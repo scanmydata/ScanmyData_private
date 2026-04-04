@@ -25,7 +25,6 @@ class AdminDashState(GlobalState):
     # Backups
     backups: list[dict] = []
     backups_loading: bool = False
-    backup_loading_name: str = ""
     # Email
     email_to: str = ""
     email_subject: str = ""

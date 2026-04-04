@@ -216,7 +216,10 @@ def fetch_page() -> rx.Component:
                             rx.select(
                                 rx.foreach(
                                     FetchState.credentials_list,
-                                    lambda c: rx.option(c["name"] + rx.cond(c["vat"] != "", " (" + c["vat"] + ")", ""), value=c["name"]),
+                                    lambda c: rx.option(
+                                        rx.cond(c["vat"] != "", c["name"] + " (" + c["vat"] + ")", c["name"]),
+                                        value=c["name"],
+                                    ),
                                 ),
                                 placeholder="-- Επιλογή --",
                                 value=FetchState.selected_credential,
