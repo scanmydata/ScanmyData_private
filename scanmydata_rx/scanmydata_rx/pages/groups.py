@@ -63,18 +63,18 @@ def groups_page() -> rx.Component:
                             lambda g: card(
                                 rx.hstack(
                                     rx.vstack(
-                                        rx.text(g.get("name", "—"), font_weight="600", font_size="15px"),
-                                        rx.text(f"Μέλη: {g.get('member_count', 0)}", font_size="12px", color=rx.color_mode_cond("#6b7280", "#9ca3af")),
+                                        rx.text(g["name"], font_weight="600", font_size="15px"),
+                                        rx.text("Μέλη: ", g["member_count"], font_size="12px", color=rx.color_mode_cond("#6b7280", "#9ca3af")),
                                         spacing="1",
                                         align="start",
                                     ),
                                     rx.spacer(),
                                     rx.cond(
-                                        GroupsState.active_group == g.get("name", ""),
+                                        GroupsState.active_group == g["name"],
                                         rx.badge("✓ Ενεργή", color_scheme="green", variant="soft"),
                                         rx.button(
                                             "Επιλογή",
-                                            on_click=GroupsState.set_active_group(g.get("name", "")),
+                                            on_click=GroupsState.set_active_group(g["name"]),
                                             size="1",
                                             background_color="#0284c7",
                                             color="white",

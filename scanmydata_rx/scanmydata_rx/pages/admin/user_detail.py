@@ -10,7 +10,10 @@ FLASK_BASE = "http://localhost:5000"
 
 class AdminUserDetailState(GlobalState):
     user_uid: str = ""
-    user_data: dict = {}
+    user_data: dict = {
+        "display_name": "—", "email": "—", "uid": "—",
+        "disabled": False, "creation_time": "—", "last_sign_in_time": "—",
+    }
     ud_loading: bool = False
     ud_error: str = ""
 
@@ -26,7 +29,15 @@ class AdminUserDetailState(GlobalState):
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{FLASK_BASE}/admin/users/{uid}")
                 if resp.status_code == 200 and "json" in resp.headers.get("content-type", ""):
-                    self.user_data = resp.json()
+                    raw = resp.json()
+                    self.user_data = {
+                        "display_name": str(raw.get("display_name") or "—"),
+                        "email": str(raw.get("email") or "—"),
+                        "uid": str(raw.get("uid") or "—"),
+                        "disabled": bool(raw.get("disabled", False)),
+                        "creation_time": str(raw.get("creation_time") or "—"),
+                        "last_sign_in_time": str(raw.get("last_sign_in_time") or "—"),
+                    }
         except Exception as e:
             self.ud_error = f"Σφάλμα: {e}"
         finally:
@@ -51,15 +62,15 @@ def admin_user_detail_page() -> rx.Component:
                 rx.center(rx.spinner(size="3"), padding="40px"),
                 card(
                     rx.vstack(
-                        rx.heading(AdminUserDetailState.user_data.get("display_name", "—"), size="4"),
-                        rx.hstack(rx.text("Email:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data.get("email", "—")), align="center"),
-                        rx.hstack(rx.text("UID:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data.get("uid", "—"), font_size="12px", font_family="monospace")),
+                        rx.heading(AdminUserDetailState.user_data["display_name"], size="4"),
+                        rx.hstack(rx.text("Email:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data["email"]), align="center"),
+                        rx.hstack(rx.text("UID:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data["uid"], font_size="12px", font_family="monospace")),
                         rx.hstack(rx.text("Κατάσταση:", font_weight="500", min_width="120px"),
-                            rx.cond(AdminUserDetailState.user_data.get("disabled", False), rx.badge("Ανενεργός", color_scheme="red"), rx.badge("Ενεργός", color_scheme="green")),
+                            rx.cond(AdminUserDetailState.user_data["disabled"], rx.badge("Ανενεργός", color_scheme="red"), rx.badge("Ενεργός", color_scheme="green")),
                             align="center",
                         ),
-                        rx.hstack(rx.text("Δημιουργία:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data.get("creation_time", "—"))),
-                        rx.hstack(rx.text("Τελευταία Σύνδεση:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data.get("last_sign_in_time", "—"))),
+                        rx.hstack(rx.text("Δημιουργία:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data["creation_time"])),
+                        rx.hstack(rx.text("Τελευταία Σύνδεση:", font_weight="500", min_width="120px"), rx.text(AdminUserDetailState.user_data["last_sign_in_time"])),
                         spacing="3",
                         width="100%",
                         align="start",

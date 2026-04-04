@@ -10,7 +10,9 @@ FLASK_BASE = "http://localhost:5000"
 
 class AdminGroupDetailState(GlobalState):
     group_id: str = ""
-    group_data: dict = {}
+    group_data: dict = {
+        "name": "—", "id": "—", "member_count": 0, "created_at": "—",
+    }
     gd_loading: bool = False
     gd_error: str = ""
     gd_success: str = ""
@@ -27,7 +29,13 @@ class AdminGroupDetailState(GlobalState):
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{FLASK_BASE}/admin/groups/{gid}")
                 if resp.status_code == 200 and "json" in resp.headers.get("content-type", ""):
-                    self.group_data = resp.json()
+                    raw = resp.json()
+                    self.group_data = {
+                        "name": str(raw.get("name") or "—"),
+                        "id": str(raw.get("id") or "—"),
+                        "member_count": int(raw.get("member_count") or 0),
+                        "created_at": str(raw.get("created_at") or "—"),
+                    }
         except Exception as e:
             self.gd_error = f"Σφάλμα: {e}"
         finally:
@@ -64,18 +72,18 @@ def admin_group_detail_page() -> rx.Component:
                 rx.center(rx.spinner(size="3"), padding="40px"),
                 card(
                     rx.vstack(
-                        rx.heading(AdminGroupDetailState.group_data.get("name", "—"), size="4"),
+                        rx.heading(AdminGroupDetailState.group_data["name"], size="4"),
                         rx.hstack(
                             rx.text("ID:", font_weight="500", min_width="120px"),
-                            rx.text(AdminGroupDetailState.group_data.get("id", "—"), font_size="12px", font_family="monospace"),
+                            rx.text(AdminGroupDetailState.group_data["id"], font_size="12px", font_family="monospace"),
                         ),
                         rx.hstack(
                             rx.text("Μέλη:", font_weight="500", min_width="120px"),
-                            rx.badge(str(AdminGroupDetailState.group_data.get("member_count", 0)), color_scheme="blue"),
+                            rx.badge(AdminGroupDetailState.group_data["member_count"], color_scheme="blue"),
                         ),
                         rx.hstack(
                             rx.text("Δημιουργία:", font_weight="500", min_width="120px"),
-                            rx.text(AdminGroupDetailState.group_data.get("created_at", "—")),
+                            rx.text(AdminGroupDetailState.group_data["created_at"]),
                         ),
                         rx.divider(),
                         rx.hstack(

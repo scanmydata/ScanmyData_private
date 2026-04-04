@@ -59,9 +59,9 @@ def custom_categories_page() -> rx.Component:
                                 rx.foreach(
                                     CustomCategoriesState.categories,
                                     lambda cat: rx.table.row(
-                                        rx.table.cell(rx.text(cat.get("code", "—"), font_size="13px")),
-                                        rx.table.cell(rx.text(cat.get("description", "—"), font_size="13px")),
-                                        rx.table.cell(rx.cond(cat.get("enabled", False), rx.badge("✓", color_scheme="green"), rx.badge("✗", color_scheme="gray"))),
+                                        rx.table.cell(rx.text(cat["code"], font_size="13px")),
+                                        rx.table.cell(rx.text(cat["description"], font_size="13px")),
+                                        rx.table.cell(rx.cond(cat["enabled"], rx.badge("✓", color_scheme="green"), rx.badge("✗", color_scheme="gray"))),
                                         _hover={"background_color": rx.color_mode_cond("#f9fafb", "#374151")},
                                     ),
                                 )

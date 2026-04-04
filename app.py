@@ -7915,7 +7915,7 @@ def credentials_edit(name):
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"credential": credential or {}, "name": name})
-    return redirect(f"http://localhost:3000/credentials/edit/{name}", 302)
+    return redirect("http://localhost:3000/credentials", 302)
 
 
 @app.get("/api/credentials/copy_params/<path:source_name>")
