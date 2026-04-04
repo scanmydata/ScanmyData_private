@@ -1,5 +1,6 @@
 """Pages package — imports all page functions so they register routes."""
 from .account import account_page
+from .list_invoices import list_invoices_page
 from .admin import (
     admin_dashboard_page,
     admin_group_detail_page,
@@ -26,6 +27,7 @@ from .signup import signup_page
 from .terms import terms_page
 
 __all__ = [
+    "list_invoices_page",
     "home_page",
     "login_page",
     "signup_page",
