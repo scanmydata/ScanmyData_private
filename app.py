@@ -5118,8 +5118,8 @@ def serve_icons(filename):
 @monitor_resources('home')
 def home():
     if "application/json" in (request.headers.get("Accept") or ""):
-        return jsonify({"redirect": "http://localhost:3000/"})
-    return redirect("http://localhost:3000/", 302)
+        return jsonify({"redirect": "/"})
+    return redirect("/", 302)
 
 
 @app.route('/terms')
@@ -5129,7 +5129,7 @@ def terms_page():
     from datetime import datetime
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "terms", "current_date": datetime.now().strftime("%B %Y")})
-    return redirect("http://localhost:3000/terms", 302)
+    return redirect("/terms", 302)
 
 
 @app.route('/privacy')
@@ -5139,7 +5139,7 @@ def privacy_page():
     from datetime import datetime
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "privacy", "current_date": datetime.now().strftime("%B %Y")})
-    return redirect("http://localhost:3000/privacy", 302)
+    return redirect("/privacy", 302)
 
 
 @app.route('/get_fiscal_year', methods=['GET'])
@@ -7801,7 +7801,7 @@ def credentials():
         active_name = (active_cred or {}).get("name", "")
         creds_list = [{"name": c.get("name", ""), "vat": str(c.get("vat") or ""), "username": str(c.get("user") or ""), "active": c.get("name") == active_name} for c in creds]
         return jsonify({"credentials": creds_list, "active_credential": active_name})
-    return redirect("http://localhost:3000/credentials", 302)
+    return redirect("/credentials", 302)
 
 
 @app.route("/credentials/edit/<name>", methods=["GET", "POST"])
@@ -7915,7 +7915,7 @@ def credentials_edit(name):
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"credential": credential or {}, "name": name})
-    return redirect("http://localhost:3000/credentials", 302)
+    return redirect("/credentials", 302)
 
 
 @app.get("/api/credentials/copy_params/<path:source_name>")
@@ -8765,7 +8765,7 @@ def fetch():
             "vat_number": str((active_cred or {}).get("vat") or ""),
             "last_fetch_date_display": initial_last_fetch_date or "",
         })
-    return redirect("http://localhost:3000/fetch", 302)
+    return redirect("/fetch", 302)
 def credentials_get_settings():
     """
     Επιστρέφει τα stored general settings σε JSON — βολικό για AJAX αν το cog τα φορτώνει δυναμικά.
@@ -10026,7 +10026,7 @@ def search():
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"results": [], "columns": [], "total": 0})
-    return redirect("http://localhost:3000/search", 302)
+    return redirect("/search", 302)
 
 @app.get("/profiles")
 def profiles_page():
@@ -10122,7 +10122,7 @@ def custom_categories_page():
     return_url = url_for("credentials", **return_args)
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "custom_categories", "vat": vat})
-    return redirect("http://localhost:3000/custom_categories", 302)
+    return redirect("/custom_categories", 302)
 
 
 @app.post("/custom_categories/save")
@@ -14086,7 +14086,8 @@ def list_invoices():
             error = "Δεν βρέθηκαν εγγραφές στο epsilon_invoices.json."
     except Exception as e:
         file_exists = False
-        error = f"Σφάλμα ανάγνωσης epsilon_invoices.json: {e}"
+        logger.exception("Error reading epsilon_invoices.json")
+        error = "Σφάλμα ανάγνωσης epsilon_invoices.json."
 
     active_name = session.get("active_credential")
     if "application/json" in (request.headers.get("Accept") or "") or request.args.get("json") == "1":
@@ -14096,7 +14097,7 @@ def list_invoices():
             "error": error or "",
             "active_credential": active_name or "",
         })
-    return redirect("http://localhost:3000/list", 302)
+    return redirect("/list", 302)
 
 
 @app.route('/list/fragment', methods=['GET'])
@@ -14277,7 +14278,7 @@ def epsilon_preview():
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "epsilon_preview", "vat": vat, "rows_count": len(rows)})
-    return redirect("http://localhost:3000/epsilon/preview", 302)
+    return redirect("/epsilon/preview", 302)
 
 
 @app.route("/export/fastimport/kinitseis")
@@ -14846,7 +14847,7 @@ def admin_dashboard():
 
         if "application/json" in (request.headers.get("Accept") or ""):
             return jsonify({"page": "admin_dashboard", "recent_activity": recent_activity})
-        return redirect("http://localhost:3000/admin/dashboard", 302)
+        return redirect("/admin/dashboard", 302)
     except Exception as e:
         logger.exception(f"Admin dashboard error: {e}")
         flash(f'Error: {str(e)}', 'danger')
@@ -14861,7 +14862,7 @@ def admin_users():
     users = admin_panel.admin_list_all_users()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"users": users})
-    return redirect("http://localhost:3000/admin/users", 302)
+    return redirect("/admin/users", 302)
 
 
 @app.route("/admin/users/<int:user_id>")
@@ -14906,7 +14907,7 @@ def admin_groups():
     groups = admin_panel.admin_list_all_groups()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"groups": groups})
-    return redirect("http://localhost:3000/admin/groups", 302)
+    return redirect("/admin/groups", 302)
 
 
 @app.route("/admin/groups/<int:group_id>")
@@ -14953,7 +14954,7 @@ def admin_group_files(group_id):
     
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "group_files", "group_id": group_id})
-    return redirect("http://localhost:3000/admin/dashboard", 302)
+    return redirect("/admin/dashboard", 302)
 
 
 @app.route("/admin/groups/<int:group_id>/delete", methods=['POST'])
@@ -14983,7 +14984,7 @@ def admin_backups():
     groups = admin_panel.admin_list_all_groups()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"backups": backups, "groups": groups})
-    return redirect("http://localhost:3000/admin/dashboard", 302)
+    return redirect("/admin/dashboard", 302)
 
 @app.route("/admin/backups/download/<backup_name>")
 @login_required
@@ -15082,7 +15083,7 @@ def admin_activity_logs():
     logs = admin_panel.admin_get_activity_logs(limit=200)
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"logs": logs})
-    return redirect("http://localhost:3000/admin/dashboard", 302)
+    return redirect("/admin/dashboard", 302)
 
 
 @app.route('/admin/settings')
@@ -15092,7 +15093,7 @@ def admin_settings():
     settings = load_settings()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify(settings)
-    return redirect("http://localhost:3000/admin/settings", 302)
+    return redirect("/admin/settings", 302)
 
 
 @app.route('/admin/settings/save', methods=['POST'])
@@ -15437,7 +15438,7 @@ def admin_send_email():
         users = admin_panel.admin_list_all_users()
         if "application/json" in (request.headers.get("Accept") or ""):
             return jsonify({"users": users})
-        return redirect("http://localhost:3000/admin/dashboard", 302)
+        return redirect("/admin/dashboard", 302)
     
     # POST: send email
     try:
@@ -15482,7 +15483,17 @@ def admin_send_email():
         return redirect(url_for('admin_send_email'))
 
 
+# ── Reflex frontend integration ────────────────────────────────────────────────
+# Must be imported AFTER all Flask routes so the catch-all proxy doesn't
+# shadow any of the routes defined above.
+from rx_integration import rx_proxy, init_reflex, init_websocket_proxy  # noqa: E402
+
+app.register_blueprint(rx_proxy)   # HTTP proxy for Reflex Next.js frontend
+init_websocket_proxy(app)          # WebSocket proxy for Reflex state backend
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
-    debug_flag = True
-    app.run(host="0.0.0.0", port=port, debug=debug_flag, use_reloader=True)
+    # Start the Reflex frontend in a background thread
+    init_reflex()
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)

@@ -1,11 +1,12 @@
 """Invoice list page (/list) — view, filter, delete, export invoices."""
+import os
 import httpx
 import reflex as rx
 
 from ..components.layout import card, layout
 from ..state import GlobalState
 
-FLASK_BASE = "http://localhost:5000"
+FLASK_BASE = os.getenv("FLASK_API_URL", f"http://localhost:{os.getenv('PORT', '5001')}")
 
 
 class ListState(GlobalState):

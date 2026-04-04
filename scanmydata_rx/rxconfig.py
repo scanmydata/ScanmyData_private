@@ -1,12 +1,15 @@
+import os
 import reflex as rx
-from reflex.plugins import SitemapPlugin
+
+_port     = os.getenv("PORT", "5001")
+_api_url  = os.getenv("REFLEX_API_URL", f"http://localhost:{_port}")
 
 config = rx.Config(
     app_name="scanmydata_rx",
-    frontend_port=3000,
-    backend_port=8000,
-    api_url="http://localhost:5000",
+    frontend_port=int(os.getenv("REFLEX_FRONTEND_PORT", "3000")),
+    backend_port=int(os.getenv("REFLEX_BACKEND_PORT", "8001")),
+    api_url=_api_url,
+    deploy_url=os.getenv("REFLEX_DEPLOY_URL", _api_url),
     db_url="sqlite:///reflex.db",
     tailwind={},
-    plugins=[SitemapPlugin()],
 )

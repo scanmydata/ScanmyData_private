@@ -62,10 +62,19 @@ COPY . /app
 # Δημιουργία φακέλων runtime (ephemeral fs στο Render)
 RUN mkdir -p /app/uploads /app/data && chmod -R 777 /app/uploads /app/data
 
-EXPOSE 5000
+EXPOSE 5001
 
-# Free tier: 1 worker, 8 threads, logs στο STDOUT
+# Install Node.js (required by Reflex to build/run the Next.js frontend)
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pre-build the Reflex frontend so the first page load is instant
+# (runs in the background at container start; skipped if bun/node not ready)
+RUN cd /app/scanmydata_rx && python -m reflex init --no-input 2>/dev/null || true
+
+# eventlet worker required for WebSocket support (Reflex /_event/ proxy)
 CMD gunicorn app:app \
-    --bind 0.0.0.0:${PORT:-5000} \
-    --workers 1 --threads 8 --timeout 180 \
+    --bind 0.0.0.0:${PORT:-5001} \
+    --worker-class eventlet \
+    --workers 1 --timeout 300 \
     --access-logfile - --error-logfile -
