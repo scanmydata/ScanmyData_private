@@ -45,9 +45,15 @@ class ListState(GlobalState):
 
     def toggle_select(self, inv_id: str):
         if inv_id in self.selected_ids:
-            self.selected_ids.remove(inv_id)
+            self.selected_ids = [i for i in self.selected_ids if i != inv_id]
         else:
-            self.selected_ids.append(inv_id)
+            self.selected_ids = self.selected_ids + [inv_id]
+
+    def update_page_length(self, v: str):
+        try:
+            self.page_length = int(v)
+        except (ValueError, TypeError):
+            pass
 
     async def delete_selected(self):
         if not self.selected_ids:
@@ -88,30 +94,25 @@ def _table_header() -> rx.Component:
 
 
 def _invoice_row(inv: dict) -> rx.Component:
-    inv_id = inv.get("id", inv.get("mark", ""))
     return rx.table.row(
         rx.table.cell(
             rx.checkbox(
-                checked=rx.cond(
-                    ListState.selected_ids.contains(str(inv_id)),
-                    True,
-                    False,
-                ),
-                on_change=lambda: ListState.toggle_select(str(inv_id)),
+                checked=ListState.selected_ids.contains(inv["mark"]),
+                on_change=ListState.toggle_select(inv["mark"]),
             )
         ),
         rx.table.cell(
-            rx.text(str(inv.get("mark", "")), font_size="12px", color=rx.color_mode_cond("#0369a1", "#60a5fa"))
+            rx.text(inv["mark"], font_size="12px", color=rx.color_mode_cond("#0369a1", "#60a5fa"))
         ),
-        rx.table.cell(rx.text(str(inv.get("issue_date", "")), font_size="12px")),
-        rx.table.cell(rx.text(str(inv.get("inv_type", "")), font_size="12px")),
-        rx.table.cell(rx.text(str(inv.get("counterpart_vat", "")), font_size="12px")),
-        rx.table.cell(rx.text(str(inv.get("counterpart_name", inv.get("issuer_name", ""))), font_size="12px", max_width="180px")),
-        rx.table.cell(rx.text(str(inv.get("net_value", "")), font_size="12px", text_align="right")),
-        rx.table.cell(rx.text(str(inv.get("vat_amount", "")), font_size="12px", text_align="right")),
-        rx.table.cell(rx.text(str(inv.get("gross_value", "")), font_size="12px", text_align="right", font_weight="600")),
+        rx.table.cell(rx.text(inv["issue_date"], font_size="12px")),
+        rx.table.cell(rx.text(inv["inv_type"], font_size="12px")),
+        rx.table.cell(rx.text(inv["counterpart_vat"], font_size="12px")),
+        rx.table.cell(rx.text(inv["counterpart_name"], font_size="12px", max_width="180px")),
+        rx.table.cell(rx.text(inv["net_value"], font_size="12px", text_align="right")),
+        rx.table.cell(rx.text(inv["vat_amount"], font_size="12px", text_align="right")),
+        rx.table.cell(rx.text(inv["gross_value"], font_size="12px", text_align="right", font_weight="600")),
         _hover={"background_color": rx.color_mode_cond("#f0f9ff", "#1e3a5f")},
-        border_bottom=f"1px solid {rx.color_mode_cond('#e5e7eb', '#374151')}",
+        border_bottom=rx.color_mode_cond("1px solid #e5e7eb", "1px solid #374151"),
     )
 
 
@@ -188,7 +189,7 @@ def list_invoices_page() -> rx.Component:
                         rx.select(
                             ["10", "25", "50", "100"],
                             default_value="25",
-                            on_change=lambda v: ListState.set_var("page_length", int(v)),
+                            on_change=ListState.update_page_length,
                             width="80px",
                         ),
                         align="center",

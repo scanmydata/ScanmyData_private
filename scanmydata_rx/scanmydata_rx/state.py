@@ -89,5 +89,8 @@ class GlobalState(rx.State):
             m for i, m in enumerate(self.flash_messages) if i != idx
         ]
 
+    def clear_flash_by_message(self, message: str):
+        self.flash_messages = [m for m in self.flash_messages if m.get("message") != message]
+
     def clear_all_flash(self):
         self.flash_messages = []

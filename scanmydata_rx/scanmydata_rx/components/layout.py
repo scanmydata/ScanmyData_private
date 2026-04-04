@@ -49,12 +49,13 @@ def layout(content: rx.Component, title: str = "ScanmyData") -> rx.Component:
 
 def card(content: rx.Component, **style) -> rx.Component:
     """Card wrapper with light/dark background."""
+    border_val = style.pop("border", rx.color_mode_cond("1px solid #e5e7eb", "1px solid #374151"))
     return rx.box(
         content,
         background_color=rx.color_mode_cond("#ffffff", "#1f2937"),
         border_radius="12px",
         padding="24px",
         box_shadow="0 1px 3px rgba(0,0,0,0.07)",
-        border=rx.color_mode_cond("1px solid #e5e7eb", "1px solid #374151"),
+        border=border_val,
         **style,
     )

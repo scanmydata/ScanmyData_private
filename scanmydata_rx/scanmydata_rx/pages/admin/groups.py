@@ -75,13 +75,13 @@ def admin_groups_page() -> rx.Component:
                             rx.foreach(
                                 AdminGroupsState.groups,
                                 lambda g: rx.table.row(
-                                    rx.table.cell(rx.text(g.get("name", ""), font_size="13px", font_weight="500")),
-                                    rx.table.cell(rx.badge(str(g.get("member_count", 0)), color_scheme="blue", size="1")),
-                                    rx.table.cell(rx.text(g.get("created_at", ""), font_size="11px")),
+                                    rx.table.cell(rx.text(g["name"], font_size="13px", font_weight="500")),
+                                    rx.table.cell(rx.badge(g["member_count"], color_scheme="blue", size="1")),
+                                    rx.table.cell(rx.text(g["created_at"], font_size="11px")),
                                     rx.table.cell(
                                         rx.hstack(
-                                            rx.link(rx.button("👁️", size="1", variant="soft"), href=f"/admin/group/{g.get('id', '')}"),
-                                            rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminGroupsState.delete_group(g.get("id", "")), cursor="pointer"),
+                                            rx.link(rx.button("👁️", size="1", variant="soft"), href="/admin/group/" + g["id"]),
+                                            rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminGroupsState.delete_group(g["id"]), cursor="pointer"),
                                             spacing="1",
                                         )
                                     ),

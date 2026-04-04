@@ -9,7 +9,9 @@ from ..styles import SKY_600
 def _logged_in_home() -> rx.Component:
     return rx.vstack(
         rx.heading(
-            f"Καλωσήρθες, {GlobalState.username}!",
+            "Καλωσήρθες, ",
+            GlobalState.username,
+            "!",
             size="6",
             color=rx.color_mode_cond("#1f2937", "#f9fafb"),
         ),

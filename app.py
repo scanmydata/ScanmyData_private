@@ -982,6 +982,11 @@ try:
     from admin_api import admin_api_bp
     app.register_blueprint(admin_api_bp)
     logger.info("Admin API routes registered")
+
+    # Register JSON page API routes for Reflex frontend
+    from api_pages import api_pages_bp
+    app.register_blueprint(api_pages_bp)
+    logger.info("API pages routes registered")
     # Start periodic background sync of local data/ to Firebase (encrypted)
     try:
         import firebase_config as _fc
@@ -5112,7 +5117,9 @@ def serve_icons(filename):
 @app.route("/")
 @monitor_resources('home')
 def home():
-    return safe_render("nav.html", active_page="home")
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"redirect": "http://localhost:3000/"})
+    return redirect("http://localhost:3000/", 302)
 
 
 @app.route('/terms')
@@ -5120,7 +5127,9 @@ def home():
 def terms_page():
     """Terms of Service page - publicly accessible"""
     from datetime import datetime
-    return render_template("terms.html", current_date=datetime.now().strftime("%B %Y"))
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"page": "terms", "current_date": datetime.now().strftime("%B %Y")})
+    return redirect("http://localhost:3000/terms", 302)
 
 
 @app.route('/privacy')
@@ -5128,7 +5137,9 @@ def terms_page():
 def privacy_page():
     """Privacy Policy & GDPR page - publicly accessible"""
     from datetime import datetime
-    return render_template("privacy.html", current_date=datetime.now().strftime("%B %Y"))
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"page": "privacy", "current_date": datetime.now().strftime("%B %Y")})
+    return redirect("http://localhost:3000/privacy", 302)
 
 
 @app.route('/get_fiscal_year', methods=['GET'])
@@ -7785,13 +7796,12 @@ def credentials():
             if c.get("name")
         ]
 
-    return safe_render(
-        "credentials_list.html",
-        credentials=creds,
-        other_creds=other_creds,
-        is_group_admin=is_group_admin,
-        active_page="credentials"
-    )
+    if "application/json" in (request.headers.get("Accept") or ""):
+        active_cred = get_active_credential_from_session()
+        active_name = (active_cred or {}).get("name", "")
+        creds_list = [{"name": c.get("name", ""), "vat": str(c.get("vat") or ""), "username": str(c.get("user") or ""), "active": c.get("name") == active_name} for c in creds]
+        return jsonify({"credentials": creds_list, "active_credential": active_name})
+    return redirect("http://localhost:3000/credentials", 302)
 
 
 @app.route("/credentials/edit/<name>", methods=["GET", "POST"])
@@ -7903,13 +7913,9 @@ def credentials_edit(name):
             if c.get("name") != name
         ]
 
-    return safe_render(
-        "credentials_edit.html",
-        credential=credential,
-        other_creds=other_creds,
-        is_group_admin=_is_group_admin,
-        active_page="credentials"
-    )
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"credential": credential or {}, "name": name})
+    return redirect(f"http://localhost:3000/credentials/edit/{name}", 302)
 
 
 @app.get("/api/credentials/copy_params/<path:source_name>")
@@ -8751,13 +8757,15 @@ def fetch():
                 "last_fetch_raw": current_last_fetch_raw,
             })
 
-    return safe_render("fetch.html", credentials=creds, message=message,
-                       error=error, preview=preview, active_page="fetch",
-                       active_credential=active_name,
-                       last_fetch_date_display=initial_last_fetch_date)
-
-
-@app.route("/credentials/get_settings", methods=["GET"])
+    if "application/json" in (request.headers.get("Accept") or ""):
+        creds_list = [{"name": c.get("name", ""), "vat": str(c.get("vat") or ""), "active": c.get("name") == active_name} for c in creds]
+        return jsonify({
+            "credentials": creds_list,
+            "active_credential": active_name,
+            "vat_number": str((active_cred or {}).get("vat") or ""),
+            "last_fetch_date_display": initial_last_fetch_date or "",
+        })
+    return redirect("http://localhost:3000/fetch", 302)
 def credentials_get_settings():
     """
     Επιστρέφει τα stored general settings σε JSON — βολικό για AJAX αν το cog τα φορτώνει δυναμικά.
@@ -10016,31 +10024,10 @@ def search():
             "has_receipt_custom_categories": bool(has_receipt_custom_categories),
         }), (400 if error else 200)
 
-    return safe_render(
-        "search.html",
-        result=result,
-        error=error,
-        mark=mark,
-        modal_summary=modal_summary,
-        invoice_lines=invoice_lines,
-        customer_categories=customer_categories,
-        customer_category_labels=customer_category_labels,
-        allow_edit_existing=allow_edit_existing,
-        vat=vat,
-        active_page="search",
-        table_html=strip_server_totals(table_html),
-        file_exists=file_exists,
-        css_numcols=css_numcols,
-        modal_warning=modal_warning,
-        scrape_url_is_receipt=scrape_url_is_receipt,
-        fiscal_mismatch_block=fiscal_mismatch_block,
-        repeat_entry_conf=repeat_entry_conf,
-        active_year=active_year_val,
-        category_vat_constraints=customer_vat_constraints,
-        receipt_custom_categories=receipt_custom_categories,
-        has_receipt_custom_categories=has_receipt_custom_categories,
-        g_category_data=g_category_data,
-    )
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"results": [], "columns": [], "total": 0})
+    return redirect("http://localhost:3000/search", 302)
+
 @app.get("/profiles")
 def profiles_page():
     vat = (request.args.get("vat") or "").strip()
@@ -10133,19 +10120,9 @@ def custom_categories_page():
     if return_args:
         return_args["open_custom"] = "1"
     return_url = url_for("credentials", **return_args)
-    return render_template(
-        "custom_categories.html",
-        vat=vat,
-        categories=categories,
-        category_labels=labels,
-        default_labels=DEFAULT_INVOICE_CATEGORY_LABELS,
-        vat_rates=VAT_RATE_NUMERIC,
-        vat_constraints=constraints,
-        credential_name=client_name,
-        book_category=book_category,
-        return_url=return_url,
-        active_page="custom_categories",
-    )
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"page": "custom_categories", "vat": vat})
+    return redirect("http://localhost:3000/custom_categories", 302)
 
 
 @app.post("/custom_categories/save")
@@ -14112,15 +14089,14 @@ def list_invoices():
         error = f"Σφάλμα ανάγνωσης epsilon_invoices.json: {e}"
 
     active_name = session.get("active_credential")
-    return safe_render(
-        "list.html",
-        table_html=Markup(table_html),
-        error=error,
-        file_exists=file_exists,
-        css_numcols=css_numcols,
-        active_page="list_invoices",
-        active_credential=active_name
-    )
+    if "application/json" in (request.headers.get("Accept") or "") or request.args.get("json") == "1":
+        return jsonify({
+            "invoices": [],
+            "file_exists": bool(file_exists),
+            "error": error or "",
+            "active_credential": active_name or "",
+        })
+    return redirect("http://localhost:3000/list", 302)
 
 
 @app.route('/list/fragment', methods=['GET'])
@@ -14299,15 +14275,9 @@ def epsilon_preview():
     except Exception:
         current_app.logger.exception("Failed to compare epsilon preview against excel MARK column")
 
-    # πέρασέ τα στο template
-    return render_template("epsilon_preview.html",
-                           vat=vat,
-                           table_rows=rows,
-                           bridge_ok=(not issues and len(rows)>0),
-                           bridge_issues=issues,
-                           category_labels=category_labels,
-                           missing_excel_marks=missing_excel_marks,
-                           missing_excel_rows=missing_excel_rows)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"page": "epsilon_preview", "vat": vat, "rows_count": len(rows)})
+    return redirect("http://localhost:3000/epsilon/preview", 302)
 
 
 @app.route("/export/fastimport/kinitseis")
@@ -14874,7 +14844,9 @@ def admin_dashboard():
         except Exception:
             recent_activity = []
 
-        return render_template('admin/dashboard_unified.html', recent_activity=recent_activity)
+        if "application/json" in (request.headers.get("Accept") or ""):
+            return jsonify({"page": "admin_dashboard", "recent_activity": recent_activity})
+        return redirect("http://localhost:3000/admin/dashboard", 302)
     except Exception as e:
         logger.exception(f"Admin dashboard error: {e}")
         flash(f'Error: {str(e)}', 'danger')
@@ -14887,7 +14859,9 @@ def admin_dashboard():
 def admin_users():
     """List and manage all users"""
     users = admin_panel.admin_list_all_users()
-    return render_template('admin/users.html', users=users)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"users": users})
+    return redirect("http://localhost:3000/admin/users", 302)
 
 
 @app.route("/admin/users/<int:user_id>")
@@ -14930,7 +14904,9 @@ def admin_user_delete(user_id):
 def admin_groups():
     """List and manage all groups"""
     groups = admin_panel.admin_list_all_groups()
-    return render_template('admin/groups.html', groups=groups)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"groups": groups})
+    return redirect("http://localhost:3000/admin/groups", 302)
 
 
 @app.route("/admin/groups/<int:group_id>")
@@ -14975,7 +14951,9 @@ def admin_group_files(group_id):
         flash('Group not found', 'danger')
         return redirect(url_for('admin_groups'))
     
-    return render_template('admin/group_files.html', group=group)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"page": "group_files", "group_id": group_id})
+    return redirect("http://localhost:3000/admin/dashboard", 302)
 
 
 @app.route("/admin/groups/<int:group_id>/delete", methods=['POST'])
@@ -15003,7 +14981,9 @@ def admin_backups():
     backups = admin_panel.admin_list_backups()
     # supply groups for restore dropdown
     groups = admin_panel.admin_list_all_groups()
-    return render_template('admin/backups.html', backups=backups, groups=groups)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"backups": backups, "groups": groups})
+    return redirect("http://localhost:3000/admin/dashboard", 302)
 
 @app.route("/admin/backups/download/<backup_name>")
 @login_required
@@ -15100,7 +15080,9 @@ def admin_backup_restore(backup_name):
 def admin_activity_logs():
     """View activity logs (traffic tracking)"""
     logs = admin_panel.admin_get_activity_logs(limit=200)
-    return render_template('admin/activity_logs.html', logs=logs)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify({"logs": logs})
+    return redirect("http://localhost:3000/admin/dashboard", 302)
 
 
 @app.route('/admin/settings')
@@ -15108,7 +15090,9 @@ def admin_activity_logs():
 @_require_admin
 def admin_settings():
     settings = load_settings()
-    return render_template('admin/settings.html', settings=settings)
+    if "application/json" in (request.headers.get("Accept") or ""):
+        return jsonify(settings)
+    return redirect("http://localhost:3000/admin/settings", 302)
 
 
 @app.route('/admin/settings/save', methods=['POST'])
@@ -15451,7 +15435,9 @@ def admin_send_email():
     """Admin: send email to selected users"""
     if request.method == 'GET':
         users = admin_panel.admin_list_all_users()
-        return render_template('admin/send_email.html', users=users)
+        if "application/json" in (request.headers.get("Accept") or ""):
+            return jsonify({"users": users})
+        return redirect("http://localhost:3000/admin/dashboard", 302)
     
     # POST: send email
     try:

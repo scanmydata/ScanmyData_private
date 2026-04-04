@@ -10,8 +10,8 @@ FLASK_BASE = "http://localhost:5000"
 
 class AdminDashState(GlobalState):
     active_tab: str = "overview"
-    # Overview
-    stats: dict = {}
+    # Overview — pre-populate keys so var access works before data loads
+    stats: dict = {"users": "—", "groups": "—", "activity_24h": "—", "system_status": "OK"}
     recent_activity: list[dict] = []
     # Users
     users: list[dict] = []
@@ -58,7 +58,13 @@ class AdminDashState(GlobalState):
                 resp = await client.get(f"{FLASK_BASE}/api/admin/stats")
                 if resp.status_code == 200 and "json" in resp.headers.get("content-type", ""):
                     data = resp.json()
-                    self.stats = data.get("stats", {})
+                    loaded = data.get("stats", {})
+                    self.stats = {
+                        "users": str(loaded.get("users", "—")),
+                        "groups": str(loaded.get("groups", "—")),
+                        "activity_24h": str(loaded.get("activity_24h", "—")),
+                        "system_status": str(loaded.get("system_status", "OK")),
+                    }
                     self.recent_activity = data.get("recent_activity", [])
         except Exception as e:
             self.dash_error = f"Σφάλμα: {e}"
@@ -199,10 +205,10 @@ def _stat_card(label: str, value: str, icon: str, color: str) -> rx.Component:
 def _overview_tab() -> rx.Component:
     return rx.vstack(
         rx.hstack(
-            _stat_card("Χρήστες", AdminDashState.stats.get("users", "—"), "👤", "blue"),
-            _stat_card("Ομάδες", AdminDashState.stats.get("groups", "—"), "👥", "green"),
-            _stat_card("Δραστηριότητα 24h", AdminDashState.stats.get("activity_24h", "—"), "📊", "orange"),
-            _stat_card("Κατάσταση Συστήματος", AdminDashState.stats.get("system_status", "OK"), "🟢", "green"),
+            _stat_card("Χρήστες", AdminDashState.stats["users"], "👤", "blue"),
+            _stat_card("Ομάδες", AdminDashState.stats["groups"], "👥", "green"),
+            _stat_card("Δραστηριότητα 24h", AdminDashState.stats["activity_24h"], "📊", "orange"),
+            _stat_card("Κατάσταση Συστήματος", AdminDashState.stats["system_status"], "🟢", "green"),
             width="100%",
             spacing="4",
             flex_wrap="wrap",
@@ -224,9 +230,9 @@ def _overview_tab() -> rx.Component:
                             rx.foreach(
                                 AdminDashState.recent_activity,
                                 lambda a: rx.table.row(
-                                    rx.table.cell(rx.text(a.get("time", ""), font_size="12px")),
-                                    rx.table.cell(rx.text(a.get("user", ""), font_size="12px")),
-                                    rx.table.cell(rx.text(a.get("action", ""), font_size="12px")),
+                                    rx.table.cell(rx.text(a["time"], font_size="12px")),
+                                    rx.table.cell(rx.text(a["user"], font_size="12px")),
+                                    rx.table.cell(rx.text(a["action"], font_size="12px")),
                                 ),
                             )
                         ),
@@ -275,20 +281,20 @@ def _users_tab() -> rx.Component:
                                 rx.foreach(
                                     AdminDashState.users,
                                     lambda u: rx.table.row(
-                                        rx.table.cell(rx.text(u.get("email", ""), font_size="12px")),
-                                        rx.table.cell(rx.text(u.get("display_name", "—"), font_size="12px")),
+                                        rx.table.cell(rx.text(u["email"], font_size="12px")),
+                                        rx.table.cell(rx.text(u["display_name"], font_size="12px")),
                                         rx.table.cell(
                                             rx.cond(
-                                                u.get("disabled", False),
+                                                u["disabled"],
                                                 rx.badge("Ανενεργός", color_scheme="red", size="1"),
                                                 rx.badge("Ενεργός", color_scheme="green", size="1"),
                                             )
                                         ),
-                                        rx.table.cell(rx.text(u.get("creation_time", ""), font_size="11px")),
+                                        rx.table.cell(rx.text(u["creation_time"], font_size="11px")),
                                         rx.table.cell(
                                             rx.hstack(
-                                                rx.link(rx.button("👁️", size="1", variant="soft"), href=f"/admin/user/{u.get('uid', '')}"),
-                                                rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminDashState.delete_user(u.get("uid", "")), cursor="pointer"),
+                                                rx.link(rx.button("👁️", size="1", variant="soft"), href="/admin/user/" + u["uid"]),
+                                                rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminDashState.delete_user(u["uid"]), cursor="pointer"),
                                                 spacing="1",
                                             )
                                         ),
@@ -341,12 +347,12 @@ def _groups_tab() -> rx.Component:
                             rx.foreach(
                                 AdminDashState.admin_groups,
                                 lambda g: rx.table.row(
-                                    rx.table.cell(rx.text(g.get("name", ""), font_size="13px", font_weight="500")),
-                                    rx.table.cell(rx.badge(str(g.get("member_count", 0)), color_scheme="blue", size="1")),
-                                    rx.table.cell(rx.text(g.get("created_at", ""), font_size="11px")),
-                                    rx.table.cell(
-                                        rx.link(rx.button("👁️ Λεπτομέρειες", size="1", variant="soft"), href=f"/admin/group/{g.get('id', '')}"),
-                                    ),
+                                    rx.table.cell(rx.text(g["name"], font_size="13px", font_weight="500")),
+                                    rx.table.cell(rx.badge(g["member_count"], color_scheme="blue", size="1")),
+                                    rx.table.cell(rx.text(g["created_at"], font_size="11px")),
+                                        rx.table.cell(
+                                        rx.link(rx.button("👁️ Λεπτομέρειες", size="1", variant="soft"), href="/admin/group/" + g["id"]),
+                                        ),
                                     _hover={"background_color": rx.color_mode_cond("#f9fafb", "#374151")},
                                 ),
                             )
@@ -395,10 +401,10 @@ def _activity_tab() -> rx.Component:
                                 rx.foreach(
                                     AdminDashState.activity_logs,
                                     lambda a: rx.table.row(
-                                        rx.table.cell(rx.text(a.get("time", ""), font_size="11px")),
-                                        rx.table.cell(rx.text(a.get("user", ""), font_size="12px")),
-                                        rx.table.cell(rx.text(a.get("action", ""), font_size="12px")),
-                                        rx.table.cell(rx.text(a.get("ip", ""), font_size="11px")),
+                                        rx.table.cell(rx.text(a["time"], font_size="11px")),
+                                        rx.table.cell(rx.text(a["user"], font_size="12px")),
+                                        rx.table.cell(rx.text(a["action"], font_size="12px")),
+                                        rx.table.cell(rx.text(a["ip"], font_size="11px")),
                                         _hover={"background_color": rx.color_mode_cond("#f9fafb", "#374151")},
                                     ),
                                 )

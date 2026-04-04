@@ -4,7 +4,7 @@ import reflex as rx
 from ..state import GlobalState
 
 
-def _flash_item(flash: dict, idx: int) -> rx.Component:
+def _flash_item(flash: dict) -> rx.Component:
     """Render a single flash message with a dismiss button."""
     color_map = {
         "success": ("ecfdf5", "065f46"),
@@ -18,7 +18,7 @@ def _flash_item(flash: dict, idx: int) -> rx.Component:
             rx.text(flash["message"], flex="1", font_size="14px"),
             rx.button(
                 "×",
-                on_click=GlobalState.clear_flash(idx),
+                on_click=GlobalState.clear_flash_by_message(flash["message"]),
                 background="transparent",
                 border="none",
                 font_size="18px",
@@ -67,7 +67,7 @@ def flash_container() -> rx.Component:
         rx.vstack(
             rx.foreach(
                 GlobalState.flash_messages,
-                lambda flash, idx: _flash_item(flash, idx),
+                lambda flash: _flash_item(flash),
             ),
             width="100%",
             spacing="2",

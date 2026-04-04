@@ -146,7 +146,7 @@ def search_page() -> rx.Component:
                 rx.vstack(
                     rx.hstack(
                         rx.heading("Αποτελέσματα", size="3"),
-                        rx.badge(f"{SearchState.total_results} εγγραφές", color_scheme="blue", variant="soft"),
+                        rx.badge(SearchState.total_results, " εγγραφές", color_scheme="blue", variant="soft"),
                         spacing="3",
                         align="center",
                     ),

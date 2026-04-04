@@ -77,16 +77,16 @@ def admin_users_page() -> rx.Component:
                                 rx.foreach(
                                     AdminUsersState.users,
                                     lambda u: rx.table.row(
-                                        rx.table.cell(rx.text(u.get("email", ""), font_size="12px")),
-                                        rx.table.cell(rx.text(u.get("display_name", "—"), font_size="12px")),
+                                        rx.table.cell(rx.text(u["email"], font_size="12px")),
+                                        rx.table.cell(rx.text(u["display_name"], font_size="12px")),
                                         rx.table.cell(
-                                            rx.cond(u.get("disabled", False), rx.badge("Ανενεργός", color_scheme="red", size="1"), rx.badge("Ενεργός", color_scheme="green", size="1")),
+                                            rx.cond(u["disabled"], rx.badge("Ανενεργός", color_scheme="red", size="1"), rx.badge("Ενεργός", color_scheme="green", size="1")),
                                         ),
-                                        rx.table.cell(rx.text(u.get("creation_time", ""), font_size="11px")),
+                                        rx.table.cell(rx.text(u["creation_time"], font_size="11px")),
                                         rx.table.cell(
                                             rx.hstack(
-                                                rx.link(rx.button("👁️", size="1", variant="soft"), href=f"/admin/user/{u.get('uid', '')}"),
-                                                rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminUsersState.delete_user(u.get("uid", "")), cursor="pointer"),
+                                                rx.link(rx.button("👁️", size="1", variant="soft"), href="/admin/user/" + u["uid"]),
+                                                rx.button("🗑️", size="1", color_scheme="red", variant="soft", on_click=AdminUsersState.delete_user(u["uid"]), cursor="pointer"),
                                                 spacing="1",
                                             )
                                         ),
