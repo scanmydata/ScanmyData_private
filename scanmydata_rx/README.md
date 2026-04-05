@@ -8,12 +8,12 @@
 ```
 ┌─────────────────────────┐          ┌─────────────────────────┐
 │  Reflex Frontend        │  httpx   │  Flask API Backend      │
-│  Port: 3000             │ ──────►  │  Port: 5000             │
+│  Port: 3000             │ ──────►  │  Port: 5001             │
 │  scanmydata_rx/         │          │  app.py                 │
 └─────────────────────────┘          └─────────────────────────┘
 ```
 
-- **Flask** (port 5000): Διαχειρίζεται όλη τη business logic, authentication, AADE API, database
+- **Flask** (port 5001): Διαχειρίζεται όλη τη business logic, authentication, AADE API, database
 - **Reflex** (port 3000): Αποδίδει το UI, καλεί Flask APIs μέσω `httpx`
 
 ## Σελίδες
@@ -57,7 +57,7 @@ pip install reflex>=0.6.0 httpx>=0.25.0
 ```bash
 cd /path/to/ScanmyData_private
 python app.py
-# → τρέχει στο http://localhost:5000
+# → τρέχει στο http://localhost:5001
 ```
 
 ### 3. Εκκίνηση Reflex frontend (σε άλλο terminal)
@@ -126,5 +126,5 @@ scanmydata_rx/
 ## Σημείωση
 
 Το Reflex frontend καλεί το Flask backend μέσω HTTP. Βεβαιωθείτε ότι:
-1. Το Flask backend τρέχει στο port 5000
+1. Το Flask backend τρέχει στο port 5001
 2. Τα session cookies λειτουργούν σωστά (ίδιο domain ή proxy setup)

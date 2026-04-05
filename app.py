@@ -5108,7 +5108,7 @@ def safe_render(template_name, **ctx):
         return body
 
 # ---------------- Reflex proxy helper (used by HTML page routes) ----------------
-def _proxy_to_reflex(path: str = None):
+def _proxy_to_reflex(path: str = None) -> "Response":
     """Forward this browser request to the Reflex Next.js frontend.
 
     Called by Flask GET-page routes so the Reflex app renders the page
