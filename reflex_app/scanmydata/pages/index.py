@@ -83,7 +83,7 @@ def index() -> rx.Component:
                 transition="all 0.2s ease",
                 text_align="center",
             ),
-            columns=rx.breakpoints(xs="1", sm="2", md="4"),
+            columns=rx.breakpoints(initial="1", sm="2", md="4"),
             spacing="4",
         ),
     )

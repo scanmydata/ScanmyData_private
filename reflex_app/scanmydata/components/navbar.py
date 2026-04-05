@@ -1,5 +1,4 @@
 import reflex as rx
-from ..state.auth import AuthState
 
 
 def theme_toggle_button() -> rx.Component:
