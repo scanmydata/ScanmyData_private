@@ -41,3 +41,4 @@ psutil>=5.9.0
 # For non-docker installs, run:
 #   python -m playwright install chromium
 #   sudo apt-get install -y libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxss1 libgbm1 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgtk-3-0t64 libasound2t64
+reflex>=0.8.28

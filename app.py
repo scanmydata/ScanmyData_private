@@ -15496,6 +15496,77 @@ def admin_send_email():
         return redirect(url_for('admin_send_email'))
 
 
+# ============================================================
+# JSON API endpoints for Reflex frontend (Phase 1)
+# ============================================================
+
+@app.route("/api/credentials", methods=["GET"])
+def api_credentials():
+    """Return credentials list as JSON for Reflex frontend."""
+    try:
+        creds = load_credentials()
+        active = get_active_credential_from_session()
+        active_name = active.get("name") if active else None
+        safe_creds = [
+            {
+                "name": c.get("name", ""),
+                "vat": c.get("vat", ""),
+                "user": c.get("user", ""),
+                "env": c.get("env", ""),
+                "book_category": c.get("book_category", "Β"),
+                "fpa_applicable": c.get("fpa_applicable", True),
+            }
+            for c in creds
+            if c.get("name")
+        ]
+        return jsonify({
+            "ok": True,
+            "credentials": safe_creds,
+            "active_name": active_name,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/invoices", methods=["GET"])
+def api_invoices():
+    """Return invoice list as JSON for Reflex frontend."""
+    try:
+        active = get_active_credential_from_session()
+        active_vat = str((active or {}).get("vat") or "").strip()
+        active_name = (active or {}).get("name") or ""
+        invoices = []
+        try:
+            eps_path = os.path.join(group_path("epsilon"), "epsilon_invoices.json")
+            if os.path.exists(eps_path):
+                with open(eps_path, encoding="utf-8") as _f:
+                    raw = json.load(_f)
+                if isinstance(raw, list):
+                    invoices = [
+                        {
+                            "mark": str(r.get("mark") or r.get("MARK") or ""),
+                            "issue_date": str(r.get("issue_date") or r.get("IssueDate") or ""),
+                            "issuer_vat": str(r.get("issuer_vat") or r.get("AFM") or ""),
+                            "doc_type": str(r.get("doc_type") or r.get("invoiceType") or ""),
+                            "total_amount": str(r.get("total_amount") or r.get("TotalAmount") or ""),
+                            "counterpart_vat": str(r.get("counterpart_vat") or r.get("AFM_counterpart") or ""),
+                        }
+                        for r in raw
+                        if isinstance(r, dict)
+                    ]
+        except Exception as list_exc:
+            current_app.logger.warning("api_invoices list error: %s", list_exc)
+        return jsonify({
+            "ok": True,
+            "invoices": invoices,
+            "active_credential": active_name,
+            "active_vat": active_vat,
+            "total": len(invoices),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
     debug_flag = True
