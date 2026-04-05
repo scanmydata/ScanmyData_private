@@ -49,28 +49,28 @@
 ### 1. Προαπαιτούμενα
 
 ```bash
-pip install reflex>=0.6.0 httpx>=0.25.0
+pip install -r requirements.txt   # από το root του project
 ```
 
-### 2. Εκκίνηση Flask backend (σε ένα terminal)
+> **Node.js** (≥18) απαιτείται για το Reflex frontend build.
+> Κατεβάστε το από https://nodejs.org ή εγκαταστήστε με `nvm`.
+
+### 2. Εκκίνηση (single command)
 
 ```bash
-cd /path/to/ScanmyData_private
+# Από το root του project:
 python app.py
-# → τρέχει στο http://localhost:5001
+# → Flask + Reflex τρέχουν μαζί στο http://localhost:5001
 ```
 
-### 3. Εκκίνηση Reflex frontend (σε άλλο terminal)
+Κατά την **πρώτη εκτέλεση** το `rx_integration.py` τρέχει αυτόματα `reflex init`
+(εγκαθιστά τα npm packages κ.λπ.) πριν ξεκινήσει το Reflex. Αυτό μπορεί να πάρει
+**2-5 λεπτά**. Η σελίδα "⏳ Starting ScanmyData…" ανανεώνεται μόνη της κάθε 5 δευτερόλεπτα
+— απλά περιμένετε να ολοκληρωθεί η compilation.
 
-```bash
-cd scanmydata_rx
-reflex run
-# → τρέχει στο http://localhost:3000
-```
+### 3. Πρόσβαση
 
-### 4. Πρόσβαση
-
-Ανοίξτε browser στο: **http://localhost:3000**
+Ανοίξτε browser στο: **http://localhost:5001**
 
 ## Δομή αρχείων
 

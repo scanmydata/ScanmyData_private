@@ -3,7 +3,10 @@ rx_integration.py
 =================
 Integrates the Reflex frontend (scanmydata_rx/) with the Flask backend.
 
-- Starts Reflex as a subprocess (frontend port 3000, backend port 8001)
+- Runs ``reflex init`` automatically if the .web directory is missing.
+- Starts Reflex as a subprocess (frontend port 3000, backend port 8001).
+- Detects readiness by polling the Reflex HTTP port directly — more
+  reliable than grepping log lines.
 - Provides a Flask Blueprint (rx_proxy) that proxies:
     HTTP:     /_next/*, /_reflex/*, and all page routes → Reflex frontend (3000)
     WebSocket: /_event/*  → Reflex state backend (8001)
@@ -44,7 +47,67 @@ _start_lock   = threading.Lock()
 _started      = False
 
 
-def _run_reflex():
+def _ensure_reflex_init(env: dict) -> None:
+    """Run ``reflex init`` if the Next.js .web directory is missing.
+
+    This is required on a fresh checkout or after deleting the build cache.
+    The command is synchronous so the subsequent ``reflex run`` can succeed.
+    """
+    web_dir = os.path.join(REFLEX_DIR, ".web")
+    if os.path.isdir(web_dir):
+        return
+
+    logger.info("Reflex .web directory not found — running 'reflex init' …")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "reflex", "init"],
+            cwd=REFLEX_DIR,
+            env=env,
+            timeout=300,  # allow up to 5 min for npm install on slow machines
+        )
+        if result.returncode != 0:
+            logger.error("'reflex init' exited with code %d", result.returncode)
+        else:
+            logger.info("'reflex init' completed successfully.")
+    except subprocess.TimeoutExpired:
+        logger.error("'reflex init' timed out after 5 minutes.")
+    except Exception as exc:
+        logger.exception("'reflex init' failed: %s", exc)
+
+
+def _poll_ready() -> None:
+    """Poll the Reflex frontend HTTP port until it accepts connections.
+
+    Sets ``_reflex_ready`` as soon as the port responds — this is more
+    robust than grepping log lines which vary between Reflex releases.
+    """
+    url = f"{REFLEX_FRONTEND_BASE}/"
+    while not _reflex_ready.is_set():
+        # If the subprocess has died, stop polling.
+        if _reflex_proc is not None and _reflex_proc.poll() is not None:
+            logger.error(
+                "Reflex subprocess exited (code %d) before becoming ready.",
+                _reflex_proc.returncode,
+            )
+            break
+        try:
+            resp = requests.get(url, timeout=3, allow_redirects=False)
+            # Any HTTP response (including 404) means the server is up.
+            if resp.status_code < 600:
+                logger.info(
+                    "Reflex frontend is ready (HTTP %d on :%d).",
+                    resp.status_code, REFLEX_FRONTEND_PORT,
+                )
+                _reflex_ready.set()
+                return
+        except requests.ConnectionError:
+            pass  # still starting — wait and retry
+        except Exception as exc:
+            logger.debug("Reflex poll error (will retry): %s", exc)
+        time.sleep(2)
+
+
+def _run_reflex() -> None:
     global _reflex_proc
     env = os.environ.copy()
     env.update({
@@ -53,7 +116,13 @@ def _run_reflex():
         # Tell Reflex where the browser should connect for WebSocket events.
         "REFLEX_API_URL": os.getenv("REFLEX_API_URL",
                                      f"http://localhost:{FLASK_PORT}"),
+        # Suppress Reflex telemetry prompts in non-interactive environments.
+        "TELEMETRY_ENABLED": "false",
     })
+
+    # Ensure the Reflex project is initialised before trying to run it.
+    _ensure_reflex_init(env)
+
     try:
         _reflex_proc = subprocess.Popen(
             [sys.executable, "-m", "reflex", "run", "--env", "dev",
@@ -65,15 +134,24 @@ def _run_reflex():
             stderr=subprocess.STDOUT,
             bufsize=1,
         )
+
+        # Start the HTTP-based readiness poller in parallel.
+        poll_thread = threading.Thread(
+            target=_poll_ready, name="reflex-poll", daemon=True
+        )
+        poll_thread.start()
+
+        # Stream subprocess output to the logger (for debugging).
         for raw in _reflex_proc.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip()
             logger.info("[reflex] %s", line)
-            low = line.lower()
-            if ("app running at" in low or "ready in" in low
-                    or "started server on" in low or "local:" in low
-                    or "localhost:" in low):
-                _reflex_ready.set()
+
         _reflex_proc.wait()
+        if _reflex_proc.returncode != 0:
+            logger.error(
+                "Reflex subprocess exited unexpectedly (code %d).",
+                _reflex_proc.returncode,
+            )
     except Exception as exc:
         logger.exception("Reflex subprocess error: %s", exc)
 
