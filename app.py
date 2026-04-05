@@ -5107,6 +5107,18 @@ def safe_render(template_name, **ctx):
             body += "<pre>" + escape(tb) + "</pre>"
         return body
 
+# ---------------- Reflex proxy helper (used by HTML page routes) ----------------
+def _proxy_to_reflex(path: str = None):
+    """Forward this browser request to the Reflex Next.js frontend.
+
+    Called by Flask GET-page routes so the Reflex app renders the page
+    instead of a (now-removed) Jinja2 template.  The import is deferred so
+    app.py can be loaded before rx_integration is registered at the bottom.
+    """
+    from rx_integration import _proxy_http_to_reflex
+    return _proxy_http_to_reflex(path if path is not None else request.path)
+
+
 # ---------------- Routes ----------------
 @app.route("/icons/<path:filename>")
 def serve_icons(filename):
@@ -5119,7 +5131,7 @@ def serve_icons(filename):
 def home():
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"redirect": "/"})
-    return redirect("/", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/terms')
@@ -5129,7 +5141,7 @@ def terms_page():
     from datetime import datetime
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "terms", "current_date": datetime.now().strftime("%B %Y")})
-    return redirect("/terms", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/privacy')
@@ -5139,7 +5151,7 @@ def privacy_page():
     from datetime import datetime
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "privacy", "current_date": datetime.now().strftime("%B %Y")})
-    return redirect("/privacy", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/get_fiscal_year', methods=['GET'])
@@ -7801,7 +7813,7 @@ def credentials():
         active_name = (active_cred or {}).get("name", "")
         creds_list = [{"name": c.get("name", ""), "vat": str(c.get("vat") or ""), "username": str(c.get("user") or ""), "active": c.get("name") == active_name} for c in creds]
         return jsonify({"credentials": creds_list, "active_credential": active_name})
-    return redirect("/credentials", 302)
+    return _proxy_to_reflex()
 
 
 @app.route("/credentials/edit/<name>", methods=["GET", "POST"])
@@ -8765,7 +8777,7 @@ def fetch():
             "vat_number": str((active_cred or {}).get("vat") or ""),
             "last_fetch_date_display": initial_last_fetch_date or "",
         })
-    return redirect("/fetch", 302)
+    return _proxy_to_reflex()
 def credentials_get_settings():
     """
     Επιστρέφει τα stored general settings σε JSON — βολικό για AJAX αν το cog τα φορτώνει δυναμικά.
@@ -10026,7 +10038,7 @@ def search():
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"results": [], "columns": [], "total": 0})
-    return redirect("/search", 302)
+    return _proxy_to_reflex()
 
 @app.get("/profiles")
 def profiles_page():
@@ -10122,7 +10134,7 @@ def custom_categories_page():
     return_url = url_for("credentials", **return_args)
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "custom_categories", "vat": vat})
-    return redirect("/custom_categories", 302)
+    return _proxy_to_reflex()
 
 
 @app.post("/custom_categories/save")
@@ -14097,7 +14109,7 @@ def list_invoices():
             "error": error or "",
             "active_credential": active_name or "",
         })
-    return redirect("/list", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/list/fragment', methods=['GET'])
@@ -14278,7 +14290,7 @@ def epsilon_preview():
 
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "epsilon_preview", "vat": vat, "rows_count": len(rows)})
-    return redirect("/epsilon/preview", 302)
+    return _proxy_to_reflex()
 
 
 @app.route("/export/fastimport/kinitseis")
@@ -14847,7 +14859,7 @@ def admin_dashboard():
 
         if "application/json" in (request.headers.get("Accept") or ""):
             return jsonify({"page": "admin_dashboard", "recent_activity": recent_activity})
-        return redirect("/admin/dashboard", 302)
+        return _proxy_to_reflex()
     except Exception as e:
         logger.exception(f"Admin dashboard error: {e}")
         flash(f'Error: {str(e)}', 'danger')
@@ -14862,7 +14874,7 @@ def admin_users():
     users = admin_panel.admin_list_all_users()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"users": users})
-    return redirect("/admin/users", 302)
+    return _proxy_to_reflex()
 
 
 @app.route("/admin/users/<int:user_id>")
@@ -14907,7 +14919,7 @@ def admin_groups():
     groups = admin_panel.admin_list_all_groups()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"groups": groups})
-    return redirect("/admin/groups", 302)
+    return _proxy_to_reflex()
 
 
 @app.route("/admin/groups/<int:group_id>")
@@ -14954,7 +14966,7 @@ def admin_group_files(group_id):
     
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"page": "group_files", "group_id": group_id})
-    return redirect("/admin/dashboard", 302)
+    return _proxy_to_reflex()
 
 
 @app.route("/admin/groups/<int:group_id>/delete", methods=['POST'])
@@ -14984,7 +14996,7 @@ def admin_backups():
     groups = admin_panel.admin_list_all_groups()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"backups": backups, "groups": groups})
-    return redirect("/admin/dashboard", 302)
+    return _proxy_to_reflex()
 
 @app.route("/admin/backups/download/<backup_name>")
 @login_required
@@ -15083,7 +15095,7 @@ def admin_activity_logs():
     logs = admin_panel.admin_get_activity_logs(limit=200)
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify({"logs": logs})
-    return redirect("/admin/dashboard", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/admin/settings')
@@ -15093,7 +15105,7 @@ def admin_settings():
     settings = load_settings()
     if "application/json" in (request.headers.get("Accept") or ""):
         return jsonify(settings)
-    return redirect("/admin/settings", 302)
+    return _proxy_to_reflex()
 
 
 @app.route('/admin/settings/save', methods=['POST'])
@@ -15438,7 +15450,7 @@ def admin_send_email():
         users = admin_panel.admin_list_all_users()
         if "application/json" in (request.headers.get("Accept") or ""):
             return jsonify({"users": users})
-        return redirect("/admin/dashboard", 302)
+        return _proxy_to_reflex()
     
     # POST: send email
     try:
