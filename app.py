@@ -15525,7 +15525,8 @@ def api_credentials():
             "active_name": active_name,
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        current_app.logger.exception("api_credentials error")
+        return jsonify({"ok": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/invoices", methods=["GET"])
@@ -15564,7 +15565,8 @@ def api_invoices():
             "total": len(invoices),
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        current_app.logger.exception("api_invoices error")
+        return jsonify({"ok": False, "error": "Internal server error"}), 500
 
 
 if __name__ == "__main__":
