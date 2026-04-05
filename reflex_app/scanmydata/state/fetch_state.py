@@ -2,7 +2,7 @@ import reflex as rx
 import httpx
 from typing import Optional
 
-FLASK_API_BASE = "http://localhost:5000"
+from ..config import FLASK_API_BASE
 
 
 class FetchState(rx.State):

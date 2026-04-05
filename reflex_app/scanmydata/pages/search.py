@@ -2,8 +2,7 @@ import reflex as rx
 import httpx
 from ..components.layout import page_layout, page_header
 from ..components.flash import flash_message
-
-FLASK_API_BASE = "http://localhost:5000"
+from ..config import FLASK_API_BASE
 
 
 class SearchState(rx.State):
@@ -12,6 +11,11 @@ class SearchState(rx.State):
     is_searching: bool = False
     result: dict = {}
     error: str = ""
+
+    @rx.var
+    def has_result(self) -> bool:
+        """True when a search result is available."""
+        return bool(self.result)
 
     def set_mark(self, value: str):
         self.mark_input = value
@@ -129,8 +133,9 @@ def search_page() -> rx.Component:
             box_shadow="0 2px 8px rgba(0,0,0,0.05)",
         ),
         rx.cond(
-            SearchState.result.length() > 0,
+            SearchState.has_result,
             result_card(),
             rx.fragment(),
         ),
     )
+

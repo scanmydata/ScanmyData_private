@@ -1,7 +1,7 @@
 import reflex as rx
 import httpx
 
-FLASK_API_BASE = "http://localhost:5000"
+from ..config import FLASK_API_BASE
 
 
 class AuthState(rx.State):
