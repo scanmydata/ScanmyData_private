@@ -125,5 +125,5 @@
     wireWarningsReload();
   }
 
-  document.addEventListener('DOMContentLoaded', wire);
+  document.addEventListener('DOMContentLoaded', wire, { once: true });
 })();

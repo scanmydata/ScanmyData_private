@@ -11,6 +11,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote, urlencode
 
+try:
+    from scraper_ai_fallback import run_schema_ai_fallback
+except Exception:
+    run_schema_ai_fallback = None
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -892,6 +897,69 @@ def _finalize_detect_result(result):
         result["MARK"] = _normalize_mark_value(result.get("MARK"))
         _normalize_invoice_flag(result)
     return result
+
+
+def _analysis_ai_schema():
+    return {
+        "MARK": {"type": "string", "required": False, "default": None, "description": "Document mark when present"},
+        "issue_date": {"type": "string", "required": False, "default": None, "description": "Issue date"},
+        "issuer_vat": {"type": "string", "required": False, "default": None, "description": "Issuer VAT/AFM"},
+        "issuer_name": {"type": "string", "required": False, "default": None, "description": "Issuer name"},
+        "total_amount": {"type": "string", "required": False, "default": None, "description": "Gross total"},
+        "doc_type": {"type": "string", "required": False, "default": None, "description": "Document type"},
+        "progressive_aa": {"type": "string", "required": False, "default": None, "description": "Document sequence"},
+        "series": {"type": "string", "required": False, "default": None, "description": "Document series"},
+        "is_invoice": {"type": "boolean", "required": False, "default": False, "description": "True for invoice"},
+        "vat_analysis": {"type": "object", "required": False, "default": {}, "description": "VAT analysis map by rate"},
+        "source": {"type": "string", "required": False, "default": "ai_fallback", "description": "Extraction source"},
+    }
+
+
+def _analysis_result_has_min_payload(result):
+    if not isinstance(result, dict):
+        return False
+    base_keys = ("MARK", "issuer_vat", "total_amount", "issue_date", "issuer_name")
+    for key in base_keys:
+        val = result.get(key)
+        if val is not None and str(val).strip() not in ("", "N/A", "None"):
+            return True
+    vat_map = result.get("vat_analysis")
+    if isinstance(vat_map, dict) and any(k for k in vat_map.keys() if k != "__inferred__"):
+        return True
+    return False
+
+
+def _maybe_apply_ai_fallback_analysis(url, result, timeout=20, debug=False, error_hint=""):
+    if _analysis_result_has_min_payload(result):
+        return _finalize_detect_result(result)
+    if run_schema_ai_fallback is None:
+        return _finalize_detect_result(result)
+
+    try:
+        ai_result = run_schema_ai_fallback(
+            url,
+            _analysis_ai_schema(),
+            debug=debug,
+            timeout_sec=max(20, int(timeout)),
+            error_hint=error_hint,
+        )
+    except Exception:
+        ai_result = None
+
+    if not isinstance(ai_result, dict):
+        return _finalize_detect_result(result)
+
+    merged = dict(result or {}) if isinstance(result, dict) else {}
+    for key, val in ai_result.items():
+        if key.startswith("_ai_fallback"):
+            merged[key] = val
+            continue
+        current = merged.get(key)
+        if current is None or str(current).strip() in ("", "N/A", "None"):
+            merged[key] = val
+    if not merged.get("source"):
+        merged["source"] = "ai_fallback"
+    return _finalize_detect_result(merged)
 
 def _text_of(el):
     if not el:
@@ -4403,57 +4471,49 @@ def detect_and_scrape(url, timeout=20, debug=False):
     parsed = urlparse(url)
     domain = (parsed.netloc or "").lower()
     path_l = (parsed.path or "").lower()
-    if "www1.aade.gr" in domain or "www1.gsis.gr" in domain:
-        result = scrape_www1_aade(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain:
-        result = scrape_mydatapi(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "wedoconnect" in domain:
-        result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:
-        result = scrape_s1ecos(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "impact.gr" in domain or "einvoice.impact" in domain:
-        result = scrape_impact(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "epsilonnet.gr" in domain or "epsilon" in domain:
-        result = scrape_epsilon(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "parochos.gr" in domain:
-        result = scrape_epsilon(url, timeout=timeout, debug=debug)  # Χρησιμοποιεί το ίδιο API
-        return _finalize_detect_result(result)
-    if "/filedocument/get/" in path_l or "/docviewer/" in path_l or "/fd/" in path_l:
-        result = scrape_epsilon(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "mydata.primer.gr" in domain or "primer.gr" in domain:
-        result = scrape_primer(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "iview.gr" in domain:
-        result = scrape_iview(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "vs.gr" in domain:
-        result = scrape_vsgr(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "pegcloud.io" in domain or "pegcloud" in domain:
-        result = scrape_pegcloud(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "e-invoicing.gr" in domain:
-        result = scrape_einvoicing_gr(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "megasoft" in domain or "invoicelink" in domain:
-        result = scrape_megasoft(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "simpleinvoicing.gr" in domain or "simpleinvoicing" in domain:
-        result = scrape_simpleinvoicing(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    if "eskap.gr" in domain or "eskap" in domain:
-        result = scrape_eskap(url, timeout=timeout, debug=debug)
-        return _finalize_detect_result(result)
-    # fallback: attempt generic wedoconnect-like scraping then page scanning
-    result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
-    return _finalize_detect_result(result)
+    result = None
+    error_hint = ""
+    try:
+        if "www1.aade.gr" in domain or "www1.gsis.gr" in domain:
+            result = scrape_www1_aade(url, timeout=timeout, debug=debug)
+        elif "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain:
+            result = scrape_mydatapi(url, timeout=timeout, debug=debug)
+        elif "wedoconnect" in domain:
+            result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
+        elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:
+            result = scrape_s1ecos(url, timeout=timeout, debug=debug)
+        elif "impact.gr" in domain or "einvoice.impact" in domain:
+            result = scrape_impact(url, timeout=timeout, debug=debug)
+        elif "epsilonnet.gr" in domain or "epsilon" in domain:
+            result = scrape_epsilon(url, timeout=timeout, debug=debug)
+        elif "parochos.gr" in domain:
+            result = scrape_epsilon(url, timeout=timeout, debug=debug)
+        elif "/filedocument/get/" in path_l or "/docviewer/" in path_l or "/fd/" in path_l:
+            result = scrape_epsilon(url, timeout=timeout, debug=debug)
+        elif "mydata.primer.gr" in domain or "primer.gr" in domain:
+            result = scrape_primer(url, timeout=timeout, debug=debug)
+        elif "iview.gr" in domain:
+            result = scrape_iview(url, timeout=timeout, debug=debug)
+        elif "vs.gr" in domain:
+            result = scrape_vsgr(url, timeout=timeout, debug=debug)
+        elif "pegcloud.io" in domain or "pegcloud" in domain:
+            result = scrape_pegcloud(url, timeout=timeout, debug=debug)
+        elif "e-invoicing.gr" in domain:
+            result = scrape_einvoicing_gr(url, timeout=timeout, debug=debug)
+        elif "megasoft" in domain or "invoicelink" in domain:
+            result = scrape_megasoft(url, timeout=timeout, debug=debug)
+        elif "simpleinvoicing.gr" in domain or "simpleinvoicing" in domain:
+            result = scrape_simpleinvoicing(url, timeout=timeout, debug=debug)
+        elif "eskap.gr" in domain or "eskap" in domain:
+            result = scrape_eskap(url, timeout=timeout, debug=debug)
+        else:
+            error_hint = "unknown scraping domain"
+            result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
+    except Exception as exc:
+        error_hint = f"detect_and_scrape exception: {exc}"
+        result = None
+
+    return _maybe_apply_ai_fallback_analysis(url, result, timeout=timeout, debug=debug, error_hint=error_hint)
 
 # if run as script, quick demo input
 if __name__ == "__main__":

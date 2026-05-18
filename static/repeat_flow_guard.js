@@ -100,7 +100,7 @@
 
   // call once at start
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fetchRepeatConfigOnce);
+    document.addEventListener('DOMContentLoaded', fetchRepeatConfigOnce, { once: true });
   } else {
     fetchRepeatConfigOnce();
   }
@@ -119,7 +119,7 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', installEmptySearchGuard);
+    document.addEventListener('DOMContentLoaded', installEmptySearchGuard, { once: true });
   } else {
     installEmptySearchGuard();
   }
@@ -267,7 +267,7 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', watchSummaryAndEnforceReceiptsRepeat);
+    document.addEventListener('DOMContentLoaded', watchSummaryAndEnforceReceiptsRepeat, { once: true });
   } else {
     watchSummaryAndEnforceReceiptsRepeat();
   }
@@ -293,7 +293,7 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', installSaveSummaryFormGuard);
+    document.addEventListener('DOMContentLoaded', installSaveSummaryFormGuard, { once: true });
   } else {
     installSaveSummaryFormGuard();
   }

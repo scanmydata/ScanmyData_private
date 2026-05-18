@@ -445,10 +445,8 @@
               else if (typeof window.FBP_REINIT === 'function') window.FBP_REINIT();
             } catch(_){ }
             try {
-              if (typeof window.__rcEnsureRepeatUiSync === 'function') window.__rcEnsureRepeatUiSync({ force: true, reason: 'partial-reload' });
+              if (typeof window.__rcEnsureRepeatUiSync === 'function') window.__rcEnsureRepeatUiSync({ reason: 'partial-reload-passive' });
             } catch(_){ }
-            setTimeout(() => { try { if (typeof window.__rcEnsureRepeatUiSync === 'function') window.__rcEnsureRepeatUiSync({ force: true, reason: 'partial-reload-late' }); } catch(_){} }, 130);
-            setTimeout(() => { try { if (typeof window.__rcEnsureRepeatUiSync === 'function') window.__rcEnsureRepeatUiSync({ force: true, reason: 'partial-reload-late2' }); } catch(_){} }, 320);
             try {
               if (typeof window.__searchRepeatHintRender === 'function') window.__searchRepeatHintRender();
             } catch(_){ }

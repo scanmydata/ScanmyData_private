@@ -7,6 +7,11 @@ from urllib.parse import urljoin, urlparse, parse_qs, unquote, urlencode
 import xml.etree.ElementTree as ET
 import os
 
+try:
+    from scraper_ai_fallback import run_schema_ai_fallback
+except Exception:
+    run_schema_ai_fallback = None
+
 # attempt to load a .env file if present so that environment variables can be
 # configured via that file; repeated import will be idempotent.
 try:
@@ -1773,6 +1778,31 @@ def scrape_iview(url):
     return [], None
 
 
+def _invoice_like_ai_schema():
+    return {
+        "MARK": {"type": "string", "required": False, "default": None, "description": "Document mark"},
+        "issuer_vat": {"type": "string", "required": False, "default": None, "description": "Counterpart VAT/AFM"},
+        "issue_date": {"type": "string", "required": False, "default": None, "description": "Issue date"},
+        "total_amount": {"type": "string", "required": False, "default": None, "description": "Document total"},
+        "doc_type": {"type": "string", "required": False, "default": None, "description": "Document type"},
+    }
+
+
+def _try_ai_fallback_for_cli(url, timeout=20, debug=False, error_hint=""):
+    if run_schema_ai_fallback is None:
+        return None
+    try:
+        return run_schema_ai_fallback(
+            url,
+            _invoice_like_ai_schema(),
+            debug=debug,
+            timeout_sec=max(20, int(timeout)),
+            error_hint=error_hint,
+        )
+    except Exception:
+        return None
+
+
 # -------------------- MAIN --------------------
 def main():
     url = input("Εισάγετε το URL: ").strip()
@@ -1841,8 +1871,15 @@ def main():
         marks, counterpart_vat = scrape_megasoft(url)
 
     else:
-        print("Άγνωστο URL. Δεν μπορεί να γίνει scrape.")
-        return
+        ai = _try_ai_fallback_for_cli(url, timeout=20, debug=False, error_hint="unknown scraping domain")
+        if not isinstance(ai, dict):
+            print("Άγνωστο URL. Δεν μπορεί να γίνει scrape.")
+            return
+        source = "AI Fallback"
+        mark = str(ai.get("MARK") or "").strip()
+        vat = str(ai.get("issuer_vat") or "").strip()
+        marks = [mark] if mark else []
+        counterpart_vat = vat or None
 
     print(f"\nΠηγή: {source}")
     if marks:

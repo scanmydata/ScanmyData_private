@@ -5990,6 +5990,111 @@ def api_repeat_entry_get_v2():
     return jsonify(resp)
 
 
+@app.route('/api/search/reload_data', methods=['GET'])
+@monitor_resources('api_search_reload_data')
+def api_search_reload_data():
+    """
+    Επιστρέφει όλα τα δεδομένα που χρειάζεται η σελίδα search για partial reload
+    όταν αλλάζει ο ενεργός πελάτης.
+    
+    Includes:
+    - repeat_entry data (enabled, mapping, profile_name)
+    - AFM rules for invoices (if not in receipts mode)
+    - expense_tags and category_labels
+    - vat_constraints for category restrictions
+    - active vat info
+    - whether AFM rules should be visible (false if in receipts mode)
+    """
+    try:
+        creds = read_credentials_list() or []
+    except Exception:
+        creds = []
+
+    vat = (request.args.get('vat') or "").strip() or None
+    session_cred = (get_active_credential_from_session() if 'get_active_credential_from_session' in globals() else {}) or {}
+    if not vat and isinstance(session_cred, dict):
+        vat = (session_cred.get('vat') or session_cred.get('afm') or "").strip() or None
+
+    base_resp = {
+        "ok": True,
+        "repeat_entry": {"enabled": False, "mapping": {}, "profile_name": ""},
+        "expense_tags": [],
+        "category_labels": {},
+        "vat_constraints": {},
+        "book_category": "Β",
+        "g_category_data": None,
+        "afm_rules": [],
+        "afm_rules_visible": False,
+    }
+
+    if not creds:
+        if vat:
+            base_resp["afm"] = vat
+            base_resp["vat"] = vat
+        return jsonify(base_resp)
+
+    # Find client record by VAT
+    client_rec = None
+    if 'find_active_client_index' in globals():
+        try:
+            idx = find_active_client_index(creds, vat=vat)
+            if idx is not None and 0 <= idx < len(creds) and isinstance(creds[idx], dict):
+                client_rec = creds[idx]
+        except Exception:
+            client_rec = None
+
+    if client_rec is None:
+        for c in creds:
+            try:
+                if str((c.get('vat') or c.get('afm') or '')).strip() == (vat or '').strip():
+                    client_rec = c
+                    break
+            except Exception:
+                continue
+
+    if not client_rec:
+        return jsonify(base_resp)
+
+    try:
+        repeat = client_rec.get('repeat_entry') or {}
+    except Exception:
+        repeat = {}
+
+    tags = _list_invoice_categories(client_rec)
+    labels = _category_labels_for_client(client_rec)
+    constraints = _category_vat_constraints(client_rec)
+    book_category = str((client_rec.get('book_category') or 'Β')).strip().upper() or 'Β'
+
+    g_category_data = None
+    try:
+        from g_category_helpers import is_g_category_active, enrich_categories_with_mtype
+        if is_g_category_active(client_rec):
+            settings = load_settings()
+            if settings:
+                g_category_data = enrich_categories_with_mtype(tags, settings)
+    except Exception:
+        g_category_data = None
+    
+    # Get AFM rules - these are applicable to invoices only
+    afm_rules = _get_afm_rules(creds, vat or "")
+    
+    resp = {
+        "ok": True,
+        "repeat_entry": repeat,
+        "expense_tags": tags,
+        "category_labels": labels,
+        "vat_constraints": constraints,
+        "book_category": book_category,
+        "g_category_data": g_category_data,
+        "afm_rules": afm_rules,
+        "afm_rules_visible": True,  # AFM rules button should be visible unless in receipts mode (handled by JS)
+    }
+    if vat:
+        resp["afm"] = vat
+        resp["vat"] = vat
+    return jsonify(resp)
+
+
 @app.route('/api/repeat_entry/status2', methods=['GET'])
 @monitor_resources('api_repeat_entry_status2')
 def api_repeat_entry_status2():
@@ -10004,6 +10109,7 @@ def search():
     modal_warning = None
     fiscal_mismatch_block = False
     scrape_url_is_receipt = False
+    ai_scrape_fallback_enabled = str(os.getenv("SCRAPER_AI_FALLBACK_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
     classified_flag = False
     classified_message = ""
     is_ajax_search = (
@@ -11119,6 +11225,7 @@ def search():
             "scrape_url_is_receipt": bool(scrape_url_is_receipt),
             "receipt_custom_categories": receipt_custom_categories or [],
             "has_receipt_custom_categories": bool(has_receipt_custom_categories),
+            "ai_scrape_fallback_enabled": bool(ai_scrape_fallback_enabled),
         }), (400 if error else 200)
 
     return safe_render(
@@ -11138,6 +11245,7 @@ def search():
         css_numcols=css_numcols,
         modal_warning=modal_warning,
         scrape_url_is_receipt=scrape_url_is_receipt,
+        ai_scrape_fallback_enabled=ai_scrape_fallback_enabled,
         fiscal_mismatch_block=fiscal_mismatch_block,
         repeat_entry_conf=repeat_entry_conf,
         active_year=active_year_val,
@@ -11750,6 +11858,10 @@ def api_char_profiles_delete():
 
 @app.get("/api/afm_rules")
 def api_afm_rules_get():
+    """
+    Επιστρέφει τους AFM κανόνες για τον ενεργό πελάτη.
+    Προσβάσιμο σε όλα τα μέλη της ομάδας (όχι μόνο admin).
+    """
     vat = request.args.get("vat", "").strip()
     creds = read_credentials_list()
     client = _find_client(creds, vat=vat) if vat else None
@@ -12198,6 +12310,9 @@ def api_scrape_receipt():
         progressive_aa = scraped.get("progressive_aa") or scraped.get("AA") or scraped.get("aa") or ""
         vat_analysis = scraped.get("vat_analysis") if isinstance(scraped.get("vat_analysis"), dict) else {}
         vat_analysis_inferred = bool(scraped.get("vat_analysis_inferred", False))
+        ai_fallback_used = bool(scraped.get("_ai_fallback_used", False))
+        ai_fallback_provider = str(scraped.get("_ai_fallback_provider") or "").strip()
+        ai_fallback_source_url = str(scraped.get("_ai_fallback_source_url") or "").strip()
 
         receipt_analysis = scraped.get("receipt_analysis") if isinstance(scraped.get("receipt_analysis"), list) else []
         if not receipt_analysis and vat_analysis:
@@ -12267,6 +12382,9 @@ def api_scrape_receipt():
         return jsonify({
             "ok": True,
             "mode": mode,
+            "ai_fallback_used": ai_fallback_used,
+            "ai_fallback_provider": ai_fallback_provider,
+            "ai_fallback_source_url": ai_fallback_source_url,
             "is_invoice": bool(is_invoice),
             "mark": mark,
             "issue_date": issue_date,

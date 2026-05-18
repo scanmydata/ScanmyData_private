@@ -59,6 +59,9 @@ function showConfirmDialog(title, message, onConfirm, onCancel) {
   `;
 
   document.body.appendChild(overlay);
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.tabIndex = -1;
 
   const confirmBtn = overlay.querySelector('.confirm-btn');
   const cancelBtn = overlay.querySelector('.cancel-btn');
@@ -66,6 +69,7 @@ function showConfirmDialog(title, message, onConfirm, onCancel) {
 
   const cleanup = () => {
     overlay.remove();
+    document.removeEventListener('keydown', keyHandler, true);
   };
 
   confirmBtn.addEventListener('click', () => {
@@ -91,15 +95,41 @@ function showConfirmDialog(title, message, onConfirm, onCancel) {
     }
   });
 
-  // Close on Escape
-  const escapeHandler = (e) => {
+  const getFocusable = () => Array.from(overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+    .filter(el => !el.disabled && el.getAttribute('aria-hidden') !== 'true' && el.offsetParent !== null);
+
+  const keyHandler = (e) => {
+    if (!document.body.contains(overlay)) return;
     if (e.key === 'Escape') {
-      overlay.removeEventListener('keydown', escapeHandler);
+      e.preventDefault();
       cleanup();
       if (onCancel) onCancel();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = getFocusable();
+    if (!focusable.length) {
+      e.preventDefault();
+      overlay.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
     }
   };
-  overlay.addEventListener('keydown', escapeHandler);
+  document.addEventListener('keydown', keyHandler, true);
+  setTimeout(() => {
+    try {
+      const first = getFocusable()[0] || overlay;
+      first.focus();
+    } catch (_) {}
+  }, 0);
 }
 
 /**
@@ -134,12 +164,16 @@ function showAlertDialog(title, message, onOk) {
   `;
 
   document.body.appendChild(overlay);
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.tabIndex = -1;
 
   const okBtn = overlay.querySelector('.ok-btn');
   const closeBtn = overlay.querySelector('.modal-close');
 
   const cleanup = () => {
     overlay.remove();
+    document.removeEventListener('keydown', keyHandler, true);
   };
 
   okBtn.addEventListener('click', () => {
@@ -160,15 +194,41 @@ function showAlertDialog(title, message, onOk) {
     }
   });
 
-  // Close on Escape
-  const escapeHandler = (e) => {
+  const getFocusable = () => Array.from(overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+    .filter(el => !el.disabled && el.getAttribute('aria-hidden') !== 'true' && el.offsetParent !== null);
+
+  const keyHandler = (e) => {
+    if (!document.body.contains(overlay)) return;
     if (e.key === 'Escape') {
-      overlay.removeEventListener('keydown', escapeHandler);
+      e.preventDefault();
       cleanup();
       if (onOk) onOk();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = getFocusable();
+    if (!focusable.length) {
+      e.preventDefault();
+      overlay.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
     }
   };
-  overlay.addEventListener('keydown', escapeHandler);
+  document.addEventListener('keydown', keyHandler, true);
+  setTimeout(() => {
+    try {
+      const first = getFocusable()[0] || overlay;
+      first.focus();
+    } catch (_) {}
+  }, 0);
 }
 
 /**
@@ -213,7 +273,7 @@ function initializeModalHandlers() {
 
 // Initialize modal handlers when DOM is ready
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeModalHandlers);
+  document.addEventListener('DOMContentLoaded', initializeModalHandlers, { once: true });
 } else {
   initializeModalHandlers();
 }
