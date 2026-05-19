@@ -2089,6 +2089,7 @@ def _maybe_apply_ai_fallback(url, result, timeout=20, debug=False, error_hint=""
             debug=debug,
             timeout_sec=max(20, int(timeout)),
             error_hint=error_hint,
+            include_metadata=False,
         )
     except Exception:
         ai_result = None

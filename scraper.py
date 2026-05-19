@@ -1798,6 +1798,7 @@ def _try_ai_fallback_for_cli(url, timeout=20, debug=False, error_hint=""):
             debug=debug,
             timeout_sec=max(20, int(timeout)),
             error_hint=error_hint,
+            include_metadata=False,
         )
     except Exception:
         return None

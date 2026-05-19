@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -52,7 +53,10 @@ def _capture_rendered_html(url: str, timeout_sec: int = 25) -> Tuple[Optional[st
             browser = p.chromium.launch(headless=headless)
             context = browser.new_context(ignore_https_errors=True)
             page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            except Exception:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
             # SPA pages can keep running after DOM ready. Wait for meaningful content.
             extra_wait_ms = max(3000, _safe_int("SCRAPER_AI_SPA_WAIT_MS", 15000))
@@ -67,7 +71,7 @@ def _capture_rendered_html(url: str, timeout_sec: int = 25) -> Tuple[Optional[st
                             const text = (document.body && document.body.innerText) ? document.body.innerText : '';
                             const compact = String(text || '').replace(/\\s+/g, ' ').trim();
                             const lower = compact.toLowerCase();
-                            const loadingTokens = ['loading', 'φορτ', 'αναμον', 'please wait', 'παρακαλώ περιμένετε'];
+                            const loadingTokens = ['loading', 'φορτ', 'αναμον', 'please wait', 'παρακαλώ περιμένετε', 'spinner', 'ajax', 'fetch', 'upload', 'μεταφόρτ'];
                             const hasLoading = loadingTokens.some(t => lower.includes(t));
                             return {
                                 readyState: document.readyState,
@@ -90,13 +94,37 @@ def _capture_rendered_html(url: str, timeout_sec: int = 25) -> Tuple[Optional[st
             html = page.content()
             final_url = page.url
             body_text = page.evaluate("(document.body && document.body.innerText) ? document.body.innerText : ''")
+
+            iframe_texts: List[str] = []
+            iframe_html_chunks: List[str] = []
+            for frame in page.frames:
+                if frame == page.main_frame:
+                    continue
+                try:
+                    frame_url = frame.url
+                    frame_body = frame.evaluate("(document.body && document.body.innerText) ? document.body.innerText : ''")
+                    frame_html = frame.content()
+                    if frame_body:
+                        iframe_texts.append(str(frame_body))
+                    if frame_html:
+                        iframe_html_chunks.append(f"<!-- FRAME {frame_url} -->\n" + str(frame_html))
+                except Exception:
+                    continue
+
+            if iframe_html_chunks:
+                html = html + "\n<!-- BEGIN FRAME CONTENTS -->\n" + "\n".join(iframe_html_chunks)
+
+            combined_body = str(body_text or "")
+            if iframe_texts:
+                combined_body += "\n" + "\n".join(iframe_texts)
+
             context.close()
             browser.close()
 
             if len((html or "").strip()) < 200:
                 return None, final_url, f"page content too small after wait (text_len={last_len})"
 
-            compact_body = re.sub(r"\s+", " ", str(body_text or "")).strip()
+            compact_body = re.sub(r"\s+", " ", combined_body).strip()
             low = compact_body.lower()
             stuck_loading = any(tok in low for tok in ["loading", "φορτ", "αναμον", "please wait", "παρακαλώ περιμένετε"])
             if len(compact_body) < min_text_chars or stuck_loading:
@@ -310,21 +338,60 @@ def _call_nerve(prompt: str, timeout_sec: int = 45) -> Optional[str]:
         return None
 
 
-def _duckduckgo_get_vqd(timeout_sec: int = 20) -> Optional[str]:
+def _duckduckgo_get_vqd(session: Optional[requests.Session] = None, timeout_sec: int = 20) -> Optional[str]:
     headers = {
         "User-Agent": "scanmydata-ai-fallback/1.0",
-        "Accept": "*/*",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://duckduckgo.com/",
-        "x-vqd-accept": "1",
     }
     try:
-        resp = requests.get("https://duckduckgo.com/duckchat/v1/status", headers=headers, timeout=timeout_sec)
+        if session is None:
+            session = requests.Session()
+        resp = session.get("https://duckduckgo.com/duckchat", headers=headers, timeout=timeout_sec)
+        resp.raise_for_status()
+        match = re.search(r'vqd\s*=\s*"([0-9\-]+)"', resp.text)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+
+    try:
+        if session is None:
+            session = requests.Session()
+        resp = session.get(
+            "https://duckduckgo.com/duckchat/v1/status",
+            headers={
+                "User-Agent": "scanmydata-ai-fallback/1.0",
+                "Accept": "*/*",
+                "Referer": "https://duckduckgo.com/",
+                "x-vqd-accept": "1",
+            },
+            timeout=timeout_sec,
+        )
+        resp.raise_for_status()
         token = str(resp.headers.get("x-vqd-4") or resp.headers.get("X-VQD-4") or "").strip()
         if token:
             return token
     except Exception:
-        return None
+        pass
     return None
+
+
+def _extract_duckduckgo_stream_content(obj: dict[str, Any]) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("message", "text", "answer", "content"):
+        value = obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    parts = []
+    if "choices" in obj and isinstance(obj["choices"], list):
+        for choice in obj["choices"]:
+            if isinstance(choice, dict):
+                msg = choice.get("message") or choice.get("text")
+                if isinstance(msg, str) and msg.strip():
+                    parts.append(msg.strip())
+    return " ".join(parts).strip()
 
 
 def _call_duckduckgo(prompt: str, timeout_sec: int = 45) -> Optional[str]:
@@ -332,7 +399,8 @@ def _call_duckduckgo(prompt: str, timeout_sec: int = 45) -> Optional[str]:
     max_prompt_chars = _safe_int("SCRAPER_AI_MAX_PROMPT_CHARS", 9000)
     compact = compact[:max_prompt_chars]
 
-    vqd = _duckduckgo_get_vqd(timeout_sec=min(timeout_sec, 20))
+    session = requests.Session()
+    vqd = _duckduckgo_get_vqd(session=session, timeout_sec=min(timeout_sec, 20))
     if not vqd:
         return None
 
@@ -345,12 +413,17 @@ def _call_duckduckgo(prompt: str, timeout_sec: int = 45) -> Optional[str]:
         "User-Agent": "scanmydata-ai-fallback/1.0",
         "Accept": "text/event-stream",
         "Content-Type": "application/json",
-        "Referer": "https://duckduckgo.com/",
+        "Referer": "https://duckduckgo.com/duckchat",
+        "Origin": "https://duckduckgo.com",
+        "X-Requested-With": "XMLHttpRequest",
         "x-vqd-4": vqd,
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
     }
 
     try:
-        resp = requests.post(
+        resp = session.post(
             "https://duckduckgo.com/duckchat/v1/chat",
             headers=headers,
             json=payload,
@@ -373,44 +446,49 @@ def _call_duckduckgo(prompt: str, timeout_sec: int = 45) -> Optional[str]:
                 obj = json.loads(chunk)
             except Exception:
                 continue
-            message = obj.get("message") or obj.get("text") or ""
+            message = _extract_duckduckgo_stream_content(obj)
             if message:
-                parts.append(str(message))
+                parts.append(message)
 
-        merged = "".join(parts).strip()
+        merged = " ".join(parts).strip()
         if merged:
             return merged
     except Exception:
         pass
 
     # Legacy/simple style call (as used by older projects); keep as best-effort fallback.
-    try:
-        legacy_payload = {"question": compact}
-        legacy_headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-            "User-Agent": "scanmydata-ai-fallback/1.0",
-        }
-        resp = requests.post(
-            "https://duckduckgo.com/duckchat/v1/chat",
-            json=legacy_payload,
-            headers=legacy_headers,
-            timeout=timeout_sec,
-        )
-        if resp.status_code >= 400:
-            return None
+    for legacy_payload in ({"question": compact}, {"messages": [{"role": "user", "content": compact}]}, {"input": compact}):
         try:
-            obj = resp.json()
-            if isinstance(obj, dict):
-                txt = obj.get("message") or obj.get("text") or obj.get("answer")
-                if isinstance(txt, str) and txt.strip():
-                    return txt
+            legacy_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "scanmydata-ai-fallback/1.0",
+                "Referer": "https://duckduckgo.com/duckchat",
+                "Origin": "https://duckduckgo.com",
+                "X-Requested-With": "XMLHttpRequest",
+                "x-vqd-4": vqd,
+            }
+            resp = session.post(
+                "https://duckduckgo.com/duckchat/v1/chat",
+                json=legacy_payload,
+                headers=legacy_headers,
+                timeout=timeout_sec,
+            )
+            if resp.status_code >= 400:
+                continue
+            try:
+                obj = resp.json()
+                text = _extract_duckduckgo_stream_content(obj)
+                if text:
+                    return text
+            except Exception:
+                pass
+            txt = str(resp.text or "").strip()
+            if txt:
+                return txt
         except Exception:
-            pass
-        txt = str(resp.text or "").strip()
-        return txt or None
-    except Exception:
-        return None
+            continue
+    return None
 
 
 def _parse_provider_chain(provider: str) -> List[str]:
@@ -506,6 +584,106 @@ def _coerce_value(value: Any, value_type: str) -> Any:
     return str(value).strip()
 
 
+def _normalize_date_string(value: str) -> Optional[str]:
+    if not value:
+        return None
+    raw = str(value).strip()
+    raw = re.sub(r"[\u2011\u2012\u2013\u2014]", "-", raw)
+    raw = raw.replace("T", " ").replace(".00", "").replace("/", "/")
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if " " in raw:
+        raw = raw.split(" ")[0]
+    # Normalize separators to slash for parsing
+    raw = raw.replace("-", "/").replace(".", "/")
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y/%m/%d", "%Y/%m/%d", "%Y/%m/%d", "%Y/%m/%d"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            continue
+    m = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})", raw)
+    if m:
+        y, mo, d = m.groups()
+        return f"{int(d):02d}/{int(mo):02d}/{int(y):04d}"
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+    if m:
+        d, mo, y = m.groups()
+        return f"{int(d):02d}/{int(mo):02d}/{int(y):04d}"
+    return raw
+
+
+def _normalize_amount_string(value: str) -> Optional[str]:
+    if value is None:
+        return None
+    s = str(value).strip()
+    s = s.replace("€", "").replace("EUR", "").replace("eur", "").replace(" ", "").replace("\u00A0", "")
+    s = re.sub(r"[^\d,\.\-]", "", s)
+    if not s:
+        return None
+    if s.count(",") and s.count("."):
+        if s.rfind(",") > s.rfind("."):
+            parts = s.split(",")
+            dec = parts[-1]
+            integer = "".join(parts[:-1]).replace(".", "")
+            s = integer + "," + dec
+        else:
+            parts = s.split(".")
+            dec = parts[-1]
+            integer = "".join(parts[:-1]).replace(",", "")
+            s = integer + "," + dec
+    elif s.count(".") and not s.count(","):
+        s = s.replace(".", ",")
+    if s.count(",") > 1:
+        parts = s.split(",")
+        dec = parts[-1]
+        integer = "".join(parts[:-1])
+        s = integer + "," + dec
+    if s.startswith(","):
+        s = s[1:]
+    return s or None
+
+
+def _normalize_vat_or_mark(value: str, key: str) -> Any:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if "vat" in key.lower():
+        digits = re.sub(r"\D", "", raw)
+        return digits or None
+    if key.lower() == "mark":
+        m = re.search(r"\d{15}", raw)
+        return m.group(0) if m else raw
+    return raw
+
+
+def _normalize_fallback_value(key: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    if not isinstance(value, str):
+        return value
+    key_l = key.lower()
+    if "date" in key_l:
+        return _normalize_date_string(value)
+    if "amount" in key_l or key_l in {"total", "gross", "net", "vat_amount", "gross_amount"}:
+        return _normalize_amount_string(value)
+    if key_l in {"issuer_vat", "vat", "seller_vat", "buyer_vat"} or key_l.endswith("_vat"):
+        return _normalize_vat_or_mark(value, key)
+    if key_l == "mark":
+        return _normalize_vat_or_mark(value, key)
+    return value.strip()
+
+
+def _normalize_fallback_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    for key, value in data.items():
+        normalized[key] = _normalize_fallback_value(key, value)
+    return normalized
+
+
 def _validate_and_fill(parsed: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for key, rule in (schema or {}).items():
@@ -520,7 +698,7 @@ def _validate_and_fill(parsed: Dict[str, Any], schema: Dict[str, Any]) -> Dict[s
         if coerced is None and default is not None:
             coerced = default
         out[key] = coerced
-    return out
+    return _normalize_fallback_data(out)
 
 
 def run_schema_ai_fallback(
@@ -530,10 +708,11 @@ def run_schema_ai_fallback(
     debug: bool = False,
     timeout_sec: int = 25,
     error_hint: str = "",
+    include_metadata: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Run AI fallback extraction.
 
-    Returns dict with schema keys and metadata when successful, else None.
+    Returns dict with schema keys and optional metadata when successful, else None.
     """
     if not is_ai_fallback_enabled():
         return None
@@ -564,7 +743,8 @@ def run_schema_ai_fallback(
         return None
 
     data = _validate_and_fill(parsed, schema)
-    data["_ai_fallback_used"] = True
-    data["_ai_fallback_provider"] = used_provider or provider
-    data["_ai_fallback_source_url"] = final_url or url
+    if include_metadata:
+        data["_ai_fallback_used"] = True
+        data["_ai_fallback_provider"] = used_provider or provider
+        data["_ai_fallback_source_url"] = final_url or url
     return data
