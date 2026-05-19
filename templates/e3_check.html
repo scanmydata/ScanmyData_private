@@ -1,0 +1,543 @@
+{% extends "base.html" %}
+{% block title %}Έλεγχος E3 - Έσοδα & Έξοδα{% endblock %}
+
+{% block content %}
+<style>
+  .e3-section {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }
+  .e3-section-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    background: #dbeafe;
+    color: #1e40af;
+    border-radius: 0.375rem;
+    margin-bottom: 1rem;
+  }
+  [data-theme="dark"] .e3-section-title {
+    background: #1e3a8a;
+    color: #93c5fd;
+  }
+
+  .e3-table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid #d1d5db;
+    background: white;
+  }
+  [data-theme="dark"] .e3-table {
+    background: #1f2937;
+    border-color: #4b5563;
+  }
+
+  .e3-table thead {
+    background: #f3f4f6;
+  }
+  [data-theme="dark"] .e3-table thead {
+    background: #111827;
+  }
+
+  .e3-table th {
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    border: 1px solid #d1d5db;
+    font-size: 0.9rem;
+  }
+  [data-theme="dark"] .e3-table th {
+    border-color: #4b5563;
+    color: #e5e7eb;
+  }
+
+  .e3-table td {
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    font-size: 0.9rem;
+  }
+  [data-theme="dark"] .e3-table td {
+    border-color: #4b5563;
+    color: #d1d5db;
+  }
+
+  .e3-table .row-code {
+    font-weight: 600;
+    background: #f9fafb;
+    width: 80px;
+  }
+  [data-theme="dark"] .e3-table .row-code {
+    background: #111827;
+    color: #93c5fd;
+  }
+
+  .e3-table .row-description {
+    text-align: left;
+  }
+
+  .e3-table .col-e3 {
+    text-align: right;
+    width: 120px;
+    background: #fff7ed;
+  }
+  [data-theme="dark"] .e3-table .col-e3 {
+    background: #5a3a1a;
+    color: #fed7aa;
+  }
+
+  .e3-table .col-mydata {
+    text-align: right;
+    width: 120px;
+    background: #f0fdf4;
+  }
+  [data-theme="dark"] .e3-table .col-mydata {
+    background: #1a3a2a;
+    color: #86efac;
+  }
+
+  .e3-table .col-diff {
+    text-align: right;
+    width: 120px;
+    background: #fef2f2;
+  }
+  [data-theme="dark"] .e3-table .col-diff {
+    background: #3a1a1a;
+    color: #fca5a5;
+  }
+
+  .e3-table .diff-negative {
+    color: #dc2626;
+    font-weight: 600;
+  }
+  [data-theme="dark"] .e3-table .diff-negative {
+    color: #fca5a5;
+  }
+
+  .e3-table .diff-zero {
+    color: #059669;
+    font-weight: 600;
+  }
+  [data-theme="dark"] .e3-table .diff-zero {
+    color: #86efac;
+  }
+
+  .e3-table .total-row {
+    background: #ecfdf5;
+    font-weight: 600;
+  }
+  [data-theme="dark"] .e3-table .total-row {
+    background: #064e3b;
+    color: #d1fae5;
+  }
+
+  .e3-table .group-header {
+    background: #e0e7ff;
+    font-weight: 700;
+    color: #3730a3;
+  }
+  [data-theme="dark"] .e3-table .group-header {
+    background: #312e81;
+    color: #a5b4fc;
+  }
+
+  .e3-table .group-subrow {
+    background: #f3f4f6;
+  }
+  [data-theme="dark"] .e3-table .group-subrow {
+    background: #1f2937;
+  }
+
+  .e3-controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .e3-file-input {
+    display: inline-block;
+  }
+
+  .btn-load-excel {
+    background: #10b981;
+    color: white;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.2s;
+  }
+  .btn-load-excel:hover {
+    background: #059669;
+  }
+  [data-theme="dark"] .btn-load-excel {
+    background: #047857;
+  }
+  [data-theme="dark"] .btn-load-excel:hover {
+    background: #10b981;
+  }
+
+  .e3-info-box {
+    background: #fef3c7;
+    color: #92400e;
+    padding: 1rem;
+    border-radius: 0.375rem;
+    margin-bottom: 2rem;
+    border-left: 4px solid #fcd34d;
+  }
+  [data-theme="dark"] .e3-info-box {
+    background: #451a03;
+    color: #fde047;
+    border-left-color: #ca8a04;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e7eb;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+</style>
+
+<div class="max-w-7xl mx-auto p-4">
+  <h1 class="text-3xl font-bold text-gray-800 mb-2">Έλεγχος E3</h1>
+  <p class="text-gray-600 mb-6">Σύγκριση δεδομένων E3 από myDATA με λογιστικά σύνολα</p>
+
+  {% if error %}
+  <div class="bg-red-100 text-red-800 p-4 rounded mb-4 border-l-4 border-red-600">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  {% if message %}
+  <div class="bg-green-100 text-green-800 p-4 rounded mb-4 border-l-4 border-green-600">
+    {{ message }}
+  </div>
+  {% endif %}
+
+  <!-- Credentials & Period Selection -->
+  <div class="bg-white dark:bg-gray-800 rounded-lg p-6 mb-6 shadow">
+    <h2 class="text-lg font-semibold text-gray-800 dark:text-white mb-4">Επιλογή Πελάτη & Περιόδου</h2>
+    
+    <form method="POST" id="e3CheckForm" class="space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Credential Selection -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ενεργός Πελάτης</label>
+          <select name="use_credential" id="e3Credential" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" required>
+            <option value="">-- Επιλέξτε Πελάτη --</option>
+            {% for cred in credentials %}
+            <option value="{{ cred.name }}" {% if cred.name == active_credential %}selected{% endif %}>
+              {{ cred.name }} ({{ cred.vat }})
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Date From -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ημερομηνία Από</label>
+          <input type="text" name="date_from" id="e3DateFrom" placeholder="dd/mm/yyyy" 
+                 class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                 required>
+        </div>
+
+        <!-- Date To -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ημερομηνία Έως</label>
+          <input type="text" name="date_to" id="e3DateTo" placeholder="dd/mm/yyyy"
+                 class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                 required>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          🔄 Φόρτωση E3 Δεδομένων
+        </button>
+        <button type="button" id="loadExcelBtn" class="btn-load-excel">
+          📊 Φόρτωση Excel Λογιστικών
+        </button>
+      </div>
+    </form>
+
+    <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;">
+  </div>
+
+  <!-- E3 Data Display (hidden until data loaded) -->
+  <div id="e3DataContainer" style="display: none;">
+    <div class="e3-info-box">
+      <strong>Σημείωση:</strong> Τα στοιχεία Ε3 ανακτώνται από το myDATA. 
+      Υποστηρίζεται σύγκριση με Excel λογιστικών δεδομένων για εντοπισμό διαφορών.
+    </div>
+
+    <!-- Revenue Section (Έσοδα) -->
+    <div class="e3-section">
+      <div class="e3-section-title">✅ Απόλυτη Συμφωνία - ΕΣΟΔΑ</div>
+      <table class="e3-table">
+        <thead>
+          <tr>
+            <th>ΚΩΔ</th>
+            <th class="row-description">Περιγραφή</th>
+            <th class="col-e3">E3</th>
+            <th class="col-mydata">MYDATA</th>
+            <th class="col-diff">ΔΙΑΦΟΡΑ</th>
+          </tr>
+        </thead>
+        <tbody id="revenueBody">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Expenses Section (Έξοδα) -->
+    <div class="e3-section">
+      <div class="e3-section-title">💰 Δαπάνες & Έξοδα</div>
+      <table class="e3-table">
+        <thead>
+          <tr>
+            <th>ΚΩΔ</th>
+            <th class="row-description">Περιγραφή</th>
+            <th class="col-e3">E3</th>
+            <th class="col-mydata">MYDATA</th>
+            <th class="col-diff">ΔΙΑΦΟΡΑ</th>
+          </tr>
+        </thead>
+        <tbody id="expensesBody">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Informational Section (Πληροφοριακά) -->
+    <div class="e3-section">
+      <div class="e3-section-title">ℹ️ Πληροφοριακά Στοιχεία</div>
+      <table class="e3-table">
+        <thead>
+          <tr>
+            <th>ΚΩΔ</th>
+            <th class="row-description">Περιγραφή</th>
+            <th class="col-e3">E3</th>
+            <th class="col-mydata">MYDATA</th>
+            <th class="col-diff">ΔΙΑΦΟΡΑ</th>
+          </tr>
+        </thead>
+        <tbody id="infoBody">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Table Ζ Section -->
+    <div class="e3-section">
+      <div class="e3-section-title">📋 Πίνακας Ζ (Ζ1, Ζ2, Ζ3)</div>
+      <table class="e3-table">
+        <thead>
+          <tr>
+            <th>ΚΩΔ</th>
+            <th class="row-description">Περιγραφή</th>
+            <th class="col-e3">E3</th>
+            <th class="col-mydata">MYDATA</th>
+            <th class="col-diff">ΔΙΑΦΟΡΑ</th>
+          </tr>
+        </thead>
+        <tbody id="tableZBody">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Status Area -->
+  <div id="e3Status" class="mt-6 text-gray-600 dark:text-gray-400 text-sm"></div>
+</div>
+
+<script>
+  const E3_STRUCTURE = {
+    revenue: [
+      { code: '561', description: 'Πωλήσεις αγαθών και υπηρεσιών' },
+      { code: '562', description: 'Λοιπές δυνητικές έσοδα' },
+      { code: '563', description: 'Παραστατικά τόκοι και συναφή έσοδα' },
+      { code: '564', description: 'Παραστατικές συναλλαγματικές διαφορές' },
+      { code: '565', description: 'Έσοδα αποθεμάτων' },
+      { code: '566', description: 'Κέρδος από διάθεση και αναγραφούντων περιουσιακών στοιχείων' },
+      { code: '567', description: 'Κέρδη από αναστροφή προβλέψεων και αποσβέσεων' },
+      { code: '568', description: 'Κέρδη από επιμήκυνση στην εύλογη αξία' },
+      { code: '570', description: 'Ακόμυτα έσοδα για κέρδη' }
+    ],
+    expenses: [
+      { code: '102', description: 'Αγορές εμπορευμάτων χρήσης (καθαρό ποσό)' },
+      { code: '202', description: 'Αγορές ημιτελικών υλών και αναλώσιμων χρήσης (καθαρό ποσό)' },
+      { code: '302', description: 'Αγορές αποθεμάτων υλών και αναλώσιμων χρήσης (καθαρό ποσό)' },
+      { code: '313', description: 'Αγορές ζύντων - φυτών (καθαρό ποσό)' },
+      { code: '581', description: 'Παροχές εργοδοτών' },
+      { code: '582', description: 'Ζημίες επιστροφής περιουσιακών στοιχείων' },
+      { code: '583', description: 'Χρηστικές συναλλαγματικές διαφορές' },
+      { code: '584', description: 'Ζημίες από διάθεση – αποχρωμάτωση με κακοποροϊοκού περιουσιακών στοιχείων' },
+      { code: '585', description: 'Διάφορα λοιπογραφικά έξοδα' },
+      { code: '586', description: 'Χρησιακή τόκοι και συναφή έξοδα' },
+      { code: '587', description: 'Αποτελέσεις' },
+      { code: '588', description: 'Ακόμυτα έξοδα ζημίες προσθήματα' },
+      { code: '589', description: 'Προβλέψεις (όπως απο προβλέψεις για το προσοστικο)' }
+    ],
+    info: [
+      { code: '101', description: 'Εμπορέματα ενάρξης' },
+      { code: '201', description: 'Πρώτες ύλες και υλικό ενάρξης' },
+      { code: '301', description: 'Πρώτες ύλες και υλικό ενάρξης' },
+      { code: '307', description: 'Προϊόντα και παραγωγή σε ενάρξης ενάρξης' },
+      { code: '312', description: 'Αποθέματα ενάρξης (ζύντων - φυτών)' }
+    ],
+    tableZ: [
+      { description: 'ΠΙΝΑΚΑΣ Ζ - ΓΕΝΙΚΕΣ ΟΙΚΟΝΟΜΙΚΕΣ ΠΛΗΡΟΦΟΡΙΕΣ', is_group: true },
+      { code: 'Ζ1', description: 'Σύνολο Αποθεμάτων Ενάρξης', is_subrow: true },
+      { code: 'Ζ2', description: 'Σύνολο Αποθεμάτων Λήξης', is_subrow: true },
+      { code: 'Ζ3', description: 'Σύνολο Αποθεμάτων Ενδιάμεσης', is_subrow: true }
+    ]
+  };
+
+  document.getElementById('e3CheckForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const credential = document.getElementById('e3Credential').value;
+    const dateFrom = document.getElementById('e3DateFrom').value;
+    const dateTo = document.getElementById('e3DateTo').value;
+
+    if (!credential || !dateFrom || !dateTo) {
+      alert('Παρακαλώ συμπληρώστε όλα τα πεδία');
+      return;
+    }
+
+    const status = document.getElementById('e3Status');
+    status.innerHTML = '<span class="loading-spinner"></span> Φόρτωση δεδομένων...';
+
+    try {
+      const response = await fetch('/api/e3/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential, date_from: dateFrom, date_to: dateTo })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
+
+      populateE3Tables(data);
+      document.getElementById('e3DataContainer').style.display = 'block';
+      status.innerHTML = '✅ Δεδομένα φορτωμένα';
+    } catch (err) {
+      status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+    }
+  });
+
+  function populateE3Tables(data) {
+    const sections = {
+      revenueBody: data.revenue || [],
+      expensesBody: data.expenses || [],
+      infoBody: data.info || [],
+      tableZBody: data.tableZ || []
+    };
+
+    // If no data returned from API, use empty structure
+    if (!data.revenue || !data.revenue.length) {
+      sections.revenueBody = E3_STRUCTURE.revenue.map(row => ({
+        code: row.code,
+        description: row.description,
+        e3_value: 0,
+        mydata_value: 0,
+        diff: 0
+      }));
+      sections.expensesBody = E3_STRUCTURE.expenses.map(row => ({
+        code: row.code,
+        description: row.description,
+        e3_value: 0,
+        mydata_value: 0,
+        diff: 0
+      }));
+      sections.infoBody = E3_STRUCTURE.info.map(row => ({
+        code: row.code,
+        description: row.description,
+        e3_value: 0,
+        mydata_value: 0,
+        diff: 0
+      }));
+      sections.tableZBody = E3_STRUCTURE.tableZ.map(row => ({
+        code: row.code,
+        description: row.description,
+        e3_value: 0,
+        mydata_value: 0,
+        diff: 0
+      }));
+    }
+
+    Object.entries(sections).forEach(([bodyId, rows]) => {
+      const tbody = document.getElementById(bodyId);
+      tbody.innerHTML = '';
+      rows.forEach(row => {
+        const tr = document.createElement('tr');
+        const diffValue = (row.diff || 0);
+        const diffClass = diffValue === 0 ? 'diff-zero' : 'diff-negative';
+        
+        // Support group headers for rows that have is_group flag
+        if (row.is_group) {
+          tr.className = 'group-header';
+          tr.innerHTML = `
+            <td colspan="5" style="padding: 0.75rem 1rem; font-weight: 700;">
+              ${row.description}
+            </td>
+          `;
+        } else {
+          const rowClass = row.is_subrow ? 'group-subrow' : '';
+          tr.className = rowClass;
+          tr.innerHTML = `
+            <td class="row-code">${row.code}</td>
+            <td class="row-description">${row.description}</td>
+            <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
+            <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
+            <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
+          `;
+        }
+        tbody.appendChild(tr);
+      });
+    });
+  }
+
+  function formatNumber(num) {
+    if (num === null || num === undefined) return '—';
+    return parseFloat(num).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  document.getElementById('loadExcelBtn').addEventListener('click', () => {
+    document.getElementById('excelFile').click();
+  });
+
+  document.getElementById('excelFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const status = document.getElementById('e3Status');
+    status.innerHTML = '<span class="loading-spinner"></span> Φόρτωση Excel...';
+
+    const formData = new FormData();
+    formData.append('excel_file', file);
+
+    try {
+      const response = await fetch('/api/e3/upload_excel', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
+
+      status.innerHTML = `✅ Excel φορτώθηκε - ${data.message || 'Δεδομένα ενημερώθηκαν'}`;
+    } catch (err) {
+      status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+    }
+  });
+</script>
+{% endblock %}

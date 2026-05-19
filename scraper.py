@@ -1781,9 +1781,11 @@ def scrape_iview(url):
 def _invoice_like_ai_schema():
     return {
         "MARK": {"type": "string", "required": False, "default": None, "description": "Document mark"},
+        "issuer_name": {"type": "string", "required": False, "default": None, "description": "Document issuer name"},
         "issuer_vat": {"type": "string", "required": False, "default": None, "description": "Counterpart VAT/AFM"},
         "issue_date": {"type": "string", "required": False, "default": None, "description": "Issue date"},
         "total_amount": {"type": "string", "required": False, "default": None, "description": "Document total"},
+        "series": {"type": "string", "required": False, "default": None, "description": "Document series"},
         "doc_type": {"type": "string", "required": False, "default": None, "description": "Document type"},
     }
 

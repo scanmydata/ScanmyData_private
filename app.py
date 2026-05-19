@@ -10109,7 +10109,14 @@ def search():
     modal_warning = None
     fiscal_mismatch_block = False
     scrape_url_is_receipt = False
-    ai_scrape_fallback_enabled = str(os.getenv("SCRAPER_AI_FALLBACK_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
+    ai_fallback_enabled_raw = os.getenv("SCRAPER_AI_FALLBACK_ENABLED")
+    ai_fallback_disabled_raw = os.getenv("SCRAPER_AI_FALLBACK_DISABLED")
+    if ai_fallback_enabled_raw is not None:
+        ai_scrape_fallback_enabled = str(ai_fallback_enabled_raw).strip().lower() in ("1", "true", "yes", "on")
+    elif ai_fallback_disabled_raw is not None:
+        ai_scrape_fallback_enabled = str(ai_fallback_disabled_raw).strip().lower() not in ("1", "true", "yes", "on")
+    else:
+        ai_scrape_fallback_enabled = True
     classified_flag = False
     classified_message = ""
     is_ajax_search = (
@@ -16595,7 +16602,117 @@ def delete_invoices():
 
 
 
-# ---------------- Global error handler ----------------
+# ============= E3 Check Routes =============
+
+@app.route("/e3_check", methods=["GET", "POST"])
+def e3_check():
+    """Display E3 check page for comparing myDATA data with accounting entries."""
+    creds = load_credentials()
+    active_cred = get_active_credential_from_session()
+    active_name = active_cred.get("name") if active_cred else None
+    
+    return safe_render(
+        "e3_check.html",
+        credentials=creds,
+        active_credential=active_name,
+        active_page="e3_check"
+    )
+
+
+@app.route("/api/e3/fetch", methods=["POST"])
+def api_e3_fetch():
+    """Fetch E3 data from myDATA for a given credential and period."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name = str(payload.get("credential") or "").strip()
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        
+        if not credential_name or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Missing credential or dates"}), 400
+        
+        # Validate dates
+        date_from_iso = normalize_input_date_to_iso(date_from)
+        date_to_iso = normalize_input_date_to_iso(date_to)
+        if not date_from_iso or not date_to_iso:
+            return jsonify({"ok": False, "error": "Invalid date format"}), 400
+        
+        # Get credential
+        creds = load_credentials()
+        cred = next((c for c in creds if str(c.get("name") or "").strip() == credential_name), None)
+        if not cred:
+            return jsonify({"ok": False, "error": "Credential not found"}), 404
+        
+        vat = str(cred.get("vat") or "").strip()
+        aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+        aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+        
+        if not aade_user or not aade_key:
+            return jsonify({"ok": False, "error": "Missing AADE credentials"}), 400
+        
+        # Fetch E3 data from myDATA (using dates in dd/mm/yyyy format)
+        from fetch import _fetch_e3_info
+        try:
+            e3_map = _fetch_e3_info(vat, date_from, date_to, aade_user, aade_key, debug=False)
+        except Exception as e:
+            log.exception("Failed to fetch E3 info")
+            return jsonify({"ok": False, "error": f"Failed to fetch E3 data: {str(e)}"}), 500
+        
+        # For now, return mock E3 data structure
+        # In a real implementation, this would parse the E3 response
+        result = {
+            "ok": True,
+            "revenue": [],
+            "expenses": [],
+            "info": [],
+            "tableZ": []
+        }
+        
+        return jsonify(result), 200
+    except Exception as e:
+        log.exception("api_e3_fetch failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/upload_excel", methods=["POST"])
+def api_e3_upload_excel():
+    """Upload Excel file with accounting data (Ισοζύγιο) for E3 comparison.
+
+    Supports both open and closed (κλεισμένο/χρεοπιστωμένο) balance sheets.
+    - Open balance sheet  : E3 amount = ABS(Υπόλοιπο)
+    - Closed balance sheet: for group-6 accounts use Χρέωση,
+                            for group-7 accounts use Πίστωση.
+    A balance sheet is considered closed when leaf-level group-6 accounts
+    have Υπόλοιπο ≈ 0 but Χρέωση > 0 AND Πίστωση > 0.
+    """
+    from e3_processor import process_excel_file
+    try:
+        if "excel_file" not in request.files:
+            return jsonify({"ok": False, "error": "No file provided"}), 400
+        file = request.files["excel_file"]
+        if file.filename == "":
+            return jsonify({"ok": False, "error": "No file selected"}), 400
+        if not file.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "Only Excel files are allowed"}), 400
+        temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
+        file.save(temp_path)
+        try:
+            result = process_excel_file(temp_path)
+        finally:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+        if not result["ok"]:
+            return jsonify(result), 400
+        return jsonify(result), 200
+    except Exception as e:
+        log.exception("api_e3_upload_excel failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ============= End E3 Check Routes =============
+
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
     from werkzeug.exceptions import HTTPException

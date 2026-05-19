@@ -8,6 +8,6 @@ curl -v \
   
 page tour
 
-credentials list partial reload completion
+να προστεθει και στο header menu, και επισης ο ελεγχος ε3 να γινεται το navigation με partial reload καθως και να εμφανιζεται και date picker σωστα ενω λειτουργει με partial reload
 session manager test--
 

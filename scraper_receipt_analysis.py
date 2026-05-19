@@ -911,6 +911,7 @@ def _analysis_ai_schema():
         "series": {"type": "string", "required": False, "default": None, "description": "Document series"},
         "is_invoice": {"type": "boolean", "required": False, "default": False, "description": "True for invoice"},
         "vat_analysis": {"type": "object", "required": False, "default": {}, "description": "VAT analysis map by rate"},
+        "vat_analysis_inferred": {"type": "boolean", "required": False, "default": False, "description": "True when VAT analysis was inferred from totals/text"},
         "source": {"type": "string", "required": False, "default": "ai_fallback", "description": "Extraction source"},
     }
 

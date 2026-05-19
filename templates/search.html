@@ -6657,6 +6657,7 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         if (markInput) {
           markInput.value = '';
           try { markInput.dispatchEvent(new Event('input', { bubbles: true })); } catch(_){ }
+          try { markInput.focus(); } catch(_){ }
         }
         window.__RC_CLEAR_MARK_AFTER_SAVE = false;
       } else if (resolvedMark && markInput) {
@@ -6984,7 +6985,11 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
           try { localStorage.setItem('useReceiptsSwitch','1'); } catch(_){}
           try {
             document.getElementById('scrapeUrlInput') && (document.getElementById('scrapeUrlInput').value = '');
-            document.getElementById('markInput') && (document.getElementById('markInput').value = '');
+            const mi = document.getElementById('markInput');
+            if (mi) {
+              mi.value = '';
+              mi.focus();
+            }
           } catch(_) {}
           try {
             if (typeof partiallyReloadInvoiceTable === 'function') {
@@ -7404,7 +7409,10 @@ evt.preventDefault();
         try {
           if (urlInput) urlInput.value = '';
           const markEl = document.getElementById('markInput');
-          if (markEl) markEl.value = '';
+          if (markEl) {
+            markEl.value = '';
+            markEl.focus();
+          }
           const hiddenUrl = document.getElementById('scrapeUrlField');
           if (hiddenUrl) hiddenUrl.value = '';
           const hiddenCategory = document.getElementById('scrapeCategoryField');
