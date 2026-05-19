@@ -27,6 +27,7 @@ import base64
 import re
 import time
 import errno
+from collections import defaultdict
 from urllib.parse import urlsplit, urlparse, urlunparse
 from logging.handlers import RotatingFileHandler
 import datetime
@@ -16650,22 +16651,71 @@ def api_e3_fetch():
         if not aade_user or not aade_key:
             return jsonify({"ok": False, "error": "Missing AADE credentials"}), 400
         
-        # Fetch E3 data from myDATA (using dates in dd/mm/yyyy format)
-        from fetch import _fetch_e3_info
+        # Fetch and classify strictly from RequestE3Info (no RequestDocs call).
+        unclassified_total = 0.0
+        unclassified_invoices = []
+        classified_marks = set()
+
+        from fetch_e3 import fetch_e3_entries, build_e3_report
         try:
-            e3_map = _fetch_e3_info(vat, date_from, date_to, aade_user, aade_key, debug=False)
+            raw_entries = fetch_e3_entries("0", date_from, date_to, aade_user, aade_key, debug=False)
+
+            mark_totals = defaultdict(float)
+            mark_is_unclassified = {}
+
+            for row in raw_entries or []:
+                mk = str(row.get("invoice_mark") or "").strip()
+                if not mk:
+                    continue
+
+                amount = float(row.get("amount") or 0.0)
+                mark_totals[mk] += amount
+
+                category = str(row.get("classification_category") or "").strip().upper()
+                is_unclassified = category.startswith("ΜΗ") and ("ΧΑΡΑΚΤΗΡΙΣΜ" in category)
+                if mk not in mark_is_unclassified:
+                    mark_is_unclassified[mk] = bool(is_unclassified)
+                elif is_unclassified:
+                    mark_is_unclassified[mk] = True
+
+            for mk, is_unclassified in mark_is_unclassified.items():
+                if is_unclassified:
+                    amount = round(float(mark_totals.get(mk, 0.0)), 2)
+                    unclassified_total += amount
+                    unclassified_invoices.append({
+                        "mark": mk,
+                        "issueDate": "",
+                        "issuerVat": "",
+                        "issuerName": "",
+                        "totalValue": amount,
+                    })
+                else:
+                    classified_marks.add(mk)
+
+            entries = [
+                row for row in (raw_entries or [])
+                if str(row.get("invoice_mark") or "").strip() in classified_marks
+            ]
+
+            report = build_e3_report(entries)
+            report["entries_count"] = len(entries)
+            report["classified_entries_count"] = len(entries)
         except Exception as e:
             log.exception("Failed to fetch E3 info")
             return jsonify({"ok": False, "error": f"Failed to fetch E3 data: {str(e)}"}), 500
-        
-        # For now, return mock E3 data structure
-        # In a real implementation, this would parse the E3 response
+
         result = {
             "ok": True,
-            "revenue": [],
-            "expenses": [],
-            "info": [],
-            "tableZ": []
+            "revenue": report.get("revenue", []),
+            "expenses": report.get("expenses", []),
+            "info": report.get("info", []),
+            "tableZ": report.get("tableZ", []),
+            "entries_count": int(report.get("entries_count", 0)),
+            "classified_marks_count": len(classified_marks),
+            "classification_ready": True,
+            "unclassified_total": round(unclassified_total, 2),
+            "unclassified_count": len(unclassified_invoices),
+            "unclassified_invoices": unclassified_invoices,
         }
         
         return jsonify(result), 200
@@ -16686,6 +16736,23 @@ def api_e3_upload_excel():
     have Υπόλοιπο ≈ 0 but Χρέωση > 0 AND Πίστωση > 0.
     """
     from e3_processor import process_excel_file
+
+    def normalize_bools(value):
+        # Convert numpy/pandas scalar values to Python scalars (e.g. numpy.bool_).
+        if hasattr(value, "item") and not isinstance(value, (str, bytes, bytearray, dict, list, tuple, set)):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, dict):
+            return {k: normalize_bools(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [normalize_bools(v) for v in value]
+        return value
+
     try:
         if "excel_file" not in request.files:
             return jsonify({"ok": False, "error": "No file provided"}), 400
@@ -16704,8 +16771,8 @@ def api_e3_upload_excel():
             except Exception:
                 pass
         if not result["ok"]:
-            return jsonify(result), 400
-        return jsonify(result), 200
+            return jsonify(normalize_bools(result)), 400
+        return jsonify(normalize_bools(result)), 200
     except Exception as e:
         log.exception("api_e3_upload_excel failed")
         return jsonify({"ok": False, "error": str(e)}), 500

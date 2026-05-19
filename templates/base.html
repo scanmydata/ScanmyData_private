@@ -1992,6 +1992,7 @@
             <nav class="layout-header__nav flex gap-3 items-center">
               <a href="{{ url_for('fetch') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='fetch' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">📥 Λήψη Παραστατικών</a>
               <a href="{{ url_for('search') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='search' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">🔍 Αναζήτηση MARK</a>
+              <a href="{{ url_for('e3_check') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='e3_check' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">📋 Έλεγχος E3</a>
               <a href="{{ url_for('credentials') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='credentials' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">🔐 Credentials</a>
               {% if current_user.is_admin or current_user.id == ADMIN_USER_ID %}
                 <a href="{{ url_for('admin_dashboard') }}" class="px-3 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700">⚙️ Admin</a>
@@ -2099,6 +2100,7 @@
             <a href="{{ url_for('home') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🏠 Αρχική</a>
             <a href="{{ url_for('fetch') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📥 Λήψη Παραστατικών</a>
             <a href="{{ url_for('search') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🔍 Αναζήτηση</a>
+            <a href="{{ url_for('e3_check') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📋 Έλεγχος E3</a>
             <a href="{{ url_for('credentials') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🔐 Credentials</a>
           </div>
         </div>
@@ -3915,7 +3917,7 @@
     })();
     
     (function(){
-      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/terms', '/privacy']);
+      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/e3_check', '/terms', '/privacy']);
       let navInFlight = null;
       let pageCaptureTimer = null;
 
@@ -4445,6 +4447,99 @@
             });
           } catch (e) {
             console.warn('Fetch fallback flatpickr init failed', e);
+          }
+        }
+
+        ensureFlatpickrReady().then(initFlatpickr);
+        setTimeout(initFlatpickr, 80);
+        setTimeout(initFlatpickr, 240);
+      }
+
+      function initE3CheckDateInputsFallback(pathname) {
+        if (normalizePath(pathname) !== '/e3_check') return;
+
+        const e3DateInputs = ['e3DateFrom', 'e3DateTo']
+          .map(function(id) { return document.getElementById(id); })
+          .filter(Boolean);
+        if (!e3DateInputs.length) return;
+
+        function formatDateInputWithSlashes(raw) {
+          const digits = String(raw || '').replace(/\D/g, '').slice(0, 8);
+          const dd = digits.slice(0, 2);
+          const mm = digits.slice(2, 4);
+          const yyyy = digits.slice(4, 8);
+          if (digits.length <= 2) return dd;
+          if (digits.length <= 4) return dd + '/' + mm;
+          return dd + '/' + mm + '/' + yyyy;
+        }
+
+        function bindManualDateMask(input) {
+          if (!input || input.dataset.e3MaskBound === '1') return;
+          input.dataset.e3MaskBound = '1';
+          input.addEventListener('input', function() {
+            const next = formatDateInputWithSlashes(input.value);
+            if (input.value !== next) input.value = next;
+          });
+        }
+
+        e3DateInputs.forEach(bindManualDateMask);
+
+        function loadScriptOnce(src) {
+          return new Promise((resolve, reject) => {
+            const existing = document.querySelector('script[src="' + src + '"]');
+            if (existing) {
+              resolve();
+              return;
+            }
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = false;
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error('Failed loading ' + src));
+            document.head.appendChild(s);
+          });
+        }
+
+        function ensureFlatpickrCss() {
+          const href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
+          const existing = document.querySelector('link[rel="stylesheet"][href="' + href + '"]');
+          if (existing) return;
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = href;
+          document.head.appendChild(link);
+        }
+
+        async function ensureFlatpickrReady() {
+          if (typeof window.flatpickr === 'function') return;
+          if (!window.__e3FallbackFlatpickrReady) {
+            window.__e3FallbackFlatpickrReady = (async function() {
+              ensureFlatpickrCss();
+              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
+              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+            })();
+          }
+          try {
+            await window.__e3FallbackFlatpickrReady;
+          } catch (e) {
+            console.warn('E3 fallback could not load flatpickr assets', e);
+          }
+        }
+
+        function initFlatpickr() {
+          if (typeof window.flatpickr !== 'function') return;
+          try {
+            e3DateInputs.forEach(function(input) {
+              if (input && input._flatpickr) input._flatpickr.destroy();
+            });
+          } catch (_) {}
+
+          try {
+            e3DateInputs.forEach(function(input) {
+              window.flatpickr(input, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
+            });
+          } catch (e) {
+            console.warn('E3 fallback flatpickr init failed', e);
           }
         }
 
@@ -5031,6 +5126,7 @@
         initSearchRepeatProfileHintSync(url.pathname);
         initFetchCredentialLockFallback(url.pathname);
         initFetchDateInputsFallback(url.pathname);
+        initE3CheckDateInputsFallback(url.pathname);
         initFetchBulkControlsFallback(url.pathname);
         initFetchModeTabsFallback(url.pathname);
         initFetchBulkActionsFallback(url.pathname);
@@ -5100,6 +5196,7 @@
         initSearchRepeatProfileHintSync(url.pathname);
         initFetchCredentialLockFallback(url.pathname);
         initFetchDateInputsFallback(url.pathname);
+        initE3CheckDateInputsFallback(url.pathname);
         initFetchBulkControlsFallback(url.pathname);
         initFetchModeTabsFallback(url.pathname);
         initFetchBulkActionsFallback(url.pathname);

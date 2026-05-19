@@ -8,13 +8,14 @@
     margin-bottom: 2rem;
   }
   .e3-section-title {
-    font-size: 1.1rem;
-    font-weight: 600;
-    padding: 0.5rem 1rem;
-    background: #dbeafe;
-    color: #1e40af;
-    border-radius: 0.375rem;
-    margin-bottom: 1rem;
+    font-size: 1rem;
+    font-weight: 700;
+    padding: 0.35rem 0.6rem;
+    background: #dbe4f0;
+    color: #1f365a;
+    border: 1px solid #8fa2bc;
+    border-radius: 0.125rem;
+    margin-bottom: 0.55rem;
   }
   [data-theme="dark"] .e3-section-title {
     background: #1e3a8a;
@@ -24,7 +25,7 @@
   .e3-table {
     width: 100%;
     border-collapse: collapse;
-    border: 1px solid #d1d5db;
+    border: 2px solid #6b7280;
     background: white;
   }
   [data-theme="dark"] .e3-table {
@@ -33,18 +34,18 @@
   }
 
   .e3-table thead {
-    background: #f3f4f6;
+    background: #dbe4f0;
   }
   [data-theme="dark"] .e3-table thead {
     background: #111827;
   }
 
   .e3-table th {
-    padding: 0.75rem;
+    padding: 0.34rem 0.45rem;
     text-align: left;
-    font-weight: 600;
-    border: 1px solid #d1d5db;
-    font-size: 0.9rem;
+    font-weight: 700;
+    border: 1px solid #6b7280;
+    font-size: 0.88rem;
   }
   [data-theme="dark"] .e3-table th {
     border-color: #4b5563;
@@ -52,9 +53,9 @@
   }
 
   .e3-table td {
-    padding: 0.75rem;
-    border: 1px solid #d1d5db;
-    font-size: 0.9rem;
+    padding: 0.22rem 0.42rem;
+    border: 1px solid #6b7280;
+    font-size: 0.86rem;
   }
   [data-theme="dark"] .e3-table td {
     border-color: #4b5563;
@@ -63,7 +64,7 @@
 
   .e3-table .row-code {
     font-weight: 600;
-    background: #f9fafb;
+    background: #edf2f7;
     width: 80px;
   }
   [data-theme="dark"] .e3-table .row-code {
@@ -146,6 +147,17 @@
   [data-theme="dark"] .e3-table .group-subrow {
     background: #1f2937;
   }
+  .e3-parent-toggle {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .e3-parent-toggle:hover {
+    background: #eef2ff;
+  }
+  [data-theme="dark"] .e3-parent-toggle:hover {
+    background: #172554;
+  }
 
   .e3-controls {
     display: flex;
@@ -204,6 +216,81 @@
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+
+  .e3-unclassified-card {
+    margin-top: 1rem;
+    border: 1px solid #fcd34d;
+    background: #fffbeb;
+    border-radius: 0.5rem;
+    padding: 0.9rem;
+  }
+  [data-theme="dark"] .e3-unclassified-card {
+    border-color: #92400e;
+    background: #3f2a05;
+  }
+  .e3-unclassified-list {
+    margin-top: 0.75rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    max-height: 260px;
+    overflow-y: auto;
+    background: #fff;
+  }
+  [data-theme="dark"] .e3-unclassified-list {
+    border-color: #4b5563;
+    background: #111827;
+  }
+  .e3-unclassified-item {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 0.88rem;
+  }
+  [data-theme="dark"] .e3-unclassified-item {
+    border-bottom-color: #374151;
+  }
+  .e3-unclassified-item:last-child {
+    border-bottom: none;
+  }
+  .e3-hidden {
+    display: none !important;
+  }
+
+  #waitOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 100000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #waitOverlay > div {
+    background: #fff;
+    padding: 1.5rem;
+    border-radius: 0.75rem;
+    text-align: center;
+    min-width: 300px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+  #waitOverlay .spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3b82f6;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 0.8rem auto;
+  }
+  [data-theme="dark"] #waitOverlay > div {
+    background: #111827;
+    border: 1px solid #374151;
+  }
+  [data-theme="dark"] #waitOverlayTitle {
+    color: #f3f4f6 !important;
+  }
+  [data-theme="dark"] #waitOverlayMsg {
+    color: #cbd5e1 !important;
+  }
 </style>
 
 <div class="max-w-7xl mx-auto p-4">
@@ -231,7 +318,17 @@
         <!-- Credential Selection -->
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ενεργός Πελάτης</label>
-          <select name="use_credential" id="e3Credential" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" required>
+          {% if active_credential %}
+          <select name="use_credential" id="e3CredentialLocked" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-white cursor-not-allowed" required disabled title="Κλειδωμένο στον ενεργό πελάτη">
+            {% for cred in credentials %}
+              {% if cred.name == active_credential %}
+              <option value="{{ cred.name }}" selected>{{ cred.name }} ({{ cred.vat }})</option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Κλειδωμένο στον ενεργό πελάτη από το header.</p>
+          {% else %}
+          <select name="use_credential" id="e3Credential" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" required title="Επιλογή πελάτη">
             <option value="">-- Επιλέξτε Πελάτη --</option>
             {% for cred in credentials %}
             <option value="{{ cred.name }}" {% if cred.name == active_credential %}selected{% endif %}>
@@ -239,6 +336,7 @@
             </option>
             {% endfor %}
           </select>
+          {% endif %}
         </div>
 
         <!-- Date From -->
@@ -259,7 +357,7 @@
       </div>
 
       <div class="flex gap-3">
-        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition">
+        <button type="button" id="loadE3Btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition">
           🔄 Φόρτωση E3 Δεδομένων
         </button>
         <button type="button" id="loadExcelBtn" class="btn-load-excel">
@@ -267,6 +365,21 @@
         </button>
       </div>
     </form>
+
+    <div id="unclassifiedSummaryCard" class="e3-unclassified-card e3-hidden">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div class="text-sm text-gray-700 dark:text-gray-200">Συνολικό ποσό μη χαρακτηρισμένων παραστατικών</div>
+          <div id="unclassifiedTotal" class="text-xl font-semibold text-amber-700 dark:text-amber-300">0,00</div>
+        </div>
+        <button id="toggleUnclassifiedList" type="button" class="px-3 py-2 rounded-md text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
+          Λίστα μη χαρακτηρισμένων (<span id="unclassifiedCount">0</span>)
+        </button>
+      </div>
+      <div id="unclassifiedListWrap" class="e3-unclassified-list e3-hidden">
+        <div id="unclassifiedList"></div>
+      </div>
+    </div>
 
     <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;">
   </div>
@@ -359,52 +472,120 @@
   <div id="e3Status" class="mt-6 text-gray-600 dark:text-gray-400 text-sm"></div>
 </div>
 
+<div id="waitOverlay" aria-hidden="true">
+  <div>
+    <div class="spinner" aria-hidden="true"></div>
+    <div id="waitOverlayTitle" class="text-lg font-semibold text-gray-800">Φόρτωση δεδομένων E3...</div>
+    <div id="waitOverlayMsg" class="text-sm text-gray-600">Παρακαλώ περιμένετε - η διαδικασία μπορεί να διαρκέσει.</div>
+  </div>
+</div>
+
 <script>
+  let E3_LAST_DATA = null;
+  let E3_EXCEL_TOTALS = new Map();
+  let E3_585_EXPANDED = false;
+
+  function showGlobalWaitOverlay(title, message) {
+    const localOverlay = document.getElementById('waitOverlay');
+    const titleEl = document.getElementById('waitOverlayTitle');
+    const msgEl = document.getElementById('waitOverlayMsg');
+    if (titleEl && title) titleEl.textContent = String(title);
+    if (msgEl && message) msgEl.textContent = String(message);
+
+    if (localOverlay) {
+      localOverlay.style.display = 'flex';
+      localOverlay.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function hideGlobalWaitOverlay() {
+    const localOverlay = document.getElementById('waitOverlay');
+    if (localOverlay) {
+      localOverlay.style.display = 'none';
+      localOverlay.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   const E3_STRUCTURE = {
     revenue: [
-      { code: '561', description: 'Πωλήσεις αγαθών και υπηρεσιών' },
-      { code: '562', description: 'Λοιπές δυνητικές έσοδα' },
-      { code: '563', description: 'Παραστατικά τόκοι και συναφή έσοδα' },
-      { code: '564', description: 'Παραστατικές συναλλαγματικές διαφορές' },
-      { code: '565', description: 'Έσοδα αποθεμάτων' },
-      { code: '566', description: 'Κέρδος από διάθεση και αναγραφούντων περιουσιακών στοιχείων' },
-      { code: '567', description: 'Κέρδη από αναστροφή προβλέψεων και αποσβέσεων' },
-      { code: '568', description: 'Κέρδη από επιμήκυνση στην εύλογη αξία' },
-      { code: '570', description: 'Ακόμυτα έσοδα για κέρδη' }
+      { code: '561', description: 'Πωλήσεις αγαθών και υπηρεσιών — Σύνολο' },
+      { code: '561.001', description: 'Χονδρικές - Σύνολο', is_subrow: true },
+      { code: '561.003', description: 'Λιανικές - Σύνολο', is_subrow: true },
+      { code: '562', description: 'Λοιπά συνήθη έσοδα — Σύνολο' },
+      { code: '563', description: 'Πιστωτικοί τόκοι και συναφή — Σύνολο' },
+      { code: '564', description: 'Πιστωτικές συναλλαγματικές διαφορές — Σύνολο' },
+      { code: '565', description: 'Έσοδα συμμετοχών — Σύνολο' },
+      { code: '566', description: 'Κέρδη από διάθεση μη κυκλοφορούντων — Σύνολο' },
+      { code: '567', description: 'Κέρδη από αναστροφή προβλέψεων — Σύνολο' },
+      { code: '568', description: 'Κέρδη από επιμέτρηση στην εύλογη αξία — Σύνολο' },
+      { code: '569', description: 'Φόρος εισοδήματος - έσοδα — Σύνολο' },
+      { code: '570', description: 'Ασυνήθη έσοδα και κέρδη — Σύνολο' }
     ],
     expenses: [
-      { code: '102', description: 'Αγορές εμπορευμάτων χρήσης (καθαρό ποσό)' },
-      { code: '202', description: 'Αγορές ημιτελικών υλών και αναλώσιμων χρήσης (καθαρό ποσό)' },
-      { code: '302', description: 'Αγορές αποθεμάτων υλών και αναλώσιμων χρήσης (καθαρό ποσό)' },
-      { code: '313', description: 'Αγορές ζύντων - φυτών (καθαρό ποσό)' },
-      { code: '581', description: 'Παροχές εργοδοτών' },
-      { code: '582', description: 'Ζημίες επιστροφής περιουσιακών στοιχείων' },
-      { code: '583', description: 'Χρηστικές συναλλαγματικές διαφορές' },
-      { code: '584', description: 'Ζημίες από διάθεση – αποχρωμάτωση με κακοποροϊοκού περιουσιακών στοιχείων' },
-      { code: '585', description: 'Διάφορα λοιπογραφικά έξοδα' },
-      { code: '586', description: 'Χρησιακή τόκοι και συναφή έξοδα' },
-      { code: '587', description: 'Αποτελέσεις' },
-      { code: '588', description: 'Ακόμυτα έξοδα ζημίες προσθήματα' },
-      { code: '589', description: 'Προβλέψεις (όπως απο προβλέψεις για το προσοστικο)' }
+      { description: 'Σύνολο Αγορών και Εξόδων', is_group: true },
+      { code: '102', description: 'Αγορές εμπορευμάτων χρήσης (καθαρό ποσό)', is_subrow: true },
+      { code: '102.001', description: 'Χονδρικές', is_subrow: true },
+      { code: '102.002', description: 'Λιανικές', is_subrow: true },
+      { code: '202', description: 'Αγορές πρώτων υλών και υλικών χρήσης (καθαρό ποσό)', is_subrow: true },
+      { code: '202.001', description: 'Χονδρικές', is_subrow: true },
+      { code: '202.002', description: 'Λιανικές', is_subrow: true },
+      { code: '302', description: 'Αγορές πρώτων υλών και υλικών χρήσης (καθαρό ποσό)', is_subrow: true },
+      { code: '302.001', description: 'Χονδρικές', is_subrow: true },
+      { code: '302.002', description: 'Λιανικές', is_subrow: true },
+      { code: '313', description: 'Αγορές ζώων - φυτών (καθαρό ποσό)', is_subrow: true },
+      { code: '313.001', description: 'Χονδρικές', is_subrow: true },
+      { code: '313.002', description: 'Λιανικές', is_subrow: true },
+      { code: '', description: 'Σύνολο Αγορών' },
+      { description: 'Σύνολο Έξοδα', is_group: true },
+      { code: '581', description: 'Παροχές σε εργαζόμενους — Σύνολο', is_subrow: true },
+      { code: '582', description: 'Ζημιές επιμέτρησης περιουσιακών στοιχείων — Σύνολο', is_subrow: true },
+      { code: '583', description: 'Χρεωστικές συναλλαγματικές διαφορές — Σύνολο', is_subrow: true },
+      { code: '584', description: 'Ζημιές από διάθεση μη κυκλοφορούντων — Σύνολο', is_subrow: true },
+      { code: '585', description: 'Διάφορα λειτουργικά έξοδα — Σύνολο', is_subrow: true },
+      { code: '585.001', description: 'Προμήθειες διαχείρισης ημεδαπής - αλλοδαπής (management fees)', is_subrow: true },
+      { code: '585.002', description: 'Δαπάνες από συνδεδεμένες επιχειρήσεις', is_subrow: true },
+      { code: '585.003', description: 'Δαπάνες από μη συνεργαζόμενα κράτη ή κράτη με προνομιακό φορολογικό καθεστώς', is_subrow: true },
+      { code: '585.004', description: 'Δαπάνες για ενημερωτικές ημερίδες', is_subrow: true },
+      { code: '585.005', description: 'Έξοδα υποδοχής και φιλοξενίας', is_subrow: true },
+      { code: '585.006', description: 'Έξοδα ταξιδίου', is_subrow: true },
+      { code: '585.007', description: 'Ασφαλιστικές εισφορές αυτοαπασχολούμενων', is_subrow: true },
+      { code: '585.008', description: 'Έξοδα και προμήθειες παραγγελιοδόχου για λογαριασμό αγροτών', is_subrow: true },
+      { code: '585.009', description: 'Λοιπές αμοιβές για υπηρεσίες ημεδαπής', is_subrow: true },
+      { code: '585.010', description: 'Λοιπές αμοιβές για υπηρεσίες αλλοδαπής', is_subrow: true },
+      { code: '585.011', description: 'Ενέργεια', is_subrow: true },
+      { code: '585.012', description: 'Ύδρευση', is_subrow: true },
+      { code: '585.013', description: 'Τηλεπικοινωνίες', is_subrow: true },
+      { code: '585.014', description: 'Ενοίκια', is_subrow: true },
+      { code: '585.015', description: 'Διαφήμιση και προβολή', is_subrow: true },
+      { code: '585.016', description: 'Λοιπά έξοδα', is_subrow: true },
+      { code: '585.017', description: 'Ποσό 7% υπέρ ΕΛΚΕ', is_subrow: true },
+      { code: '586', description: 'Χρεωστικοί τόκοι και συναφή έξοδα — Σύνολο', is_subrow: true },
+      { code: '587', description: 'Αποσβέσεις — Σύνολο', is_subrow: true },
+      { code: '588', description: 'Ασυνήθη έξοδα, ζημιές και πρόστιμα — Σύνολο', is_subrow: true },
+      { code: '589', description: 'Προβλέψεις (εκτός προσωπικού) — Σύνολο', is_subrow: true }
     ],
     info: [
-      { code: '101', description: 'Εμπορέματα ενάρξης' },
-      { code: '201', description: 'Πρώτες ύλες και υλικό ενάρξης' },
-      { code: '301', description: 'Πρώτες ύλες και υλικό ενάρξης' },
-      { code: '307', description: 'Προϊόντα και παραγωγή σε ενάρξης ενάρξης' },
-      { code: '312', description: 'Αποθέματα ενάρξης (ζύντων - φυτών)' }
+      { code: '101', description: 'Εμπορεύματα έναρξης' },
+      { code: '201', description: 'Πρώτες ύλες και υλικά έναρξης — Παραγωγική' },
+      { code: '301', description: 'Πρώτες ύλες και υλικά έναρξης — Αγροτική' },
+      { code: '307', description: 'Παραγωγή σε εξέλιξη έναρξης — Αγροτική' },
+      { code: '312', description: 'Αποθέματα έναρξης ζώων - φυτών' }
     ],
     tableZ: [
-      { description: 'ΠΙΝΑΚΑΣ Ζ - ΓΕΝΙΚΕΣ ΟΙΚΟΝΟΜΙΚΕΣ ΠΛΗΡΟΦΟΡΙΕΣ', is_group: true },
-      { code: 'Ζ1', description: 'Σύνολο Αποθεμάτων Ενάρξης', is_subrow: true },
-      { code: 'Ζ2', description: 'Σύνολο Αποθεμάτων Λήξης', is_subrow: true },
-      { code: 'Ζ3', description: 'Σύνολο Αποθεμάτων Ενδιάμεσης', is_subrow: true }
+      { description: 'ΠΙΝΑΚΑΣ Ζ1 - ΣΥΝΟΛΟ ΕΣΟΔΩΝ', is_group: true },
+      { code: '560', description: 'Σύνολο Εσόδων — Σύνολο', is_subrow: true },
+      { description: 'ΠΙΝΑΚΑΣ Ζ2 - ΣΥΝΟΛΟ ΕΞΟΔΩΝ', is_group: true },
+      { code: '580', description: 'Σύνολο Εξόδων — Σύνολο', is_subrow: true },
+      { description: 'ΠΙΝΑΚΑΣ Ζ3 - ΛΟΙΠΑ ΠΛΗΡΟΦΟΡΙΑΚΑ', is_group: true },
+      { code: '595', description: 'Έξοδα σε ιδιοπαραγωγή — Σύνολο', is_subrow: true },
+      { code: '596', description: 'Επιδοτήσεις - Επιχορηγήσεις — Σύνολο', is_subrow: true },
+      { code: '598', description: 'Λοιπά πληροφοριακά — Σύνολο', is_subrow: true }
     ]
   };
 
-  document.getElementById('e3CheckForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const credential = document.getElementById('e3Credential').value;
+  async function loadE3Data() {
+    const credentialSelect = document.querySelector('#e3Credential, #e3CredentialLocked');
+    const credential = credentialSelect ? credentialSelect.value : '';
     const dateFrom = document.getElementById('e3DateFrom').value;
     const dateTo = document.getElementById('e3DateTo').value;
 
@@ -414,7 +595,9 @@
     }
 
     const status = document.getElementById('e3Status');
-    status.innerHTML = '<span class="loading-spinner"></span> Φόρτωση δεδομένων...';
+    status.textContent = 'Φόρτωση δεδομένων...';
+
+    showGlobalWaitOverlay('Φόρτωση δεδομένων E3...', 'Παρακαλώ περιμένετε - γίνεται λήψη και επεξεργασία δεδομένων.');
 
     try {
       const response = await fetch('/api/e3/fetch', {
@@ -426,83 +609,264 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
 
+      E3_LAST_DATA = data;
       populateE3Tables(data);
+      populateUnclassifiedSummary(data);
       document.getElementById('e3DataContainer').style.display = 'block';
       status.innerHTML = '✅ Δεδομένα φορτωμένα';
     } catch (err) {
       status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+    } finally {
+      hideGlobalWaitOverlay();
     }
-  });
+  }
+
+  document.getElementById('loadE3Btn').addEventListener('click', loadE3Data);
+  const e3Form = document.getElementById('e3CheckForm');
+  if (e3Form) {
+    e3Form.addEventListener('submit', (e) => e.preventDefault());
+  }
+
+
+  function round2(value) {
+    const num = Number(value || 0);
+    return Math.round(num * 100) / 100;
+  }
+
+  function displayCodeCandidatesFromExcel(e3Code) {
+    const num = Number(e3Code);
+    if (!Number.isFinite(num)) return [];
+
+    const txt = num.toFixed(3);
+    const parts = txt.split('.');
+    const main = parseInt(parts[0], 10);
+    const sub = (parts[1] || '000');
+    if (!Number.isFinite(main)) return [];
+
+    const candidates = [];
+    candidates.push(String(main));
+    candidates.push(sub === '000' ? String(main) : `${main}.${sub}`);
+
+    if (main >= 100 && main <= 499) {
+      const mappedTotal = 500 + (main % 100);
+      candidates.push(String(mappedTotal));
+      candidates.push(sub === '000' ? String(mappedTotal) : `${mappedTotal}.${sub}`);
+    }
+
+    return candidates;
+  }
+
+  function buildExcelTotalsMap(payload) {
+    const map = new Map();
+    let rows = [];
+
+    if (Array.isArray(payload && payload.e3_totals) && payload.e3_totals.length) {
+      rows = payload.e3_totals;
+    } else {
+      const byTable = payload && payload.e3_by_table;
+      if (byTable && typeof byTable === 'object') {
+        Object.values(byTable).forEach((tableRows) => {
+          if (Array.isArray(tableRows)) rows.push(...tableRows);
+        });
+      }
+    }
+
+    if (!rows.length) return map;
+
+    const knownCodes = new Set([
+      ...E3_STRUCTURE.revenue,
+      ...E3_STRUCTURE.expenses,
+      ...E3_STRUCTURE.info,
+      ...E3_STRUCTURE.tableZ,
+    ].filter(r => r && r.code).map(r => String(r.code)));
+
+    rows.forEach((row) => {
+      const rawAmount = row && row.amount;
+      const amount = typeof rawAmount === 'string'
+        ? Number(rawAmount.replace(/\./g, '').replace(',', '.'))
+        : Number(rawAmount);
+      if (!Number.isFinite(amount)) return;
+
+      const candidates = displayCodeCandidatesFromExcel(row && row.e3_code);
+      const targetCode = candidates.find(c => knownCodes.has(c));
+      if (!targetCode) return;
+
+      map.set(targetCode, round2((map.get(targetCode) || 0) + amount));
+    });
+
+    const opexSubs = Array.from(map.entries()).filter(([code]) => /^585\.\d{3}$/.test(code));
+    if (opexSubs.length && !map.has('585')) {
+      const subtotal = opexSubs.reduce((acc, [, amount]) => acc + Number(amount || 0), 0);
+      map.set('585', round2(subtotal));
+    }
+
+    return map;
+  }
+
+  function mergeExcelIntoRows(rows) {
+    if (!Array.isArray(rows) || !E3_EXCEL_TOTALS || !E3_EXCEL_TOTALS.size) return rows;
+    return rows.map((row) => {
+      if (!row || row.is_group || !row.code) return row;
+      const code = String(row.code);
+      if (!E3_EXCEL_TOTALS.has(code)) return row;
+
+      const excelAmount = round2(E3_EXCEL_TOTALS.get(code));
+      const mydataAmount = round2(row.mydata_value || 0);
+      return {
+        ...row,
+        e3_value: excelAmount,
+        diff: round2(excelAmount - mydataAmount),
+      };
+    });
+  }
 
   function populateE3Tables(data) {
-    const sections = {
-      revenueBody: data.revenue || [],
-      expensesBody: data.expenses || [],
-      infoBody: data.info || [],
-      tableZBody: data.tableZ || []
-    };
-
-    // If no data returned from API, use empty structure
-    if (!data.revenue || !data.revenue.length) {
-      sections.revenueBody = E3_STRUCTURE.revenue.map(row => ({
-        code: row.code,
-        description: row.description,
-        e3_value: 0,
-        mydata_value: 0,
-        diff: 0
-      }));
-      sections.expensesBody = E3_STRUCTURE.expenses.map(row => ({
-        code: row.code,
-        description: row.description,
-        e3_value: 0,
-        mydata_value: 0,
-        diff: 0
-      }));
-      sections.infoBody = E3_STRUCTURE.info.map(row => ({
-        code: row.code,
-        description: row.description,
-        e3_value: 0,
-        mydata_value: 0,
-        diff: 0
-      }));
-      sections.tableZBody = E3_STRUCTURE.tableZ.map(row => ({
-        code: row.code,
-        description: row.description,
-        e3_value: 0,
-        mydata_value: 0,
-        diff: 0
-      }));
+    function rowKey(row) {
+      if (!row || typeof row !== 'object') return '';
+      if (row.is_group) return `group:${String(row.description || '').trim()}`;
+      if (row.code !== undefined && row.code !== null && String(row.code).trim()) {
+        return `code:${String(row.code).trim()}`;
+      }
+      return `desc:${String(row.description || '').trim()}`;
     }
+
+    function mergeWithDefaults(defaultRows, incomingRows) {
+      const incoming = Array.isArray(incomingRows) ? incomingRows : [];
+      const byKey = new Map();
+      incoming.forEach((row) => {
+        const key = rowKey(row);
+        if (key) byKey.set(key, row);
+      });
+
+      const merged = defaultRows.map((base) => {
+        const key = rowKey(base);
+        const actual = key ? byKey.get(key) : null;
+        if (!actual) {
+          return {
+            ...base,
+            e3_value: 0,
+            mydata_value: 0,
+            diff: 0,
+          };
+        }
+        return {
+          ...base,
+          ...actual,
+          code: actual.code ?? base.code,
+          description: actual.description || base.description,
+          is_subrow: base.is_subrow || actual.is_subrow,
+          is_group: base.is_group || actual.is_group,
+        };
+      });
+
+      incoming.forEach((row) => {
+        const key = rowKey(row);
+        if (!key) return;
+        const existsInDefaults = defaultRows.some((base) => rowKey(base) === key);
+        if (!existsInDefaults) merged.push(row);
+      });
+
+      return merged;
+    }
+
+    const sections = {
+      revenueBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.revenue, data.revenue)),
+      expensesBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.expenses, data.expenses)),
+      infoBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.info, data.info)),
+      tableZBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.tableZ, data.tableZ))
+    };
 
     Object.entries(sections).forEach(([bodyId, rows]) => {
       const tbody = document.getElementById(bodyId);
+      if (!tbody) return;
       tbody.innerHTML = '';
-      rows.forEach(row => {
+      rows.forEach((row) => {
+        const rowIsGroup = row.is_group;
+        const rowIsSubrow = row.is_subrow && !rowIsGroup;
+        let groupParentKey = null;
+        if (rowIsSubrow && rows.length > 0) {
+          for (let i = rows.indexOf(row) - 1; i >= 0; i--) {
+            if (rows[i].is_group) {
+              groupParentKey = String(rows[i].description || '').replace(/^\s*/, '').substring(0, 20);
+              break;
+            }
+          }
+        }
+
         const tr = document.createElement('tr');
-        const diffValue = (row.diff || 0);
+        const diffValue = Number(row.diff || 0);
         const diffClass = diffValue === 0 ? 'diff-zero' : 'diff-negative';
-        
-        // Support group headers for rows that have is_group flag
+
         if (row.is_group) {
           tr.className = 'group-header';
+          const groupKey = String(row.description || '').replace(/^\s*/, '').substring(0, 20);
+          tr.setAttribute('data-group-key', groupKey);
+          tr.setAttribute('data-table-body', bodyId);
+          tr.classList.add('e3-group-toggle');
           tr.innerHTML = `
-            <td colspan="5" style="padding: 0.75rem 1rem; font-weight: 700;">
-              ${row.description}
+            <td colspan="5" style="padding: 0.75rem 1rem; font-weight: 700; cursor: pointer;">
+              <span style="user-select: none;">[+] ${row.description}</span>
             </td>
           `;
         } else {
           const rowClass = row.is_subrow ? 'group-subrow' : '';
           tr.className = rowClass;
-          tr.innerHTML = `
-            <td class="row-code">${row.code}</td>
-            <td class="row-description">${row.description}</td>
-            <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
-            <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
-            <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
-          `;
+
+          if (bodyId === 'expensesBody' && row.code === '585') {
+            tr.classList.add('e3-parent-toggle');
+            tr.setAttribute('data-e3-toggle', '585');
+            const arrow = E3_585_EXPANDED ? '[-]' : '[+]';
+            tr.innerHTML = `
+              <td class="row-code">${row.code}</td>
+              <td class="row-description">${arrow} ${row.description}</td>
+              <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
+              <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
+              <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
+            `;
+          } else {
+            tr.innerHTML = `
+              <td class="row-code">${row.code || ''}</td>
+              <td class="row-description">${row.description || ''}</td>
+              <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
+              <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
+              <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
+            `;
+          }
+
+          if (bodyId === 'expensesBody' && row.is_subrow && String(row.code || '').startsWith('585.')) {
+            tr.classList.add('e3-subrow-585');
+            if (!E3_585_EXPANDED) tr.classList.add('e3-hidden');
+          }
         }
+
+        if (groupParentKey) tr.setAttribute('data-parent-group', groupParentKey);
+        if (groupParentKey && bodyId === 'tableZBody') tr.classList.add('e3-hidden');
         tbody.appendChild(tr);
       });
+    });
+
+    bindExpenses585Toggle();
+    bindGroupHeaderToggles();
+  }
+
+  function bindExpenses585Toggle() {
+    const tbody = document.getElementById('expensesBody');
+    if (!tbody || tbody.dataset.bound585 === '1') return;
+    tbody.dataset.bound585 = '1';
+
+    tbody.addEventListener('click', (ev) => {
+      const row = ev.target.closest('tr[data-e3-toggle="585"]');
+      if (!row) return;
+
+      E3_585_EXPANDED = !E3_585_EXPANDED;
+      const subrows = tbody.querySelectorAll('tr.e3-subrow-585');
+      subrows.forEach((tr) => tr.classList.toggle('e3-hidden', !E3_585_EXPANDED));
+
+      const descCell = row.querySelector('.row-description');
+      if (descCell) {
+        const plain = String(descCell.textContent || '').replace(/^\s*\[(?:\+|-)\]\s*/, '');
+        descCell.textContent = `${E3_585_EXPANDED ? '[-]' : '[+]'} ${plain}`;
+      }
     });
   }
 
@@ -510,6 +874,87 @@
     if (num === null || num === undefined) return '—';
     return parseFloat(num).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+
+  function bindGroupHeaderToggles() {
+    document.querySelectorAll('tr.e3-group-toggle').forEach((headerRow) => {
+      if (headerRow.dataset.groupBound === '1') return;
+      headerRow.dataset.groupBound = '1';
+
+      headerRow.addEventListener('click', (ev) => {
+        if (ev.target.closest('a, button, input')) return;
+        const tableBody = document.getElementById(headerRow.getAttribute('data-table-body'));
+        if (!tableBody) return;
+
+        const groupKey = headerRow.getAttribute('data-group-key');
+        const childRows = tableBody.querySelectorAll(`tr[data-parent-group="${groupKey}"]`);
+        const firstSubrow = childRows[0];
+        const isCurrentlyHidden = firstSubrow && firstSubrow.classList.contains('e3-hidden');
+
+        childRows.forEach((child) => {
+          child.classList.toggle('e3-hidden', !isCurrentlyHidden);
+        });
+
+        const spanEl = headerRow.querySelector('span');
+        if (spanEl) {
+          const plain = String(spanEl.textContent || '').replace(/^\s*\[(?:\+|-)\]\s*/, '');
+          spanEl.textContent = `${isCurrentlyHidden ? '[-]' : '[+]'} ${plain}`;
+        }
+      });
+    });
+  }
+
+  function populateUnclassifiedSummary(data) {
+    const card = document.getElementById('unclassifiedSummaryCard');
+    const countEl = document.getElementById('unclassifiedCount');
+    const totalEl = document.getElementById('unclassifiedTotal');
+    const listWrap = document.getElementById('unclassifiedListWrap');
+    const listEl = document.getElementById('unclassifiedList');
+
+    if (!card || !countEl || !totalEl || !listWrap || !listEl) return;
+
+    const rows = Array.isArray(data.unclassified_invoices) ? data.unclassified_invoices : [];
+    const total = Number(data.unclassified_total || 0);
+
+    countEl.textContent = String(rows.length);
+    totalEl.textContent = formatNumber(total);
+
+    listEl.innerHTML = '';
+    if (!rows.length) {
+      const emptyRow = document.createElement('div');
+      emptyRow.className = 'e3-unclassified-item';
+      emptyRow.textContent = 'Δεν υπάρχουν μη χαρακτηρισμένα παραστατικά για την επιλεγμένη περίοδο.';
+      listEl.appendChild(emptyRow);
+    } else {
+      rows.forEach((row) => {
+        const item = document.createElement('div');
+        item.className = 'e3-unclassified-item';
+        const mark = String(row.mark || '').trim();
+        const issueDate = String(row.issueDate || '').trim();
+        const issuerVat = String(row.issuerVat || '').trim();
+        const issuerName = String(row.issuerName || '').trim();
+        const amount = Number(row.totalValue || 0);
+        item.innerHTML = `
+          <div><strong>MARK:</strong> ${mark || '—'} | <strong>Ημ/νία:</strong> ${issueDate || '—'}</div>
+          <div><strong>Εκδότης:</strong> ${issuerName || '—'} ${issuerVat ? '(' + issuerVat + ')' : ''}</div>
+          <div><strong>Σύνολο:</strong> ${formatNumber(amount)}</div>
+        `;
+        listEl.appendChild(item);
+      });
+    }
+
+    card.classList.remove('e3-hidden');
+    listWrap.classList.add('e3-hidden');
+  }
+
+  (function bindUnclassifiedToggle() {
+    const btn = document.getElementById('toggleUnclassifiedList');
+    const wrap = document.getElementById('unclassifiedListWrap');
+    if (!btn || !wrap || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      wrap.classList.toggle('e3-hidden');
+    });
+  })();
 
   document.getElementById('loadExcelBtn').addEventListener('click', () => {
     document.getElementById('excelFile').click();
@@ -520,7 +965,9 @@
     if (!file) return;
 
     const status = document.getElementById('e3Status');
-    status.innerHTML = '<span class="loading-spinner"></span> Φόρτωση Excel...';
+    status.textContent = 'Φόρτωση Excel...';
+
+    showGlobalWaitOverlay('Φόρτωση Excel...', 'Παρακαλώ περιμένετε - γίνεται ανάγνωση του αρχείου λογιστικών.');
 
     const formData = new FormData();
     formData.append('excel_file', file);
@@ -534,10 +981,115 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
 
-      status.innerHTML = `✅ Excel φορτώθηκε - ${data.message || 'Δεδομένα ενημερώθηκαν'}`;
+      E3_EXCEL_TOTALS = buildExcelTotalsMap(data);
+      if (E3_LAST_DATA) {
+        populateE3Tables(E3_LAST_DATA);
+        document.getElementById('e3DataContainer').style.display = 'block';
+      }
+
+      const mappedCount = E3_EXCEL_TOTALS.size;
+      status.innerHTML = `✅ Excel φορτώθηκε - ${data.message || 'Δεδομένα ενημερώθηκαν'} (αντιστοιχίστηκαν ${mappedCount} κωδικοί)`;
     } catch (err) {
       status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+    } finally {
+      hideGlobalWaitOverlay();
+
+      const fileInput = document.getElementById('excelFile');
+      if (fileInput) fileInput.value = '';
     }
   });
+
+  function ensureE3DatePickerReady() {
+    const inputs = ['e3DateFrom', 'e3DateTo']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    if (!inputs.length) return;
+
+    function applyMask(input) {
+      if (!input || input.dataset.e3MaskBound === '1') return;
+      input.dataset.e3MaskBound = '1';
+      input.addEventListener('input', function() {
+        const digits = String(input.value || '').replace(/\D/g, '').slice(0, 8);
+        const dd = digits.slice(0, 2);
+        const mm = digits.slice(2, 4);
+        const yyyy = digits.slice(4, 8);
+        let out = dd;
+        if (digits.length > 2) out += '/' + mm;
+        if (digits.length > 4) out += '/' + yyyy;
+        if (input.value !== out) input.value = out;
+      });
+    }
+
+    function loadScriptOnce(src) {
+      return new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[src="' + src + '"]');
+        if (existing) {
+          resolve();
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = false;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Failed loading ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    function ensureCss() {
+      const href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
+      if (document.querySelector('link[rel="stylesheet"][href="' + href + '"]')) return;
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      document.head.appendChild(link);
+    }
+
+    async function ensureFlatpickrReady() {
+      if (typeof window.flatpickr === 'function') return;
+      if (!window.__e3CheckFlatpickrReadyPromise) {
+        window.__e3CheckFlatpickrReadyPromise = (async function() {
+          ensureCss();
+          await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
+          await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+        })();
+      }
+      try {
+        await window.__e3CheckFlatpickrReadyPromise;
+      } catch (e) {
+        console.warn('E3 page could not load flatpickr assets', e);
+      }
+    }
+
+    function initFlatpickr() {
+      if (typeof window.flatpickr !== 'function') return;
+      try {
+        inputs.forEach((input) => {
+          if (input && input._flatpickr) input._flatpickr.destroy();
+        });
+      } catch (_) {}
+
+      try {
+        inputs.forEach((input) => {
+          window.flatpickr(input, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
+        });
+      } catch (e) {
+        console.warn('E3 page flatpickr init failed', e);
+      }
+    }
+
+    inputs.forEach(applyMask);
+    ensureFlatpickrReady().then(initFlatpickr);
+    setTimeout(initFlatpickr, 80);
+    setTimeout(initFlatpickr, 240);
+  }
+
+  (window.__runOnPageReady || function(fn){
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    } else {
+      fn();
+    }
+  })(ensureE3DatePickerReady);
 </script>
 {% endblock %}
