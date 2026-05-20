@@ -1845,6 +1845,10 @@ function katToPercent(k){
   window._repeatModalVAT = VAT;
   try { window.__RC_ACTIVE_VAT = String(VAT || '').trim(); } catch(_) {}
   try { if (document.body && document.body.dataset) document.body.dataset.activeVat = String(VAT || '').trim(); } catch(_) {}
+  try {
+    window.__repeat_invoice_mtype = '';
+    window.__repeat_receipt_mtype = '';
+  } catch(_) {}
 
   const hint = document.getElementById('charMissingHint');
   if(hint){ hint.style.display='none'; hint.textContent=''; }
@@ -1954,9 +1958,15 @@ function katToPercent(k){
 
   const savedName = String(state.savedName || cachedRepeat.profile_name || '').trim();
   const rememberedName = loadRememberedRepeatProfile(VAT, modeKey);
-  const profileToSelect = savedName || rememberedName;
-  const invoiceMtype = state.invoiceMtype || cachedRepeat.invoice_mtype || window.__repeat_invoice_mtype || "";
-  const receiptMtype = state.receiptMtype || cachedRepeat.receipt_mtype || window.__repeat_receipt_mtype || "";
+  const hasRepeatEntry = !!(
+    savedName ||
+    String(state.invoiceMtype || '').trim() ||
+    String(state.receiptMtype || '').trim() ||
+    (state.activeMap && Object.keys(state.activeMap || {}).length > 0)
+  );
+  const profileToSelect = savedName || (!hasRepeatEntry ? rememberedName : '');
+  const invoiceMtype = String(state.invoiceMtype || '').trim();
+  const receiptMtype = String(state.receiptMtype || '').trim();
 
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
@@ -13085,6 +13095,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('pageshow', () => {
     try { refreshFromBackendVatHint(); } catch(_) {}
+    try {
+      window.__RC_REPEAT_ENTRY_LAST = null;
+      window.__repeat_invoice_mtype = '';
+      window.__repeat_receipt_mtype = '';
+    } catch(_) {}
     try {
       if (typeof initAfmRuleModeButton === 'function') initAfmRuleModeButton();
       if (typeof renderAfmRuleModeButton === 'function') renderAfmRuleModeButton();
