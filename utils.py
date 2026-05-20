@@ -1000,7 +1000,7 @@ def log_user_activity(user_id, group_name, action, details=None, user_email=None
         - 'bulk_fetch_data': {'date_from': str, 'date_to': str, 'vat': str, 'added_docs': int, 'added_summaries': int, 'fetched_count': int}
     """
     try:
-        import firebase_config
+        from firebase import firebase_config
         from datetime import datetime, timezone
         from flask import request
         

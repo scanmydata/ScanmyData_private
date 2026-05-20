@@ -12,6 +12,7 @@ WORKDIR /app
 # - existing libs for pyzbar/pdf2image/Pillow
 # - extra libs required by Playwright Chromium fallback (Megasoft -> MyData button click)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    grep \
     libzbar0 \
     poppler-utils \
     libjpeg-dev \
@@ -56,16 +57,18 @@ RUN pip install --upgrade pip setuptools wheel \
  && find /ms-playwright -type f | grep -qi chrome \
  && echo "Playwright Chromium binary detected"
 
-# Μετά όλος ο κώδικας
+# Set environment variables for persistent storage paths
+ENV DATA_DIR=/data \
+    UPLOADS_DIR=/uploads \
+    PORT=5000
+
+# Copy application files
 COPY . /app
 
-# Δημιουργία φακέλων runtime (ephemeral fs στο Render)
-RUN mkdir -p /app/uploads /app/data && chmod -R 777 /app/uploads /app/data
+# Create persistent storage directories and set permissions
+RUN mkdir -p $UPLOADS_DIR $DATA_DIR && chmod -R 777 $UPLOADS_DIR $DATA_DIR
 
 EXPOSE 5000
 
 # Free tier: 1 worker, 8 threads, logs στο STDOUT
-CMD gunicorn app:app \
-    --bind 0.0.0.0:${PORT:-5000} \
-    --workers 1 --threads 8 --timeout 180 \
-    --access-logfile - --error-logfile -
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-"]

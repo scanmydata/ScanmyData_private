@@ -10,8 +10,8 @@ import requests
 import os
 from firebase_admin import auth as firebase_auth
 from firebase_admin import db, credentials
-import firebase_config
-from encryption import derive_key_from_password, generate_encryption_key
+from . import firebase_config
+from admin.encryption import derive_key_from_password, generate_encryption_key
 
 logger = logging.getLogger(__name__)
 

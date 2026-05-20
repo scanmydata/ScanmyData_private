@@ -12,8 +12,8 @@ import json
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
 from firebase_admin import auth as firebase_auth
-import firebase_config
-from email_utils import send_email
+from . import firebase_config
+from admin.email_utils import send_email
 
 logger = logging.getLogger(__name__)
 

@@ -42,7 +42,7 @@ for k,p in sorted(local_map):
 
 # Now read Firebase
 try:
-    import firebase_config
+    from firebase import firebase_config
     inited = False
     try:
         inited = firebase_config.init_firebase()

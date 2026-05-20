@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scraper import scrape_einvoicing_gr
-from scraper_ai_fallback import run_schema_ai_fallback
+from scraper import run_schema_ai_fallback
 
 URL = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/783c7336-2885-4be0-9381-0b82d10c6b1e_34ei7l8"
 

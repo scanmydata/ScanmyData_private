@@ -9,7 +9,7 @@ try:
 except ImportError:
     import xml.etree.ElementTree as ET
 
-from e3_field_map import E3_FIELD_MAP, OPEX_SUB
+from ..e3_field_map import E3_FIELD_MAP
 
 
 _URL_REQUEST_E3 = "https://mydatapi.aade.gr/myDATA/RequestE3Info"
@@ -256,28 +256,34 @@ def build_e3_report(entries: List[dict]) -> dict:
     def _sub_sum(code: str, sub_keys: List[str]) -> float:
         return round(sum(totals_by_sub.get((code, sk), 0.0) for sk in sub_keys), 2)
 
+    def _meta_subcodes(code: str) -> Dict[str, str]:
+        try:
+            return dict((E3_FIELD_MAP.get(int(code), {}) or {}).get("sub_codes") or {})
+        except Exception:
+            return {}
+
+    def _append_subrows(rows: List[dict], code: str, parent_code: str = None) -> None:
+        sub_codes = _meta_subcodes(code)
+        if not sub_codes:
+            return
+
+        parent = parent_code or code
+        for sub_key in sorted(sub_codes.keys()):
+            rows.append(
+                {
+                    "code": f"{code}.{sub_key}",
+                    "description": sub_codes[sub_key],
+                    "e3_value": 0.0,
+                    "mydata_value": _sub_sum(code, [sub_key]),
+                    "diff": 0.0,
+                    "is_subrow": True,
+                    "parent_code": parent,
+                }
+            )
+
     revenue_rows = []
     revenue_rows.append(_row_for_code("561", totals_by_code.get("561", 0.0)))
-    revenue_rows.append(
-        {
-            "code": "561.001",
-            "description": "Χονδρικές - Σύνολο",
-            "e3_value": 0.0,
-            "mydata_value": _sub_sum("561", ["001", "002"]),
-            "diff": 0.0,
-            "is_subrow": True,
-        }
-    )
-    revenue_rows.append(
-        {
-            "code": "561.003",
-            "description": "Λιανικές - Σύνολο",
-            "e3_value": 0.0,
-            "mydata_value": _sub_sum("561", ["003", "004"]),
-            "diff": 0.0,
-            "is_subrow": True,
-        }
-    )
+    _append_subrows(revenue_rows, "561")
     for code in revenue_codes:
         if code == "561":
             continue
@@ -292,27 +298,7 @@ def build_e3_report(entries: List[dict]) -> dict:
         row["is_subrow"] = True
         expense_rows.append(row)
         purchases_total += float(totals_by_code.get(code, 0.0))
-
-        expense_rows.append(
-            {
-                "code": f"{code}.001",
-                "description": "Χονδρικές",
-                "e3_value": 0.0,
-                "mydata_value": _sub_sum(code, ["001"]),
-                "diff": 0.0,
-                "is_subrow": True,
-            }
-        )
-        expense_rows.append(
-            {
-                "code": f"{code}.002",
-                "description": "Λιανικές",
-                "e3_value": 0.0,
-                "mydata_value": _sub_sum(code, ["002"]),
-                "diff": 0.0,
-                "is_subrow": True,
-            }
-        )
+        _append_subrows(expense_rows, code)
 
     expense_rows.append(
         {
@@ -329,19 +315,8 @@ def build_e3_report(entries: List[dict]) -> dict:
         row = _row_for_code(code, totals_by_code.get(code, 0.0))
         row["is_subrow"] = True
         expense_rows.append(row)
-        if code == "585":
-            for sub_key in sorted(OPEX_SUB.keys()):
-                sub_amount = round(totals_by_sub.get((code, sub_key), 0.0), 2)
-                expense_rows.append(
-                    {
-                        "code": f"585.{sub_key}",
-                        "description": OPEX_SUB[sub_key],
-                        "e3_value": sub_amount,
-                        "mydata_value": sub_amount,
-                        "diff": 0.0,
-                        "is_subrow": True,
-                    }
-                )
+        if code in {"581", "585"}:
+            _append_subrows(expense_rows, code)
 
     info_codes = ["101", "201", "301", "307", "312"]
     info_rows = [_row_for_code(code, totals_by_code.get(code, 0.0)) for code in info_codes]
@@ -362,7 +337,17 @@ def build_e3_report(entries: List[dict]) -> dict:
         _row_for_code("595", totals_by_code.get("595", 0.0)),
         _row_for_code("596", totals_by_code.get("596", 0.0)),
         _row_for_code("598", totals_by_code.get("598", 0.0)),
+        _row_for_code("880", totals_by_code.get("880", 0.0)),
     ]
+
+    _append_subrows(z_rows, "880")
+
+    for code in ("881", "882", "883"):
+        row = _row_for_code(code, totals_by_code.get(code, 0.0))
+        row["is_subrow"] = True
+        # 881/882/883 are siblings of 880, NOT children — no parent_code
+        z_rows.append(row)
+        _append_subrows(z_rows, code)
 
     return {
         "revenue": revenue_rows,

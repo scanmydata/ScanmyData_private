@@ -148,10 +148,7 @@
                             if (typeof window.FBP_INIT_TABULATOR === 'function') window.FBP_INIT_TABULATOR();
                             else if (typeof window.FBP_INIT_TABLE === 'function') window.FBP_INIT_TABLE();
                             try {
-                                if (savedMark && typeof window.FBP_HIGHLIGHT_ROW_BY_MARK === 'function') {
-                                    setTimeout(function(){ try { window.FBP_HIGHLIGHT_ROW_BY_MARK(savedMark); } catch(_) {} }, 80);
-                                    setTimeout(function(){ try { window.FBP_HIGHLIGHT_ROW_BY_MARK(savedMark); } catch(_) {} }, 260);
-                                }
+                                if (typeof window.rcScheduleSearchBoxRefocus === 'function') window.rcScheduleSearchBoxRefocus('receipt-summary-modal-save');
                             } catch(_) {}
                         }
                     }

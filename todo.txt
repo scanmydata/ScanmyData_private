@@ -8,6 +8,5 @@ curl -v \
   
 page tour
 
-να προστεθει και στο header menu, και επισης ο ελεγχος ε3 να γινεται το navigation με partial reload καθως και να εμφανιζεται και date picker σωστα ενω λειτουργει με partial reload
 session manager test--
-
+το κολλαει αν μπω στην σελιδα epsilon preview και γυρισω πισω τοτε φερνει στην επεξεργασια το mtype του προηγουμενου επιλεγμενου προφιλ και κολλαει εκει

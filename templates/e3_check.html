@@ -151,12 +151,47 @@
     cursor: pointer;
     -webkit-user-select: none;
     user-select: none;
+    background: #dbeafe !important;
+    border-left: 3px solid #2563eb !important;
+    font-weight: 600;
+  }
+  .e3-parent-toggle .row-code {
+    background: #dbeafe !important;
+    color: #1e40af;
+  }
+  .e3-parent-toggle .row-description {
+    color: #1e40af;
   }
   .e3-parent-toggle:hover {
-    background: #eef2ff;
+    background: #bfdbfe !important;
+    border-left-color: #1d4ed8 !important;
+  }
+  [data-theme="dark"] .e3-parent-toggle {
+    background: #1e3a5f !important;
+    border-left-color: #3b82f6 !important;
+  }
+  [data-theme="dark"] .e3-parent-toggle .row-code {
+    background: #1e3a5f !important;
+    color: #93c5fd;
+  }
+  [data-theme="dark"] .e3-parent-toggle .row-description {
+    color: #93c5fd;
   }
   [data-theme="dark"] .e3-parent-toggle:hover {
-    background: #172554;
+    background: #172554 !important;
+  }
+  .e3-expand-icon {
+    display: inline-block;
+    width: 1rem;
+    text-align: center;
+    font-size: 0.7rem;
+    margin-right: 0.25rem;
+    transition: transform 0.15s ease;
+    color: #2563eb;
+    font-weight: 900;
+  }
+  [data-theme="dark"] .e3-expand-icon {
+    color: #60a5fa;
   }
 
   .e3-controls {
@@ -261,6 +296,7 @@
     background: rgba(0, 0, 0, 0.5);
     z-index: 100000;
     display: none;
+    pointer-events: none;
     align-items: center;
     justify-content: center;
   }
@@ -483,7 +519,10 @@
 <script>
   let E3_LAST_DATA = null;
   let E3_EXCEL_TOTALS = new Map();
-  let E3_585_EXPANDED = false;
+  const E3_EXPANDED_CODES = new Set();
+  let E3_LOADING = false;
+  let E3_FETCH_CONTROLLER = null;
+  let E3_OVERLAY_TIMEOUT = null;
 
   function showGlobalWaitOverlay(title, message) {
     const localOverlay = document.getElementById('waitOverlay');
@@ -491,17 +530,22 @@
     const msgEl = document.getElementById('waitOverlayMsg');
     if (titleEl && title) titleEl.textContent = String(title);
     if (msgEl && message) msgEl.textContent = String(message);
-
     if (localOverlay) {
       localOverlay.style.display = 'flex';
+      localOverlay.style.pointerEvents = 'all';
       localOverlay.setAttribute('aria-hidden', 'false');
     }
+    // Safety: always hide overlay after 90 seconds max
+    if (E3_OVERLAY_TIMEOUT) clearTimeout(E3_OVERLAY_TIMEOUT);
+    E3_OVERLAY_TIMEOUT = setTimeout(() => { hideGlobalWaitOverlay(); E3_LOADING = false; }, 90000);
   }
 
   function hideGlobalWaitOverlay() {
+    if (E3_OVERLAY_TIMEOUT) { clearTimeout(E3_OVERLAY_TIMEOUT); E3_OVERLAY_TIMEOUT = null; }
     const localOverlay = document.getElementById('waitOverlay');
     if (localOverlay) {
       localOverlay.style.display = 'none';
+      localOverlay.style.pointerEvents = 'none';
       localOverlay.setAttribute('aria-hidden', 'true');
     }
   }
@@ -509,8 +553,14 @@
   const E3_STRUCTURE = {
     revenue: [
       { code: '561', description: 'Πωλήσεις αγαθών και υπηρεσιών — Σύνολο' },
-      { code: '561.001', description: 'Χονδρικές - Σύνολο', is_subrow: true },
-      { code: '561.003', description: 'Λιανικές - Σύνολο', is_subrow: true },
+      { code: '561.001', description: 'Χονδρικές - Επιτηδευματιών', is_subrow: true, parent_code: '561' },
+      { code: '561.002', description: 'Χονδρικές βάσει άρθρ. 39α παρ.5 Κώδικα ΦΠΑ', is_subrow: true, parent_code: '561' },
+      { code: '561.003', description: 'Λιανικές - Ιδιωτική Πελατεία', is_subrow: true, parent_code: '561' },
+      { code: '561.004', description: 'Λιανικές βάσει άρθρ. 39α παρ.5 Κώδικα ΦΠΑ', is_subrow: true, parent_code: '561' },
+      { code: '561.005', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '561' },
+      { code: '561.006', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '561' },
+      { code: '561.007', description: 'Λοιπά', is_subrow: true, parent_code: '561' },
+      { code: '561.008', description: 'Προμήθεια πλανόδιων λαχειοπωλών (παρ.7 άρθρ.29 ν.4172/2013)', is_subrow: true, parent_code: '561' },
       { code: '562', description: 'Λοιπά συνήθη έσοδα — Σύνολο' },
       { code: '563', description: 'Πιστωτικοί τόκοι και συναφή — Σύνολο' },
       { code: '564', description: 'Πιστωτικές συναλλαγματικές διαφορές — Σύνολο' },
@@ -524,41 +574,57 @@
     expenses: [
       { description: 'Σύνολο Αγορών και Εξόδων', is_group: true },
       { code: '102', description: 'Αγορές εμπορευμάτων χρήσης (καθαρό ποσό)', is_subrow: true },
-      { code: '102.001', description: 'Χονδρικές', is_subrow: true },
-      { code: '102.002', description: 'Λιανικές', is_subrow: true },
+      { code: '102.001', description: 'Χονδρικές', is_subrow: true, parent_code: '102' },
+      { code: '102.002', description: 'Λιανικές', is_subrow: true, parent_code: '102' },
+      { code: '102.003', description: 'Αγαθών του άρθρου 39α παρ.5 Κώδικα ΦΠΑ', is_subrow: true, parent_code: '102' },
+      { code: '102.004', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '102' },
+      { code: '102.005', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '102' },
+      { code: '102.006', description: 'Λοιπά', is_subrow: true, parent_code: '102' },
       { code: '202', description: 'Αγορές πρώτων υλών και υλικών χρήσης (καθαρό ποσό)', is_subrow: true },
-      { code: '202.001', description: 'Χονδρικές', is_subrow: true },
-      { code: '202.002', description: 'Λιανικές', is_subrow: true },
+      { code: '202.001', description: 'Χονδρικές', is_subrow: true, parent_code: '202' },
+      { code: '202.002', description: 'Λιανικές', is_subrow: true, parent_code: '202' },
+      { code: '202.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '202' },
+      { code: '202.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '202' },
+      { code: '202.005', description: 'Λοιπά', is_subrow: true, parent_code: '202' },
       { code: '302', description: 'Αγορές πρώτων υλών και υλικών χρήσης (καθαρό ποσό)', is_subrow: true },
-      { code: '302.001', description: 'Χονδρικές', is_subrow: true },
-      { code: '302.002', description: 'Λιανικές', is_subrow: true },
+      { code: '302.001', description: 'Χονδρικές', is_subrow: true, parent_code: '302' },
+      { code: '302.002', description: 'Λιανικές', is_subrow: true, parent_code: '302' },
+      { code: '302.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '302' },
+      { code: '302.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '302' },
+      { code: '302.005', description: 'Λοιπά', is_subrow: true, parent_code: '302' },
       { code: '313', description: 'Αγορές ζώων - φυτών (καθαρό ποσό)', is_subrow: true },
-      { code: '313.001', description: 'Χονδρικές', is_subrow: true },
-      { code: '313.002', description: 'Λιανικές', is_subrow: true },
+      { code: '313.001', description: 'Χονδρικές', is_subrow: true, parent_code: '313' },
+      { code: '313.002', description: 'Λιανικές', is_subrow: true, parent_code: '313' },
+      { code: '313.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '313' },
+      { code: '313.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '313' },
+      { code: '313.005', description: 'Λοιπά', is_subrow: true, parent_code: '313' },
       { code: '', description: 'Σύνολο Αγορών' },
       { description: 'Σύνολο Έξοδα', is_group: true },
       { code: '581', description: 'Παροχές σε εργαζόμενους — Σύνολο', is_subrow: true },
+      { code: '581.001', description: 'Μικτές αποδοχές', is_subrow: true, parent_code: '581' },
+      { code: '581.002', description: 'Εργοδοτικές εισφορές', is_subrow: true, parent_code: '581' },
+      { code: '581.003', description: 'Λοιπές παροχές', is_subrow: true, parent_code: '581' },
       { code: '582', description: 'Ζημιές επιμέτρησης περιουσιακών στοιχείων — Σύνολο', is_subrow: true },
       { code: '583', description: 'Χρεωστικές συναλλαγματικές διαφορές — Σύνολο', is_subrow: true },
       { code: '584', description: 'Ζημιές από διάθεση μη κυκλοφορούντων — Σύνολο', is_subrow: true },
       { code: '585', description: 'Διάφορα λειτουργικά έξοδα — Σύνολο', is_subrow: true },
-      { code: '585.001', description: 'Προμήθειες διαχείρισης ημεδαπής - αλλοδαπής (management fees)', is_subrow: true },
-      { code: '585.002', description: 'Δαπάνες από συνδεδεμένες επιχειρήσεις', is_subrow: true },
-      { code: '585.003', description: 'Δαπάνες από μη συνεργαζόμενα κράτη ή κράτη με προνομιακό φορολογικό καθεστώς', is_subrow: true },
-      { code: '585.004', description: 'Δαπάνες για ενημερωτικές ημερίδες', is_subrow: true },
-      { code: '585.005', description: 'Έξοδα υποδοχής και φιλοξενίας', is_subrow: true },
-      { code: '585.006', description: 'Έξοδα ταξιδίου', is_subrow: true },
-      { code: '585.007', description: 'Ασφαλιστικές εισφορές αυτοαπασχολούμενων', is_subrow: true },
-      { code: '585.008', description: 'Έξοδα και προμήθειες παραγγελιοδόχου για λογαριασμό αγροτών', is_subrow: true },
-      { code: '585.009', description: 'Λοιπές αμοιβές για υπηρεσίες ημεδαπής', is_subrow: true },
-      { code: '585.010', description: 'Λοιπές αμοιβές για υπηρεσίες αλλοδαπής', is_subrow: true },
-      { code: '585.011', description: 'Ενέργεια', is_subrow: true },
-      { code: '585.012', description: 'Ύδρευση', is_subrow: true },
-      { code: '585.013', description: 'Τηλεπικοινωνίες', is_subrow: true },
-      { code: '585.014', description: 'Ενοίκια', is_subrow: true },
-      { code: '585.015', description: 'Διαφήμιση και προβολή', is_subrow: true },
-      { code: '585.016', description: 'Λοιπά έξοδα', is_subrow: true },
-      { code: '585.017', description: 'Ποσό 7% υπέρ ΕΛΚΕ', is_subrow: true },
+      { code: '585.001', description: 'Προμήθειες διαχείρισης ημεδαπής - αλλοδαπής (management fees)', is_subrow: true, parent_code: '585' },
+      { code: '585.002', description: 'Δαπάνες από συνδεδεμένες επιχειρήσεις', is_subrow: true, parent_code: '585' },
+      { code: '585.003', description: 'Δαπάνες από μη συνεργαζόμενα κράτη ή κράτη με προνομιακό φορολογικό καθεστώς', is_subrow: true, parent_code: '585' },
+      { code: '585.004', description: 'Δαπάνες για ενημερωτικές ημερίδες', is_subrow: true, parent_code: '585' },
+      { code: '585.005', description: 'Έξοδα υποδοχής και φιλοξενίας', is_subrow: true, parent_code: '585' },
+      { code: '585.006', description: 'Έξοδα ταξιδίου', is_subrow: true, parent_code: '585' },
+      { code: '585.007', description: 'Ασφαλιστικές εισφορές αυτοαπασχολούμενων', is_subrow: true, parent_code: '585' },
+      { code: '585.008', description: 'Έξοδα και προμήθειες παραγγελιοδόχου για λογαριασμό αγροτών', is_subrow: true, parent_code: '585' },
+      { code: '585.009', description: 'Λοιπές αμοιβές για υπηρεσίες ημεδαπής', is_subrow: true, parent_code: '585' },
+      { code: '585.010', description: 'Λοιπές αμοιβές για υπηρεσίες αλλοδαπής', is_subrow: true, parent_code: '585' },
+      { code: '585.011', description: 'Ενέργεια', is_subrow: true, parent_code: '585' },
+      { code: '585.012', description: 'Ύδρευση', is_subrow: true, parent_code: '585' },
+      { code: '585.013', description: 'Τηλεπικοινωνίες', is_subrow: true, parent_code: '585' },
+      { code: '585.014', description: 'Ενοίκια', is_subrow: true, parent_code: '585' },
+      { code: '585.015', description: 'Διαφήμιση και προβολή', is_subrow: true, parent_code: '585' },
+      { code: '585.016', description: 'Λοιπά έξοδα', is_subrow: true, parent_code: '585' },
+      { code: '585.017', description: 'Ποσό 7% υπέρ ΕΛΚΕ', is_subrow: true, parent_code: '585' },
       { code: '586', description: 'Χρεωστικοί τόκοι και συναφή έξοδα — Σύνολο', is_subrow: true },
       { code: '587', description: 'Αποσβέσεις — Σύνολο', is_subrow: true },
       { code: '588', description: 'Ασυνήθη έξοδα, ζημιές και πρόστιμα — Σύνολο', is_subrow: true },
@@ -579,11 +645,33 @@
       { description: 'ΠΙΝΑΚΑΣ Ζ3 - ΛΟΙΠΑ ΠΛΗΡΟΦΟΡΙΑΚΑ', is_group: true },
       { code: '595', description: 'Έξοδα σε ιδιοπαραγωγή — Σύνολο', is_subrow: true },
       { code: '596', description: 'Επιδοτήσεις - Επιχορηγήσεις — Σύνολο', is_subrow: true },
-      { code: '598', description: 'Λοιπά πληροφοριακά — Σύνολο', is_subrow: true }
+      { code: '598', description: 'Λοιπά πληροφοριακά — Σύνολο', is_subrow: true },
+      { code: '880', description: 'Πωλήσεις παγίων — Σύνολο', is_subrow: true },
+      { code: '880.001', description: 'Χονδρικές', is_subrow: true, parent_code: '880' },
+      { code: '880.002', description: 'Λιανικές', is_subrow: true, parent_code: '880' },
+      { code: '880.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '880' },
+      { code: '880.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '880' },
+      { code: '881', description: 'Πωλήσεις για λογαριασμό Τρίτων — Σύνολο', is_subrow: true },
+      { code: '881.001', description: 'Χονδρικές', is_subrow: true, parent_code: '881' },
+      { code: '881.002', description: 'Λιανικές', is_subrow: true, parent_code: '881' },
+      { code: '881.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '881' },
+      { code: '881.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '881' },
+      { code: '882', description: 'Αγορές ενσώματων παγίων χρήσης — Σύνολο', is_subrow: true },
+      { code: '882.001', description: 'Χονδρικές', is_subrow: true, parent_code: '882' },
+      { code: '882.002', description: 'Λιανικές', is_subrow: true, parent_code: '882' },
+      { code: '882.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '882' },
+      { code: '882.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '882' },
+      { code: '883', description: 'Αγορές μη ενσώματων παγίων χρήσης — Σύνολο', is_subrow: true },
+      { code: '883.001', description: 'Χονδρικές', is_subrow: true, parent_code: '883' },
+      { code: '883.002', description: 'Λιανικές', is_subrow: true, parent_code: '883' },
+      { code: '883.003', description: 'Εξωτερικού - Ενδοκοινοτικές', is_subrow: true, parent_code: '883' },
+      { code: '883.004', description: 'Εξωτερικού - Τρίτες Χώρες', is_subrow: true, parent_code: '883' }
     ]
   };
 
   async function loadE3Data() {
+    if (E3_LOADING) return; // prevent double-click
+
     const credentialSelect = document.querySelector('#e3Credential, #e3CredentialLocked');
     const credential = credentialSelect ? credentialSelect.value : '';
     const dateFrom = document.getElementById('e3DateFrom').value;
@@ -594,6 +682,14 @@
       return;
     }
 
+    // Cancel any previous pending request
+    if (E3_FETCH_CONTROLLER) { try { E3_FETCH_CONTROLLER.abort(); } catch (_) {} }
+    E3_FETCH_CONTROLLER = new AbortController();
+
+    E3_LOADING = true;
+    const btn = document.getElementById('loadE3Btn');
+    if (btn) btn.disabled = true;
+
     const status = document.getElementById('e3Status');
     status.textContent = 'Φόρτωση δεδομένων...';
 
@@ -603,7 +699,8 @@
       const response = await fetch('/api/e3/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential, date_from: dateFrom, date_to: dateTo })
+        body: JSON.stringify({ credential, date_from: dateFrom, date_to: dateTo }),
+        signal: E3_FETCH_CONTROLLER.signal
       });
 
       const data = await response.json();
@@ -615,13 +712,29 @@
       document.getElementById('e3DataContainer').style.display = 'block';
       status.innerHTML = '✅ Δεδομένα φορτωμένα';
     } catch (err) {
-      status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+      if (err.name === 'AbortError') {
+        status.textContent = '';
+      } else {
+        status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+      }
     } finally {
       hideGlobalWaitOverlay();
+      E3_LOADING = false;
+      if (btn) btn.disabled = false;
     }
   }
 
-  document.getElementById('loadE3Btn').addEventListener('click', loadE3Data);
+  (function attachLoadBtn() {
+    const btn = document.getElementById('loadE3Btn');
+    if (btn) {
+      btn.addEventListener('click', loadE3Data);
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        const b = document.getElementById('loadE3Btn');
+        if (b) b.addEventListener('click', loadE3Data);
+      });
+    }
+  })();
   const e3Form = document.getElementById('e3CheckForm');
   if (e3Form) {
     e3Form.addEventListener('submit', (e) => e.preventDefault());
@@ -756,6 +869,7 @@
           description: actual.description || base.description,
           is_subrow: base.is_subrow || actual.is_subrow,
           is_group: base.is_group || actual.is_group,
+          parent_code: actual.parent_code || base.parent_code,
         };
       });
 
@@ -780,93 +894,59 @@
       const tbody = document.getElementById(bodyId);
       if (!tbody) return;
       tbody.innerHTML = '';
-      rows.forEach((row) => {
-        const rowIsGroup = row.is_group;
-        const rowIsSubrow = row.is_subrow && !rowIsGroup;
-        let groupParentKey = null;
-        if (rowIsSubrow && rows.length > 0) {
-          for (let i = rows.indexOf(row) - 1; i >= 0; i--) {
-            if (rows[i].is_group) {
-              groupParentKey = String(rows[i].description || '').replace(/^\s*/, '').substring(0, 20);
-              break;
-            }
-          }
-        }
 
+      const expandableCodes = new Set(['561', '102', '202', '302', '313', '581', '585', '880', '881', '882', '883']);
+
+      rows.forEach((row) => {
         const tr = document.createElement('tr');
         const diffValue = Number(row.diff || 0);
         const diffClass = diffValue === 0 ? 'diff-zero' : 'diff-negative';
 
         if (row.is_group) {
           tr.className = 'group-header';
-          const groupKey = String(row.description || '').replace(/^\s*/, '').substring(0, 20);
-          tr.setAttribute('data-group-key', groupKey);
-          tr.setAttribute('data-table-body', bodyId);
-          tr.classList.add('e3-group-toggle');
           tr.innerHTML = `
-            <td colspan="5" style="padding: 0.75rem 1rem; font-weight: 700; cursor: pointer;">
-              <span style="user-select: none;">[+] ${row.description}</span>
+            <td colspan="5" style="padding: 0.65rem 0.9rem; font-weight: 700;">
+              <span style="user-select: none;">${row.description}</span>
             </td>
           `;
         } else {
           const rowClass = row.is_subrow ? 'group-subrow' : '';
           tr.className = rowClass;
 
-          if (bodyId === 'expensesBody' && row.code === '585') {
+          const rowCode = String(row.code || '').trim();
+          const hasParent = String(row.parent_code || '').trim();
+          const isExpandable = expandableCodes.has(rowCode);
+
+          if (rowCode) tr.setAttribute('data-row-code', rowCode);
+          if (hasParent) tr.setAttribute('data-parent-code', hasParent);
+
+          if (isExpandable) {
             tr.classList.add('e3-parent-toggle');
-            tr.setAttribute('data-e3-toggle', '585');
-            const arrow = E3_585_EXPANDED ? '[-]' : '[+]';
+            tr.setAttribute('data-e3-parent', rowCode);
+            const isOpen = E3_EXPANDED_CODES.has(rowCode);
+            const iconHtml = `<span class="e3-expand-icon" style="transform:rotate(${isOpen ? 90 : 0}deg);display:inline-block">${isOpen ? '&#9660;' : '&#9654;'}</span>`;
             tr.innerHTML = `
-              <td class="row-code">${row.code}</td>
-              <td class="row-description">${arrow} ${row.description}</td>
+              <td class="row-code">${rowCode}</td>
+              <td class="row-description">${iconHtml}${row.description}</td>
               <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
               <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
               <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
             `;
           } else {
             tr.innerHTML = `
-              <td class="row-code">${row.code || ''}</td>
+              <td class="row-code">${rowCode}</td>
               <td class="row-description">${row.description || ''}</td>
               <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
               <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
               <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
             `;
           }
-
-          if (bodyId === 'expensesBody' && row.is_subrow && String(row.code || '').startsWith('585.')) {
-            tr.classList.add('e3-subrow-585');
-            if (!E3_585_EXPANDED) tr.classList.add('e3-hidden');
-          }
         }
-
-        if (groupParentKey) tr.setAttribute('data-parent-group', groupParentKey);
-        if (groupParentKey && bodyId === 'tableZBody') tr.classList.add('e3-hidden');
         tbody.appendChild(tr);
       });
-    });
 
-    bindExpenses585Toggle();
-    bindGroupHeaderToggles();
-  }
-
-  function bindExpenses585Toggle() {
-    const tbody = document.getElementById('expensesBody');
-    if (!tbody || tbody.dataset.bound585 === '1') return;
-    tbody.dataset.bound585 = '1';
-
-    tbody.addEventListener('click', (ev) => {
-      const row = ev.target.closest('tr[data-e3-toggle="585"]');
-      if (!row) return;
-
-      E3_585_EXPANDED = !E3_585_EXPANDED;
-      const subrows = tbody.querySelectorAll('tr.e3-subrow-585');
-      subrows.forEach((tr) => tr.classList.toggle('e3-hidden', !E3_585_EXPANDED));
-
-      const descCell = row.querySelector('.row-description');
-      if (descCell) {
-        const plain = String(descCell.textContent || '').replace(/^\s*\[(?:\+|-)\]\s*/, '');
-        descCell.textContent = `${E3_585_EXPANDED ? '[-]' : '[+]'} ${plain}`;
-      }
+      refreshRowExpansionState(tbody);
+      bindRowExpansionToggles(tbody);
     });
   }
 
@@ -875,31 +955,57 @@
     return parseFloat(num).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
-  function bindGroupHeaderToggles() {
-    document.querySelectorAll('tr.e3-group-toggle').forEach((headerRow) => {
-      if (headerRow.dataset.groupBound === '1') return;
-      headerRow.dataset.groupBound = '1';
+  function bindRowExpansionToggles(tbody) {
+    if (!tbody || tbody.dataset.boundExpand === '1') return;
+    tbody.dataset.boundExpand = '1';
 
-      headerRow.addEventListener('click', (ev) => {
-        if (ev.target.closest('a, button, input')) return;
-        const tableBody = document.getElementById(headerRow.getAttribute('data-table-body'));
-        if (!tableBody) return;
+    tbody.addEventListener('click', (ev) => {
+      const row = ev.target.closest('tr[data-e3-parent]');
+      if (!row) return;
 
-        const groupKey = headerRow.getAttribute('data-group-key');
-        const childRows = tableBody.querySelectorAll(`tr[data-parent-group="${groupKey}"]`);
-        const firstSubrow = childRows[0];
-        const isCurrentlyHidden = firstSubrow && firstSubrow.classList.contains('e3-hidden');
+      const parentCode = String(row.getAttribute('data-e3-parent') || '').trim();
+      if (!parentCode) return;
 
-        childRows.forEach((child) => {
-          child.classList.toggle('e3-hidden', !isCurrentlyHidden);
-        });
+      if (E3_EXPANDED_CODES.has(parentCode)) E3_EXPANDED_CODES.delete(parentCode);
+      else E3_EXPANDED_CODES.add(parentCode);
 
-        const spanEl = headerRow.querySelector('span');
-        if (spanEl) {
-          const plain = String(spanEl.textContent || '').replace(/^\s*\[(?:\+|-)\]\s*/, '');
-          spanEl.textContent = `${isCurrentlyHidden ? '[-]' : '[+]'} ${plain}`;
-        }
-      });
+      refreshRowExpansionState(tbody);
+    });
+  }
+
+  function refreshRowExpansionState(tbody) {
+    if (!tbody) return;
+
+    const rowsByCode = new Map();
+    tbody.querySelectorAll('tr[data-row-code]').forEach((row) => {
+      const code = String(row.getAttribute('data-row-code') || '').trim();
+      if (code) rowsByCode.set(code, row);
+    });
+
+    function isVisibleByParents(row) {
+      let parentCode = String(row.getAttribute('data-parent-code') || '').trim();
+      while (parentCode) {
+        if (!E3_EXPANDED_CODES.has(parentCode)) return false;
+        const parentRow = rowsByCode.get(parentCode);
+        if (!parentRow) return true;
+        parentCode = String(parentRow.getAttribute('data-parent-code') || '').trim();
+      }
+      return true;
+    }
+
+    tbody.querySelectorAll('tr').forEach((row) => {
+      if (!row.hasAttribute('data-parent-code')) return;
+      row.classList.toggle('e3-hidden', !isVisibleByParents(row));
+    });
+
+    tbody.querySelectorAll('tr[data-e3-parent]').forEach((row) => {
+      const code = String(row.getAttribute('data-e3-parent') || '').trim();
+      const iconEl = row.querySelector('.e3-expand-icon');
+      if (iconEl) {
+        const isOpen = E3_EXPANDED_CODES.has(code);
+        iconEl.innerHTML = isOpen ? '&#9660;' : '&#9654;';
+        iconEl.style.transform = `rotate(${isOpen ? 0 : 0}deg)`;
+      }
     });
   }
 

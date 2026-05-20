@@ -8,7 +8,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from activity_monitor import monitor_resources
+from admin.activity_monitor import monitor_resources
 
 # Load environment variables
 try:

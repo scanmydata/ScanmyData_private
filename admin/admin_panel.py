@@ -9,8 +9,8 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from pathlib import Path
 from models import db, User, Group, UserGroup
-import firebase_config
-from firebase_config import firebase_log_activity
+from firebase import firebase_config
+from firebase.firebase_config import firebase_log_activity
 
 logger = logging.getLogger(__name__)
 

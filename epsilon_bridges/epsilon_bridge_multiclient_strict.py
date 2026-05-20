@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from activity_monitor import monitor_resources
+from admin.activity_monitor import monitor_resources
 
 # ----------------------- basic utils -----------------------
 def _digits(s: Any) -> str:

@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Avoid importing the full `app` module to prevent starting the dev server.
 from flask import Flask
 from models import db, User, Group, UserGroup, VerificationToken
-import firebase_config
+from firebase import firebase_config
 
 DATA_DIR = os.path.join(os.getcwd(), 'data')
 UPLOADS_DIR = os.path.join(os.getcwd(), 'uploads')

@@ -492,9 +492,10 @@
       var modal = $id('summaryModal');
       if (modal) modal.style.display = 'none';
 
+      var savedMark = String(mark || (summary && (summary.mark || summary.MARK || summary.number)) || '').trim();
       var reloaded = false;
       if (typeof window.partiallyReloadInvoiceTable === 'function') {
-        try { reloaded = !!(await window.partiallyReloadInvoiceTable()); } catch(_) { reloaded = false; }
+        try { reloaded = !!(await window.partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
       }
       if (!reloaded) {
         try {
@@ -511,6 +512,11 @@
           }
         } catch(_){}
       }
+
+      try {
+        if (typeof window.rcScheduleSearchBoxRefocus === 'function') window.rcScheduleSearchBoxRefocus('receipts-repeat-direct-save');
+        else if (typeof window.rcFocusSearchBoxCursorEnd === 'function') window.rcFocusSearchBoxCursorEnd();
+      } catch(_){ }
 
       if (window.showFlash) {
         if (reloaded) window.showFlash(successMsg, 'success', 4200);

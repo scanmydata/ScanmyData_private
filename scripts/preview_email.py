@@ -8,7 +8,7 @@ TMP_DIR = os.path.join(REPO_ROOT, 'tmp')
 os.makedirs(TMP_DIR, exist_ok=True)
 
 # Preview email using email_utils.send_password_reset (monkeypatch send_email and token creator)
-import email_utils
+from admin import email_utils
 
 # Backups
 _email_create_token_backup = getattr(email_utils, 'create_verification_token', None)
@@ -44,7 +44,7 @@ if _email_send_backup is not None:
     email_utils.send_email = _email_send_backup
 
 # Now preview for firebed_email_verification
-import firebed_email_verification as fev
+from firebase import firebed_email_verification as fev
 
 # Backups
 _fev_create_token_backup = getattr(fev.FirebedEmailVerification, 'create_verification_token', None)

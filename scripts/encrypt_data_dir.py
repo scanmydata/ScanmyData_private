@@ -7,7 +7,7 @@ must decrypt files before reading them. Run backups first.
 import os
 import sys
 import tempfile
-from encryption import encrypt_file
+from admin.encryption import encrypt_file
 
 BASE = os.path.join(os.getcwd(), 'data')
 if not os.path.exists(BASE):

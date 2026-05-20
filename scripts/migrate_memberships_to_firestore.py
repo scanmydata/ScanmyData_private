@@ -33,7 +33,7 @@ def migrate_memberships():
     """Migrate all user group memberships from SQLite to Firestore."""
     try:
         from models import db, User, UserGroup, Group
-        from firestore_sync import fs_atomic_add_user_to_group, FIRESTORE_ENABLED
+        from admin.firestore_sync import fs_atomic_add_user_to_group, FIRESTORE_ENABLED
         from app import app
         
         if not FIRESTORE_ENABLED:

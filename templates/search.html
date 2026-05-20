@@ -1641,8 +1641,8 @@ function katToPercent(k){
       o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || {}));
       o.dataset.profileName = profileName;
       o.dataset.profileId = profileId;
-      o.dataset.invoiceMtype = String((p && (p.invoice_mtype || p.invoiceMtype)) || '').trim();
-      o.dataset.receiptMtype = String((p && (p.receipt_mtype || p.receiptMtype)) || '').trim();
+      o.dataset.invoiceMtype = String((p && (p.invoice_mtype || p.invoiceMtype || p.mtype || p.movement_type || p.movementType)) || '').trim();
+      o.dataset.receiptMtype = String((p && (p.receipt_mtype || p.receiptMtype || p.mtype || p.movement_type || p.movementType)) || '').trim();
       selProfile.appendChild(o);
     });
   }
@@ -1982,8 +1982,8 @@ function katToPercent(k){
 
     const normalizePayload = (raw) => ({
       mapping: normalizeMapping((raw && raw.mapping) || {}),
-      invoiceMtype: String((raw && raw.invoiceMtype) || '').trim(),
-      receiptMtype: String((raw && raw.receiptMtype) || '').trim(),
+      invoiceMtype: String((raw && (raw.invoiceMtype || raw.invoice_mtype || raw.mtype || raw.movement_type || raw.movementType)) || '').trim(),
+      receiptMtype: String((raw && (raw.receiptMtype || raw.receipt_mtype || raw.mtype || raw.movement_type || raw.movementType)) || '').trim(),
       name: String((raw && raw.name) || '').trim(),
       id: String((raw && raw.id) || '').trim()
     });
@@ -2081,8 +2081,8 @@ function katToPercent(k){
       const profileName = String(p.name || '').trim();
       const profileId = String(p.id || '').trim();
       const profileMap = normalizeMapping(p.mapping || p.map || {});
-      const profileInvoiceMtype = String(p.invoice_mtype || p.invoiceMtype || '').trim();
-      const profileReceiptMtype = String(p.receipt_mtype || p.receiptMtype || '').trim();
+      const profileInvoiceMtype = String(p.invoice_mtype || p.invoiceMtype || p.mtype || p.movement_type || p.movementType || '').trim();
+      const profileReceiptMtype = String(p.receipt_mtype || p.receiptMtype || p.mtype || p.movement_type || p.movementType || '').trim();
 
       o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
       o.textContent = profileName || "(χωρίς όνομα)";
@@ -2826,7 +2826,25 @@ const SEARCH_BASE_URL = "{{ url_for('search') }}";
 const VAT = "{{ vat or '' }}"; // active vat from server
 const INITIAL_MARK = "{{ mark|e }}"; // αρχική τιμή mark (αν υπήρχε)
 const RC_CLEAR_FLAG_KEY = 'rc:clearSearchAfterReload';
+  window.__RC_DISABLE_POSTSAVE_HIGHLIGHT = false;
   window.__RC_CLEAR_MARK_AFTER_SAVE = false;
+  window.__RC_LIVE_DEBUG_ENABLED = false;
+
+function rcLiveDebugDescribeElement(el){
+  try {
+    if (!el) return 'null';
+    if (el.id) return String(el.id);
+    if (el.name) return String(el.name);
+    return String(el.tagName || 'unknown').toLowerCase();
+  } catch(_) {
+    return 'unknown';
+  }
+}
+
+function rcLiveDebug(){ }
+
+try { window.rcLiveDebugDescribeElement = rcLiveDebugDescribeElement; } catch(_) {}
+try { window.rcLiveDebug = rcLiveDebug; } catch(_) {}
 
 function rcRememberSearchClear(){
   try { sessionStorage.setItem(RC_CLEAR_FLAG_KEY, '1'); } catch(_) {}
@@ -3423,11 +3441,9 @@ function showFlash(message, type='info', timeout=3000){
               const hiddenUrl = document.getElementById('scrapeUrlField');
               if (markEl) {
                 markEl.value = '';
-                try { markEl.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
               }
               if (urlEl) {
                 urlEl.value = '';
-                try { urlEl.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
               }
               if (hiddenUrl) {
                 hiddenUrl.value = '';
@@ -5175,6 +5191,11 @@ function hideSummaryModal(){
       if(typeof api.hide === 'function') api.hide();
     }
   } catch(_){}
+  try {
+    if (typeof window.rcScheduleDirectSearchFocus === 'function') {
+      window.rcScheduleDirectSearchFocus('hide-summary-modal', [0, 60, 180, 450, 900, 1800, 3500, 6000], 12000);
+    }
+  } catch(_) {}
 }
 window.hideSummaryModal = hideSummaryModal;
 
@@ -6862,6 +6883,11 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     try { clearReceiptSearchCacheOnClose(); } catch(_) {}
     hideSummaryModal();
     removeForceEditParamFromUrl();
+    try {
+      if (typeof window.rcScheduleDirectSearchFocus === 'function') {
+        window.rcScheduleDirectSearchFocus('summary-close-button', [0, 60, 180, 450, 900, 1800, 3500, 6000], 12000);
+      }
+    } catch(_) {}
   }));
 
   (function bindSummaryModalKeyboard(){
@@ -7245,6 +7271,11 @@ document.addEventListener('DOMContentLoaded', function(){
       clearTimeout(t);
       t = setTimeout(()=>{
         try {
+          const suppressUntil = Number(window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL || 0);
+          if (suppressUntil && Date.now() < suppressUntil) {
+            lastVal = (mi.value || '').trim();
+            return;
+          }
           const v = (mi.value || '').trim();
           if (v === '' && (lastVal && lastVal.trim() !== '')) {
             try {
@@ -7770,8 +7801,101 @@ try {
 // --- replace the previous payload construction + fetch with this robust version ---
 
 // ===== Helper function for partial table reload (after save) =====
+function rcDirectFocusSearchBox(reason){
+  try {
+    const isVisible = (el) => {
+      if (!el) return false;
+      try {
+        const cs = window.getComputedStyle(el);
+        return !!(cs && cs.display !== 'none' && cs.visibility !== 'hidden');
+      } catch(_) { return false; }
+    };
+    const markEl = document.getElementById('markInput');
+    const urlEl = document.getElementById('scrapeUrlInput');
+    const target = isVisible(markEl) ? markEl : (isVisible(urlEl) ? urlEl : (markEl || urlEl));
+    if (!target) return false;
+    try { if (typeof rcLiveDebug === 'function') rcLiveDebug('direct-focus-search-box', { reason: String(reason || ''), target: (typeof rcLiveDebugDescribeElement === 'function') ? rcLiveDebugDescribeElement(target) : target.id || target.name || target.tagName }); } catch(_) {}
+    try { target.focus({ preventScroll: true }); } catch(_) { try { target.focus(); } catch(__) {} }
+    try {
+      const pos = String(target.value || '').length;
+      target.setSelectionRange(pos, pos);
+    } catch(_) {}
+    return document.activeElement === target;
+  } catch(_) {
+    return false;
+  }
+}
+
+function rcScheduleDirectSearchFocus(reason, delays, stickyMs){
+  const schedule = Array.isArray(delays) && delays.length ? delays : [0, 80, 180, 420, 900, 1800, 3500, 6000, 9000, 13000, 18000];
+  const stickyUntil = Date.now() + Math.max(0, Number(stickyMs) || 0);
+  try {
+    if (!Array.isArray(window.__RC_DIRECT_SEARCH_FOCUS_TIMERS)) window.__RC_DIRECT_SEARCH_FOCUS_TIMERS = [];
+    window.__RC_DIRECT_SEARCH_FOCUS_TIMERS.forEach(id => { try { clearTimeout(id); } catch(_) {} });
+    window.__RC_DIRECT_SEARCH_FOCUS_TIMERS = [];
+  } catch(_) {}
+
+  const run = (label) => {
+    try {
+      if (stickyUntil && Date.now() > stickyUntil) return;
+      const activeEl = document.activeElement;
+      const isBody = !activeEl || activeEl === document.body || activeEl === document.documentElement;
+      if (isBody) {
+        rcDirectFocusSearchBox(label);
+      }
+    } catch(_) {}
+  };
+
+  schedule.forEach(delay => {
+    try {
+      const id = setTimeout(() => { run(String(reason || '') + ':' + String(delay)); }, Math.max(0, Number(delay) || 0));
+      window.__RC_DIRECT_SEARCH_FOCUS_TIMERS.push(id);
+    } catch(_) {}
+  });
+
+  try {
+    if (window.__RC_DIRECT_SEARCH_FOCUS_INTERVAL) clearInterval(window.__RC_DIRECT_SEARCH_FOCUS_INTERVAL);
+  } catch(_) {}
+  try {
+    window.__RC_DIRECT_SEARCH_FOCUS_INTERVAL = setInterval(() => {
+      if (Date.now() > stickyUntil) {
+        try { clearInterval(window.__RC_DIRECT_SEARCH_FOCUS_INTERVAL); } catch(_) {}
+        window.__RC_DIRECT_SEARCH_FOCUS_INTERVAL = null;
+        return;
+      }
+      run(String(reason || '') + ':interval');
+    }, 700);
+  } catch(_) {}
+}
+
+try { window.rcDirectFocusSearchBox = rcDirectFocusSearchBox; } catch(_) {}
+try { window.rcScheduleDirectSearchFocus = rcScheduleDirectSearchFocus; } catch(_) {}
+
 async function partiallyReloadInvoiceTable(options = {}) {
   const opts = (options && typeof options === 'object') ? options : {};
+  try {
+    rcLiveDebug('partial-reload-start', {
+      highlightMark: String(opts.highlightMark || '').trim(),
+      preserveYellowFlow: !!opts.preserveYellowFlow
+    });
+  } catch(_) {}
+  try {
+    const stickyMark = String(opts.highlightMark || '').trim();
+    if (stickyMark && typeof window.rcScheduleDirectSearchFocus === 'function') {
+      window.rcScheduleDirectSearchFocus('partial-reload-direct', [0, 60, 160, 420, 900, 1800, 3500, 6000, 9000, 13000, 18000], 22000);
+    }
+  } catch(_) {}
+  try {
+    const stickyMark = String(opts.highlightMark || '').trim();
+    if (stickyMark && typeof window.rcArmStickySearchFocus === 'function') {
+      window.rcArmStickySearchFocus('partial-reload-save', 25000);
+    }
+  } catch(_) {}
+  try {
+    if (typeof window.rcScheduleSearchBoxRefocus === 'function') {
+      window.rcScheduleSearchBoxRefocus('partial-reload-start', [0, 120, 300, 650]);
+    }
+  } catch(_) {}
   try { window.__RC_SUPPRESS_PROFILE_MODAL_AUTOPEN_UNTIL = Date.now() + 3500; } catch(_) {}
   try {
     if (!opts.preserveYellowFlow) {
@@ -7779,23 +7903,27 @@ async function partiallyReloadInvoiceTable(options = {}) {
       window.__RC_YELLOW_FRAME_STICKY_UNTIL = 0;
     }
   } catch(_) {}
-  const candidateFromOptions = String(opts.highlightMark || '').trim();
-  const candidateFromGlobal = String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim();
+  const suppressPostSaveHighlight = !!window.__RC_DISABLE_POSTSAVE_HIGHLIGHT;
+  const candidateFromOptions = suppressPostSaveHighlight ? '' : String(opts.highlightMark || '').trim();
+  const candidateFromGlobal = suppressPostSaveHighlight ? '' : String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim();
   const candidateFromInput = (function(){
     try {
       const src = JSON.parse(document.getElementById('summaryJsonInput')?.value || '{}');
       return String((src && (src.mark || src.MARK || src.number)) || '').trim();
     } catch(_) { return ''; }
   })();
-  const highlightMark = candidateFromOptions || candidateFromGlobal || candidateFromInput;
+  const highlightMark = suppressPostSaveHighlight ? '' : (candidateFromOptions || candidateFromGlobal || candidateFromInput);
 
   try {
     if (highlightMark) {
       window.__RC_PENDING_LIST_HIGHLIGHT_MARK = highlightMark;
       window.__RC_LAST_HIGHLIGHT_SUCCESS_MARK = '';
+    } else if (suppressPostSaveHighlight) {
+      window.__RC_PENDING_LIST_HIGHLIGHT_MARK = '';
     }
     if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
       const refreshed = await window.FBP_REFRESH_LIST_FRAGMENT();
+      try { rcLiveDebug('partial-reload-delegated-result', { refreshed: !!refreshed, highlightMark: highlightMark }); } catch(_) {}
       try { window.__RC_SUPPRESS_PROFILE_MODAL_AUTOPEN_UNTIL = Date.now() + 3500; } catch(_) {}
       try {
         if (typeof initAfmRuleModeButton === 'function') initAfmRuleModeButton();
@@ -7810,9 +7938,20 @@ async function partiallyReloadInvoiceTable(options = {}) {
       try {
         if (typeof window.rcSyncSearchBoxYellowFrame === 'function') window.rcSyncSearchBoxYellowFrame();
       } catch(_) {}
+      try {
+        if (typeof window.rcScheduleSearchBoxRefocus === 'function') {
+          window.rcScheduleSearchBoxRefocus('partial-reload-delegated-done');
+        }
+      } catch(_) {}
+      try {
+        if (typeof window.rcScheduleDirectSearchFocus === 'function') {
+          window.rcScheduleDirectSearchFocus('partial-reload-delegated-done', [0, 80, 220, 520, 1000, 2000, 4000, 7000, 11000, 16000], 22000);
+        }
+      } catch(_) {}
       return !!refreshed;
     }
   } catch(err) {
+    try { rcLiveDebug('partial-reload-delegated-error', { message: String((err && err.message) || err || '') }); } catch(_) {}
     console.warn('Delegated list refresh failed, falling back to local partial reload:', err);
   }
 
@@ -7893,10 +8032,10 @@ async function partiallyReloadInvoiceTable(options = {}) {
       } catch(_) {}
       try {
         const pendingMark = String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim();
-        if (pendingMark && typeof window.FBP_HIGHLIGHT_ROW_BY_MARK === 'function') {
-          setTimeout(() => { try { window.FBP_HIGHLIGHT_ROW_BY_MARK(pendingMark); } catch(_) {} }, 180);
-          setTimeout(() => { try { window.FBP_HIGHLIGHT_ROW_BY_MARK(pendingMark); } catch(_) {} }, 620);
-          setTimeout(() => { try { window.FBP_HIGHLIGHT_ROW_BY_MARK(pendingMark); } catch(_) {} }, 1400);
+        if (pendingMark) {
+          setTimeout(() => { tryHighlightRow(pendingMark); }, 180);
+          setTimeout(() => { tryHighlightRow(pendingMark); }, 620);
+          setTimeout(() => { tryHighlightRow(pendingMark); }, 1400);
         }
       } catch(_) {}
     }, 50);
@@ -7921,6 +8060,7 @@ async function partiallyReloadInvoiceTable(options = {}) {
         const container = document.getElementById('summary-container');
         if (container) {
           container.innerHTML = data.table_html;
+          try { rcLiveDebug('partial-reload-fragment-html', { highlightMark: highlightMark, fileExists: !!data.file_exists }); } catch(_) {}
           syncDownloadControls(!!data.file_exists);
           reinitTable();
           const markToHighlight = String((data && data.highlight_mark) || highlightMark || '').trim();
@@ -7933,20 +8073,6 @@ async function partiallyReloadInvoiceTable(options = {}) {
             setTimeout(() => { tryHighlightRow(markToHighlight); }, 2300);
             setTimeout(() => {
               try {
-                if (typeof window.FBP_HIGHLIGHT_ROW_BY_MARK === 'function') {
-                  window.FBP_HIGHLIGHT_ROW_BY_MARK(markToHighlight);
-                }
-              } catch(_) {}
-            }, 180);
-            setTimeout(() => {
-              try {
-                if (typeof window.FBP_HIGHLIGHT_ROW_BY_MARK === 'function') {
-                  window.FBP_HIGHLIGHT_ROW_BY_MARK(markToHighlight);
-                }
-              } catch(_) {}
-            }, 620);
-            setTimeout(() => {
-              try {
                 const lastOk = String(window.__RC_LAST_HIGHLIGHT_SUCCESS_MARK || '').trim();
                 if (String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim() === markToHighlight && lastOk === markToHighlight) {
                   window.__RC_PENDING_LIST_HIGHLIGHT_MARK = '';
@@ -7956,11 +8082,23 @@ async function partiallyReloadInvoiceTable(options = {}) {
           } else {
             window.__RC_PENDING_LIST_HIGHLIGHT_MARK = '';
           }
+          try {
+            if (typeof window.rcScheduleSearchBoxRefocus === 'function') {
+              window.rcScheduleSearchBoxRefocus('partial-reload-fragment-done');
+            }
+          } catch(_) {}
+          try {
+            if (typeof window.rcScheduleDirectSearchFocus === 'function') {
+              window.rcScheduleDirectSearchFocus('partial-reload-fragment-done', [0, 80, 220, 520, 1000, 2000, 4000, 7000, 11000, 16000], 22000);
+            }
+          } catch(_) {}
+          try { rcLiveDebug('partial-reload-fragment-done', { markToHighlight: markToHighlight }); } catch(_) {}
           return true;
         }
       }
     }
   } catch(err) {
+    try { rcLiveDebug('partial-reload-fragment-error', { message: String((err && err.message) || err || '') }); } catch(_) {}
     console.warn('Partial reload failed:', err);
   }
 
@@ -7976,6 +8114,7 @@ async function partiallyReloadInvoiceTable(options = {}) {
       const controls = document.getElementById('listDownloadControls');
       if (fresh && container) {
         container.innerHTML = fresh.innerHTML;
+        try { rcLiveDebug('partial-reload-fullpage-html', { highlightMark: highlightMark }); } catch(_) {}
         if (freshControls && controls) {
           controls.className = freshControls.className;
         }
@@ -7987,13 +8126,6 @@ async function partiallyReloadInvoiceTable(options = {}) {
           setTimeout(() => { tryHighlightRow(highlightMark); }, 1100);
           setTimeout(() => {
             try {
-              if (typeof window.FBP_HIGHLIGHT_ROW_BY_MARK === 'function') {
-                window.FBP_HIGHLIGHT_ROW_BY_MARK(highlightMark);
-              }
-            } catch(_) {}
-          }, 220);
-          setTimeout(() => {
-            try {
               const lastOk = String(window.__RC_LAST_HIGHLIGHT_SUCCESS_MARK || '').trim();
               if (String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim() === highlightMark && lastOk === highlightMark) {
                 window.__RC_PENDING_LIST_HIGHLIGHT_MARK = '';
@@ -8003,6 +8135,11 @@ async function partiallyReloadInvoiceTable(options = {}) {
         } else {
           window.__RC_PENDING_LIST_HIGHLIGHT_MARK = '';
         }
+        try {
+          if (typeof window.rcScheduleSearchBoxRefocus === 'function') {
+            window.rcScheduleSearchBoxRefocus('partial-reload-fallback-done');
+          }
+        } catch(_) {}
         return true;
       }
     }
@@ -8429,13 +8566,21 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     vatCategory: (l && (l.vatCategory || l.vat_category)) || '',
     category: (l && l.category) || ''
   }));
+        try { rcLiveDebug('partial-reload-fullpage-done', { highlightMark: highlightMark }); } catch(_) {}
   if (!receiptAnalysisEnabled) {
     summary.lines = summary.lines.map((line) => {
       const next = Object.assign({}, line || {});
       if (!String(next.category || '').trim()) next.category = 'αποδειξακια';
+        try {
+          if (typeof window.rcScheduleDirectSearchFocus === 'function') {
+            window.rcScheduleDirectSearchFocus('partial-reload-fallback-done', [0, 80, 220, 520, 1000, 2000, 4000, 7000, 11000, 16000], 22000);
+          }
+        } catch(_) {}
+    try { rcLiveDebug('partial-reload-fullpage-error', { message: String((err && err.message) || err || '') }); } catch(_) {}
       return next;
     });
   }
+  try { rcLiveDebug('partial-reload-failed', { highlightMark: highlightMark }); } catch(_) {}
 
   function parseMoneyForValidation(raw){
     const txt = String(raw || '').trim();
@@ -8956,14 +9101,12 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
         const markEl = document.getElementById('markInput');
         if (markEl) {
           markEl.value = '';
-          markEl.dispatchEvent(new Event('input', { bubbles: true }));
         }
       } catch(_) {}
       try {
         const urlEl = document.getElementById('scrapeUrlInput');
         if (urlEl) {
           urlEl.value = '';
-          urlEl.dispatchEvent(new Event('input', { bubbles: true }));
         }
       } catch(_) {}
       try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
@@ -9197,7 +9340,6 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       const markEl = document.getElementById('markInput');
       if (markEl) {
         markEl.value = '';
-        markEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
     } catch(_) {}
     try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
@@ -9215,6 +9357,9 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       showFlash('Η αποθήκευση ολοκληρώθηκε, αλλά δεν έγινε ανανέωση πίνακα. Πάτησε αναζήτηση ή ανανέωση λίστας.', 'warning', 4500);
       persistReceiptFlash(successMsg, 'success');
     }
+    try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {}
+    setTimeout(() => { try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {} }, 0);
+    setTimeout(() => { try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {} }, 80);
 
     // clean hidden fields
     const scrapeUrlField = document.getElementById('scrapeUrlField');
@@ -11147,6 +11292,10 @@ document.addEventListener('submit', function(ev){
 
     function trySubmit(){
       if (!form || !getAuto()) return;
+      try {
+        const until = Number(window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL || 0);
+        if (until && Date.now() < until) return;
+      } catch(_) {}
       if (warningOpen()) return;
       
       // Νέος έλεγχος: Αν είναι ενεργή η επαναληπτική εισαγωγή ΚΑΙ υπάρχει yellow box για ύπαρχο MARK,
@@ -13659,18 +13808,30 @@ document.addEventListener('click', function(e){
 /* Reset & reload όταν εμφανίζονται warning modals στη σελίδα αναζήτησης */
 (function(){
   function clearSearchInputs(){
+    const isPostSaveClear = !!window.__RC_CLEAR_MARK_AFTER_SAVE;
+    try { rcLiveDebug('clear-search-inputs', { postSave: isPostSaveClear }); } catch(_) {}
+    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + 5000; } catch (_) {}
+    try {
+      if (isPostSaveClear) {
+        window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 1500;
+      }
+    } catch (_) {}
     try {
       const markEl = document.getElementById('markInput');
       if (markEl){
         markEl.value = '';
-        markEl.dispatchEvent(new Event('input', { bubbles: true }));
+        if (!isPostSaveClear) {
+          markEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
       }
     } catch (_) {}
     try {
       const urlEl = document.getElementById('scrapeUrlInput');
       if (urlEl){
         urlEl.value = '';
-        urlEl.dispatchEvent(new Event('input', { bubbles: true }));
+        if (!isPostSaveClear) {
+          urlEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
       }
     } catch (_) {}
     try {
@@ -13683,6 +13844,8 @@ document.addEventListener('click', function(e){
     try {
       removeForceEditParamFromUrl();
     } catch (_) {}
+    try { rcFocusSearchBoxCursorEnd(); } catch (_) {}
+    setTimeout(() => { try { rcFocusSearchBoxCursorEnd(); } catch (_) {} }, 0);
   }
 
   function rcFocusSearchBoxCursorEnd(){
@@ -13697,6 +13860,7 @@ document.addEventListener('click', function(e){
     const urlEl = document.getElementById('scrapeUrlInput');
     const target = (isVisible(markEl) ? markEl : (isVisible(urlEl) ? urlEl : (markEl || urlEl)));
     if (!target) return;
+    try { rcLiveDebug('focus-search-box', { target: rcLiveDebugDescribeElement(target), valueLength: String(target.value || '').length }); } catch(_) {}
     try { target.focus({ preventScroll: true }); } catch(_) { try { target.focus(); } catch(__) {} }
     try {
       const pos = String(target.value || '').length;
@@ -13704,17 +13868,201 @@ document.addEventListener('click', function(e){
     } catch(_) {}
   }
 
+  let __rcSearchRefocusTimers = [];
+  let __rcSearchFocusLockTimer = null;
+
+  function rcArmStickySearchFocus(reason, durationMs){
+    const duration = Math.max(0, Number(durationMs) || 0);
+    if (!duration) return;
+    try {
+      window.__RC_STICKY_SEARCH_FOCUS_UNTIL = Date.now() + duration;
+      rcLiveDebug('arm-sticky-search-focus', { reason: String(reason || ''), duration: duration });
+    } catch(_) {}
+    try { rcArmSearchBoxFocusLock('sticky:' + String(reason || ''), Math.max(duration, 5000)); } catch(_) {}
+    try { rcFocusSearchBoxCursorEnd(); } catch(_) {}
+  }
+
+  function rcInstallStickySearchFocusGuard(){
+    if (window.__RC_STICKY_SEARCH_FOCUS_GUARD_INSTALLED) return;
+    window.__RC_STICKY_SEARCH_FOCUS_GUARD_INSTALLED = true;
+
+    const maybeRestoreStickyFocus = (source) => {
+      setTimeout(() => {
+        try {
+          const until = Number(window.__RC_STICKY_SEARCH_FOCUS_UNTIL || 0);
+          if (!until || Date.now() > until) return;
+          const markEl = document.getElementById('markInput');
+          const urlEl = document.getElementById('scrapeUrlInput');
+          const activeEl = document.activeElement;
+          const isSearchTarget = !!(activeEl && (activeEl === markEl || activeEl === urlEl));
+          const isBodyFocus = !activeEl || activeEl === document.body || activeEl === document.documentElement;
+          if (!isSearchTarget && isBodyFocus) {
+            rcLiveDebug('sticky-search-focus-restore', {
+              source: String(source || ''),
+              active: rcLiveDebugDescribeElement(activeEl)
+            });
+            rcFocusSearchBoxCursorEnd();
+          }
+        } catch(_) {}
+      }, 0);
+    };
+
+    document.addEventListener('focusout', function(evt){
+      try {
+        const target = evt && evt.target;
+        if (!target) return;
+        if (target.id !== 'markInput' && target.id !== 'scrapeUrlInput') return;
+        maybeRestoreStickyFocus('focusout:' + target.id);
+      } catch(_) {}
+    }, true);
+
+    document.addEventListener('mousedown', function(){
+      maybeRestoreStickyFocus('mousedown');
+    }, true);
+
+    document.addEventListener('mouseup', function(){
+      maybeRestoreStickyFocus('mouseup');
+    }, true);
+  }
+
+  function rcArmSearchBoxFocusLock(reason, durationMs){
+    const duration = Math.max(0, Number(durationMs) || 0);
+    if (!duration) return;
+    try { rcLiveDebug('arm-focus-lock', { reason: String(reason || ''), duration: duration }); } catch(_) {}
+    try { window.__RC_SEARCHBOX_FOCUS_LOCK_UNTIL = Date.now() + duration; } catch(_) {}
+    try { window.__RC_SUPPRESS_LIST_FOCUS_UNTIL = Date.now() + duration; } catch(_) {}
+
+    try {
+      if (__rcSearchFocusLockTimer) {
+        clearInterval(__rcSearchFocusLockTimer);
+        __rcSearchFocusLockTimer = null;
+      }
+    } catch(_) {}
+
+    const enforceFocus = () => {
+      try {
+        const until = Number(window.__RC_SEARCHBOX_FOCUS_LOCK_UNTIL || 0);
+        if (!until || Date.now() > until) {
+          if (__rcSearchFocusLockTimer) {
+            clearInterval(__rcSearchFocusLockTimer);
+            __rcSearchFocusLockTimer = null;
+          }
+          return;
+        }
+
+        const markEl = document.getElementById('markInput');
+        const urlEl = document.getElementById('scrapeUrlInput');
+        const activeEl = document.activeElement;
+        const summaryContainer = document.getElementById('summary-container');
+        const isSearchTarget = !!(activeEl && (activeEl === markEl || activeEl === urlEl));
+        const isBodyFocus = !activeEl || activeEl === document.body || activeEl === document.documentElement;
+        const inSummary = !!(activeEl && summaryContainer && summaryContainer.contains(activeEl));
+
+        if (!isSearchTarget && (isBodyFocus || inSummary)) {
+          rcLiveDebug('focus-lock-corrective', {
+            reason: String(reason || ''),
+            active: rcLiveDebugDescribeElement(activeEl),
+            inSummary: inSummary,
+            bodyFocus: isBodyFocus
+          });
+          rcFocusSearchBoxCursorEnd();
+        }
+      } catch(_) {}
+    };
+
+    try { enforceFocus(); } catch(_) {}
+    try {
+      requestAnimationFrame(() => {
+        try { enforceFocus(); } catch(_) {}
+      });
+    } catch(_) {}
+    __rcSearchFocusLockTimer = setInterval(enforceFocus, 120);
+  }
+
+  function rcScheduleSearchBoxRefocus(reason, delays){
+    const schedule = Array.isArray(delays) && delays.length ? delays : [0, 50, 140, 320, 700, 1200, 2000, 3200, 4300];
+    try { rcLiveDebug('schedule-refocus', { reason: String(reason || ''), delays: schedule }); } catch(_) {}
+    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + 5000; } catch(_) {}
+    try { window.__RC_SUPPRESS_LIST_FOCUS_UNTIL = Date.now() + 4000; } catch(_) {}
+    try { rcArmSearchBoxFocusLock(reason, 5000); } catch(_) {}
+    try {
+      (__rcSearchRefocusTimers || []).forEach(id => {
+        try { clearTimeout(id); } catch(_) {}
+      });
+    } catch(_) {}
+    __rcSearchRefocusTimers = [];
+
+    const runFocus = () => {
+      try {
+        const activeEl = document.activeElement;
+        const summaryContainer = document.getElementById('summary-container');
+        if (activeEl && summaryContainer && summaryContainer.contains(activeEl)) {
+          try { rcLiveDebug('run-focus-blur-summary', { reason: String(reason || ''), active: rcLiveDebugDescribeElement(activeEl) }); } catch(_) {}
+          try { if (typeof activeEl.blur === 'function') activeEl.blur(); } catch(_) {}
+        }
+      } catch(_) {}
+      try { rcFocusSearchBoxCursorEnd(); } catch(_) {}
+      try {
+        const markEl = document.getElementById('markInput');
+        if (markEl && document.activeElement !== markEl) {
+          markEl.focus({ preventScroll: true });
+          const pos = String(markEl.value || '').length;
+          markEl.setSelectionRange(pos, pos);
+        }
+      } catch(_) {}
+    };
+
+    schedule.forEach(delay => {
+      const timerId = setTimeout(runFocus, Math.max(0, Number(delay) || 0));
+      __rcSearchRefocusTimers.push(timerId);
+    });
+
+    try {
+      requestAnimationFrame(() => {
+        try { runFocus(); } catch(_) {}
+      });
+    } catch(_) {}
+  }
+
+  function rcInstallListFocusGuard(){
+    if (window.__RC_LIST_FOCUS_GUARD_INSTALLED) return;
+    window.__RC_LIST_FOCUS_GUARD_INSTALLED = true;
+    document.addEventListener('focusin', function(evt){
+      try {
+        const until = Number(window.__RC_SUPPRESS_LIST_FOCUS_UNTIL || 0);
+        if (!until || Date.now() > until) return;
+        const target = evt && evt.target;
+        const summaryContainer = document.getElementById('summary-container');
+        if (!target || !summaryContainer || !summaryContainer.contains(target)) return;
+        try { rcLiveDebug('focus-guard-block', { target: rcLiveDebugDescribeElement(target), until: until }); } catch(_) {}
+        try { if (typeof target.blur === 'function') target.blur(); } catch(_) {}
+        setTimeout(() => {
+          try {
+            if (typeof window.rcFocusSearchBoxCursorEnd === 'function') {
+              window.rcFocusSearchBoxCursorEnd();
+            }
+          } catch(_) {}
+        }, 0);
+      } catch(_) {}
+    }, true);
+  }
+
+  try { rcInstallListFocusGuard(); } catch(_) {}
+  try { rcInstallStickySearchFocusGuard(); } catch(_) {}
+
   function rcFastPostSaveRefresh(savedMark, successMsg){
     const mark = String(savedMark || '').trim();
-    if (mark) {
+    try { rcLiveDebug('fast-post-save-refresh', { mark: mark, successMsg: String(successMsg || '') }); } catch(_) {}
+    try { rcArmStickySearchFocus('fast-post-save', 25000); } catch(_) {}
+    if (mark && !window.__RC_DISABLE_POSTSAVE_HIGHLIGHT) {
       try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = mark; } catch(_) {}
+    } else {
+      try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = ''; } catch(_) {}
     }
     try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
     try { clearSearchInputs(); } catch(_) {}
     try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
-    try { rcFocusSearchBoxCursorEnd(); } catch(_) {}
-    setTimeout(() => { try { rcFocusSearchBoxCursorEnd(); } catch(_) {} }, 0);
-    setTimeout(() => { try { rcFocusSearchBoxCursorEnd(); } catch(_) {} }, 80);
+    try { rcScheduleSearchBoxRefocus('fast-post-save'); } catch(_) {}
     try {
       if (successMsg && typeof showFlash === 'function') showFlash(successMsg, 'success', 1800);
     } catch(_) {}
@@ -13730,6 +14078,9 @@ document.addEventListener('click', function(e){
 
   try { window.clearSearchInputs = clearSearchInputs; } catch(_) {}
   try { window.rcFocusSearchBoxCursorEnd = rcFocusSearchBoxCursorEnd; } catch(_) {}
+  try { window.rcArmSearchBoxFocusLock = rcArmSearchBoxFocusLock; } catch(_) {}
+  try { window.rcArmStickySearchFocus = rcArmStickySearchFocus; } catch(_) {}
+  try { window.rcScheduleSearchBoxRefocus = rcScheduleSearchBoxRefocus; } catch(_) {}
   try { window.rcFastPostSaveRefresh = rcFastPostSaveRefresh; } catch(_) {}
 
   function buildCleanUrl(){
@@ -13823,8 +14174,8 @@ document.addEventListener('click', function(e){
     const hCat  = document.getElementById('scrapeCategoryField');
     const sumJs = document.getElementById('summaryJsonInput');
 
-    if (mark) { mark.value = ''; try { mark.dispatchEvent(new Event('input',{bubbles:true})); } catch(_){} }
-    if (url)  { url.value  = ''; try { url.dispatchEvent(new Event('input',{bubbles:true})); } catch(_){} }
+    if (mark) { mark.value = ''; }
+    if (url)  { url.value  = ''; }
     if (hUrl) hUrl.value = '';
     if (hCat) hCat.value = '';
     if (sumJs) sumJs.value = '{}';
@@ -14102,8 +14453,12 @@ document.addEventListener('click', function(e){
       try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
       try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
       try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+      try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {}
       // second pass to catch any late autofill that runs after save
-      setTimeout(() => { try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {} }, 120);
+      setTimeout(() => {
+        try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
+        try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {}
+      }, 120);
 
       setTimeout(function(){
         try {

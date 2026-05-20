@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 import os
 
 try:
-    from scraper_ai_fallback import run_schema_ai_fallback
+    from .scraper_ai_fallback import run_schema_ai_fallback
 except Exception:
     run_schema_ai_fallback = None
 

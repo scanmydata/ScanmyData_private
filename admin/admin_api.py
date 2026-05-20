@@ -8,11 +8,11 @@ import os
 from flask import Blueprint, jsonify, request, current_app
 from flask_login import login_required, current_user
 from datetime import datetime, timezone
-import firebase_config
-from firebase_auth_handlers import FirebaseAuthHandler
+from firebase import firebase_config
+from firebase.firebase_auth_handlers import FirebaseAuthHandler
 from models import db, User, Group
-import admin_panel
-from admin_panel import admin_list_all_users, admin_list_all_groups, admin_get_activity_logs, is_admin
+from . import admin_panel
+from .admin_panel import admin_list_all_users, admin_list_all_groups, admin_get_activity_logs, is_admin
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +371,7 @@ def api_backup_group(group_name):
         
         # Local backup (Server filesystem)
         if target in ['local', 'both']:
-            from admin_panel import admin_backup_group
+            from .admin_panel import admin_backup_group
             local_path = admin_backup_group(group.id)
             if local_path:
                 results['local'] = local_path
@@ -900,7 +900,7 @@ def api_delete_user_by_id(user_id):
         # Delete from Firebase Authentication if UID exists
         if firebase_uid:
             try:
-                import firebase_config
+                from firebase import firebase_config
                 firebase_config.firebase_delete_user(firebase_uid)
                 logger.info(f"Deleted Firebase user: {firebase_uid}")
             except Exception as e:
@@ -908,7 +908,7 @@ def api_delete_user_by_id(user_id):
         
         # Delete from Firebase Database (user data)
         try:
-            import firebase_config
+            from firebase import firebase_config
             firebase_config.firebase_delete_data(f'/users/{firebase_uid}')
             firebase_config.firebase_delete_data(f'/user_profiles/{firebase_uid}')
             logger.info(f"Deleted Firebase user data for: {firebase_uid}")
@@ -1338,7 +1338,7 @@ def api_send_email():
                 if not user_ids:
                         return jsonify({'success': False, 'error': 'No valid user IDs provided'}), 400
 
-                from email_utils import send_bulk_email_to_users
+                from admin.email_utils import send_bulk_email_to_users
 
                 # Build HTML body using the admin template requested by the user
                 import os
@@ -1417,7 +1417,7 @@ def api_email_config():
     """Get or update email configuration"""
     if request.method == 'GET':
         try:
-            import email_utils
+            from admin import email_utils
             from app import load_admin_settings
             
             settings = load_admin_settings()
@@ -1480,7 +1480,7 @@ def api_test_email():
         if not test_email:
             return jsonify({'success': False, 'error': 'No email address provided'}), 400
         
-        import email_utils
+        from admin import email_utils
         import os
         app_url = os.getenv('APP_URL', 'http://localhost:5001')
         logo_url = f"{app_url}/icons/scanmydata_logo_3000w.png"
@@ -1527,7 +1527,7 @@ def api_resend_inbound_forward_sync():
         except Exception:
             limit = 25
 
-        import email_utils
+        from admin import email_utils
         result = email_utils.forward_resend_inbound_to_smtp_user(limit=limit)
         ok = bool(result.get('errors') == [] and result.get('failed', 0) == 0)
 
@@ -1552,7 +1552,7 @@ def api_resend_inbound_webhook():
     import base64
 
     try:
-        import email_utils
+        from admin import email_utils
 
         signing_secret = (getattr(email_utils, 'RESEND_WEBHOOK_SIGNING_SECRET', None) or os.getenv('RESEND_WEBHOOK_SIGNING_SECRET') or '').strip()
         if not signing_secret:

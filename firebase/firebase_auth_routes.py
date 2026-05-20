@@ -9,9 +9,9 @@ import time
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, session, current_app
 from flask_login import login_user, logout_user, current_user, login_required
 from datetime import datetime, timezone
-import firebase_config
-from firebase_auth_handlers import FirebaseAuthHandler
-from firebed_email_verification import FirebedEmailVerification
+from . import firebase_config
+from .firebase_auth_handlers import FirebaseAuthHandler
+from .firebed_email_verification import FirebedEmailVerification
 from models import db, User, Group, UserGroup
 from sqlalchemy.exc import IntegrityError
 import secrets

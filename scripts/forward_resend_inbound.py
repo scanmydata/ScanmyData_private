@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from email_utils import forward_resend_inbound_to_smtp_user  # noqa: E402
+from admin.email_utils import forward_resend_inbound_to_smtp_user  # noqa: E402
 
 
 def main() -> int:

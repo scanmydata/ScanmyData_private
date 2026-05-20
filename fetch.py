@@ -14,7 +14,7 @@ try:
 except ImportError:
     import xml.etree.ElementTree as ET
 
-from activity_monitor import monitor_resources
+from admin.activity_monitor import monitor_resources
 
 def _safe_strip(s):
     return str(s).strip() if s else ""

@@ -71,7 +71,7 @@ class User(UserMixin, db.Model):
         # If Firebase is enabled and user has firebase_uid, get groups from Firebase
         if self.firebase_uid:
             try:
-                from firebase_auth_handlers_new import firebase_user_groups
+                from firebase.firebase_auth_handlers_new import firebase_user_groups
                 firebase_group_names = firebase_user_groups(self.firebase_uid)
                 if firebase_group_names:
                     # Convert group names to Group objects from local DB
@@ -93,7 +93,7 @@ class User(UserMixin, db.Model):
         # If Firebase is enabled and user has firebase_uid, sync to Firebase
         if self.firebase_uid:
             try:
-                from firebase_auth_handlers_new import firebase_add_user_to_group, firebase_set_user_group_role
+                from firebase.firebase_auth_handlers_new import firebase_add_user_to_group, firebase_set_user_group_role
                 success, error = firebase_add_user_to_group(self.firebase_uid, group.name)
                 if success:
                     firebase_set_user_group_role(self.firebase_uid, group.name, role)
@@ -120,7 +120,7 @@ class User(UserMixin, db.Model):
         # If not found locally, and Firebase is enabled for this user, try Firebase as a fallback
         if self.firebase_uid:
             try:
-                from firebase_auth_handlers_new import firebase_get_user_role_in_group
+                from firebase.firebase_auth_handlers_new import firebase_get_user_role_in_group
                 firebase_role = firebase_get_user_role_in_group(self.firebase_uid, group.name)
                 if firebase_role:
                     return firebase_role
@@ -134,7 +134,7 @@ class User(UserMixin, db.Model):
         # If Firebase is enabled and user has firebase_uid, sync to Firebase
         if self.firebase_uid:
             try:
-                from firebase_auth_handlers_new import firebase_remove_user_from_group
+                from firebase.firebase_auth_handlers_new import firebase_remove_user_from_group
                 success, error = firebase_remove_user_from_group(self.firebase_uid, group.name)
                 if not success:
                     print(f"Firebase group remove failed: {error}")
@@ -218,7 +218,7 @@ class Group(db.Model):
     def users(self):
         """Get all users in this group (prioritize Firebase, fallback to local)"""
         try:
-            from firebase_auth_handlers_new import firebase_get_group_members
+            from firebase.firebase_auth_handlers_new import firebase_get_group_members
             firebase_member_uids = firebase_get_group_members(self.name)
             if firebase_member_uids:
                 # Convert UIDs to User objects
@@ -239,7 +239,7 @@ class Group(db.Model):
     def admins(self):
         """Get all admin users in this group (prioritize Firebase, fallback to local)"""
         try:
-            import firebase_config
+            from firebase import firebase_config
             if firebase_config.is_firebase_enabled():
                 group_data = firebase_config.firebase_read_data(f'/groups/{self.name}')
                 if group_data and 'admins' in group_data:

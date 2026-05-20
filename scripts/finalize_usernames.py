@@ -16,7 +16,7 @@ if ROOT not in sys.path:
 
 from app import app
 from models import db, User, UserGroup
-from admin_panel import admin_list_all_users
+from admin.admin_panel import admin_list_all_users
 
 
 def normalize_candidate(u: User) -> str:

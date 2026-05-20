@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 # Import από το υπάρχον module
-from epsilon_bridge_multiclient_strict import (
+from .epsilon_bridge_multiclient_strict import (
     _safe_json_read,
     _to_date,
     _ddmmyyyy,

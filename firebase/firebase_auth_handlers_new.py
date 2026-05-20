@@ -10,8 +10,8 @@ import requests
 import os
 from firebase_admin import auth as firebase_auth
 from firebase_admin import db, credentials
-import firebase_config
-from encryption import derive_key_from_password, generate_encryption_key
+from . import firebase_config
+from admin.encryption import derive_key_from_password, generate_encryption_key
 
 logger = logging.getLogger(__name__)
 
@@ -375,7 +375,7 @@ class FirebaseAuthHandler:
             
             # Try Firestore first if enabled
             try:
-                from firestore_sync import fs_atomic_add_user_to_group, FIRESTORE_ENABLED
+                from admin.firestore_sync import fs_atomic_add_user_to_group, FIRESTORE_ENABLED
                 if FIRESTORE_ENABLED:
                     result = fs_atomic_add_user_to_group(uid, group_name, role)
                     if result:
@@ -448,7 +448,7 @@ class FirebaseAuthHandler:
             
             # Try Firestore first if enabled
             try:
-                from firestore_sync import fs_atomic_remove_user_from_group, FIRESTORE_ENABLED
+                from admin.firestore_sync import fs_atomic_remove_user_from_group, FIRESTORE_ENABLED
                 if FIRESTORE_ENABLED:
                     result = fs_atomic_remove_user_from_group(uid, group_name)
                     if result:
@@ -519,7 +519,7 @@ class FirebaseAuthHandler:
             
             # Try Firestore first if enabled
             try:
-                from firestore_sync import fs_get_user_groups, FIRESTORE_ENABLED
+                from admin.firestore_sync import fs_get_user_groups, FIRESTORE_ENABLED
                 if FIRESTORE_ENABLED:
                     groups_dict = fs_get_user_groups(uid)
                     if groups_dict:
@@ -553,7 +553,7 @@ class FirebaseAuthHandler:
             
             # Try Firestore first if enabled
             try:
-                from firestore_sync import fs_get_group_members, FIRESTORE_ENABLED
+                from admin.firestore_sync import fs_get_group_members, FIRESTORE_ENABLED
                 if FIRESTORE_ENABLED:
                     group_data = fs_get_group_members(group_name)
                     if group_data:
@@ -679,7 +679,7 @@ def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[
         
         # Try Firestore first if enabled
         try:
-            from firestore_sync import fs_atomic_set_user_group_role, FIRESTORE_ENABLED
+            from admin.firestore_sync import fs_atomic_set_user_group_role, FIRESTORE_ENABLED
             if FIRESTORE_ENABLED:
                 result = fs_atomic_set_user_group_role(uid, group_name, role)
                 if result:
@@ -763,7 +763,7 @@ def firebase_get_user_role_in_group(uid: str, group_name: str) -> Optional[str]:
 
         # Try Firestore first
         try:
-            from firestore_sync import fs_get_user_role_in_group, FIRESTORE_ENABLED
+            from admin.firestore_sync import fs_get_user_role_in_group, FIRESTORE_ENABLED
             if FIRESTORE_ENABLED:
                 role = fs_get_user_role_in_group(uid, group_name)
                 if role:
@@ -806,7 +806,7 @@ def firebase_delete_group(group_name: str, admin_uid: str) -> Tuple[bool, Option
 
         # Try Firestore first
         try:
-            from firestore_sync import fs_delete_group, FIRESTORE_ENABLED
+            from admin.firestore_sync import fs_delete_group, FIRESTORE_ENABLED
             if FIRESTORE_ENABLED:
                 if fs_delete_group(group_name):
                     logger.info(f"Group '{group_name}' deleted in Firestore by {admin_uid}")

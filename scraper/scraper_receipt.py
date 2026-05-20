@@ -10,60 +10,60 @@ from datetime import datetime
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 try:
-    from scraper_ai_fallback import run_schema_ai_fallback
+    from .scraper_ai_fallback import run_schema_ai_fallback
 except Exception:
     run_schema_ai_fallback = None
 
 # try to reuse classification helper defined in analysis variant
 try:
-    from scraper_receipt_analysis import _refine_doc_type
+    from .scraper_receipt_analysis import _refine_doc_type
 except ImportError:
     def _refine_doc_type(target, page_text):
         return
 
 # some analysis helpers may also carry actual scrapers we forward to
 try:
-    from scraper_receipt_analysis import scrape_einvoicing_gr as _analysis_einvoicing_gr
+    from .scraper_receipt_analysis import scrape_einvoicing_gr as _analysis_einvoicing_gr
 except ImportError:
     _analysis_einvoicing_gr = None
 
 try:
-    from scraper_receipt_analysis import scrape_iview as _analysis_iview
+    from .scraper_receipt_analysis import scrape_iview as _analysis_iview
 except ImportError:
     _analysis_iview = None
 
 try:
-    from scraper_receipt_analysis import scrape_vsgr as _analysis_vsgr
+    from .scraper_receipt_analysis import scrape_vsgr as _analysis_vsgr
 except ImportError:
     _analysis_vsgr = None
 
 try:
-    from scraper_receipt_analysis import scrape_primer as _analysis_primer
+    from .scraper_receipt_analysis import scrape_primer as _analysis_primer
 except ImportError:
     _analysis_primer = None
 
 try:
-    from scraper_receipt_analysis import scrape_s1ecos as _analysis_s1ecos
+    from .scraper_receipt_analysis import scrape_s1ecos as _analysis_s1ecos
 except ImportError:
     _analysis_s1ecos = None
 
 try:
-    from scraper_receipt_analysis import scrape_pegcloud as _analysis_pegcloud
+    from .scraper_receipt_analysis import scrape_pegcloud as _analysis_pegcloud
 except ImportError:
     _analysis_pegcloud = None
 
 try:
-    from scraper_receipt_analysis import scrape_simpleinvoicing as _analysis_simpleinvoicing
+    from .scraper_receipt_analysis import scrape_simpleinvoicing as _analysis_simpleinvoicing
 except ImportError:
     _analysis_simpleinvoicing = None
 
 try:
-    from scraper_receipt_analysis import scrape_eskap as _analysis_eskap
+    from .scraper_receipt_analysis import scrape_eskap as _analysis_eskap
 except ImportError:
     _analysis_eskap = None
 
 try:
-    from scraper_receipt_analysis import detect_and_scrape as _analysis_detect_and_scrape
+    from .scraper_receipt_analysis import detect_and_scrape as _analysis_detect_and_scrape
 except ImportError:
     _analysis_detect_and_scrape = None
 

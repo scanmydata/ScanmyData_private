@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask
 from models import db, User
-import firebase_config
-from firebase_auth_handlers import FirebaseAuthHandler
+from firebase import firebase_config
+from firebase.firebase_auth_handlers import FirebaseAuthHandler
 
 ADMIN_EMAIL = 'adonis.douramanis@gmail.com'
 ADMIN_PASSWORD = 'passpadeisou16!'

@@ -12,7 +12,7 @@ from datetime import datetime
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote, urlencode
 
 try:
-    from scraper_ai_fallback import run_schema_ai_fallback
+    from .scraper_ai_fallback import run_schema_ai_fallback
 except Exception:
     run_schema_ai_fallback = None
 

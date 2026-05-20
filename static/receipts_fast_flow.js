@@ -274,9 +274,10 @@
 
       hideModal();
 
+      const savedMark = String((j && (j.mark || j.MARK || j.saved_mark || j.number)) || (payload && (payload.mark || payload.MARK || payload.number)) || '').trim();
       let reloaded = false;
       if (typeof window.partiallyReloadInvoiceTable === 'function') {
-        try { reloaded = !!(await window.partiallyReloadInvoiceTable()); } catch(_) { reloaded = false; }
+        try { reloaded = !!(await window.partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
       }
 
       // Fallback for repeat mode: force-refresh table fragment even if helper returns false.
@@ -295,6 +296,11 @@
           }
         } catch(_) {}
       }
+
+      try {
+        if (typeof window.rcScheduleSearchBoxRefocus === 'function') window.rcScheduleSearchBoxRefocus('receipts-fast-flow-save');
+        else if (typeof window.rcFocusSearchBoxCursorEnd === 'function') window.rcFocusSearchBoxCursorEnd();
+      } catch(_) {}
 
       if (reloaded) showFlash('✓ Αποθηκεύτηκε η απόδειξη', 'success', 2500);
       else showFlash('Η αποθήκευση ολοκληρώθηκε, αλλά δεν έγινε ανανέωση πίνακα. Πάτησε αναζήτηση ή ανανέωση λίστας.', 'warning', 4500);

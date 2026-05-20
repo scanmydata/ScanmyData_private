@@ -17,7 +17,7 @@ import os
 import pandas as pd
 import numpy as np
 
-from e3_field_map import lookup as _e3_lookup, group_by_table as _e3_group
+from .e3_field_map import lookup as _e3_lookup, group_by_table as _e3_group
 
 
 # ─────────────────────────────────────────────────────────────────────────────

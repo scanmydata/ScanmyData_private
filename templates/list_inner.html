@@ -305,6 +305,8 @@
         const applyHighlightStyle = (rowEl) => {
           if (!rowEl) return false;
           const cellEls = Array.from(rowEl.querySelectorAll ? rowEl.querySelectorAll('.tabulator-cell') : []);
+          try { rowEl.setAttribute('tabindex', '-1'); } catch(_) {}
+          try { if (typeof rowEl.blur === 'function') rowEl.blur(); } catch(_) {}
           rowEl.style.setProperty('background-color', '#dcfce7', 'important');
           rowEl.style.setProperty('outline', '2px solid #16a34a', 'important');
           rowEl.style.setProperty('outline-offset', '-2px', 'important');
@@ -312,10 +314,24 @@
           rowEl.style.setProperty('transition', 'background-color 1.2s ease, box-shadow 1.2s ease, outline-color 1.2s ease', 'important');
           cellEls.forEach((cell) => {
             try {
+              cell.setAttribute('tabindex', '-1');
               cell.style.setProperty('background-color', '#dcfce7', 'important');
               cell.style.setProperty('transition', 'background-color 1.2s ease', 'important');
             } catch(_) {}
           });
+          try {
+            const activeEl = document.activeElement;
+            if (activeEl && (activeEl === rowEl || rowEl.contains(activeEl))) {
+              try { if (typeof activeEl.blur === 'function') activeEl.blur(); } catch(_) {}
+              setTimeout(() => {
+                try {
+                  if (typeof window.rcFocusSearchBoxCursorEnd === 'function') {
+                    window.rcFocusSearchBoxCursorEnd();
+                  }
+                } catch(_) {}
+              }, 0);
+            }
+          } catch(_) {}
           setTimeout(() => {
             try {
               rowEl.style.removeProperty('background-color');
@@ -437,6 +453,11 @@
               prevPageSize = Number(window.FBP_TABULATOR.getPageSize()) || null;
             }
           } catch(_) { prevPageSize = null; }
+          try {
+            if (typeof window.rcArmSearchBoxFocusLock === 'function') {
+              window.rcArmSearchBoxFocusLock('list-fragment-refresh-start', 5000);
+            }
+          } catch(_) {}
           container.innerHTML = j.table_html || '';
           syncDownloadControls(!!j.file_exists);
           setTimeout(() => {
@@ -449,6 +470,11 @@
             } catch(_){ }
             try {
               if (typeof window.__searchRepeatHintRender === 'function') window.__searchRepeatHintRender();
+            } catch(_){ }
+            try {
+              if (typeof window.rcScheduleSearchBoxRefocus === 'function') {
+                window.rcScheduleSearchBoxRefocus('list-fragment-refresh-done', [0, 80, 220, 500, 1000, 1800, 2600, 3600, 4600]);
+              }
             } catch(_){ }
             try {
               const markToHighlight = String((j && j.highlight_mark) || highlightMark || '').trim();

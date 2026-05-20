@@ -59,12 +59,12 @@ import pandas as pd
 from shutil import move
 import importlib
 import io
-from activity_monitor import monitor_resources, start_request_monitoring, end_request_monitoring
+from admin.activity_monitor import monitor_resources, start_request_monitoring, end_request_monitoring
 import csv
 import unicodedata
 import secrets
 import qrcode
-from epsilon_bridge_multiclient_strict import (
+from epsilon_bridges import (
     run_and_report_dynamic,
     export_multiclient_strict,
     build_preview_strict_multiclient,
@@ -73,7 +73,7 @@ from epsilon_bridge_multiclient_strict import (
     _norm_afm,   # <-- απαιτείται
     # προαιρετικά: export_multiclient_strict
 )
-from scraper_receipt import detect_and_scrape as scrape_receipt
+from scraper import detect_and_scrape as scrape_receipt
 # local mydata helper
 from fetch import request_docs
 import sys, subprocess, json
@@ -129,14 +129,14 @@ except Exception:
             self.release()
 
 from flask import current_app
-from epsilon_bridge_multiclient_strict import build_preview_rows_for_ui
+from epsilon_bridges import build_preview_rows_for_ui
 import utils as utils
 from utils import decode_qr_from_file, decode_qr_payloads, extract_mark
 
 # Firebase & Admin imports
-import firebase_config
-import admin_panel
-from encryption import encrypt_data, decrypt_data, encrypt_data_with_group_key, decrypt_data_with_group_key
+from firebase import firebase_config
+from admin import admin_panel
+from admin.encryption import encrypt_data, decrypt_data, encrypt_data_with_group_key, decrypt_data_with_group_key
 
 # Import login_required early for decorator usage
 try:
@@ -971,7 +971,7 @@ if handler not in root_logger.handlers:
 try:
     # local imports to avoid circulars during module import
     from models import db
-    from auth import login_manager, auth_bp
+    from admin.auth import login_manager, auth_bp
 
     app.config.setdefault('SQLALCHEMY_DATABASE_URI', os.getenv('DATABASE_URL') or 'sqlite:///' + os.path.join(BASE_DIR, 'firebed.db'))
     app.config.setdefault('SQLALCHEMY_TRACK_MODIFICATIONS', False)
@@ -993,7 +993,7 @@ try:
         from sqlalchemy.orm import Session
         from flask_login import current_user
         from flask import session as flask_session
-        import firebase_config as _fc
+        from firebase import firebase_config as _fc
         from models import Group
 
         @event.listens_for(Session, 'after_commit')
@@ -1031,7 +1031,7 @@ try:
     
     # Initialize Firestore sync (must be after db.create_all() and Firebase init)
     try:
-        from firestore_sync import init_firestore_sync
+        from admin.firestore_sync import init_firestore_sync
         init_firestore_sync(app)
         logger.info("Firestore sync initialized")
     except ImportError:
@@ -1040,17 +1040,17 @@ try:
         logger.warning(f"Firestore sync initialization failed: {e}")
     
     # Register Firebase Auth routes
-    from firebase_auth_routes import firebase_auth_bp
+    from firebase.firebase_auth_routes import firebase_auth_bp
     app.register_blueprint(firebase_auth_bp)
     logger.info("Firebase Auth routes registered")
     
     # Register Admin API routes
-    from admin_api import admin_api_bp
+    from admin.admin_api import admin_api_bp
     app.register_blueprint(admin_api_bp)
     logger.info("Admin API routes registered")
     # Start periodic background sync of local data/ to Firebase (encrypted)
     try:
-        import firebase_config as _fc
+        from firebase import firebase_config as _fc
         _fc.start_firebase_data_sync()
     except Exception:
         logger.exception('Could not start firebase data sync')
@@ -1130,7 +1130,7 @@ def get_group_base_dir():
 
     try:
         # avoid top-level import cycles
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
     except Exception:
         grp = None
@@ -1156,7 +1156,7 @@ def credentials_path_for_request():
 def api_sync_progress():
     """Return current sync progress for the active group (non-blocking)."""
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         if not grp or not getattr(grp, 'data_folder', None):
             return jsonify({'status': 'no_group', 'percent': 0, 'message': 'No active group'})
@@ -1184,7 +1184,7 @@ def api_sync_progress():
 def api_debug_role():
     """Debug endpoint to check user role detection in active group."""
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         
         result = {
@@ -1481,7 +1481,7 @@ def enforce_active_session_claim():
                 if _utils.firebase_sync_login_logout_enabled():
                     active_group_name = str(session.get('active_group') or '').strip()
                     if active_group_name:
-                        from auth import _schedule_timeout_push_for_group
+                        from admin.auth import _schedule_timeout_push_for_group
                         _schedule_timeout_push_for_group(active_group_name, getattr(current_user, 'id', 0))
             except Exception:
                 try:
@@ -2097,7 +2097,7 @@ def _resolve_client_db_path(vat: str) -> str | None:
 
     # 2) Fallback: «έξυπνη» ανακάλυψη στον φάκελο της ομάδας
     try:
-        from epsilon_bridge_multiclient_strict import _discover_client_db_in_data_dir
+        from epsilon_bridges import _discover_client_db_in_data_dir
         fb = _discover_client_db_in_data_dir(base, vat=vat)
         if fb:
             return fb
@@ -2106,7 +2106,7 @@ def _resolve_client_db_path(vat: str) -> str | None:
 
     # 3) Fallback: «έξυπνη» ανακάλυψη στο global data/
     try:
-        from epsilon_bridge_multiclient_strict import _discover_client_db_in_data_dir
+        from epsilon_bridges import _discover_client_db_in_data_dir
         fb = _discover_client_db_in_data_dir(os.path.join(BASE_DIR, "data"), vat=vat)
         if fb:
             return fb
@@ -2239,7 +2239,7 @@ def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str =
     
     # 1) Ψάχνουμε στο client_db του group
     try:
-        from epsilon_bridge_multiclient_strict import _load_client_map, _norm_afm as bridge_norm_afm
+        from epsilon_bridges import _load_client_map, _norm_afm as bridge_norm_afm
         
         # Χρησιμοποιούμε την ίδια κανονικοποίηση που χρησιμοποιεί το _load_client_map
         issuer_afm_clean = bridge_norm_afm(issuer_afm)
@@ -2279,7 +2279,7 @@ def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str =
         
         # Χρησιμοποιούμε το normalized AFM από το βήμα 1
         try:
-            from epsilon_bridge_multiclient_strict import _norm_afm as bridge_norm_afm
+            from epsilon_bridges import _norm_afm as bridge_norm_afm
             issuer_afm_clean = bridge_norm_afm(issuer_afm)
         except:
             issuer_afm_clean = str(issuer_afm).strip()
@@ -3477,7 +3477,7 @@ def get_existing_client_ids() -> set:
         # If Flask-Login is present and there's a current_user, restrict to their folders.
         try:
             from flask_login import current_user
-            from auth import get_user_data_folders
+            from admin.auth import get_user_data_folders
             if getattr(current_user, 'is_authenticated', False):
                 folders = get_user_data_folders(current_user) or []
                 # if user has no folders, return empty set
@@ -5502,7 +5502,7 @@ def inject_active_credential():
     # Resolve active group ONCE to avoid multiple DB hits
     active_grp = None
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         active_grp = get_active_group()
     except Exception:
         pass
@@ -6617,7 +6617,7 @@ def api_qr_remote_start():
         if getattr(current_user, 'is_authenticated', False):
             owner_user_id = current_user.id
             try:
-                from auth import get_active_group
+                from admin.auth import get_active_group
                 g = get_active_group()
                 if g:
                     owner_group_name = g.name
@@ -7219,7 +7219,7 @@ def mobile_qr_scanner():
         repeat_enabled = bool(entry.get("repeat_enabled"))
 
         # Get active fiscal year
-        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        from epsilon_bridges import _read_active_fiscal_year
         active_year = _read_active_fiscal_year("data")
 
     return render_template(
@@ -7244,7 +7244,7 @@ def mobile_qr_scanner():
 def credentials_add():
     # Only group admin may add credentials
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7317,7 +7317,7 @@ def credentials_delete_post(name):
 
     # Only group admin may delete credentials
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7380,7 +7380,7 @@ def credentials_set_active():
 def credentials_save_settings():
     # Only group admin may update settings
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7481,7 +7481,7 @@ def upload_client_db():
     """
     # Permission check: only admins can upload client_db
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7708,7 +7708,7 @@ def _upload_chart_of_accounts_impl(category='G'):
     dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
     
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7874,7 +7874,7 @@ def _remove_chart_of_accounts_impl(category='G'):
     dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
     
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7917,7 +7917,7 @@ def _get_chart_of_accounts_status_impl(category='G'):
     dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
     
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -7979,7 +7979,7 @@ _COA_CACHE = {
 def _get_coa_file_path(category: str):
     dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         base = os.path.join(BASE_DIR, 'data', (grp.data_folder or '') if grp else '')
     except Exception:
@@ -8079,7 +8079,7 @@ def api_coa_search():
     Returns: { ok: bool, exists: bool, results: [ { code, name } ], total: int }
     """
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -8364,7 +8364,7 @@ def credentials():
             if ok:
                 # Log credential addition
                 try:
-                    from auth import _append_group_log, get_active_group
+                    from admin.auth import _append_group_log, get_active_group
                     grp = get_active_group()
                     if grp:
                         _append_group_log(grp, f"Credential '{name}' added by {current_user.username if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
@@ -8380,7 +8380,7 @@ def credentials():
     is_group_admin = False
     other_creds = []
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         if grp and getattr(current_user, 'is_authenticated', False):
             is_group_admin = current_user.role_for_group(grp) == 'admin'
@@ -8413,7 +8413,7 @@ def credentials_edit(name):
 
     can_edit_credential = False
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         if grp and getattr(current_user, 'is_authenticated', False):
             can_edit_credential = current_user.role_for_group(grp) == 'admin'
@@ -8526,7 +8526,7 @@ def credentials_edit(name):
 def credentials_copy_params(source_name):
     """Return configuration params from another credential — only for group admins."""
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         if not grp:
             return jsonify({'ok': False, 'error': 'no active group'}), 403
@@ -8563,7 +8563,7 @@ def credentials_delete(name):
 
     # Log credential deletion
     try:
-        from auth import _append_group_log, get_active_group
+        from admin.auth import _append_group_log, get_active_group
         grp = get_active_group()
         if grp:
             _append_group_log(grp, f"Credential '{name}' deleted by {current_user.username if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
@@ -9190,7 +9190,7 @@ def _request_bulk_fetch_stop(job_id: str) -> bool:
 def _is_active_group_admin_user() -> bool:
     try:
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
 
         if not getattr(current_user, 'is_authenticated', False):
             return False
@@ -9245,7 +9245,7 @@ def api_fetch_bulk_start():
     group_part = 'nogroup'
     try:
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
         user_part = str(getattr(current_user, 'id', 'anon'))
         grp = get_active_group()
         group_part = str(getattr(grp, 'id', 'nogroup'))
@@ -9281,7 +9281,7 @@ def api_fetch_bulk_start():
     app_obj = None
     try:
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
         app_obj = current_app._get_current_object()
         grp = get_active_group()
         log_group_obj = grp
@@ -9434,7 +9434,7 @@ def api_fetch_bulk_start():
                                 pass
                             if _log_group_obj is not None:
                                 try:
-                                    from auth import _append_group_log
+                                    from admin.auth import _append_group_log
                                     entry_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
                                     _append_group_log(_log_group_obj, {
                                         'user_id': str(_log_actor_id) if _log_actor_id is not None else 'anonymous',
@@ -9689,7 +9689,7 @@ def fetch():
         log_actor_email = None
         log_actor_username = None
         try:
-            from auth import get_active_group
+            from admin.auth import get_active_group
             log_group = get_active_group()
             if log_group:
                 log_group_name = getattr(log_group, 'name', None) or getattr(log_group, 'data_folder', None)
@@ -9797,7 +9797,7 @@ def fetch():
                             pass
                     if _log_group_obj:
                         try:
-                            from auth import _append_group_log
+                            from admin.auth import _append_group_log
                             resolved_group_name = str(_log_group_name or getattr(_log_group_obj, 'name', None) or getattr(_log_group_obj, 'data_folder', None) or 'system')
                             entry_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
                             _append_group_log(_log_group_obj, {
@@ -10047,7 +10047,7 @@ def api_update_epsilon_characteristic():
             try:
                 from utils import log_user_activity
                 from flask_login import current_user
-                from auth import get_active_group
+                from admin.auth import get_active_group
                 grp = get_active_group()
                 log_user_activity(
                     user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
@@ -10407,7 +10407,7 @@ def search():
         from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
         # safe import of receipt scraper
         try:
-            from scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
+            from scraper import detect_and_scrape as detect_and_scrape_receipt
         except Exception:
             detect_and_scrape_receipt = None
 
@@ -12284,21 +12284,21 @@ def api_scrape_receipt():
         detect_and_scrape = None
         if mode == "analysis":
             try:
-                from scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
+                from scraper import detect_and_scrape as detect_and_scrape
             except Exception:
                 log.exception("api_scrape_receipt: cannot import analysis scraper, fallback to legacy")
                 try:
-                    from scraper_receipt import detect_and_scrape as detect_and_scrape
+                    from scraper import detect_and_scrape as detect_and_scrape
                 except Exception:
                     log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
                     return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
         else:
             try:
-                from scraper_receipt import detect_and_scrape as detect_and_scrape
+                from scraper import detect_and_scrape as detect_and_scrape
             except Exception:
                 log.exception("api_scrape_receipt: cannot import mixed scraper, fallback to analysis")
                 try:
-                    from scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
+                    from scraper import detect_and_scrape as detect_and_scrape
                 except Exception:
                     log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
                     return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
@@ -13627,7 +13627,7 @@ def save_summary():
             try:
                 from utils import log_user_activity
                 from flask_login import current_user
-                from auth import get_active_group
+                from admin.auth import get_active_group
                 grp = get_active_group()
                 log_user_activity(
                     user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
@@ -13707,7 +13707,7 @@ def save_receipt():
     try:
         from utils import log_user_activity
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         try:
             log_user_activity(
@@ -14123,7 +14123,7 @@ def api_confirm_receipt():
         try:
             from utils import log_user_activity
             from flask_login import current_user
-            from auth import get_active_group
+            from admin.auth import get_active_group
             grp = get_active_group()
             log_user_activity(
                 user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
@@ -14703,7 +14703,7 @@ def api_support_open_ticket():
     if not display_name:
         return jsonify({"ok": False, "error": "Δήλωσε όνομα πριν ξεκινήσεις συνομιλία."}), 400
 
-    from auth import get_active_group
+    from admin.auth import get_active_group
     grp = get_active_group()
     user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
     if not user_id:
@@ -15428,7 +15428,7 @@ def _derive_backup_password() -> str:
 def data_backup_download():
     # only group admin may download backups
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -15538,7 +15538,7 @@ def data_backup_download():
 def data_backup_inspect():
     # only group admin may inspect backup contents
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -15570,7 +15570,7 @@ def data_backup_inspect():
 def data_backup_restore():
     # only group admin may restore backups
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
@@ -15654,7 +15654,7 @@ def list_invoices():
         try:
             from utils import log_user_activity
             from flask_login import current_user
-            from auth import get_active_group
+            from admin.auth import get_active_group
             import pandas as pd
             
             file_size_mb = os.path.getsize(excel_path) / (1024 * 1024)
@@ -15756,7 +15756,7 @@ def activity_check_updates():
     """
     try:
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
         from utils import log_user_activity
         grp = get_active_group()
         active = get_active_credential_from_session()
@@ -15775,7 +15775,7 @@ def activity_check_updates():
         # get recent activity for this group
         events = []
         try:
-            import firebase_config
+            from firebase import firebase_config
             folder = grp.name if grp else (grp.data_folder if grp and getattr(grp, 'data_folder', None) else 'unknown')
             raw = firebase_config.firebase_get_group_activity_logs(folder, limit=50) or []
             for e in raw:
@@ -15854,16 +15854,16 @@ def epsilon_preview():
     
     # Επιλογή του κατάλληλου module
     if is_g_category:
-        from epsilon_bridge_g_category import build_preview_rows_for_ui_g as build_preview_func
+        from epsilon_bridges import build_preview_rows_for_ui_g as build_preview_func
     else:
-        from epsilon_bridge_multiclient_strict import build_preview_rows_for_ui as build_preview_func
+        from epsilon_bridges import build_preview_rows_for_ui as build_preview_func
     
     client_db_path = _resolve_client_db_path(vat)
     
     # Διάβασμα ενεργού έτους για φιλτράρισμα
     fiscal_year = None
     try:
-        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        from epsilon_bridges import _read_active_fiscal_year
         fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
     except Exception:
         pass
@@ -15907,7 +15907,7 @@ def export_fastimport_kinitseis():
 
     if excluded_marks:
         try:
-            from epsilon_bridge_multiclient_strict import resolve_paths_for_vat, load_epsilon_invoices
+            from epsilon_bridges import resolve_paths_for_vat, load_epsilon_invoices
             paths_for_invoices = resolve_paths_for_vat(vat, None, None, None, group_path("epsilon"))
             all_invoices = load_epsilon_invoices(paths_for_invoices["invoices"])
             filtered_invoices = []
@@ -15956,11 +15956,11 @@ def export_fastimport_kinitseis():
     # Επιλογή του κατάλληλου module ανάλογα με την κατηγορία
     if is_g_category:
         # Χρήση Γ Κατηγορίας module
-        from epsilon_bridge_g_category import build_preview_strict_g_category as build_preview
-        from epsilon_bridge_g_category import export_g_category as export_func
+        from epsilon_bridges import build_preview_strict_g_category as build_preview
+        from epsilon_bridges import export_g_category as export_func
     else:
         # Χρήση Β Κατηγορίας (default)
-        from epsilon_bridge_multiclient_strict import (
+        from epsilon_bridges import (
             build_preview_strict_multiclient as build_preview,
             export_multiclient_strict as export_func,
         )
@@ -15969,7 +15969,7 @@ def export_fastimport_kinitseis():
     # Διάβασμα ενεργού έτους
     fiscal_year = None
     try:
-        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        from epsilon_bridges import _read_active_fiscal_year
         fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
     except Exception:
         pass
@@ -16012,7 +16012,7 @@ def export_fastimport_kinitseis():
     # Διάβασμα ενεργού έτους
     fiscal_year = None
     try:
-        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        from epsilon_bridges import _read_active_fiscal_year
         fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
     except Exception:
         pass
@@ -16046,7 +16046,7 @@ def export_fastimport_kinitseis():
         try:
             from utils import log_user_activity
             from flask_login import current_user
-            from auth import get_active_group
+            from admin.auth import get_active_group
             grp = get_active_group()
             log_user_activity(
                 user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
@@ -16057,8 +16057,8 @@ def export_fastimport_kinitseis():
                     'rows_count': rows_count,
                     'file_size_mb': round(file_size_mb, 2),
                     'file_name': os.path.basename(out_path),
-                    'includes_b_kat': is_b_category and os.path.exists(os.path.join(BASE_DIR, "b_kat.ect")),
-                    'includes_g_kat': is_g_category and os.path.exists(os.path.join(BASE_DIR, "Γ.ect")),
+                    'includes_b_kat': is_b_category and os.path.exists(os.path.join(BASE_DIR, "epsilon_bridges", "b_kat.ect")),
+                    'includes_g_kat': is_g_category and os.path.exists(os.path.join(BASE_DIR, "epsilon_bridges", "Γ.ect")),
                     'vat': vat
                 },
                 user_email=getattr(current_user, 'email', None),
@@ -16070,16 +16070,16 @@ def export_fastimport_kinitseis():
         # Bundling με .ect file ανάλογα με την κατηγορία
         ect_file = None
         if is_b_category:
-            bkat_path = os.path.join(BASE_DIR, "b_kat.ect")
+            bkat_path = os.path.join(BASE_DIR, "epsilon_bridges", "b_kat.ect")
             if os.path.exists(bkat_path):
                 ect_file = ("b_kat.ect", bkat_path)
         elif is_g_category:
             # Προτιμάμε το g_kat.ect αν υπάρχει, αλλιώς το Γ.ect
-            gkat_path = os.path.join(BASE_DIR, "g_kat.ect")
+            gkat_path = os.path.join(BASE_DIR, "epsilon_bridges", "g_kat.ect")
             if os.path.exists(gkat_path):
                 ect_file = ("g_kat.ect", gkat_path)
             else:
-                gkat_path_alt = os.path.join(BASE_DIR, "Γ.ect")
+                gkat_path_alt = os.path.join(BASE_DIR, "epsilon_bridges", "Γ.ect")
                 if os.path.exists(gkat_path_alt):
                     ect_file = ("Γ.ect", gkat_path_alt)
         
@@ -16164,7 +16164,7 @@ def _delete_undo_scope_key() -> str:
     name = str(active.get("name") or "default").strip() or "default"
 
     try:
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         group_name = str(getattr(grp, "name", "") or "default").strip() or "default"
     except Exception:
@@ -16560,7 +16560,7 @@ def delete_invoices():
     try:
         from utils import log_user_activity
         from flask_login import current_user
-        from auth import get_active_group
+        from admin.auth import get_active_group
         grp = get_active_group()
         log_user_activity(
             user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
@@ -16656,7 +16656,7 @@ def api_e3_fetch():
         unclassified_invoices = []
         classified_marks = set()
 
-        from fetch_e3 import fetch_e3_entries, build_e3_report
+        from e3.checks.fetch_e3 import fetch_e3_entries, build_e3_report
         try:
             raw_entries = fetch_e3_entries("0", date_from, date_to, aade_user, aade_key, debug=False)
 
@@ -16735,7 +16735,7 @@ def api_e3_upload_excel():
     A balance sheet is considered closed when leaf-level group-6 accounts
     have Υπόλοιπο ≈ 0 but Χρέωση > 0 AND Πίστωση > 0.
     """
-    from e3_processor import process_excel_file
+    from e3.e3_processor import process_excel_file
 
     def normalize_bools(value):
         # Convert numpy/pandas scalar values to Python scalars (e.g. numpy.bool_).
@@ -16849,7 +16849,7 @@ def admin_dashboard():
     try:
         # Load recent activity logs to show on dashboard
         try:
-            from admin_panel import admin_get_activity_logs
+            from admin.admin_panel import admin_get_activity_logs
             recent_activity = admin_get_activity_logs(limit=10) or []
         except Exception:
             recent_activity = []
@@ -17529,7 +17529,7 @@ def admin_send_email():
     
     # POST: send email
     try:
-        from email_utils import send_bulk_email_to_users
+        from admin.email_utils import send_bulk_email_to_users
         
         user_ids = request.form.getlist('user_ids')
         subject = request.form.get('subject', '').strip()
