@@ -5,14 +5,14 @@
     <div class="flex gap-2 items-center flex-wrap">
       <div id="listDownloadControls" class="relative{% if not file_exists %} hidden{% endif %}">
         <button id="downloadToggle" class="px-4 py-2 bg-[#0284c7] text-white rounded-lg shadow hover:bg-[#0369a1] transition flex items-center gap-2" type="button" aria-haspopup="true" aria-expanded="false">
-          ⬇️ Κατέβασμα .xlsx
+          ⬇️ Λήψη .xlsx
           <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clip-rule="evenodd" />
           </svg>
         </button>
         <div id="downloadMenu" class="hidden absolute right-0 mt-2 min-w-[220px] bg-white rounded-lg shadow-lg overflow-hidden z-50">
-          <a class="block px-4 py-2 hover:bg-gray-100 transition" href="{{ url_for('list_invoices', download=1) }}">Εξοδολόγιο (.xlsx)</a>
-          <button id="epsilonExport" class="w-full text-left px-4 py-2 hover:bg-gray-100 transition">Epsilon Excel</button>
+          <a class="block px-4 py-2 hover:bg-gray-100 transition download-menu-item" href="{{ url_for('list_invoices', download=1) }}">Εξοδολόγιο (.xlsx)</a>
+          <a id="epsilonExport" class="block px-4 py-2 hover:bg-gray-100 transition download-menu-item" href="{{ url_for('epsilon_preview', vat=vat) }}" rel="external">Epsilon Excel</a>
         </div>
       </div>
       <a class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition hidden" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
@@ -277,8 +277,21 @@
         }catch(_){ }
       }
 
+      function syncEpsilonPreviewLink(vatValue){
+        try {
+          const link = document.getElementById('epsilonExport');
+          if (!link) return;
+          const vat = String(vatValue || '').trim();
+          const url = vat
+            ? ('/epsilon/preview?vat=' + encodeURIComponent(vat))
+            : '/epsilon/preview';
+          link.setAttribute('href', url);
+        } catch(_) {}
+      }
+
       async function refreshListFragment(){
         const normalizeMark = (value) => String(value || '').replace(/\D+/g, '').trim();
+        const currentVat = String((window.__RC_ACTIVE_VAT || document.querySelector('input[name="active_vat"]')?.value || '')).trim();
         const highlightMark = String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim();
         const rowMatchesTarget = (dataObj, target, targetDigits) => {
           try {
@@ -441,7 +454,10 @@
         window.FBP_HIGHLIGHT_ROW_BY_MARK = tryHighlightRow;
 
         try{
-          const frag = await fetch('/list/fragment', { method: 'GET', credentials: 'same-origin' });
+          const fragUrl = new URL('/list/fragment', window.location.origin);
+          if (currentVat) fragUrl.searchParams.set('vat', currentVat);
+          if (highlightMark) fragUrl.searchParams.set('highlight_mark', highlightMark);
+          const frag = await fetch(fragUrl.toString(), { method: 'GET', credentials: 'same-origin' });
           if(!frag.ok) return false;
           const j = await frag.json().catch(() => null);
           if(!j || !j.ok) return false;
@@ -460,6 +476,7 @@
           } catch(_) {}
           container.innerHTML = j.table_html || '';
           syncDownloadControls(!!j.file_exists);
+          syncEpsilonPreviewLink(j.active_vat || currentVat || '');
           setTimeout(() => {
             try {
               if (typeof window.FBP_INIT_TABULATOR === 'function') window.FBP_INIT_TABULATOR({ pageSize: prevPageSize });
@@ -692,6 +709,7 @@
       });
 
       window.FBP_SYNC_LIST_DOWNLOAD_CONTROLS = syncDownloadControls;
+      window.FBP_SYNC_EPSILON_PREVIEW_LINK = syncEpsilonPreviewLink;
       window.FBP_REFRESH_LIST_FRAGMENT = refreshListFragment;
       window.FBP_DELETE_UNDO = {
         push: pushUndo,
@@ -1510,10 +1528,42 @@ document.addEventListener('click', function(e){
 })();
 </script>
 <script>
-document.getElementById('epsilonExport')?.addEventListener('click', function(){
-  const vat = this.dataset.vat || '{{ vat }}';
-  window.location.href = "{{ url_for('epsilon_preview') }}" + "?vat=" + encodeURIComponent(vat);
-});
+// Epsilon option is a regular anchor; navigation is handled by the app shell.
+(function(){
+  const epsilonLink = document.getElementById('epsilonExport');
+  if (!epsilonLink || epsilonLink.dataset.vatBound === '1') return;
+  epsilonLink.dataset.vatBound = '1';
+
+  const resolveVat = () => {
+    try {
+      if (typeof window.rcResolveActiveVat === 'function') {
+        const v = String(window.rcResolveActiveVat() || '').trim();
+        if (v) return v;
+      }
+    } catch(_) {}
+    try {
+      const v = String(window.__RC_ACTIVE_VAT || '').trim();
+      if (v) return v;
+    } catch(_) {}
+    try {
+      const v = String((document.body && document.body.dataset && document.body.dataset.activeVat) || '').trim();
+      if (v) return v;
+    } catch(_) {}
+    try {
+      const hrefVat = new URL(epsilonLink.getAttribute('href') || '', window.location.origin).searchParams.get('vat') || '';
+      return String(hrefVat).trim();
+    } catch(_) {
+      return '';
+    }
+  };
+
+  epsilonLink.addEventListener('click', function(){
+    try {
+      const vat = resolveVat();
+      this.href = vat ? ('/epsilon/preview?vat=' + encodeURIComponent(vat)) : '/epsilon/preview';
+    } catch(_) {}
+  }, true);
+})();
 </script>
 
 <!-- Live-update polling for shared active client -->
@@ -2723,6 +2773,32 @@ body table.summary-table td {
   color: #ffffff !important;
 }
 [data-theme="dark"] #downloadToggle:hover { background-color: #0369a1 !important; }
+
+@media (prefers-color-scheme: dark) {
+  #downloadMenu {
+    background-color: #0f172a !important;
+    border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  }
+  #downloadMenu .download-menu-item {
+    color: #e2e8f0 !important;
+  }
+  #downloadMenu .download-menu-item:hover {
+    background-color: rgba(148, 163, 184, 0.16) !important;
+    color: #ffffff !important;
+  }
+}
+
+[data-theme="dark"] #downloadMenu {
+  background-color: #0f172a !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+}
+[data-theme="dark"] #downloadMenu .download-menu-item {
+  color: #e2e8f0 !important;
+}
+[data-theme="dark"] #downloadMenu .download-menu-item:hover {
+  background-color: rgba(148, 163, 184, 0.16) !important;
+  color: #ffffff !important;
+}
 
 /* Make toggle switches (receipt/repeat/other) use same sky-600 background in both light and dark */
 input[type="checkbox"]#useReceiptsSwitch,

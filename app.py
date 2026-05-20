@@ -15731,8 +15731,9 @@ def list_fragment():
     Used by client-side partial refresh when other users update the same VAT.
     """
     try:
+        requested_vat = str(request.args.get("vat") or "").strip()
         active = get_active_credential_from_session() or {}
-        active_vat = str(active.get("vat") or "").strip()
+        active_vat = requested_vat or str(active.get("vat") or "").strip()
         highlight_mark = str(request.args.get("highlight_mark") or "").strip()
         table_html, exists, _ = _render_table_html_for_vat(active_vat, with_checkbox_value=True)
         if not exists:
@@ -15743,6 +15744,7 @@ def list_fragment():
             "table_html": table_html,
             "file_exists": bool(exists),
             "highlight_mark": highlight_mark,
+            "active_vat": active_vat,
         })
     except Exception as exc:
         current_app.logger.exception('list_fragment failed')

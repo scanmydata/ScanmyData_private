@@ -69,11 +69,7 @@ $(document).ready(function(){
     document.addEventListener('click', function(e){ if(!menu.classList.contains('hidden') && !menu.contains(e.target) && !toggle.contains(e.target)) closeMenu(); });
     document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeMenu(); });
     if(epsilon){
-      epsilon.addEventListener('click', function(e){
-        e.preventDefault(); closeMenu();
-        if(typeof showBanner==='function'){ showBanner('Η εξαγωγή Epsilon θα υλοποιηθεί σύντομα.','info',6000); } 
-        else { showModalAlert('Πληροφορία', 'Η εξαγωγή Epsilon θα υλοποιηθεί σύντομα.'); }
-      });
+      epsilon.addEventListener('click', function(){ closeMenu(); });
     }
   })();
 });

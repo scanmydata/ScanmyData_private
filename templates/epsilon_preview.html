@@ -86,7 +86,7 @@
 <div class="bg-white rounded shadow p-6">
   <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-3">
-      <a href="javascript:history.back()" class="inline-flex items-center gap-2 px-3 py-2 border rounded hover:bg-gray-50">
+      <a href="{{ url_for('search') }}" rel="external" class="inline-flex items-center gap-2 px-3 py-2 border rounded hover:bg-gray-50">
         ← Επιστροφή
       </a>
       <h2 class="text-lg font-semibold">Προεπισκόπηση Epsilon (VAT: {{ vat or '' }})</h2>
@@ -584,7 +584,75 @@ async function performBridgeDownload(url, options){
   }
 }
 
-$(function(){
+function loadScriptOnce(src){
+  return new Promise((resolve, reject) => {
+    try {
+      const existing = Array.from(document.querySelectorAll('script[src]')).find(s => String(s.getAttribute('src') || '').includes(src));
+      if (existing) {
+        if (existing.dataset.loaded === '1' || existing.readyState === 'complete') return resolve();
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error('script load failed: ' + src)), { once: true });
+        return;
+      }
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = false;
+      s.addEventListener('load', () => { s.dataset.loaded = '1'; resolve(); }, { once: true });
+      s.addEventListener('error', () => reject(new Error('script load failed: ' + src)), { once: true });
+      document.head.appendChild(s);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function ensureDataTablesDeps(){
+  try {
+    if (window.jQuery && $.fn && $.fn.DataTable) return true;
+  } catch(_) {}
+  try {
+    await loadScriptOnce('https://code.jquery.com/jquery-3.6.0.min.js');
+    await loadScriptOnce('https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js');
+    return !!(window.jQuery && $.fn && $.fn.DataTable);
+  } catch(_) {
+    return false;
+  }
+}
+
+async function initEpsilonPreviewPage(){
+  try {
+    const serverVat = String(ACTIVE_VAT || '').trim();
+    if (!serverVat) {
+      const fallbackVat = String(
+        (window.__RC_ACTIVE_VAT || '')
+        || ((document.body && document.body.dataset && document.body.dataset.activeVat) || '')
+      ).trim();
+      if (fallbackVat) {
+        const u = new URL(window.location.href);
+        if (String(u.searchParams.get('vat') || '').trim() !== fallbackVat) {
+          u.searchParams.set('vat', fallbackVat);
+          window.location.replace(u.toString());
+          return;
+        }
+      }
+    }
+  } catch(_) {}
+
+  const tableEl = document.getElementById('epsilonTable');
+  if (!tableEl) return;
+  const depsReady = await ensureDataTablesDeps();
+  if (!depsReady) {
+    showFlash('Αποτυχία φόρτωσης DataTables. Κάνε ανανέωση σελίδας.', 'error', 5000);
+    return;
+  }
+  try {
+    if (window.jQuery && $.fn && $.fn.dataTable && $.fn.dataTable.isDataTable(tableEl)) {
+      const existing = $(tableEl).DataTable();
+      if (existing && existing.rows && existing.rows().count() > 0) return;
+      try { existing.clear().destroy(); } catch(_) {}
+    }
+  } catch(_) {}
+
   if(!TABLE_DATA || !TABLE_DATA.length){
     $('#emptyState').removeClass('hidden');
   }
@@ -793,6 +861,12 @@ $(function(){
       if(e.target === wrap) closeModal();
     });
   })();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initEpsilonPreviewPage, { once: true });
+} else {
+  initEpsilonPreviewPage();
+}
 </script>
 {% endblock %}

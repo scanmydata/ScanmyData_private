@@ -343,6 +343,307 @@
   // Canonical receipt pipeline switch must be set before external flow scripts load.
   window.__RC_USE_CANONICAL_RECEIPT_AUTOCONFIRM = true;
 </script>
+
+<script>
+(function(){
+  if (window.__RC_INVOICE_REPEAT_SYNC_BRIDGE_V2) return;
+  window.__RC_INVOICE_REPEAT_SYNC_BRIDGE_V2 = true;
+
+  function activeVat(){
+    try {
+      const live = String((typeof window.rcResolveActiveVat === 'function' ? window.rcResolveActiveVat() : '') || '').trim();
+      if (live) return live;
+    } catch(_) {}
+    try {
+      const ds = String((document.body && document.body.dataset && document.body.dataset.activeVat) || '').trim();
+      if (ds) return ds;
+    } catch(_) {}
+    try {
+      const w = String(window._repeatModalVAT || '').trim();
+      if (w) return w;
+    } catch(_) {}
+    return String('{{ vat or "" }}' || '').trim();
+  }
+
+  function normalizeMap(raw){
+    const out = { '0%':'', '6%':'', '13%':'', '17%':'', '24%':'' };
+    if (!raw || typeof raw !== 'object') return out;
+
+    // Support char-profile payloads (kat_fpa_*) used by invoices/receipts profile APIs.
+    if (
+      Object.prototype.hasOwnProperty.call(raw, 'kat_fpa_a') ||
+      Object.prototype.hasOwnProperty.call(raw, 'kat_fpa_b') ||
+      Object.prototype.hasOwnProperty.call(raw, 'kat_fpa_g') ||
+      Object.prototype.hasOwnProperty.call(raw, 'kat_fpa_d') ||
+      Object.prototype.hasOwnProperty.call(raw, 'kat_fpa_e')
+    ) {
+      out['0%'] = String(raw.kat_fpa_a || '').trim();
+      out['6%'] = String(raw.kat_fpa_b || '').trim();
+      out['13%'] = String(raw.kat_fpa_g || '').trim();
+      out['17%'] = String(raw.kat_fpa_d || '').trim();
+      out['24%'] = String(raw.kat_fpa_e || '').trim();
+      return out;
+    }
+
+    const pairs = [
+      ['0%', ['0%', 'fpa0', 'fpa_0', 'kat_fpa_0']],
+      ['6%', ['6%', 'fpa6', 'fpa_6', 'kat_fpa_6']],
+      ['13%', ['13%', 'fpa13', 'fpa_13', 'kat_fpa_13']],
+      ['17%', ['17%', 'fpa17', 'fpa_17', 'kat_fpa_17']],
+      ['24%', ['24%', 'fpa24', 'fpa_24', 'kat_fpa_24']]
+    ];
+    pairs.forEach(function(entry){
+      const target = entry[0];
+      const keys = entry[1];
+      for (let i = 0; i < keys.length; i += 1){
+        const key = keys[i];
+        if (Object.prototype.hasOwnProperty.call(raw, key) && String(raw[key] || '').trim()) {
+          out[target] = String(raw[key] || '').trim();
+          return;
+        }
+      }
+    });
+    return out;
+  }
+
+  function setSelectSafe(selectEl, value){
+    if (!selectEl) return;
+    const val = String(value || '').trim();
+    if (!val) {
+      selectEl.value = '';
+      return;
+    }
+    const has = Array.from(selectEl.options || []).some(function(o){
+      return String(o.value || '').trim() === val;
+    });
+    if (!has) {
+      const extra = document.createElement('option');
+      extra.value = val;
+      extra.textContent = val + ' (legacy)';
+      extra.dataset.legacy = '1';
+      selectEl.appendChild(extra);
+    }
+    selectEl.value = val;
+  }
+
+  function applyMapToRepeatUi(mapping){
+    const norm = normalizeMap(mapping || {});
+    const list = document.getElementById('repeatMappingList');
+    if (!list) return;
+    list.querySelectorAll('select[data-vat]').forEach(function(sel){
+      const vat = String(sel.dataset.vat || '').trim();
+      if (!vat) return;
+      setSelectSafe(sel, norm[vat] || '');
+    });
+  }
+
+  function extractCurrentMappingFromUi(){
+    const out = { '0%':'', '6%':'', '13%':'', '17%':'', '24%':'' };
+    const list = document.getElementById('repeatMappingList');
+    if (!list) return out;
+    list.querySelectorAll('select[data-vat]').forEach(function(sel){
+      const vat = String(sel.dataset.vat || '').trim();
+      if (Object.prototype.hasOwnProperty.call(out, vat)) {
+        out[vat] = String(sel.value || '').trim();
+      }
+    });
+    return out;
+  }
+
+  function currentRepeatProfileName(){
+    const sel = document.getElementById('charProfileSelect');
+    if (!sel) return '';
+    const opt = sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0] : null;
+    return String((opt && opt.dataset && opt.dataset.profileName) || sel.value || '').trim();
+  }
+
+  async function persistRepeatEnabled(enabled){
+    const vat = activeVat();
+    if (!vat) return;
+    let existing = null;
+    try {
+      const rg = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), { credentials: 'same-origin' });
+      existing = await rg.json().catch(function(){ return null; });
+    } catch(_) {}
+
+    const rep = (existing && existing.repeat_entry && typeof existing.repeat_entry === 'object') ? existing.repeat_entry : {};
+    const hasServerRepeat = !!(existing && existing.ok && rep && typeof rep === 'object');
+
+    const payload = {
+      vat: vat,
+      enabled: !!enabled,
+      // Never synthesize mapping/profile from UI on toggle-only action.
+      // This prevents accidental overwrite of saved profile/mapping.
+      mapping: normalizeMap(rep.mapping || {}),
+      invoice_mtype: String(rep.invoice_mtype || '').trim(),
+      receipt_mtype: String(rep.receipt_mtype || '').trim(),
+      profile_name: String(rep.profile_name || '').trim()
+    };
+
+    let saved = false;
+    if (hasServerRepeat) {
+      try {
+        const rs = await fetch('/api/repeat_entry/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(payload)
+        });
+        const js = await rs.json().catch(function(){ return null; });
+        saved = !!(js && js.ok);
+      } catch(_) {}
+    }
+
+    if (!saved) {
+      try {
+        await fetch('/api/repeat_state/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ enabled: !!enabled, vat: vat })
+        });
+      } catch(_) {}
+    }
+
+    try {
+      localStorage.setItem('REPEAT:enabled', enabled ? '1' : '0');
+      localStorage.setItem('REPEAT:enabled:' + vat, enabled ? '1' : '0');
+      localStorage.setItem('rc:repeat_enabled', enabled ? '1' : '0');
+    } catch(_) {}
+  }
+
+  async function fetchInvoiceProfileFromServer(vat, profileName){
+    const target = String(profileName || '').trim();
+    if (!target) {
+      const rg = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), { credentials: 'same-origin' });
+      if (!rg.ok) return null;
+      const gj = await rg.json().catch(function(){ return null; });
+      const rep = gj && gj.repeat_entry ? gj.repeat_entry : null;
+      if (!rep) return null;
+      return {
+        mapping: rep.general_mapping || rep.mapping || {},
+        invoice_mtype: String(rep.invoice_mtype || rep.mtype || '').trim(),
+        receipt_mtype: String(rep.receipt_mtype || '').trim()
+      };
+    }
+
+    const query = '/api/char_profiles?vat=' + encodeURIComponent(vat) + '&mode=invoices';
+    const r = await fetch(query, { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    const j = await r.json().catch(function(){ return null; });
+    if (!j || !Array.isArray(j.profiles)) return null;
+
+    const exact = j.profiles.find(function(p){
+      return String((p && p.name) || '').trim() === target;
+    }) || null;
+    if (!exact) return null;
+
+    return {
+      mapping: exact.mapping || exact.map || {},
+      invoice_mtype: String(exact.invoice_mtype || exact.invoiceMtype || exact.mtype || exact.movement_type || exact.movementType || '').trim(),
+      receipt_mtype: String(exact.receipt_mtype || exact.receiptMtype || '').trim()
+    };
+  }
+
+  async function onProfileChangeServerSync(){
+    const modal = document.getElementById('repeatMappingModal');
+    const sel = document.getElementById('charProfileSelect');
+    if (!modal || !sel) return;
+
+    const visible = window.getComputedStyle(modal).display !== 'none';
+    if (!visible) return;
+
+    const receiptsOn = !!(document.getElementById('useReceiptsSwitch') && document.getElementById('useReceiptsSwitch').checked);
+    if (receiptsOn) return;
+
+    const vat = activeVat();
+    if (!vat) return;
+    const profileName = currentRepeatProfileName();
+
+    try {
+      const data = await fetchInvoiceProfileFromServer(vat, profileName);
+      if (!data) return;
+
+      if (data.mapping && typeof data.mapping === 'object') {
+        applyMapToRepeatUi(data.mapping);
+      }
+
+      const invoiceSel = document.getElementById('repeatMtypeSelect');
+      const receiptSel = document.getElementById('repeatReceiptMtypeSelect');
+      setSelectSafe(invoiceSel, data.invoice_mtype || '');
+      setSelectSafe(receiptSel, data.receipt_mtype || '');
+
+      try {
+        window.__repeat_invoice_mtype = String(data.invoice_mtype || '').trim();
+        window.__repeat_receipt_mtype = String(data.receipt_mtype || '').trim();
+      } catch(_) {}
+    } catch(err) {
+      console.warn('invoice profile server sync failed', err);
+    }
+  }
+
+  document.addEventListener('change', function(ev){
+    const target = ev && ev.target ? ev.target : null;
+    if (!target) return;
+
+    if (target.id === 'repeatEntrySwitch') {
+      persistRepeatEnabled(!!target.checked);
+      return;
+    }
+
+    if (target.id === 'charProfileSelect') {
+      const sel = target;
+      const selectedOpt = sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0] : null;
+      const profileName = String((selectedOpt && selectedOpt.dataset && selectedOpt.dataset.profileName) || sel.value || '').trim();
+
+      // For named profiles, apply the already-loaded profile payload directly
+      // instead of re-fetching and potentially overwriting the freshly selected MTYPE.
+      if (profileName) {
+        const invoiceSel = document.getElementById('repeatMtypeSelect');
+        const receiptSel = document.getElementById('repeatReceiptMtypeSelect');
+        const invoiceVal = String((selectedOpt && selectedOpt.dataset && selectedOpt.dataset.invoiceMtype) || '').trim();
+        const receiptVal = String((selectedOpt && selectedOpt.dataset && selectedOpt.dataset.receiptMtype) || '').trim();
+        const rawMapping = selectedOpt && selectedOpt.dataset && selectedOpt.dataset.mapping ? selectedOpt.dataset.mapping : null;
+        let mapping = {};
+        try { mapping = rawMapping ? JSON.parse(rawMapping || '{}') : {}; } catch(_) { mapping = {}; }
+        if (mapping && typeof mapping === 'object') applyMapToRepeatUi(mapping);
+        setSelectSafe(invoiceSel, invoiceVal || '');
+        setSelectSafe(receiptSel, receiptVal || '');
+        try {
+          window.__repeat_invoice_mtype = invoiceVal;
+          window.__repeat_receipt_mtype = receiptVal;
+        } catch(_) {}
+        return;
+      }
+
+      // Do not re-fetch from /api/repeat_entry/get for the blank general profile.
+      // The general option is already built from authoritative local state,
+      // and the current repeat_entry may still contain the previous custom profile's mtype.
+      return;
+    }
+  }, true);
+
+  window.addEventListener('rc:partial-content-ready', function(){
+    const sw = document.getElementById('repeatEntrySwitch');
+    if (!sw) return;
+    const vat = activeVat();
+    if (!vat) return;
+    fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        const rep = j && j.repeat_entry ? j.repeat_entry : null;
+        if (!rep || typeof rep.enabled === 'undefined') return;
+        sw.checked = !!rep.enabled;
+        try {
+          localStorage.setItem('REPEAT:enabled', rep.enabled ? '1' : '0');
+          localStorage.setItem('REPEAT:enabled:' + vat, rep.enabled ? '1' : '0');
+          localStorage.setItem('rc:repeat_enabled', rep.enabled ? '1' : '0');
+        } catch(_) {}
+      })
+      .catch(function(){});
+  }, { passive: true });
+})();
+</script>
 <script src="{{ url_for('static', filename='repeat_flow_guard.js') }}?v=20260422a"></script>
 <script>
 // Loading overlay helpers
@@ -472,12 +773,17 @@ function renderAfmRuleModeButton(){
   const vatKey = String((typeof rcResolveActiveVat === 'function' ? rcResolveActiveVat() : '') || btn.dataset.afmVatKey || '').trim() || 'global';
   try { btn.dataset.afmVatKey = vatKey; } catch(_) {}
   const mode = getAfmRuleDecisionMode(vatKey);
+  btn.classList.remove('afm-auto', 'afm-ask', 'bg-emerald-50', 'bg-fuchsia-600', 'text-white', 'border-transparent', 'ring-2', 'ring-fuchsia-400');
+  btn.style.background = '';
+  btn.style.color = '';
+  btn.style.borderColor = '';
+  btn.style.boxShadow = '';
   if (mode === 'auto') {
-    btn.textContent = 'Κανόνες ΑΦΜ: Auto-apply';
-    btn.classList.add('bg-emerald-50');
+    btn.textContent = 'Κανόνες ΑΦΜ: ενεργό αυτόματο (χωρίς ερώτηση).';
+    btn.classList.add('afm-auto', 'bg-fuchsia-600', 'text-white', 'ring-2', 'ring-fuchsia-400');
   } else {
     btn.textContent = 'Κανόνες ΑΦΜ: Ερώτηση';
-    btn.classList.remove('bg-emerald-50');
+    btn.classList.add('afm-ask');
   }
 }
 
@@ -533,9 +839,9 @@ if (!window.__AFM_RULE_MODE_DELEGATED_BOUND) {
     if (typeof showFlash === 'function') {
       showFlash(
         next === 'auto'
-          ? 'AFM rules: ενεργό Auto-apply (χωρίς ερώτηση).'
-          : 'AFM rules: ενεργό Ερώτηση (εμφάνιση modal).',
-        'info',
+          ? 'Κανόνες ΑΦΜ: ενεργό αυτόματο (χωρίς ερώτηση).'
+          : 'Κανόνες ΑΦΜ: ενεργό ερώτηση (εμφάνιση modal).',
+        'afm',
         2200
       );
     }
@@ -645,6 +951,7 @@ function afmRuleAutoSubmitManualSummary(summary){
     input.value = JSON.stringify(summary || {});
     if (window.__AFM_RULE_MANUAL_AUTOSAVE_PENDING) return true;
     window.__AFM_RULE_MANUAL_AUTOSAVE_PENDING = true;
+    try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
     setTimeout(() => {
       try {
         if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom();
@@ -765,6 +1072,9 @@ async function validateAfmRuleBeforeSave(summary, options){
 
     if (getAfmRuleDecisionMode() === 'auto') {
       const changed = afmRuleApplyExpectedCategories(summary, data.validation || {});
+      if (changed && typeof showFlash === 'function') {
+        showFlash('Κανόνας ΑΦΜ εφαρμόστηκε αυτόματα.', 'afm', 4000);
+      }
       if (!changed) {
         summary._afm_rule_force = true;
         summary.force_afm_rule = true;
@@ -1601,17 +1911,100 @@ function katToPercent(k){
     return 'repeat:selected_profile:' + normMode + ':' + normVat;
   }
 
+  function isAuthErrorText(value){
+    const txt = String(value || '').trim().toLowerCase();
+    if (!txt) return false;
+    return (
+      txt === 'authentication required'
+      || txt === 'unauthorized'
+      || txt === 'session_expired'
+      || txt === 'session conflict'
+      || txt === 'session_conflict'
+      || txt === 'not authenticated'
+    );
+  }
+
+  function safeProfileName(value){
+    const name = String(value || '').trim();
+    return isAuthErrorText(name) ? '' : name;
+  }
+
+  function repeatProfilesCacheKey(vat, mode){
+    return 'repeat:profiles:' + String(mode || 'invoices').trim().toLowerCase() + ':' + String(vat || '').trim();
+  }
+
+  function repeatEntryCacheKey(vat){
+    return 'repeat:entry:' + String(vat || '').trim();
+  }
+  function repeatProfileMtypeCacheKey(vat, mode, profileName){
+    const v = String(vat || '').trim();
+    const m = String(mode || 'invoices').trim().toLowerCase();
+    const raw = String(profileName || '').trim().toLowerCase();
+    const p = raw || '__general__';
+    return 'repeat:profile:mtype:' + m + ':' + v + ':' + p;
+  }
+  
+  function loadCachedProfileMtype(vat, mode, profileName){
+    try {
+      const key = repeatProfileMtypeCacheKey(vat, mode, profileName);
+      return String(localStorage.getItem(key) || '').trim();
+    } catch(_) { return ''; }
+  }
+  
+  function saveCachedProfileMtype(vat, mode, profileName, mtype){
+    try {
+      const mt = String(mtype || '').trim();
+      if (!mt) return;
+      const key = repeatProfileMtypeCacheKey(vat, mode, profileName);
+      localStorage.setItem(key, mt);
+    } catch(_) {}
+  }
+
+  function loadCachedRepeatProfiles(vat, mode){
+    try {
+      const raw = localStorage.getItem(repeatProfilesCacheKey(vat, mode));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(_) { return []; }
+  }
+
+  function saveCachedRepeatProfiles(vat, mode, profiles){
+    try {
+      const arr = Array.isArray(profiles) ? profiles : [];
+      localStorage.setItem(repeatProfilesCacheKey(vat, mode), JSON.stringify(arr));
+    } catch(_) {}
+  }
+
+  function loadCachedRepeatEntry(vat){
+    try {
+      const raw = localStorage.getItem(repeatEntryCacheKey(vat));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch(_) { return null; }
+  }
+
+  function saveCachedRepeatEntry(vat, repeatEntry){
+    try {
+      if (!repeatEntry || typeof repeatEntry !== 'object') return;
+      localStorage.setItem(repeatEntryCacheKey(vat), JSON.stringify(repeatEntry));
+    } catch(_) {}
+  }
+
   function rememberRepeatSelectedProfile(vat, mode, profileName){
     try {
       const key = repeatProfileStorageKey(vat, mode);
-      localStorage.setItem(key, String(profileName || '').trim());
+      const safeName = safeProfileName(profileName);
+      localStorage.setItem(key, safeName);
     } catch(_) {}
   }
 
   function loadRememberedRepeatProfile(vat, mode){
     try {
       const key = repeatProfileStorageKey(vat, mode);
-      return String(localStorage.getItem(key) || '').trim();
+      const remembered = String(localStorage.getItem(key) || '').trim();
+      return safeProfileName(remembered);
     } catch(_) {
       return '';
     }
@@ -1636,7 +2029,7 @@ function katToPercent(k){
       const o = document.createElement('option');
       const profileName = String((p && p.name) || '').trim();
       const profileId = String((p && p.id) || '').trim();
-      o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
+      o.value = profileName || profileId || ('profile_' + String(idx));
       o.textContent = profileName || '(χωρίς όνομα)';
       o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || {}));
       o.dataset.profileName = profileName;
@@ -1845,10 +2238,7 @@ function katToPercent(k){
   window._repeatModalVAT = VAT;
   try { window.__RC_ACTIVE_VAT = String(VAT || '').trim(); } catch(_) {}
   try { if (document.body && document.body.dataset) document.body.dataset.activeVat = String(VAT || '').trim(); } catch(_) {}
-  try {
-    window.__repeat_invoice_mtype = '';
-    window.__repeat_receipt_mtype = '';
-  } catch(_) {}
+  // Keep existing MTYPE caches until authoritative payload/profile hydration runs.
 
   const hint = document.getElementById('charMissingHint');
   if(hint){ hint.style.display='none'; hint.textContent=''; }
@@ -1879,12 +2269,14 @@ function katToPercent(k){
         let j = null;
         try {
           const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || '') + charProfilesModeParam, {credentials:'same-origin'});
+          if (r.status === 401) return loadCachedRepeatProfiles(VAT, modeKey);
           j = await r.json();
         } catch (_) { j = null; }
 
         if (!j || !j.ok || (!Array.isArray(j.profiles) && !Array.isArray(j.expense_tags))) {
           try {
             const r2 = await fetch('/api/char_profiles?mode=' + (useReceiptsMode ? 'receipts' : 'invoices'), {credentials:'same-origin'});
+            if (r2.status === 401) return loadCachedRepeatProfiles(VAT, modeKey);
             j = await r2.json();
           } catch (_) { j = null; }
         }
@@ -1919,6 +2311,7 @@ function katToPercent(k){
         if (!profilesOut.length && !useReceiptsMode) {
           try {
             const rp = await fetch('/api/profiles', {credentials:'same-origin'});
+            if (rp.status === 401) return loadCachedRepeatProfiles(VAT, modeKey);
             const jp = await rp.json();
             if (jp && Array.isArray(jp.profiles)) {
               profilesOut = jp.profiles
@@ -1929,18 +2322,56 @@ function katToPercent(k){
           catch (_) {}
         }
 
+        if (profilesOut.length) saveCachedRepeatProfiles(VAT, modeKey, profilesOut);
+        if (!profilesOut.length) return loadCachedRepeatProfiles(VAT, modeKey);
+
         return profilesOut;
       } catch (_e) { return []; }
     })(),
     (async () => {
       try {
         const r = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(VAT), {credentials:'same-origin'});
+        if (r.status === 401) {
+          const cached = loadCachedRepeatEntry(VAT);
+          return (cached && cached.mapping) ? cached.mapping : {};
+        }
         const j = await r.json();
+        if (j && j.repeat_entry) saveCachedRepeatEntry(VAT, j.repeat_entry);
         return (j && j.repeat_entry && j.repeat_entry.mapping) || {};
       } catch (_e) { return {}; }
     })(),
     fetchRepeatState(VAT)
   ]);
+
+  // Authoritative repeat_entry refresh: protects invoice flow after back/partial navigation.
+  try {
+    const repeatResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(VAT || ''), { credentials: 'same-origin' });
+    if (repeatResp && repeatResp.ok) {
+      const repeatJson = await repeatResp.json().catch(() => null);
+      const rep = repeatJson && repeatJson.repeat_entry ? repeatJson.repeat_entry : null;
+      if (rep && state && typeof state === 'object') {
+        saveCachedRepeatEntry(VAT, rep);
+        state.invoiceMtype = String(rep.invoice_mtype || rep.mtype || state.invoiceMtype || '').trim();
+        state.receiptMtype = String(rep.receipt_mtype || rep.mtype || state.receiptMtype || '').trim();
+        state.savedName = safeProfileName(String(rep.profile_name || state.savedName || '').trim());
+        if (rep.mapping && typeof rep.mapping === 'object' && !Object.keys(state.activeMap || {}).length) {
+          state.activeMap = normalizeMapping(rep.mapping || {});
+        }
+      }
+    }
+  } catch(_) {}
+
+  // If fetchRepeatState was blocked (e.g. 401), hydrate state from cache.
+  try {
+    const cachedEntry = loadCachedRepeatEntry(VAT);
+    if (cachedEntry && typeof cachedEntry === 'object' && state && typeof state === 'object') {
+      if (!Object.keys(state.defaultMap || {}).length) state.defaultMap = normalizeMapping(cachedEntry.general_mapping || cachedEntry.mapping || {});
+      if (!Object.keys(state.activeMap || {}).length) state.activeMap = normalizeMapping(cachedEntry.mapping || {});
+      if (!String(state.invoiceMtype || '').trim()) state.invoiceMtype = String(cachedEntry.invoice_mtype || cachedEntry.mtype || '').trim();
+      if (!String(state.receiptMtype || '').trim()) state.receiptMtype = String(cachedEntry.receipt_mtype || cachedEntry.mtype || '').trim();
+      if (!String(state.savedName || '').trim()) state.savedName = safeProfileName(cachedEntry.profile_name || '');
+    }
+  } catch(_) {}
 
   const cachedRepeat = (typeof window !== 'undefined' && window.__RC_REPEAT_ENTRY_LAST && typeof window.__RC_REPEAT_ENTRY_LAST === 'object')
     ? window.__RC_REPEAT_ENTRY_LAST
@@ -1956,7 +2387,7 @@ function katToPercent(k){
       ? state.defaultMap
       : (Object.keys((cachedRepeat.mapping || {})).length ? (cachedRepeat.mapping || {}) : defaultFromGet));
 
-  const savedName = String(state.savedName || cachedRepeat.profile_name || '').trim();
+  const savedName = safeProfileName(String(state.savedName || cachedRepeat.profile_name || '').trim());
   const rememberedName = loadRememberedRepeatProfile(VAT, modeKey);
   const hasRepeatEntry = !!(
     savedName ||
@@ -1964,7 +2395,7 @@ function katToPercent(k){
     String(state.receiptMtype || '').trim() ||
     (state.activeMap && Object.keys(state.activeMap || {}).length > 0)
   );
-  const profileToSelect = savedName || (!hasRepeatEntry ? rememberedName : '');
+  const profileToSelect = savedName || rememberedName || (!hasRepeatEntry ? rememberedName : '');
   const invoiceMtype = String(state.invoiceMtype || '').trim();
   const receiptMtype = String(state.receiptMtype || '').trim();
 
@@ -1977,30 +2408,60 @@ function katToPercent(k){
     const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
     const profilePayloads = {};
 
-    const receiptsGeneralProfile = useReceiptsMode
-      ? (Array.isArray(profiles) ? profiles.find(p => !String((p && p.name) || '').trim() && String((p && p.mode) || '').trim().toLowerCase() === 'receipts') : null)
+    const modeGeneralProfile = Array.isArray(profiles)
+      ? profiles.find(p => {
+          const profileName = String((p && p.name) || '').trim();
+          if (profileName) return false;
+          const profileMode = String((p && p.mode) || 'invoices').trim().toLowerCase();
+          return useReceiptsMode ? profileMode === 'receipts' : profileMode !== 'receipts';
+        })
       : null;
-    const generalMap = receiptsGeneralProfile && receiptsGeneralProfile.mapping
-      ? normalizeMapping(receiptsGeneralProfile.mapping)
+    const generalMap = modeGeneralProfile && modeGeneralProfile.mapping
+      ? normalizeMapping(modeGeneralProfile.mapping)
       : defaultMap;
-    const generalInvoiceMtype = receiptsGeneralProfile
-      ? String(receiptsGeneralProfile.invoice_mtype || receiptsGeneralProfile.invoiceMtype || '').trim()
-      : String(invoiceMtype || '').trim();
-    const generalReceiptMtype = receiptsGeneralProfile
-      ? String(receiptsGeneralProfile.receipt_mtype || receiptsGeneralProfile.receiptMtype || '').trim()
-      : String(receiptMtype || '').trim();
+    const backendGeneralSelected = !savedName;
+    const generalInvoiceMtype = modeGeneralProfile
+      ? String(modeGeneralProfile.invoice_mtype || modeGeneralProfile.invoiceMtype || invoiceMtype || '').trim()
+      : (backendGeneralSelected ? String(invoiceMtype || '').trim() : '');
+    const generalReceiptMtype = modeGeneralProfile
+      ? String(modeGeneralProfile.receipt_mtype || modeGeneralProfile.receiptMtype || receiptMtype || '').trim()
+      : (backendGeneralSelected ? String(receiptMtype || '').trim() : '');
 
-    const normalizePayload = (raw) => ({
-      mapping: normalizeMapping((raw && raw.mapping) || {}),
-      invoiceMtype: String((raw && (raw.invoiceMtype || raw.invoice_mtype || raw.mtype || raw.movement_type || raw.movementType)) || '').trim(),
-      receiptMtype: String((raw && (raw.receiptMtype || raw.receipt_mtype || raw.mtype || raw.movement_type || raw.movementType)) || '').trim(),
-      name: String((raw && raw.name) || '').trim(),
-      id: String((raw && raw.id) || '').trim()
-    });
+    const normalizePayload = (raw) => {
+      const explicitInvoice = String((raw && (raw.invoiceMtype || raw.invoice_mtype)) || '').trim();
+      const explicitReceipt = String((raw && (raw.receiptMtype || raw.receipt_mtype)) || '').trim();
+      const legacyGeneric = String((raw && (raw.mtype || raw.movement_type || raw.movementType)) || '').trim();
+      return {
+        mapping: normalizeMapping((raw && raw.mapping) || {}),
+        invoiceMtype: explicitInvoice || legacyGeneric,
+        receiptMtype: explicitReceipt || legacyGeneric,
+        name: String((raw && raw.name) || '').trim(),
+        id: String((raw && raw.id) || '').trim()
+      };
+    };
+
+    const setSelectValueSafe = (selectEl, rawValue) => {
+      if (!selectEl) return;
+      const value = String(rawValue || '').trim();
+      if (!value) {
+        selectEl.value = '';
+        return;
+      }
+      const hasOption = Array.from(selectEl.options || []).some(o => String(o.value || '').trim() === value);
+      if (!hasOption) {
+        const extra = document.createElement('option');
+        extra.value = value;
+        extra.textContent = value + ' (legacy)';
+        extra.dataset.legacy = '1';
+        selectEl.appendChild(extra);
+      }
+      selectEl.value = value;
+    };
 
     const registerPayload = (optionEl, rawPayload) => {
       if (!optionEl) return;
       const normalized = normalizePayload(rawPayload);
+      normalized.name = safeProfileName(normalized.name);
       optionEl.dataset.mapping = JSON.stringify(normalized.mapping);
       optionEl.dataset.invoiceMtype = normalized.invoiceMtype;
       optionEl.dataset.receiptMtype = normalized.receiptMtype;
@@ -2012,6 +2473,12 @@ function katToPercent(k){
       if (normalized.id) profilePayloads['id:' + normalized.id] = normalized;
       if (normalized.name) profilePayloads['name:' + normalized.name.toLowerCase()] = normalized;
       if (!profilePayloads['__general__'] && !normalized.name) profilePayloads['__general__'] = normalized;
+      // Persist profile-specific MTYPE so invoice flow survives partial navigation/back.
+      try {
+        const vatNow = String(VAT || '').trim();
+        if (normalized.invoiceMtype) saveCachedProfileMtype(vatNow, 'invoices', normalized.name, normalized.invoiceMtype);
+        if (normalized.receiptMtype) saveCachedProfileMtype(vatNow, 'receipts', normalized.name, normalized.receiptMtype);
+      } catch(_) {}
     };
 
     const payloadFromOption = (opt) => {
@@ -2034,18 +2501,57 @@ function katToPercent(k){
       });
     };
 
+    const resolveProfileByName = (profileName) => {
+      const name = String(profileName || '').trim();
+      if (!name || !Array.isArray(profiles)) return null;
+      return profiles.find(p => String((p && p.name) || '').trim() === name) || null;
+    };
+
+    const resolveInvoiceMtypeForPayload = (payload) => {
+      const data = normalizePayload(payload || {});
+      if (data.invoiceMtype) return data.invoiceMtype;
+            try {
+              const vatNow = String(VAT || '').trim();
+              const cachedByName = loadCachedProfileMtype(vatNow, 'invoices', data.name || '');
+              if (cachedByName) return cachedByName;
+            } catch(_) {}
+
+      const fromProfile = resolveProfileByName(data.name || '');
+      const fromProfileMtype = String((fromProfile && (fromProfile.invoice_mtype || fromProfile.invoiceMtype || fromProfile.mtype || fromProfile.movement_type || fromProfile.movementType)) || '').trim();
+      if (fromProfileMtype) return fromProfileMtype;
+      if (generalInvoiceMtype) return generalInvoiceMtype;
+      return String(invoiceMtype || '').trim();
+    };
+
+    const resolveReceiptMtypeForPayload = (payload) => {
+      const data = normalizePayload(payload || {});
+      if (data.receiptMtype) return data.receiptMtype;
+            try {
+              const vatNow = String(VAT || '').trim();
+              const cachedByName = loadCachedProfileMtype(vatNow, 'receipts', data.name || '');
+              if (cachedByName) return cachedByName;
+            } catch(_) {}
+      const fromProfile = resolveProfileByName(data.name || '');
+      const fromProfileMtype = String((fromProfile && (fromProfile.receipt_mtype || fromProfile.receiptMtype || fromProfile.mtype || fromProfile.movement_type || fromProfile.movementType)) || '').trim();
+      if (fromProfileMtype) return fromProfileMtype;
+      if (generalReceiptMtype) return generalReceiptMtype;
+      return String(receiptMtype || '').trim();
+    };
+
     const applyPayloadToUi = (payload, extra) => {
       const data = normalizePayload(payload);
+      const resolvedInvoiceMtype = resolveInvoiceMtypeForPayload(data);
+      const resolvedReceiptMtype = resolveReceiptMtypeForPayload(data);
       renderMapping(data.mapping || {});
       if (repeatMtypeSelect && repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none') {
-        repeatMtypeSelect.value = data.invoiceMtype || '';
+        setSelectValueSafe(repeatMtypeSelect, resolvedInvoiceMtype || '');
       }
       if (repeatReceiptMtypeSelect && repeatReceiptMtypeContainer && repeatReceiptMtypeContainer.style.display !== 'none') {
-        repeatReceiptMtypeSelect.value = data.receiptMtype || '';
+        setSelectValueSafe(repeatReceiptMtypeSelect, resolvedReceiptMtype || '');
       }
       try {
-        window.__repeat_invoice_mtype = data.invoiceMtype || '';
-        window.__repeat_receipt_mtype = data.receiptMtype || '';
+        window.__repeat_invoice_mtype = resolvedInvoiceMtype || '';
+        window.__repeat_receipt_mtype = resolvedReceiptMtype || '';
       } catch(_) {}
       if (!extra || !extra.skipHint) {
         setActiveProfileHint(data.name || '');
@@ -2088,13 +2594,13 @@ function katToPercent(k){
 
     filteredProfiles.forEach((p, idx)=>{
       const o = document.createElement('option');
-      const profileName = String(p.name || '').trim();
+      const profileName = safeProfileName(String(p.name || '').trim());
       const profileId = String(p.id || '').trim();
       const profileMap = normalizeMapping(p.mapping || p.map || {});
       const profileInvoiceMtype = String(p.invoice_mtype || p.invoiceMtype || p.mtype || p.movement_type || p.movementType || '').trim();
       const profileReceiptMtype = String(p.receipt_mtype || p.receiptMtype || p.mtype || p.movement_type || p.movementType || '').trim();
 
-      o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
+      o.value = profileName || profileId || ('profile_' + String(idx));
       o.textContent = profileName || "(χωρίς όνομα)";
       o.dataset.id = profileId;
       registerPayload(o, {
@@ -3415,9 +3921,26 @@ function showFlash(message, type='info', timeout=3000){
     if (dup) dup.remove();
     const el = document.createElement('div');
     el.className = 'flash-banner text-sm';
-    if(type === 'success') el.classList.add('flash-success');
-    else if(type === 'error') el.classList.add('flash-error');
-    else {
+    if(type === 'success') {
+      el.classList.add('flash-success');
+    } else if(type === 'error') {
+      el.classList.add('flash-error');
+    } else if (type === 'afm') {
+      el.classList.add('flash-info');
+      const theme = String((document.documentElement || {}).dataset.theme || (document.body || {}).dataset.theme || '').trim().toLowerCase();
+      const isDark = theme === 'dark';
+      if (isDark) {
+        el.style.background = '#3f0b42';
+        el.style.color = '#f8d7ff';
+        el.style.border = '1px solid #d946ef';
+        el.style.boxShadow = '0 0 0 1px rgba(212,70,239,0.35)';
+      } else {
+        el.style.background = '#fde4ff';
+        el.style.color = '#701a75';
+        el.style.border = '1px solid #d946ef';
+        el.style.boxShadow = '0 0 0 1px rgba(212,70,239,0.2)';
+      }
+    } else {
       el.classList.add('flash-info');
       el.style.background = '#eff6ff';
       el.style.color = '#1e3a8a';
@@ -6523,8 +7046,7 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
       clearStyle(urlEl);
       if (!hasYellowFlow && !receiptsOn) return;
 
-      const priority = receiptsOn ? [urlEl, markEl] : [markEl, urlEl];
-      const target = priority.find(isVisible) || priority.find(Boolean) || null;
+      const target = receiptsOn ? (isVisible(urlEl) ? urlEl : markEl) : markEl;
       applyStyle(target);
     } catch(_) {}
   }
@@ -6606,7 +7128,7 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     rcSyncSearchBoxYellowFrame();
   }
 
-  function rcOpenSummaryModalFromObject(obj){
+  function rcOpenSummaryModalFromObject(obj, options){
     if (!obj || typeof obj !== 'object') return false;
     try {
       const summaryInputEl = document.getElementById('summaryJsonInput');
@@ -6625,7 +7147,8 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
       }
 
       const m = document.getElementById('summaryModal');
-      if (m && !(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) {
+      const forceShow = options && options.forceShow;
+      if (m && ((!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) || forceShow)) {
         m.style.display = 'flex';
       }
       return true;
@@ -6824,8 +7347,9 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         if (raw && raw !== '{}' && raw !== 'null') pending = JSON.parse(raw);
       } catch(_){ pending = null; }
     }
-    if (pending && rcOpenSummaryModalFromObject(pending)) {
+    if (pending && rcOpenSummaryModalFromObject(pending, { forceShow: true })) {
       try { window.__RC_PENDING_FORCE_SUMMARY = null; } catch(_){ }
+      try { if (window.__RC_FLAGS && typeof window.__RC_FLAGS === 'object') window.__RC_FLAGS.autoHandled = false; } catch(_){ }
       return;
     }
     window.location = SEARCH_BASE_URL + '?mark=' + markVal + '&force_edit=1';
@@ -11010,6 +11534,77 @@ document.addEventListener('submit', function(ev){
 
       [data-theme="dark"] #receiptsModeMenu .receipt-mode-tick {
         color: #38bdf8;
+      }
+
+      #afmRuleModeBtn,
+      #manageAfmRulesBtn {
+        transition: background .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
+      }
+
+      #afmRuleModeBtn {
+        background: #f8fafc;
+        color: #0f172a;
+        border-color: #cbd5e1;
+      }
+
+      #afmRuleModeBtn.afm-ask {
+        background: #f8fafc;
+        color: #0f172a;
+        border-color: #cbd5e1;
+      }
+
+      #afmRuleModeBtn.afm-auto {
+        background: #d946ef;
+        color: #ffffff;
+        border-color: #c026d3;
+        box-shadow: 0 0 0 1px rgba(212,70,239,0.25);
+      }
+
+      #afmRuleModeBtn:hover {
+        background: #e2e8f0;
+      }
+
+      #afmRuleModeBtn.afm-auto:hover {
+        background: #be185d;
+      }
+
+      #manageAfmRulesBtn {
+        background: #ffffff;
+        color: #0f172a;
+        border-color: #cbd5e1;
+      }
+
+      #manageAfmRulesBtn:hover {
+        background: #e2e8f0;
+      }
+
+      [data-theme="dark"] #afmRuleModeBtn,
+      [data-theme="dark"] #manageAfmRulesBtn {
+        background: #111827;
+        color: #e5e7eb;
+        border-color: #374151;
+      }
+
+      [data-theme="dark"] #afmRuleModeBtn.afm-ask {
+        background: #111827;
+        color: #e5e7eb;
+        border-color: #374151;
+      }
+
+      [data-theme="dark"] #afmRuleModeBtn.afm-auto {
+        background: #a21caf;
+        color: #f8d7ff;
+        border-color: #db2777;
+        box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.35);
+      }
+
+      [data-theme="dark"] #afmRuleModeBtn:hover,
+      [data-theme="dark"] #manageAfmRulesBtn:hover {
+        background: #1f2937;
+      }
+
+      [data-theme="dark"] #afmRuleModeBtn.afm-auto:hover {
+        background: #be185d;
       }
 
       #markSearchForm {
