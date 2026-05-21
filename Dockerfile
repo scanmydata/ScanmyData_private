@@ -60,7 +60,7 @@ RUN pip install --upgrade pip setuptools wheel \
 # Set environment variables for persistent storage paths
 ENV DATA_DIR=/data \
     UPLOADS_DIR=/uploads \
-    PORT=5000
+    PORT=5001
 
 # Copy application files
 COPY . /app
