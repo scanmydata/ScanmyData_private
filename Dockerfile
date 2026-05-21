@@ -68,7 +68,7 @@ COPY . /app
 # Create persistent storage directories and set permissions
 RUN mkdir -p $UPLOADS_DIR $DATA_DIR && chmod -R 777 $UPLOADS_DIR $DATA_DIR
 
-EXPOSE 5000
+EXPOSE 5001
 
 # Free tier: 1 worker, 8 threads, logs στο STDOUT
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5001", "--workers", "1", "--threads", "8", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-"]

@@ -9,4 +9,12 @@ curl -v \
 page tour
 
 session manager test--
-το κολλαει αν μπω στην σελιδα epsilon preview και γυρισω πισω τοτε φερνει στην επεξεργασια το mtype του προηγουμενου επιλεγμενου προφιλ και κολλαει εκει
+Ναι — το script είναι έτοιμο να τρέξει με μόνο input τους κωδικούς.
+
+Χρησιμοποιώντας:
+
+```bash
+python3 e3/checks/misth.py --username user3407382057 --password aggeliki92 --output extracted_misth_user3407382057_v2.json --headed
+```
+
+παραγωγήθηκε επιτυχώς το extracted_misth_user3407382057_v2.json.

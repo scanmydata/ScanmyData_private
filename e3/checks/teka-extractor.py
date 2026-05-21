@@ -74,7 +74,7 @@ def extract_table_data(page: Page) -> dict:
 
 def test_example(page: Page, username: str, password: str, amka: str) -> None:
     e_efka_url = "https://www.e-efka.gov.gr/el/elektronikes-yperesies/bebaiose-eisphoron-gia-phorologike-chrese"
-    idika_url = "https://www.idika.org.gr/EfkaServices/Application/EfkaCertificates.aspx"
+    idika_url = "https://www.idika.org.gr/EfkaServices/Application/TekaCertificates.aspx"
 
     page.goto(e_efka_url, timeout=DEFAULT_TIMEOUT)
     page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
@@ -84,14 +84,14 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         page.goto(idika_url, timeout=DEFAULT_TIMEOUT)
         page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
 
-    link = page.get_by_role("link", name="Βεβαιώσεις Εισφορών e-ΕΦΚΑ")
+    link = page.get_by_role("link", name="Βεβαιώσεις Εισφορών ΤΕΚΑ")
     if link.count() == 0:
-        link = page.locator("a", has_text="Βεβαιώσεις Εισφορών e-ΕΦΚΑ")
+        link = page.locator("a", has_text="Βεβαιώσεις Εισφορών ΤΕΚΑ")
     if link.count() == 0:
         link = page.locator("a", has_text="Βεβαιώσεις Εισφορών")
 
     if link.count() == 0:
-        raise RuntimeError("Could not find the EFKA certificates link on the initial page.")
+        raise RuntimeError("Could not find the ΤΕΚΑ certificates link on the initial page.")
 
     with page.expect_popup(timeout=POPUP_TIMEOUT) as page1_info:
         link.first.scroll_into_view_if_needed()
@@ -119,15 +119,6 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
     if username_field.count() and password_field.count():
         username_field.fill(username)
         password_field.fill(password)
-        login_button = page1.locator("#btn-login-submit")
-        if login_button.count() == 0:
-            login_button = page1.get_by_role("button", name="Σύνδεση")
-        try:
-            with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
-                login_button.click()
-        except PlaywrightTimeoutError:
-            login_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
     else:
         afm_field = page1.get_by_role("textbox", name="ΑΦΜ:")
         if afm_field.count() == 0:
@@ -136,18 +127,55 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         if amka_login_field.count() == 0:
             amka_login_field = page1.locator("input[name*='amka'], input[id*='amka']")
         if afm_field.count() == 0 or amka_login_field.count() == 0:
-            raise RuntimeError("Could not find AFM/AMKA login fields on the TAXISNET page.")
+            raise RuntimeError("Could not find TAXISNET login fields on the TEKA page.")
         afm_field.first.fill(username)
         amka_login_field.first.fill(amka)
-        login_button = page1.locator("#j_idt38, button:has-text('Είσοδος'), input[type='submit'][value*='Είσοδος']").first
-        if login_button.count() == 0:
-            raise RuntimeError("Could not find the TAXISNET Είσοδος button.")
+
+    login_button = page1.locator("#btn-login-submit")
+    if login_button.count() == 0:
+        login_button = page1.get_by_role("button", name="Σύνδεση")
+    if login_button.count() == 0:
+        login_button = page1.locator("button:has-text('Είσοδος'), input[type='submit'][value*='Εισοδος']").first
+    if login_button.count() == 0:
+        raise RuntimeError("Could not find the login button on the TEKA page.")
+    try:
+        with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+            login_button.click()
+    except PlaywrightTimeoutError:
+        login_button.click()
+    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+
+    if page1.locator("button:has-text('Συνέχεια')").count() > 0:
+        continue_button = page1.locator("button:has-text('Συνέχεια')").first
         try:
             with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
-                login_button.click()
+                continue_button.click()
         except PlaywrightTimeoutError:
-            login_button.click()
+            continue_button.click()
         page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+
+    if page1.locator("button:has-text('Αποστολή')").count() > 0:
+        submit_button = page1.locator("button:has-text('Αποστολή')").first
+        try:
+            with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+                submit_button.click()
+        except PlaywrightTimeoutError:
+            submit_button.click()
+        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+
+    if page1.locator("input[name*='amka'], input[id*='amka']").count() > 0 and page1.locator("button:has-text('Είσοδος')").count() > 0:
+        afm_field = page1.locator("input[name*='afm'], input[id*='afm']")
+        amka_field = page1.locator("input[name*='amka'], input[id*='amka']")
+        if afm_field.count() > 0 and amka_field.count() > 0:
+            afm_field.first.fill(username)
+            amka_field.first.fill(amka)
+            enter_button = page1.locator("button:has-text('Είσοδος')").first
+            try:
+                with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+                    enter_button.click()
+            except PlaywrightTimeoutError:
+                enter_button.click()
+            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
 
     if page1.locator("input[type='radio']").count() > 0 or page1.get_by_role("button", name="Αποστολή").count() > 0:
         page1.wait_for_selector("input[type='radio']", timeout=NETWORK_TIMEOUT)
@@ -172,44 +200,42 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         if amka_field.count() == 0:
             amka_field = page1.locator("input[name*='AMKA'], input[id*='AMKA']")
         if amka_field.count() == 0:
-            raise RuntimeError("Could not find the AMKA input field on the TAXISNET auth page.")
-        amka_field.first.fill(amka, timeout=NETWORK_TIMEOUT)
-        enter_button = page1.get_by_role("button", name="Είσοδος")
-        if enter_button.count() == 0:
-            enter_button = page1.locator("input[type='submit'][value*='Εισοδος'], button:has-text('Είσοδος')").first
-        if enter_button.count() == 0:
-            raise RuntimeError("Could not find the Enter button after AMKA.")
-        try:
-            with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
-                enter_button.click()
-        except PlaywrightTimeoutError:
-            enter_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+            logging.info("No second AMKA field found after the radio selection; continuing.")
+        else:
+            amka_field.first.fill(amka, timeout=NETWORK_TIMEOUT)
+            enter_button = page1.get_by_role("button", name="Είσοδος")
+            if enter_button.count() == 0:
+                enter_button = page1.locator("input[type='submit'][value*='Εισοδος'], button:has-text('Είσοδος')").first
+            if enter_button.count() > 0:
+                try:
+                    with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+                        enter_button.click()
+                except PlaywrightTimeoutError:
+                    enter_button.click()
+                page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
 
-    expect(page1.get_by_text("Βεβαιώσεις για φορολογική χρήση Φορολογικές Βεβαιώσεις e")).to_be_visible(timeout=ASSERT_TIMEOUT)
     page1.wait_for_timeout(SHORT_WAIT)
 
     logging.info("Clicking on the section to scrape the table.")
-    if page1.locator("section div", has_text="Φορολογικές Βεβαιώσεις e").count() > 0:
-        section_button = page1.locator("section div", has_text="Φορολογικές Βεβαιώσεις e").nth(4)
-        section_button.wait_for(state="visible", timeout=NETWORK_TIMEOUT)
-        section_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    section_button = page1.locator("section div", has_text="Φορολογικές Βεβαιώσεις ΤΕΚΑ").nth(4)
+    section_button.wait_for(state="visible", timeout=NETWORK_TIMEOUT)
+    section_button.click()
 
+    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
     page1.wait_for_selector("#ContentPlaceHolder1_TaxNotificationsGrid_DXMainTable", timeout=NETWORK_TIMEOUT)
 
     output = extract_table_data(page1)
-    with open("extracted_table_data.json", "w", encoding="utf-8") as output_file:
+    with open("extracted_table_data_teka.json", "w", encoding="utf-8") as output_file:
         json.dump(output, output_file, ensure_ascii=False, indent=4)
 
-    logging.info("Saved extracted_table_data.json with headers and row mappings.")
+    logging.info("Saved extracted_table_data_teka.json with headers and row mappings.")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="EFKA extractor for table data.")
-    parser.add_argument("--username", default=os.getenv("EFKA_USER", "159712098"), help="TAXISNET username")
-    parser.add_argument("--password", default=os.getenv("EFKA_PASSWORD", "159712"), help="TAXISNET password")
-    parser.add_argument("--amka", default=os.getenv("EFKA_AMKA", "12019400675"), help="AMKA to fill")
+    parser = argparse.ArgumentParser(description="ΤΕΚΑ extractor for table data.")
+    parser.add_argument("--username", default=os.getenv("TEKA_USER", "159712098"), help="TAXISNET username")
+    parser.add_argument("--password", default=os.getenv("TEKA_PASSWORD", "159712"), help="TAXISNET password")
+    parser.add_argument("--amka", default=os.getenv("TEKA_AMKA", "12019400675"), help="AMKA to fill")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     args = parser.parse_args()
 
