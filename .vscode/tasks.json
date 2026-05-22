@@ -1,0 +1,33 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run ETΑΚ 2026 headed test",
+			"type": "shell",
+			"command": "python \"e3\\checks\\e9.py\" --username user3407382057 --password aggeliki92 --year 2026 --address \"ΤΑΡΣΟΥ\" --output extracted_etak_property_status_test.json --keep-pdf --headed",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run ETΑΚ 2026 headed test",
+			"type": "shell",
+			"command": "python \"e3\\checks\\e9.py\" --username user3407382057 --password aggeliki92 --year 2026 --address \"ΤΑΡΣΟΥ\" --output extracted_etak_property_status_test.json --keep-pdf --headed",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run ETΑΚ 2026 headed test",
+			"type": "shell",
+			"command": "python \"e3\\checks\\e9.py\" --username user3407382057 --password aggeliki92 --year 2026 --address \"ΤΑΡΣΟΥ\" --output extracted_etak_property_status_test.json --keep-pdf --headed",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run ETΑΚ 2026 headed test",
+			"type": "shell",
+			"command": "python \"e3\\checks\\e9.py\" --username user3407382057 --password aggeliki92 --year 2026 --address \"ΤΑΡΣΟΥ\" --output extracted_etak_property_status_test.json --keep-pdf --headed",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

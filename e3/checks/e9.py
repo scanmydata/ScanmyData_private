@@ -1,7 +1,10 @@
 import argparse
 import asyncio
 import json
+import re
 from pathlib import Path
+
+import pdfplumber
 from playwright.async_api import Playwright, async_playwright
 
 AADE_ENTRY_URL = "https://www1.aade.gr/sgsisapps/plcs"
@@ -30,7 +33,6 @@ async def _login_and_open_listing(page, username: str, password: str):
         error_html = await dump_page_html(page, 'entry_link_missing')
         raise RuntimeError(f"Could not find ETΑΚ entry link on AADE E9/ENFIA page. Debug: {error_html}")
 
-    popup_page = None
     async with page.context.expect_page() as popup_info:
         await entry_link.first.click()
     popup_page = await popup_info.value
@@ -66,7 +68,7 @@ async def _login_and_open_listing(page, username: str, password: str):
         await popup_page.wait_for_timeout(3000)
         return popup_page
 
-    etak_entry_button = popup_page.locator('button#pt1\\:cbEnter, button:has-text("Είσοδος")')
+    etak_entry_button = popup_page.locator(r'button#pt1\:cbEnter, button:has-text("Είσοδος")')
     if await etak_entry_button.count() > 0:
         await etak_entry_button.first.wait_for(state="visible", timeout=20000)
         try:
@@ -96,89 +98,11 @@ async def _login_and_open_listing(page, username: str, password: str):
     return popup_page
 
 
-async def collect_listing_entries(page):
-    forms = page.locator('form:has(input[name="button2"])')
-    entries = []
-    for i in range(await forms.count()):
-        form = forms.nth(i)
-        trans_id = await form.locator('input[name="transId"]').input_value()
-        row = form.locator('xpath=ancestor::td[contains(@class, "displaySubmissionDetails1")]')
-        summary = []
-        if await row.count() > 0:
-            summary = await row.nth(0).locator('td').all_inner_texts()
-            summary = [text.strip() for text in summary if text.strip()]
-        entries.append({
-            'index': i,
-            'transId': trans_id,
-            'summary': summary,
-        })
-    return entries
-
-
-async def extract_detail_page(page):
-    tables = page.locator('table.kadtable2, table.textbluelec5, table#propertyTable0')
-    if await tables.count() == 0:
-        all_tables = await page.locator('table').count()
-        error_html = await dump_page_html(page, 'detail_tables_missing')
-        raise RuntimeError(f"No detail target tables found on detail page. Found {all_tables} table(s). Debug: {error_html}")
-
-    extracted_tables = []
-    for idx in range(await tables.count()):
-        table = tables.nth(idx)
-        rows = []
-        row_locator = table.locator('tr')
-        for j in range(await row_locator.count()):
-            cell_texts = await row_locator.nth(j).locator('th,td').all_inner_texts()
-            rows.append([text.strip() for text in cell_texts if text.strip()])
-        table_html = await table.evaluate('(node) => node.outerHTML')
-        extracted_tables.append({
-            'tableIndex': idx,
-            'tableClasses': await table.get_attribute('class'),
-            'tableId': await table.get_attribute('id'),
-            'rows': rows,
-            'html': table_html,
-        })
-
-    return {
-        'pageTitle': await page.title(),
-        'url': page.url,
-        'detailTables': extracted_tables,
-    }
-
-
-async def extract_registry_info(page):
-    content_td = page.locator('td.contenttd')
-    if await content_td.count() == 0:
-        error_html = await dump_page_html(page, 'registry_contenttd_missing')
-        raise RuntimeError(f"Could not find the TAXIS registry content container. Debug: {error_html}")
-
-    tables = content_td.locator('table')
-    if await tables.count() == 0:
-        error_html = await dump_page_html(page, 'registry_tables_missing')
-        raise RuntimeError(f"Could not find registry table(s) inside contenttd. Debug: {error_html}")
-
-    extracted_tables = []
-    for idx in range(await tables.count()):
-        table = tables.nth(idx)
-        rows = []
-        row_locator = table.locator('tr')
-        for j in range(await row_locator.count()):
-            cell_texts = await row_locator.nth(j).locator('th,td').all_inner_texts()
-            rows.append([text.strip() for text in cell_texts if text.strip()])
-        table_html = await table.evaluate('(node) => node.outerHTML')
-        extracted_tables.append({
-            'tableIndex': idx,
-            'tableClasses': await table.get_attribute('class'),
-            'tableId': await table.get_attribute('id'),
-            'rows': rows,
-            'html': table_html,
-        })
-
-    return {
-        'pageTitle': await page.title(),
-        'url': page.url,
-        'registryTables': extracted_tables,
-    }
+async def dump_page_html(page, suffix: str) -> Path:
+    path = Path(f'etak_debug_{suffix}.html')
+    html = await page.content()
+    path.write_text(html, encoding='utf-8')
+    return path
 
 
 async def extract_etak_year_options(page):
@@ -215,8 +139,217 @@ async def extract_etak_year_options(page):
     }
 
 
+def normalize_search_text(text: str) -> str:
+    if not text:
+        return ''
+    s = text.lower()
+    s = s.replace(' ', ' ')
+    s = ' '.join(s.split())
+    s = re.sub(r'[^\w\dά-ώϊϋΐΰέύώόήάς\s]', ' ', s, flags=re.UNICODE)
+    return s.strip()
+
+
+def find_ataks_by_address(grids: list[dict], address: str) -> tuple[list[str], list[dict]]:
+    normalized_address = normalize_search_text(address)
+    if not normalized_address:
+        return [], []
+
+    matched_ataks = []
+    matched_rows = []
+    for grid in grids:
+        for row in grid.get('rows', []):
+            if not row:
+                continue
+            normalized_cells = [normalize_search_text(str(cell)) for cell in row]
+            if any(normalized_address in cell for cell in normalized_cells):
+                atak = str(row[0]).strip()
+                if atak and atak not in matched_ataks:
+                    matched_ataks.append(atak)
+                matched_rows.append({
+                    'gridIndex': grid.get('gridIndex'),
+                    'gridId': grid.get('gridId'),
+                    'headers': grid.get('headers', []),
+                    'row': row,
+                })
+    return matched_ataks, matched_rows
+
+
+async def select_etak_year(page, year: str) -> str:
+    select_locator = page.locator('select[name="pt1:yearSelect"], select[id="pt1:yearSelect::content"]')
+    if await select_locator.count() == 0:
+        error_html = await dump_page_html(page, 'etak_year_select_missing')
+        raise RuntimeError(f"Could not find the ETΑΚ year select element. Debug: {error_html}")
+
+    options = select_locator.locator('option')
+    match_value = None
+    match_label = None
+    match_by = 'value'
+    for i in range(await options.count()):
+        option = options.nth(i)
+        value = await option.get_attribute('value') or ''
+        text = (await option.inner_text()).strip()
+        if text == year or value == year or year in text or year in value:
+            if value:
+                match_value = value
+                match_by = 'value'
+            else:
+                match_value = text
+                match_by = 'label'
+            match_label = text
+            break
+
+    if not match_value:
+        valid_years = [((await options.nth(i).inner_text()).strip()) for i in range(await options.count())]
+        raise RuntimeError(f"Requested year '{year}' not found in ETΑΚ year selector. Available: {valid_years}")
+
+    await select_locator.click()
+    if match_by == 'value':
+        await select_locator.select_option(value=match_value)
+    else:
+        await select_locator.select_option(label=match_value)
+
+    await page.evaluate(
+        '''(payload) => {
+            const { value, label } = payload;
+            const select = document.querySelector('select[name="pt1:yearSelect"], select[id="pt1:yearSelect::content"]');
+            if (!select) return false;
+            const option = Array.from(select.options).find(o => o.value === value || o.textContent.trim() === label);
+            if (option) {
+                select.value = option.value;
+            }
+            let event;
+            if (typeof Event === 'function') {
+                event = new Event('change', { bubbles: true, cancelable: true });
+            } else {
+                event = document.createEvent('HTMLEvents');
+                event.initEvent('change', true, true);
+            }
+            select.dispatchEvent(event);
+            return select.value;
+        }''',
+        {
+            'value': match_value if match_by == 'value' else '',
+            'label': match_label if match_by != 'value' else '',
+        },
+    )
+
+    await page.wait_for_timeout(2000)
+    await page.wait_for_function(
+        '''(payload) => {
+            const { value, label } = payload;
+            const select = document.querySelector('select[name="pt1:yearSelect"], select[id="pt1:yearSelect::content"]');
+            if (!select) return false;
+            if (value) return select.value === value;
+            return select.options[select.selectedIndex]?.text.trim() === label;
+        }''',
+        arg={
+            'value': match_value if match_by == 'value' else '',
+            'label': match_label if match_by != 'value' else '',
+        },
+        timeout=10000,
+    )
+    return match_label or year
+
+
+async def download_etak_pdf(page, year: str, download_dir: Path) -> Path:
+    download_dir.mkdir(parents=True, exist_ok=True)
+    await page.wait_for_timeout(1500)
+
+    exact_button = page.locator(f'a[id="pt1:clPrintEkk{year}"]')
+    print_button = None
+    if await exact_button.count() > 0:
+        exact_text = (await exact_button.first.inner_text()).strip().replace(' ', ' ')
+        if 'εκτύπωση εκκαθαριστικού' in exact_text.lower():
+            print_button = exact_button.first
+
+    if print_button is None:
+        candidates = []
+        anchors = page.locator('a')
+        for i in range(await anchors.count()):
+            anchor = anchors.nth(i)
+            text = (await anchor.inner_text()).strip()
+            aid = await anchor.get_attribute('id') or ''
+            if text:
+                normalized = text.replace(' ', ' ')
+                lower_text = normalized.lower()
+                if 'εκτύπωση εκκαθαριστικού' in lower_text:
+                    candidates.append({
+                        'index': i,
+                        'id': aid,
+                        'text': normalized,
+                    })
+
+        for candidate in candidates:
+            lower_text = candidate['text'].lower()
+            if year in lower_text and 'εκτύπωση εκκαθαριστικού' in lower_text:
+                loc = page.locator(f'a[id="{candidate["id"]}"]') if candidate['id'] else page.locator(f'a:has-text("{candidate["text"]}")')
+                if await loc.count() > 0:
+                    print_button = loc
+                    break
+
+    if print_button is None:
+        for candidate in candidates:
+            lower_text = candidate['text'].lower()
+            if 'εκτύπωση εκκαθαριστικού' in lower_text:
+                loc = page.locator(f'a[id="{candidate["id"]}"]') if candidate['id'] else page.locator(f'a:has-text("{candidate["text"]}")')
+                if await loc.count() > 0:
+                    print_button = loc
+                    break
+
+    if print_button is None:
+        error_html = await dump_page_html(page, 'etak_print_pdf_button_missing')
+        raise RuntimeError(f"Could not find the ETΑΚ εκκαθαριστικού print PDF button for year {year}. Debug: {error_html}")
+
+    async with page.expect_download(timeout=120000) as download_info:
+        await print_button.click()
+    download = await download_info.value
+    suggested = download.suggested_filename or f"etak_{year}.pdf"
+    pdf_path = download_dir / suggested
+    await download.save_as(str(pdf_path))
+    return pdf_path
+
+
+def extract_pdf_rows_for_ataks(pdf_path: Path, ataks: list[str]) -> list[dict]:
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found at {pdf_path}")
+
+    found_rows = []
+    atak_digits = [re.sub(r'\D', '', atak) for atak in ataks]
+
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            text = (page.extract_text() or '')
+            tables = page.extract_tables() or []
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                for row in table[1:]:
+                    row_text = ' '.join([str(cell or '') for cell in row]).strip()
+                    digit_text = re.sub(r'\D', '', row_text)
+                    for atak, atak_digits_value in zip(ataks, atak_digits):
+                        if atak_digits_value and atak_digits_value in digit_text:
+                            found_rows.append({
+                                'page': page_num,
+                                'row': row,
+                                'text': row_text,
+                                'matchedAtak': atak,
+                            })
+                            break
+            if not found_rows:
+                digit_text = re.sub(r'\D', '', text)
+                for atak, atak_digits_value in zip(ataks, atak_digits):
+                    if atak_digits_value and atak_digits_value in digit_text:
+                        found_rows.append({
+                            'page': page_num,
+                            'row': [atak],
+                            'text': text,
+                            'matchedAtak': atak,
+                        })
+    return found_rows
+
+
 async def click_etak_entry_button(page):
-    entry_button = page.locator('button#pt1\\:cbEnter, button:has-text("Είσοδος")')
+    entry_button = page.locator(r'button#pt1\:cbEnter, button:has-text("Είσοδος")')
     if await entry_button.count() == 0:
         return False
 
@@ -225,7 +358,7 @@ async def click_etak_entry_button(page):
             await entry_button.first.click()
     except Exception:
         await entry_button.first.click()
-        await page.wait_for_load_state('networkidle')
+        await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
     return True
 
@@ -298,37 +431,7 @@ async def extract_etak_property_status(page):
     }
 
 
-async def back_to_list(page):
-    back_link = page.locator('a:has-text("Επιστροφή στη διαχείριση των δηλώσεων")')
-    if await back_link.count() > 0:
-        await back_link.first.click()
-    else:
-        back_btn = page.locator('input[value="Επιστροφή"], button:has-text("Επιστροφή"), a:has-text("Επιστροφή")')
-        if await back_btn.count() > 0:
-            await back_btn.first.click()
-        else:
-            await page.go_back()
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_selector('input[type=image][name="button2"], input[name="button2"]', timeout=20000)
-    await page.wait_for_timeout(2000)
-
-
-USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-DEFAULT_HEADERS = {
-    'accept-language': 'el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7',
-    'referer': 'https://www1.aade.gr/',
-}
-USER_DATA_DIR = Path('etak_user_data')
-
-
-async def dump_page_html(page, suffix: str) -> Path:
-    path = Path(f'etak_debug_{suffix}.html')
-    html = await page.content()
-    path.write_text(html, encoding='utf-8')
-    return path
-
-
-async def run(playwright: Playwright, username: str, password: str, output_path: Path, headed: bool) -> None:
+async def run(playwright: Playwright, username: str, password: str, year: str, address: str, output_path: Path, headed: bool, keep_pdf: bool) -> None:
     browser = await playwright.chromium.launch(
         headless=not headed,
         args=[
@@ -343,7 +446,11 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
         'user_agent': USER_AGENT,
         'locale': 'el-GR',
         'viewport': {'width': 1280, 'height': 1024},
-        'extra_http_headers': DEFAULT_HEADERS,
+        'extra_http_headers': {
+            'accept-language': 'el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7',
+            'referer': 'https://www1.aade.gr/',
+        },
+        'accept_downloads': True,
     }
     if STORAGE_STATE_PATH.exists():
         context_args['storage_state'] = str(STORAGE_STATE_PATH)
@@ -354,7 +461,6 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
     page1 = await _login_and_open_listing(page, username, password)
     await context.storage_state(path=str(STORAGE_STATE_PATH))
 
-    # If the login flow lands on the initial ETΑΚ landing page, click the enter button first.
     clicked_enter = await click_etak_entry_button(page1)
     if not clicked_enter:
         await page1.goto(AADE_ETAK_URL)
@@ -362,12 +468,39 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
         await page1.wait_for_timeout(2000)
 
     etak_info = await extract_etak_property_status(page1)
+    matched_ataks, matched_rows = find_ataks_by_address(etak_info['propertyStatusGrids'], address)
+    if not matched_ataks:
+        raise RuntimeError(f"Could not find address '{address}' in ETΑΚ property status grids.")
 
-    etak_output_path = output_path.parent / 'extracted_etak_property_status.json'
-    with etak_output_path.open('w', encoding='utf-8') as f:
-        json.dump(etak_info, f, ensure_ascii=False, indent=2)
+    selected_year = await select_etak_year(page1, year)
+    download_dir = output_path.parent / 'tmp_etak_download'
+    pdf_path = await download_etak_pdf(page1, selected_year, download_dir)
+    pdf_rows = extract_pdf_rows_for_ataks(pdf_path, matched_ataks)
 
-    print(f'Wrote ETΑΚ JSON to: {etak_output_path}')
+    pdf_deleted = False
+    if not keep_pdf:
+        if pdf_path.exists():
+            pdf_path.unlink()
+        if download_dir.exists() and not any(download_dir.iterdir()):
+            download_dir.rmdir()
+        pdf_deleted = True
+
+    result = {
+        'username': username,
+        'year': selected_year,
+        'address': address,
+        'matchedAtaks': matched_ataks,
+        'matchedTableRows': matched_rows,
+        'pdfPath': str(pdf_path),
+        'pdfDeleted': pdf_deleted,
+        'pdfMatchedRows': pdf_rows,
+        'propertyStatus': etak_info,
+    }
+
+    with output_path.open('w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f'Wrote ETΑΚ JSON to: {output_path}')
 
     await context.close()
     await browser.close()
@@ -375,14 +508,17 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description='Extract AADE ETΑΚ property status data to JSON')
-    parser.add_argument('--username', default='802576637', help='AADE username')
-    parser.add_argument('--password', default='Tv802576!', help='AADE password')
-    parser.add_argument('--output', default='extracted_etak_property_status.json', help='Base output file path for JSON exports')
+    parser.add_argument('--username', required=True, help='AADE username')
+    parser.add_argument('--password', required=True, help='AADE password')
+    parser.add_argument('--year', required=True, help='Year to select in ETΑΚ and print the PDF for')
+    parser.add_argument('--address', required=True, help='Address to match in ETΑΚ Πίνακας 1 data')
+    parser.add_argument('--output', default='extracted_etak_property_status.json', help='Output JSON file path')
     parser.add_argument('--headed', action='store_true', help='Run browser in headed mode')
+    parser.add_argument('--keep-pdf', action='store_true', help='Keep downloaded PDF after extraction')
     args = parser.parse_args()
 
     async with async_playwright() as playwright:
-        await run(playwright, args.username, args.password, Path(args.output), args.headed)
+        await run(playwright, args.username, args.password, args.year, args.address, Path(args.output), args.headed, args.keep_pdf)
 
 
 if __name__ == '__main__':
