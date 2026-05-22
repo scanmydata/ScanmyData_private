@@ -9,12 +9,5 @@ curl -v \
 page tour
 
 session manager test--
-Ναι — το script είναι έτοιμο να τρέξει με μόνο input τους κωδικούς.
-
-Χρησιμοποιώντας:
-
-```bash
-python3 e3/checks/misth.py --username user3407382057 --password aggeliki92 --output extracted_misth_user3407382057_v2.json --headed
-```
-
-παραγωγήθηκε επιτυχώς το extracted_misth_user3407382057_v2.json.
+Ε9 ΤΣΕΚ ΕΝΦΙΑ
+ΑΝΤΙΠΑΡΑΒΟΛΗ ΑΑΔΕ-ΓΕΜΗ ΓΙΑ ΜΕΤΟΧΟΥΣ
