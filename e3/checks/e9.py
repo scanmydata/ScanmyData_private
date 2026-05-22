@@ -478,7 +478,7 @@ async def run(playwright: Playwright, username: str, password: str, year: str, a
     pdf_rows = extract_pdf_rows_for_ataks(pdf_path, matched_ataks)
 
     pdf_deleted = False
-    if not keep_pdf:
+    if pdf_rows or not keep_pdf:
         if pdf_path.exists():
             pdf_path.unlink()
         if download_dir.exists() and not any(download_dir.iterdir()):
