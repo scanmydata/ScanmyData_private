@@ -16780,7 +16780,452 @@ def api_e3_upload_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/e3/brain", methods=["POST"])
+def api_e3_brain():
+    """Run the E3 orchestration brain for single or bulk clients.
+
+    Expected JSON payload (high level):
+      {
+        "mode": "single" | "bulk",
+        "year": 2026,
+        "single_client": {...},
+        "excel_path": "...",          # for bulk mode
+        "active_group_clients": [...], # optional
+        "auto_active_group_clients": true,
+        "run_extractors": false,
+        "headed": false
+      }
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        auto_active = bool(payload.get("auto_active_group_clients", True))
+        active_clients = payload.get("active_group_clients")
+
+        if auto_active and not isinstance(active_clients, list):
+            active_group_clients = []
+            seen = set()
+            try:
+                for cred in (load_credentials() or []):
+                    if not isinstance(cred, dict):
+                        continue
+                    afm = _canon_afm(cred.get("vat") or "")
+                    if not afm or afm in seen:
+                        continue
+                    seen.add(afm)
+                    active_group_clients.append(
+                        {
+                            "afm": afm,
+                            "name": str(cred.get("name") or "").strip(),
+                        }
+                    )
+            except Exception:
+                log.exception("api_e3_brain: failed auto-loading active clients from credentials")
+
+            payload["active_group_clients"] = active_group_clients
+
+        from e3.checks.e3_brain import run_brain, E3BrainError
+
+        result = run_brain(payload)
+        return jsonify(result), 200
+
+    except Exception as e:
+        try:
+            from e3.checks.e3_brain import E3BrainError
+            if isinstance(e, E3BrainError):
+                return jsonify({"ok": False, "error": str(e)}), 400
+        except Exception:
+            pass
+
+        log.exception("api_e3_brain failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/upload", methods=["POST"])
+def api_e3_brain_upload():
+    """Bulk E3 brain endpoint with Excel upload.
+
+    Multipart fields:
+      - excel_file: required .xlsx/.xls
+      - payload_json: optional JSON string with extra settings
+    """
+    temp_path = None
+    try:
+        if "excel_file" not in request.files:
+            return jsonify({"ok": False, "error": "No excel_file provided"}), 400
+
+        file = request.files["excel_file"]
+        if not file or not file.filename:
+            return jsonify({"ok": False, "error": "No file selected"}), 400
+
+        if not file.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "Only .xlsx/.xls files are allowed"}), 400
+
+        payload = {}
+        payload_raw = request.form.get("payload_json", "").strip()
+        if payload_raw:
+            try:
+                payload = json.loads(payload_raw)
+            except Exception:
+                return jsonify({"ok": False, "error": "Invalid payload_json"}), 400
+
+        temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
+        file.save(temp_path)
+
+        payload["mode"] = "bulk"
+        payload["excel_path"] = temp_path
+
+        auto_active = bool(payload.get("auto_active_group_clients", True))
+        if auto_active and not isinstance(payload.get("active_group_clients"), list):
+            active_group_clients = []
+            seen = set()
+            try:
+                for cred in (load_credentials() or []):
+                    if not isinstance(cred, dict):
+                        continue
+                    afm = _canon_afm(cred.get("vat") or "")
+                    if not afm or afm in seen:
+                        continue
+                    seen.add(afm)
+                    active_group_clients.append(
+                        {
+                            "afm": afm,
+                            "name": str(cred.get("name") or "").strip(),
+                        }
+                    )
+            except Exception:
+                log.exception("api_e3_brain_upload: failed auto-loading active clients from credentials")
+            payload["active_group_clients"] = active_group_clients
+
+        from e3.checks.e3_brain import run_brain, E3BrainError
+        result = run_brain(payload)
+        return jsonify(result), 200
+
+    except Exception as e:
+        try:
+            from e3.checks.e3_brain import E3BrainError
+            if isinstance(e, E3BrainError):
+                return jsonify({"ok": False, "error": str(e)}), 400
+        except Exception:
+            pass
+        log.exception("api_e3_brain_upload failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@app.route("/api/e3/brain/save_credentials", methods=["POST"])
+@login_required
+def api_e3_brain_save_credentials():
+    """Persist E3 brain credential snapshots into active-group scoped JSON.
+
+    Access: admin users or authenticated members of the active group.
+    """
+    try:
+        from admin.auth import get_active_group
+
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα αποθήκευσης για την ενεργή ομάδα."}), 403
+
+        payload = request.get_json(silent=True) or {}
+
+        snapshots = []
+        if isinstance(payload.get("snapshots"), list):
+            snapshots = payload.get("snapshots")
+        else:
+            brain_result = payload.get("brain_result") if isinstance(payload.get("brain_result"), dict) else {}
+            clients = brain_result.get("clients") if isinstance(brain_result.get("clients"), list) else []
+            for c in clients:
+                if not isinstance(c, dict):
+                    continue
+                snap = c.get("credential_snapshot") if isinstance(c.get("credential_snapshot"), dict) else None
+                if snap:
+                    snapshots.append(snap)
+
+        if not snapshots:
+            return jsonify({"ok": False, "error": "Δεν υπάρχουν snapshots για αποθήκευση."}), 400
+
+        # Strict group scope: write only inside current active group's data folder.
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        if not os.path.isdir(group_data_dir):
+            os.makedirs(group_data_dir, exist_ok=True)
+
+        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+
+        existing = {
+            "group": {
+                "id": getattr(grp, "id", None),
+                "name": getattr(grp, "name", None),
+                "data_folder": getattr(grp, "data_folder", None),
+            },
+            "updated_at": datetime.datetime.utcnow().isoformat(),
+            "updated_by": {
+                "user_id": getattr(current_user, "id", None),
+                "username": getattr(current_user, "username", None),
+                "email": getattr(current_user, "email", None),
+                "role": role,
+            },
+            "companies": [],
+        }
+
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    existing.update(loaded)
+                    if not isinstance(existing.get("companies"), list):
+                        existing["companies"] = []
+            except Exception:
+                pass
+
+        by_afm = {}
+        for item in existing.get("companies", []):
+            if not isinstance(item, dict):
+                continue
+            cafm = str((item.get("company") or {}).get("afm") or "").strip()
+            if cafm:
+                by_afm[cafm] = item
+
+        for snap in snapshots:
+            if not isinstance(snap, dict):
+                continue
+            company = snap.get("company") if isinstance(snap.get("company"), dict) else {}
+            cafm = str(company.get("afm") or "").strip()
+            if not cafm:
+                continue
+
+            normalized = {
+                "company": {
+                    "afm": cafm,
+                    "name": str(company.get("name") or "").strip(),
+                    "taxisnet_username": str(company.get("taxisnet_username") or "").strip(),
+                    "taxisnet_password": str(company.get("taxisnet_password") or "").strip(),
+                    "amka": str(company.get("amka") or "").strip(),
+                    "mydata_user": str(company.get("mydata_user") or "").strip(),
+                    "mydata_key": str(company.get("mydata_key") or "").strip(),
+                    "address": str(company.get("address") or "").strip(),
+                },
+                "members": [
+                    {
+                        "full_name": str(m.get("full_name") or "").strip(),
+                        "afm": str(m.get("afm") or "").strip(),
+                        "amka": str(m.get("amka") or "").strip(),
+                        "taxisnet_username": str(m.get("taxisnet_username") or "").strip(),
+                        "taxisnet_password": str(m.get("taxisnet_password") or "").strip(),
+                        "role": str(m.get("role") or "").strip(),
+                    }
+                    for m in (snap.get("members") if isinstance(snap.get("members"), list) else [])
+                    if isinstance(m, dict)
+                ],
+                "saved_at": datetime.datetime.utcnow().isoformat(),
+            }
+
+            by_afm[cafm] = normalized
+
+        existing["group"] = {
+            "id": getattr(grp, "id", None),
+            "name": getattr(grp, "name", None),
+            "data_folder": getattr(grp, "data_folder", None),
+        }
+        existing["updated_at"] = datetime.datetime.utcnow().isoformat()
+        existing["updated_by"] = {
+            "user_id": getattr(current_user, "id", None),
+            "username": getattr(current_user, "username", None),
+            "email": getattr(current_user, "email", None),
+            "role": role,
+        }
+        existing["companies"] = sorted(by_afm.values(), key=lambda x: str((x.get("company") or {}).get("afm") or ""))
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+
+        try:
+            from admin.auth import _append_group_log
+            _append_group_log(
+                grp,
+                f"E3 credential snapshots saved ({len(snapshots)} records) by {getattr(current_user, 'username', 'unknown')}"
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            {
+                "ok": True,
+                "saved": len(snapshots),
+                "file": file_path,
+                "group": {
+                    "id": getattr(grp, "id", None),
+                    "name": getattr(grp, "name", None),
+                    "data_folder": getattr(grp, "data_folder", None),
+                },
+            }
+        ), 200
+
+    except Exception as e:
+        log.exception("api_e3_brain_save_credentials failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ============= End E3 Check Routes =============
+
+# ============= E3 Credentials Store CRUD =============
+
+@app.route("/api/e3/brain/credentials_store", methods=["GET"])
+@login_required
+def api_e3_brain_credentials_store_fetch():
+    """Fetch all saved credentials for the active group."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα ανάγνωσης για την ενεργή ομάδα."}), 403
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        if not os.path.exists(file_path):
+            return jsonify({"ok": True, "companies": []})
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        companies = data.get("companies", []) if isinstance(data, dict) else []
+        return jsonify({"ok": True, "companies": companies, "group": data.get("group", {})})
+    except Exception as e:
+        log.exception("api_e3_brain_credentials_store_fetch failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/credentials_store/update", methods=["POST"])
+@login_required
+def api_e3_brain_credentials_store_update():
+    """Update or insert a single company credentials record by AFM."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα ενημέρωσης για την ενεργή ομάδα."}), 403
+        payload = request.get_json(silent=True) or {}
+        snap = payload.get("snapshot")
+        if not isinstance(snap, dict):
+            return jsonify({"ok": False, "error": "Λείπει το snapshot."}), 400
+        company = snap.get("company") if isinstance(snap.get("company"), dict) else {}
+        cafm = str(company.get("afm") or "").strip()
+        if not cafm:
+            return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ εταιρίας."}), 400
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        if not os.path.isdir(group_data_dir):
+            os.makedirs(group_data_dir, exist_ok=True)
+        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        existing = {"companies": []}
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    existing.update(loaded)
+                    if not isinstance(existing.get("companies"), list):
+                        existing["companies"] = []
+            except Exception:
+                pass
+        by_afm = {}
+        for item in existing.get("companies", []):
+            if not isinstance(item, dict):
+                continue
+            afm = str((item.get("company") or {}).get("afm") or "").strip()
+            if afm:
+                by_afm[afm] = item
+        snap["saved_at"] = datetime.datetime.utcnow().isoformat()
+        by_afm[cafm] = snap
+        existing["companies"] = sorted(by_afm.values(), key=lambda x: str((x.get("company") or {}).get("afm") or ""))
+        existing["updated_at"] = datetime.datetime.utcnow().isoformat()
+        existing["updated_by"] = {
+            "user_id": getattr(current_user, "id", None),
+            "username": getattr(current_user, "username", None),
+            "email": getattr(current_user, "email", None),
+            "role": role,
+        }
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        return jsonify({"ok": True, "afm": cafm})
+    except Exception as e:
+        log.exception("api_e3_brain_credentials_store_update failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/credentials_store/delete", methods=["POST"])
+@login_required
+def api_e3_brain_credentials_store_delete():
+    """Delete a company credentials record by AFM."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα διαγραφής για την ενεργή ομάδα."}), 403
+        payload = request.get_json(silent=True) or {}
+        afm = str(payload.get("afm") or "").strip()
+        if not afm:
+            return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ προς διαγραφή."}), 400
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        if not os.path.exists(file_path):
+            return jsonify({"ok": True, "deleted": False})
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        companies = data.get("companies", []) if isinstance(data, dict) else []
+        new_companies = [item for item in companies if str((item.get("company") or {}).get("afm") or "").strip() != afm]
+        if len(new_companies) == len(companies):
+            return jsonify({"ok": True, "deleted": False})
+        data["companies"] = new_companies
+        data["updated_at"] = datetime.datetime.utcnow().isoformat()
+        data["updated_by"] = {
+            "user_id": getattr(current_user, "id", None),
+            "username": getattr(current_user, "username", None),
+            "email": getattr(current_user, "email", None),
+            "role": role,
+        }
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({"ok": True, "deleted": True})
+    except Exception as e:
+        log.exception("api_e3_brain_credentials_store_delete failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):

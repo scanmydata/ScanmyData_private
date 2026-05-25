@@ -65,6 +65,7 @@ class BusinessPortalFetcher:
         result = {
             'success': False,
             'partners': [],
+            'company': {},
             'error': None
         }
 
@@ -85,11 +86,13 @@ class BusinessPortalFetcher:
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
+            result['company'] = self._extract_company(data)
             persons = self._extract_persons(data)
 
             if not persons:
                 # Fallback: if no persons found from ArGemi endpoint, try search result persons.
                 data = self._search_company_by_afm(vat_number)
+                result['company'] = self._extract_company(data)
                 persons = self._extract_persons(data)
 
             if not persons:
@@ -132,6 +135,62 @@ class BusinessPortalFetcher:
 
         return result
 
+    def fetch_company_profile(self, vat_number: str) -> Dict[str, Any]:
+        """Fetch company-level profile for a VAT number.
+
+        Returns:
+            {
+                'success': bool,
+                'company': Dict[str, Any],
+                'error': str | None,
+            }
+        """
+        result = {
+            'success': False,
+            'company': {},
+            'error': None,
+        }
+
+        try:
+            ar_gemi = self._resolve_ar_gemi(vat_number)
+            if not ar_gemi:
+                raise ValueError('Could not resolve ArGemi from AFM')
+
+            headers = {
+                'accept': 'application/json',
+                'api_key': self.api_key
+            }
+
+            url = self.API_URL.format(arGemi=ar_gemi)
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            company = self._extract_company(data)
+            if not company:
+                data = self._search_company_by_afm(vat_number)
+                company = self._extract_company(data)
+
+            if not company:
+                result['error'] = 'No company data found for the given VAT number'
+                return result
+
+            result['success'] = True
+            result['company'] = company
+            return result
+
+        except requests.exceptions.Timeout:
+            result['error'] = 'Business Portal API timeout'
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response else 'unknown'
+            result['error'] = f'HTTP error {status_code}: {str(e)}'
+        except requests.exceptions.RequestException as e:
+            result['error'] = f'Network error: {str(e)}'
+        except Exception as e:
+            result['error'] = f'Unexpected error: {str(e)}'
+
+        return result
+
     def _search_company_by_afm(self, vat_number: str) -> Dict[str, Any]:
         """Search company by AFM and return the first result body."""
         url = self.SEARCH_URL
@@ -171,6 +230,23 @@ class BusinessPortalFetcher:
                 company = search_results[0] or {}
                 persons = company.get('persons') or []
         return persons
+
+    @staticmethod
+    def _extract_company(data: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            return {}
+
+        if isinstance(data.get('company'), dict):
+            return data.get('company') or {}
+
+        if data.get('coNameEl') or data.get('afm') or data.get('arGemi'):
+            return data
+
+        search_results = data.get('searchResults') or []
+        if search_results and isinstance(search_results, list) and isinstance(search_results[0], dict):
+            return search_results[0]
+
+        return {}
 
 if __name__ == '__main__':
     import sys
