@@ -172,7 +172,26 @@
         }
       })
       .finally(() => {
-        setTimeout(() => location.replace(location.pathname + "?use_receipts=1"), 150);
+        (async () => {
+          const savedMark = String(obj.mark || obj.MARK || '').trim();
+          try {
+            if (typeof window.rcFastPostSaveRefresh === 'function') {
+              await window.rcFastPostSaveRefresh(savedMark, 'Αποθηκεύτηκε η απόδειξη (repeat).');
+              return;
+            }
+            if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+              await window.FBP_REFRESH_LIST_FRAGMENT();
+              return;
+            }
+            if (typeof window.partiallyReloadInvoiceTable === 'function') {
+              await window.partiallyReloadInvoiceTable({ highlightMark: savedMark });
+              return;
+            }
+          } catch(_) {
+            // fallback to page reload when partial refresh is not available or fails
+          }
+          try { window.location.replace(location.pathname + "?use_receipts=1"); } catch(_) { window.location.reload(); }
+        })();
       });
   }
 

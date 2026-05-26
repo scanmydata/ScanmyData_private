@@ -244,7 +244,18 @@
     }
     
     header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
       margin-bottom: 1.5rem;
+      background: var(--bg-secondary);
+      border-bottom: none;
+      box-shadow: none;
+    }
+    body[data-theme="dark"] header {
+      background: var(--bg-secondary);
+      border-bottom: none;
+      box-shadow: none;
     }
     
     .container {
@@ -2503,7 +2514,7 @@
         const kind = String(type || 'success').toLowerCase();
         const cls = kind === 'error' ? 'flash-error' : (kind === 'warning' ? 'flash-warning' : 'flash-success');
         const id = String(flashId || 'fetchFinalFlashMessage');
-        const timeoutMs = Number(ttl || 5000);
+        const timeoutMs = Number(ttl ?? 5000);
 
         let el = document.getElementById(id);
         if (!el) {

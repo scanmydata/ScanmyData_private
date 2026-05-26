@@ -8,7 +8,7 @@ import sys
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 import requests
@@ -30,6 +30,133 @@ except Exception as _infisical_exc:
     logging.getLogger(__name__).warning("Infisical bootstrap unavailable: %s", _infisical_exc)
 
 log = logging.getLogger(__name__)
+
+
+def _first_non_empty(source: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+    for key in keys:
+        value = source.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _format_address(company: Dict[str, Any]) -> str:
+    address_obj = company.get("address") if isinstance(company.get("address"), dict) else {}
+    street = _first_non_empty(address_obj, ["street", "addressStreet", "streetName", "coStreet"])
+    street_no = _first_non_empty(address_obj, ["streetNumber", "addressNumber", "streetNo", "coStreetNumber"])
+    city = _first_non_empty(address_obj, ["city", "coCity", "addressCity"])
+    zip_code = _first_non_empty(address_obj, ["zipCode", "postalCode", "zip", "coZipCode"])
+    raw_address = _first_non_empty(company, ["address", "fullAddress", "companyAddress", "headquarterAddress", "registeredAddress"])
+    if raw_address and isinstance(raw_address, str) and raw_address.strip():
+        return raw_address.strip()
+    parts = [str(x).strip() for x in [street, street_no, city, zip_code] if x and str(x).strip()]
+    return " ".join(parts).strip()
+
+
+_INDIVIDUAL_LEGAL_FORM_TOKENS = {
+    "ΑΤΟΜΙΚΗ",
+    "ΑΤΟΜΙΚΟ",
+    "ΑΤΟΜΙΚΗΣ",
+    "ΑΤΟΜΙΚΟΥ",
+    "SOLE",
+    "SOLE PROPRIETOR",
+    "SOLE TRADER",
+    "INDIVIDUAL",
+    "ΜΟΝΟΠΡΟΣΩΠΗ",
+    "ΑΤΟΜική",
+}
+
+
+def _is_individual_business(legal_form: Optional[str]) -> bool:
+    if not legal_form:
+        return False
+    text = str(legal_form).upper()
+    return any(token in text for token in _INDIVIDUAL_LEGAL_FORM_TOKENS)
+
+
+def _normalize_company(company: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(company, dict):
+        return {}
+
+    normalized = dict(company)
+    normalized["legalType"] = _first_non_empty(normalized, [
+        "legalType",
+        "legalTypeLabel",
+        "coLegalType",
+        "coLegalTypeLabel",
+        "legalForm",
+        "legalFormLabel",
+        "legalFormName",
+        "legalFormDescription",
+        "companyLegalForm",
+        "companyLegalType",
+    ]) or normalized.get("legalType")
+    normalized["legalForm"] = _first_non_empty(normalized, [
+        "legalForm",
+        "legalFormLabel",
+        "legalFormName",
+        "legalFormDescription",
+        "companyLegalForm",
+        "companyLegalType",
+        "legalType",
+        "legalTypeLabel",
+    ]) or normalized.get("legalForm")
+
+    address_obj = normalized.get("address") if isinstance(normalized.get("address"), dict) else {}
+    normalized["street"] = _first_non_empty(normalized, [
+        "street",
+        "addressStreet",
+        "streetName",
+        "coStreet",
+        "companyStreet",
+    ]) or _first_non_empty(address_obj, [
+        "street",
+        "addressStreet",
+        "streetName",
+        "coStreet",
+        "companyStreet",
+    ])
+    normalized["streetNumber"] = _first_non_empty(normalized, [
+        "streetNumber",
+        "addressNumber",
+        "streetNo",
+        "coStreetNumber",
+        "companyStreetNumber",
+    ]) or _first_non_empty(address_obj, [
+        "streetNumber",
+        "addressNumber",
+        "streetNo",
+        "coStreetNumber",
+        "companyStreetNumber",
+    ])
+    normalized["zipCode"] = _first_non_empty(normalized, [
+        "zipCode",
+        "postalCode",
+        "zip",
+        "coZipCode",
+        "companyZipCode",
+    ]) or _first_non_empty(address_obj, [
+        "zipCode",
+        "postalCode",
+        "zip",
+        "coZipCode",
+        "companyZipCode",
+    ])
+    normalized["city"] = _first_non_empty(normalized, [
+        "city",
+        "coCity",
+        "addressCity",
+        "companyCity",
+    ]) or _first_non_empty(address_obj, [
+        "city",
+        "coCity",
+        "addressCity",
+        "companyCity",
+    ])
+    normalized["address"] = _format_address(normalized) or normalized.get("address")
+    normalized["headquarter_address"] = normalized["address"]
+    return normalized
+
 
 class BusinessPortalFetcher:
     """Fetches business partners using Business Portal API"""
@@ -94,6 +221,16 @@ class BusinessPortalFetcher:
                 data = self._search_company_by_afm(vat_number)
                 result['company'] = self._extract_company(data)
                 persons = self._extract_persons(data)
+
+            legal_form = _first_non_empty(result['company'], [
+                'legalType', 'legalForm', 'legalTypeLabel', 'legalFormLabel',
+                'legalFormName', 'legalTypeName', 'companyLegalForm', 'companyLegalType'
+            ])
+            if not persons and _is_individual_business(legal_form):
+                result['success'] = True
+                result['partners'] = []
+                result['error'] = None
+                return result
 
             if not persons:
                 result['error'] = 'No persons found for the given VAT number'
@@ -237,14 +374,14 @@ class BusinessPortalFetcher:
             return {}
 
         if isinstance(data.get('company'), dict):
-            return data.get('company') or {}
+            return _normalize_company(data.get('company') or {})
 
         if data.get('coNameEl') or data.get('afm') or data.get('arGemi'):
-            return data
+            return _normalize_company(data)
 
         search_results = data.get('searchResults') or []
         if search_results and isinstance(search_results, list) and isinstance(search_results[0], dict):
-            return search_results[0]
+            return _normalize_company(search_results[0])
 
         return {}
 

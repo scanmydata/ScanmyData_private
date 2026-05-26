@@ -73,7 +73,7 @@ from epsilon_bridges import (
     _norm_afm,   # <-- απαιτείται
     # προαιρετικά: export_multiclient_strict
 )
-from scraper import detect_and_scrape as scrape_receipt
+from scraper.scraper_receipt import detect_and_scrape as scrape_receipt
 # local mydata helper
 from fetch import request_docs
 import sys, subprocess, json
@@ -10407,7 +10407,7 @@ def search():
         from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
         # safe import of receipt scraper
         try:
-            from scraper import detect_and_scrape as detect_and_scrape_receipt
+            from scraper.scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
         except Exception:
             detect_and_scrape_receipt = None
 
@@ -12284,21 +12284,21 @@ def api_scrape_receipt():
         detect_and_scrape = None
         if mode == "analysis":
             try:
-                from scraper import detect_and_scrape as detect_and_scrape
+                from scraper.scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
             except Exception:
                 log.exception("api_scrape_receipt: cannot import analysis scraper, fallback to legacy")
                 try:
-                    from scraper import detect_and_scrape as detect_and_scrape
+                    from scraper.scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
                 except Exception:
                     log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
                     return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
         else:
             try:
-                from scraper import detect_and_scrape as detect_and_scrape
+                from scraper.scraper_receipt import detect_and_scrape as detect_and_scrape
             except Exception:
                 log.exception("api_scrape_receipt: cannot import mixed scraper, fallback to analysis")
                 try:
-                    from scraper import detect_and_scrape as detect_and_scrape
+                    from scraper.scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
                 except Exception:
                     log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
                     return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
@@ -16708,6 +16708,7 @@ def api_e3_fetch():
 
         result = {
             "ok": True,
+            "message": "✅ Δεδομένα E3 φόρτωθηκαν επιτυχώς.",
             "revenue": report.get("revenue", []),
             "expenses": report.get("expenses", []),
             "info": report.get("info", []),
@@ -16774,6 +16775,8 @@ def api_e3_upload_excel():
                 pass
         if not result["ok"]:
             return jsonify(normalize_bools(result)), 400
+        if "message" not in result:
+            result["message"] = "Excel αρχείο επεξεργάστηκε επιτυχώς."
         return jsonify(normalize_bools(result)), 200
     except Exception as e:
         log.exception("api_e3_upload_excel failed")
@@ -16827,6 +16830,8 @@ def api_e3_brain():
         from e3.checks.e3_brain import run_brain, E3BrainError
 
         result = run_brain(payload)
+        if isinstance(result, dict) and result.get("ok") and "message" not in result:
+            result["message"] = "Η εκτέλεση E3 Brain ολοκληρώθηκε επιτυχώς."
         return jsonify(result), 200
 
     except Exception as e:
@@ -16838,6 +16843,93 @@ def api_e3_brain():
             pass
 
         log.exception("api_e3_brain failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/company_members", methods=["POST"])
+@login_required
+def api_e3_brain_company_members():
+    """Return active partners/owners for a company AFM."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        afm = str(payload.get("afm") or "").strip()
+        afm = "".join(ch for ch in afm if ch.isdigit())
+        if len(afm) != 9:
+            return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
+
+        from e3.checks.fetch_business_partners import BusinessPortalFetcher
+        from e3.checks.e3_brain import _extract_active_members, _extract_company_summary, _is_individual_business
+
+        fetcher = BusinessPortalFetcher()
+        partners_result = fetcher.fetch_partners(afm)
+        if not isinstance(partners_result, dict):
+            raise ValueError("Μη έγκυρο αποτέλεσμα από Business Portal.")
+
+        if not partners_result.get("success"):
+            err = partners_result.get("error") or "Αποτυχία ανάκτησης συνεργατών."
+            return jsonify({"ok": False, "error": str(err)}), 400
+
+        company_payload = partners_result.get("company") if isinstance(partners_result.get("company"), dict) else {}
+        if not company_payload.get("address") or not company_payload.get("legalType"):
+            profile_result = fetcher.fetch_company_profile(afm)
+            if isinstance(profile_result, dict) and profile_result.get("success"):
+                company_payload = {**company_payload, **(profile_result.get("company") or {})}
+
+        summary = _extract_company_summary(company_payload)
+        legal_type = summary.get("legal_type") or company_payload.get("legalType") or ""
+        is_individual = _is_individual_business(legal_type)
+        members = _extract_active_members(partners_result, _dt.utcnow().date())
+        company_address = str(
+            company_payload.get("address")
+            or company_payload.get("address1")
+            or company_payload.get("street")
+            or summary.get("headquarter_address")
+            or ""
+        ).strip()
+        if not company_address:
+            company_address = " ".join(
+                str(x).strip()
+                for x in [
+                    company_payload.get("street"),
+                    company_payload.get("streetNumber"),
+                    company_payload.get("city"),
+                    company_payload.get("zipCode"),
+                ]
+                if x and str(x).strip()
+            ).strip()
+        members_out = [
+            {
+                "afm": m.get("afm"),
+                "name": m.get("name"),
+                "role": m.get("role"),
+                "dt_from": m.get("dt_from"),
+                "dt_to": m.get("dt_to"),
+            }
+            for m in members
+        ]
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Εταιρικά στοιχεία ανακτήθηκαν.",
+                "company": {
+                    "afm": afm,
+                    "name": str(company_payload.get("businessName") or company_payload.get("name") or "").strip(),
+                    "address": str(company_payload.get("address") or company_payload.get("address1") or company_payload.get("street") or "").strip(),
+                    "street": str(company_payload.get("street") or company_payload.get("addressStreet") or company_payload.get("streetName") or company_payload.get("coStreet") or "").strip(),
+                    "streetNumber": str(company_payload.get("streetNumber") or company_payload.get("addressNumber") or company_payload.get("streetNo") or company_payload.get("coStreetNumber") or "").strip(),
+                    "city": str(company_payload.get("city") or company_payload.get("coCity") or company_payload.get("addressCity") or "").strip(),
+                    "zipCode": str(company_payload.get("zipCode") or company_payload.get("postalCode") or company_payload.get("zip") or company_payload.get("coZipCode") or "").strip(),
+                    "headquarter_address": str(summary.get("headquarter_address") or company_address).strip(),
+                    "legal_type": str(legal_type or "").strip(),
+                },
+                "summary": summary,
+                "is_individual": is_individual,
+                "members": members_out,
+            }
+        ), 200
+    except Exception as e:
+        log.exception("api_e3_brain_company_members failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -16899,6 +16991,8 @@ def api_e3_brain_upload():
 
         from e3.checks.e3_brain import run_brain, E3BrainError
         result = run_brain(payload)
+        if isinstance(result, dict) and result.get("ok") and "message" not in result:
+            result["message"] = "Η εκτέλεση E3 Brain ολοκληρώθηκε επιτυχώς."
         return jsonify(result), 200
 
     except Exception as e:
@@ -16909,6 +17003,44 @@ def api_e3_brain_upload():
         except Exception:
             pass
         log.exception("api_e3_brain_upload failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@app.route("/api/e3/brain/upload_preview", methods=["POST"])
+def api_e3_brain_upload_preview():
+    temp_path = None
+    try:
+        if "excel_file" not in request.files:
+            return jsonify({"ok": False, "error": "No excel_file provided"}), 400
+
+        file = request.files["excel_file"]
+        if not file or not file.filename:
+            return jsonify({"ok": False, "error": "No file selected"}), 400
+
+        if not file.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "Only .xlsx/.xls files are allowed"}), 400
+
+        temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
+        file.save(temp_path)
+
+        from e3.checks.e3_brain import _parse_bulk_clients, E3BrainError
+        clients = _parse_bulk_clients(temp_path)
+        return jsonify({"ok": True, "message": f"Βρέθηκαν {len(clients)} πελάτες στο αρχείο.", "clients": clients}), 200
+
+    except Exception as e:
+        try:
+            from e3.checks.e3_brain import E3BrainError
+            if isinstance(e, E3BrainError):
+                return jsonify({"ok": False, "error": str(e)}), 400
+        except Exception:
+            pass
+        log.exception("api_e3_brain_upload_preview failed")
         return jsonify({"ok": False, "error": str(e)}), 500
     finally:
         if temp_path:
@@ -17067,6 +17199,7 @@ def api_e3_brain_save_credentials():
         return jsonify(
             {
                 "ok": True,
+                "message": f"Αποθηκεύτηκαν {len(snapshots)} εγγραφές credentials.",
                 "saved": len(snapshots),
                 "file": file_path,
                 "group": {
@@ -17106,13 +17239,64 @@ def api_e3_brain_credentials_store_fetch():
         group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
         file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
         if not os.path.exists(file_path):
-            return jsonify({"ok": True, "companies": []})
+            return jsonify({"ok": True, "message": "Δεν βρέθηκαν αποθηκευμένα credentials.", "companies": []})
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         companies = data.get("companies", []) if isinstance(data, dict) else []
-        return jsonify({"ok": True, "companies": companies, "group": data.get("group", {})})
+        return jsonify({"ok": True, "message": "Αποθηκευμένα credentials φορτώθηκαν.", "companies": companies, "group": data.get("group", {})})
     except Exception as e:
         log.exception("api_e3_brain_credentials_store_fetch failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/active_group_clients", methods=["GET"])
+@login_required
+def api_e3_brain_active_group_clients():
+    """Return active group clients from the current group's credentials."""
+    try:
+        from admin.auth import get_active_group
+
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα ανάγνωσης για την ενεργή ομάδα."}), 403
+
+        creds = load_credentials() or []
+        clients = []
+        for c in creds:
+            if not isinstance(c, dict):
+                continue
+            afm = str(c.get("vat") or c.get("afm") or "").strip()
+            if not afm:
+                continue
+            mydata_user = str(c.get("mydata_user") or c.get("user") or "").strip()
+            mydata_key = str(c.get("mydata_key") or c.get("key") or "").strip()
+            clients.append({
+                "afm": afm,
+                "name": str(c.get("name") or "").strip(),
+                "taxisnet_username": str(c.get("taxisnet_username") or c.get("username") or "").strip(),
+                "taxisnet_password": str(c.get("taxisnet_password") or c.get("password") or "").strip(),
+                "amka": str(c.get("amka") or "").strip(),
+                "mydata_user": mydata_user,
+                "mydata_key": mydata_key,
+                "user": mydata_user,
+                "key": mydata_key,
+                "address": str(c.get("address") or "").strip(),
+                "legal_type": str(c.get("legal_type") or "").strip(),
+            })
+
+        return jsonify({"ok": True, "message": "Πελάτες ενεργής ομάδας φορτώθηκαν.", "clients": clients}), 200
+    except Exception as e:
+        log.exception("api_e3_brain_active_group_clients failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 

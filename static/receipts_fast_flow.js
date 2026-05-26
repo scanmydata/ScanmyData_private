@@ -212,8 +212,40 @@
       } catch (err) { /* defensive - do not block save */ }
 
       // debug: ensure payload.mtype present when user selected one
-      try { console.debug('[fast-flow] submitting summary.mtype=', payload.mtype || payload.receipt_mtype || payload.invoice_mtype || ''); } catch(_){}
+      try { console.debug('[fast-flow] submitting summary.mtype=', payload.mtype || payload.receipt_mtype || payload.invoice_mtype || ''); } catch(_) {}
 
+      try {
+        const receiptAnalysisOn = !!(
+          payload.receipt_analysis_enabled === true ||
+          payload.receipts_analysis_enabled === true ||
+          payload.receiptAnalysisEnabled === true
+        );
+        const isReceipt = !!(
+          payload.is_receipt === true ||
+          payload.isReceipt === true ||
+          payload.type === 'receipt' ||
+          payload.document_type === 'receipt' ||
+          payload.source === 'receipt'
+        );
+        if (isReceipt && !receiptAnalysisOn) {
+          const grossValue = String(payload.totalValue || payload.total_amount || payload.totalNetValue || payload.total_net_value || '').trim();
+          if (grossValue) {
+            payload.totalValue = grossValue;
+            payload.totalNetValue = grossValue;
+          }
+          payload.totalVatAmount = '';
+          payload.total_vat_amount = '';
+          if (Array.isArray(payload.lines)) {
+            payload.lines = payload.lines.map(function(ln) {
+              if (!ln || typeof ln !== 'object') return ln;
+              var out = Object.assign({}, ln);
+              if (!String(out.amount || '').trim() && grossValue) out.amount = grossValue;
+              out.vat = '';
+              return out;
+            });
+          }
+        }
+      } catch(_) {}
       // Guard: if a visible MTYPE selector exists in modal, require selection before autosave.
       try {
         const invCont = document.getElementById('invoiceMtypeContainer');
@@ -275,15 +307,30 @@
       hideModal();
 
       const savedMark = String((j && (j.mark || j.MARK || j.saved_mark || j.number)) || (payload && (payload.mark || payload.MARK || payload.number)) || '').trim();
+      if (savedMark) {
+        try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark; } catch(_) {}
+      }
+      if (typeof window.rcFastPostSaveRefresh === 'function') {
+        try {
+          await window.rcFastPostSaveRefresh(savedMark, 'Αποθηκεύτηκε η απόδειξη');
+          return true;
+        } catch(_) {
+          // fallback to manual refresh if helper fails
+        }
+      }
       let reloaded = false;
-      if (typeof window.partiallyReloadInvoiceTable === 'function') {
+      if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+        try { reloaded = !!(await window.FBP_REFRESH_LIST_FRAGMENT()); } catch(_) { reloaded = false; }
+      }
+      if (!reloaded && typeof window.partiallyReloadInvoiceTable === 'function') {
         try { reloaded = !!(await window.partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
       }
 
       // Fallback for repeat mode: force-refresh table fragment even if helper returns false.
       if (!reloaded) {
         try {
-          const tableRes = await fetch('/list/fragment', { method: 'GET', credentials: 'same-origin' });
+          const listFragmentUrl = '/list/fragment' + (window.location.search || '');
+          const tableRes = await fetch(listFragmentUrl, { method: 'GET', credentials: 'same-origin' });
           if (tableRes.ok) {
             const data = await tableRes.json().catch(() => null);
             const container = document.getElementById('summary-container');

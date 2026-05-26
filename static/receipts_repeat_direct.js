@@ -493,13 +493,28 @@
       if (modal) modal.style.display = 'none';
 
       var savedMark = String(mark || (summary && (summary.mark || summary.MARK || summary.number)) || '').trim();
+      if (savedMark) {
+        try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark; } catch(_) {}
+      }
+      if (typeof window.rcFastPostSaveRefresh === 'function') {
+        try {
+          await window.rcFastPostSaveRefresh(savedMark, 'Αποθηκεύτηκε η απόδειξη (repeat).');
+          return;
+        } catch(_) {
+          // fallback to manual refresh if helper fails
+        }
+      }
       var reloaded = false;
-      if (typeof window.partiallyReloadInvoiceTable === 'function') {
+      if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+        try { reloaded = !!(await window.FBP_REFRESH_LIST_FRAGMENT()); } catch(_) { reloaded = false; }
+      }
+      if (!reloaded && typeof window.partiallyReloadInvoiceTable === 'function') {
         try { reloaded = !!(await window.partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
       }
       if (!reloaded) {
         try {
-          var tableRes = await fetch('/list/fragment', { method: 'GET', credentials: 'same-origin' });
+          var listFragmentUrl = '/list/fragment' + (window.location.search || '');
+          var tableRes = await fetch(listFragmentUrl, { method: 'GET', credentials: 'same-origin' });
           if (tableRes.ok) {
             var data = await tableRes.json().catch(function(){ return null; });
             var container = document.getElementById('summary-container');

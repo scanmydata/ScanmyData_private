@@ -6,6 +6,7 @@
   .e3-section {
     margin-top: 2rem;
     margin-bottom: 2rem;
+  }
   .e3-section-title {
     font-size: 1rem;
     font-weight: 700;
@@ -15,9 +16,11 @@
     border: 1px solid #8fa2bc;
     border-radius: 0.125rem;
     margin-bottom: 0.55rem;
+  }
   [data-theme="dark"] .e3-section-title {
     background: #1e3a8a;
     color: #93c5fd;
+  }
 
   .e3-table {
     width: 100%;
@@ -107,6 +110,69 @@
     color: #dc2626;
     font-weight: 600;
   }
+
+  html[data-theme="dark"] .e3-section input,
+  html[data-theme="dark"] .e3-section select,
+  html[data-theme="dark"] .e3-section textarea,
+  html[data-theme="dark"] .bg-white input,
+  html[data-theme="dark"] .bg-white select,
+  html[data-theme="dark"] .bg-white textarea,
+  html[data-theme="dark"] .bg-slate-50 input,
+  html[data-theme="dark"] .bg-slate-50 select,
+  html[data-theme="dark"] .bg-slate-50 textarea,
+  body[data-theme="dark"] .e3-section input,
+  body[data-theme="dark"] .e3-section select,
+  body[data-theme="dark"] .e3-section textarea,
+  body[data-theme="dark"] .bg-white input,
+  body[data-theme="dark"] .bg-white select,
+  body[data-theme="dark"] .bg-white textarea,
+  body[data-theme="dark"] .bg-slate-50 input,
+  body[data-theme="dark"] .bg-slate-50 select,
+  body[data-theme="dark"] .bg-slate-50 textarea,
+  [data-theme="dark"] .e3-section input,
+  [data-theme="dark"] .e3-section select,
+  [data-theme="dark"] .e3-section textarea,
+  [data-theme="dark"] .bg-white input,
+  [data-theme="dark"] .bg-white select,
+  [data-theme="dark"] .bg-white textarea,
+  [data-theme="dark"] .bg-slate-50 input,
+  [data-theme="dark"] .bg-slate-50 select,
+  [data-theme="dark"] .bg-slate-50 textarea {
+    background: #111827 !important;
+    color: #f8fafc !important;
+    border-color: #374151 !important;
+  }
+
+  html[data-theme="dark"] .e3-section input::placeholder,
+  html[data-theme="dark"] .e3-section textarea::placeholder,
+  html[data-theme="dark"] .e3-section select::placeholder,
+  html[data-theme="dark"] .bg-white input::placeholder,
+  html[data-theme="dark"] .bg-white textarea::placeholder,
+  html[data-theme="dark"] .bg-white select::placeholder,
+  html[data-theme="dark"] .bg-slate-50 input::placeholder,
+  html[data-theme="dark"] .bg-slate-50 textarea::placeholder,
+  html[data-theme="dark"] .bg-slate-50 select::placeholder,
+  body[data-theme="dark"] .e3-section input::placeholder,
+  body[data-theme="dark"] .e3-section textarea::placeholder,
+  body[data-theme="dark"] .e3-section select::placeholder,
+  body[data-theme="dark"] .bg-white input::placeholder,
+  body[data-theme="dark"] .bg-white textarea::placeholder,
+  body[data-theme="dark"] .bg-white select::placeholder,
+  body[data-theme="dark"] .bg-slate-50 input::placeholder,
+  body[data-theme="dark"] .bg-slate-50 textarea::placeholder,
+  body[data-theme="dark"] .bg-slate-50 select::placeholder,
+  [data-theme="dark"] .e3-section input::placeholder,
+  [data-theme="dark"] .e3-section textarea::placeholder,
+  [data-theme="dark"] .e3-section select::placeholder,
+  [data-theme="dark"] .bg-white input::placeholder,
+  [data-theme="dark"] .bg-white textarea::placeholder,
+  [data-theme="dark"] .bg-white select::placeholder,
+  [data-theme="dark"] .bg-slate-50 input::placeholder,
+  [data-theme="dark"] .bg-slate-50 textarea::placeholder,
+  [data-theme="dark"] .bg-slate-50 select::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+  }
   [data-theme="dark"] .e3-table .diff-negative {
     color: #fca5a5;
   }
@@ -122,6 +188,41 @@
   .e3-table .total-row {
     background: #ecfdf5;
     font-weight: 600;
+  }
+  [data-theme="dark"] #e3DateFrom,
+  [data-theme="dark"] #e3DateTo,
+  [data-theme="dark"] #brainDateFrom,
+  [data-theme="dark"] #brainDateTo,
+  [data-theme="dark"] #brainAddress,
+  [data-theme="dark"] #brainAfm,
+  [data-theme="dark"] #brainName,
+  [data-theme="dark"] #brainTaxisUser,
+  [data-theme="dark"] #brainTaxisPass,
+  [data-theme="dark"] #brainMydataUser,
+  [data-theme="dark"] #brainMydataKey,
+  [data-theme="dark"] #brainAmka,
+  [data-theme="dark"] .brain-tab-button,
+  [data-theme="dark"] .brain-badge,
+  [data-theme="dark"] .brain-legal-type-notice {
+    background-color: #1f2937 !important;
+    color: #f8fafc !important;
+    border-color: #374151 !important;
+  }
+
+  [data-theme="dark"] #e3DateFrom::placeholder,
+  [data-theme="dark"] #e3DateTo::placeholder,
+  [data-theme="dark"] #brainDateFrom::placeholder,
+  [data-theme="dark"] #brainDateTo::placeholder,
+  [data-theme="dark"] #brainAddress::placeholder,
+  [data-theme="dark"] #brainAfm::placeholder,
+  [data-theme="dark"] #brainName::placeholder,
+  [data-theme="dark"] #brainTaxisUser::placeholder,
+  [data-theme="dark"] #brainTaxisPass::placeholder,
+  [data-theme="dark"] #brainMydataUser::placeholder,
+  [data-theme="dark"] #brainMydataKey::placeholder,
+  [data-theme="dark"] #brainAmka::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
   }
   [data-theme="dark"] .e3-table .total-row {
     background: #064e3b;
@@ -198,6 +299,125 @@
     flex-wrap: wrap;
   }
 
+  .brain-tab-button {
+    background: #e0f2fe;
+    color: #0c4a6e;
+    border: 1px solid #7dd3fc;
+    border-radius: 0.75rem;
+    padding: 0.6rem 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .brain-tab-button:hover,
+  .brain-tab-button:focus {
+    background: #bae6fd;
+  }
+
+  [data-theme="dark"] button.brain-tab-button {
+    background: #0f172a !important;
+    color: #bfdbfe !important;
+    border-color: #3b82f6 !important;
+  }
+  [data-theme="dark"] button.brain-tab-button:hover,
+  [data-theme="dark"] button.brain-tab-button:focus {
+    background: #1e3a8a !important;
+  }
+  [data-theme="dark"] .brain-tab-button.active {
+    background: #0ea5e9 !important;
+    color: white !important;
+    border-color: #0ea5e9 !important;
+  }
+
+  .brain-tab-button.active {
+    background: #0ea5e9;
+    color: white;
+    border-color: #0ea5e9;
+  }
+
+  .e3-action-button {
+    background: #0ea5e9;
+    color: white;
+    padding: 0.75rem 1.1rem;
+    border: 1px solid #0ea5e9;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: background 0.2s, transform 0.2s;
+  }
+  .e3-action-button:hover,
+  .e3-action-button:focus {
+    background: #0284c7;
+  }
+
+  [data-theme="dark"] .e3-action-button {
+    background: #38bdf8;
+    color: #0f172a;
+    border-color: #38bdf8;
+  }
+  [data-theme="dark"] .e3-action-button:hover,
+  [data-theme="dark"] .e3-action-button:focus {
+    background: #2db7e6;
+  }
+
+  [data-theme="dark"] .bg-sky-600 {
+    background-color: #075985 !important;
+  }
+  [data-theme="dark"] .bg-sky-600:hover,
+  [data-theme="dark"] .hover\:bg-sky-700:hover {
+    background-color: #0c4a6e !important;
+  }
+
+  .brain-tab-panel {
+    display: block;
+  }
+
+  .brain-tab-panel.hidden,
+  .hidden {
+    display: none !important;
+  }
+
+  .brain-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #ecfdf5;
+    color: #166534;
+    border: 1px solid #a7f3d0;
+    border-radius: 9999px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+
+  [data-theme="dark"] .brain-badge {
+    background: #065f46;
+    color: #f8fafc;
+    border-color: #134e4a;
+  }
+
+  .brain-legal-type-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #d1fae5;
+    color: #065f46;
+    border: 1px solid #6ee7b7;
+    border-radius: 9999px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  [data-theme="dark"] .brain-legal-type-notice {
+    background: #064e3b;
+    color: #d1fae5;
+    border-color: #0f766e;
+  }
+
   .e3-file-input {
     display: inline-block;
   }
@@ -222,8 +442,90 @@
     background: #10b981;
   }
 
+  .e3-action-dropdown {
+    position: relative;
+    display: inline-block;
+  }
+
+  button.e3-action-button {
+    background: #0ea5e9 !important;
+    color: #ffffff !important;
+    padding: 0.75rem 1.1rem;
+    border: 1px solid #0ea5e9 !important;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: background 0.2s, transform 0.2s;
+  }
+  button.e3-action-button:hover,
+  button.e3-action-button:focus {
+    background: #0284c7 !important;
+  }
+
+  [data-theme="dark"] button.e3-action-button {
+    background: #0ea5e9 !important;
+    color: #ffffff !important;
+    border-color: #0ea5e9 !important;
+  }
+  [data-theme="dark"] button.e3-action-button:hover,
+  [data-theme="dark"] button.e3-action-button:focus {
+    background: #0284c7 !important;
+  }
+
+  .e3-action-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.5rem);
+    min-width: 240px;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 0.75rem;
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.15);
+    overflow: hidden;
+    display: none;
+    z-index: 100;
+  }
+  [data-theme="dark"] .e3-action-menu {
+    background: #111827;
+    border-color: #374151;
+  }
+  .e3-action-dropdown:hover .e3-action-menu,
+  .e3-action-dropdown:focus-within .e3-action-menu {
+    display: block;
+  }
+
+  .e3-action-item {
+    width: 100%;
+    background: transparent;
+    color: #1f2937;
+    border: none;
+    text-align: left;
+    padding: 0.9rem 1rem;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: background 0.15s;
+  }
+  .e3-action-item:hover,
+  .e3-action-item:focus {
+    background: #f3f4f6;
+  }
+
+  [data-theme="dark"] .e3-action-menu {
+    background: #111827;
+    border-color: #374151;
+  }
+  [data-theme="dark"] .e3-action-item {
+    color: #f8fafc;
+  }
+  [data-theme="dark"] .e3-action-item:hover,
+  [data-theme="dark"] .e3-action-item:focus {
+    background: #1f2937;
+  }
+
   .e3-info-box {
-    background: #fef3c7;
     color: #92400e;
     padding: 1rem;
     border-radius: 0.375rem;
@@ -285,6 +587,24 @@
   }
   .e3-hidden {
     display: none !important;
+  }
+
+  [data-theme="dark"] .e3-unclassified-card,
+  [data-theme="dark"] .e3-unclassified-list,
+  [data-theme="dark"] .e3-unclassified-item,
+  [data-theme="dark"] #e3Credential,
+  [data-theme="dark"] #e3CredentialLocked,
+  [data-theme="dark"] #e3DateFrom,
+  [data-theme="dark"] #e3DateTo,
+  [data-theme="dark"] select,
+  [data-theme="dark"] input {
+    color: #f9fafb !important;
+    background-color: #1f2937 !important;
+    border-color: #4b5563 !important;
+  }
+  [data-theme="dark"] select option,
+  [data-theme="dark"] input::placeholder {
+    color: #f3f4f6 !important;
   }
 
   #waitOverlay {
@@ -350,6 +670,12 @@
   </div>
   {% endif %}
 
+  <div class="flex flex-wrap gap-2 mb-4">
+    <button id="quickCheckTabBtn" type="button" class="brain-tab-button active">Γρήγορος Έλεγχος</button>
+    <button id="analyticTabBtn" type="button" class="brain-tab-button">Αναλυτικός</button>
+  </div>
+
+  <div id="quickCheckTab">
   <!-- Credentials & Period Selection -->
   <div class="bg-white dark:bg-gray-800 rounded-lg p-6 mb-6 shadow">
     <h2 class="text-lg font-semibold text-gray-800 dark:text-white mb-4">Επιλογή Πελάτη & Περιόδου</h2>
@@ -398,12 +724,20 @@
       </div>
 
       <div class="flex flex-wrap gap-3 mb-2 items-center">
-        <button type="button" id="loadE3Btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition">
-          🔄 Φόρτωση E3 Δεδομένων
-        </button>
-        <button type="button" id="loadExcelBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition">
-          📊 Φόρτωση Excel Λογιστικών
-        </button>
+        <div class="e3-action-dropdown" tabindex="0">
+          <button type="button" id="e3ActionMenuBtn" class="e3-action-button">
+            📋 Δεδομένα E3
+            <span aria-hidden="true">▾</span>
+          </button>
+          <div class="e3-action-menu" role="menu" aria-label="Επιλογές δεδομένων E3">
+            <button type="button" id="loadE3Btn" class="e3-action-item" role="menuitem">
+              📥 myDATA
+            </button>
+            <button type="button" id="loadExcelBtn" class="e3-action-item" role="menuitem">
+              📤 Μεταφόρτωση Ισοζυγίου
+            </button>
+          </div>
+        </div>
         <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;" />
       </div>
     </form>
@@ -423,7 +757,6 @@
       </div>
     </div>
 
-    <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;">
   </div>
 
   <!-- E3 Data Display (hidden until data loaded) -->
@@ -490,9 +823,9 @@
       </table>
     </div>
 
-    <!-- Table Ζ Section -->
-    <div class="e3-section">
-      <div class="e3-section-title">📋 Πίνακας Ζ (Ζ1, Ζ2, Ζ3)</div>
+    <!-- Table Ζ3 Section -->
+    <div id="tableZSection" class="e3-section" style="display:none;">
+      <div class="e3-section-title">📋 Πίνακας Ζ3</div>
       <table class="e3-table">
         <thead>
           <tr>
@@ -509,66 +842,198 @@
       </table>
     </div>
   </div>
+</div>
 
+  <div id="analyticTab" class="hidden">
   <!-- E3 Brain Controls -->
   <div class="bg-white dark:bg-gray-800 rounded-lg p-6 mb-6 shadow">
     <h2 class="text-lg font-semibold text-gray-800 dark:text-white mb-4">E3 Brain (Beta)</h2>
     <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">
-      Single πελάτης ή bulk εισαγωγή από Excel (π.χ. ΤΕΣΤ_ΚΩΔΙΚΟΙ.xlsx).
+      Επιλέξτε τη ροή της σελίδας: Ατομικός έλεγχος ή Μαζικός έλεγχος.
     </p>
 
-    <!-- Credentials Store Panel -->
-    <div class="mb-6">
-      <div class="flex flex-wrap gap-2 items-center mb-2">
-        <span class="font-semibold text-gray-700 dark:text-gray-200">Αποθηκευμένα Credentials Ομάδας</span>
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button id="brainTabSingleBtn" type="button" class="brain-tab-button active">Ατομικός</button>
+      <button id="brainTabBulkBtn" type="button" class="brain-tab-button">Μαζικός</button>
+      <button id="brainTabSavedBtn" type="button" class="brain-tab-button">Αποθηκευμένα</button>
+    </div>
+
+    <div id="brainTabSingle" class="brain-tab-panel">
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Επιλογή πελάτη ενεργής ομάδας</label>
+        <select id="brainActiveClientSelect" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+          <option value="">-- Επίλεξε πελάτη --</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ημερομηνία Από</label>
+            <input type="text" id="brainDateFrom" placeholder="dd/mm/yyyy"
+              class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Ημερομηνία Έως</label>
+            <input type="text" id="brainDateTo" placeholder="dd/mm/yyyy"
+              class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-3 items-center">
+          <input id="brainExcelFile" type="file" accept=".xlsx,.xls" class="hidden" />
+          <span id="brainLoadingNote" class="text-sm text-gray-500 dark:text-gray-400">Το beta Brain μπορεί τώρα να φορτώσει E3 και Excel απευθείας.</span>
+        </div>
+      </div>
+      <div id="brainE3Status" class="mb-3 text-sm text-gray-600 dark:text-gray-300"></div>
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <span id="brainSingleTypeHint" class="text-sm text-gray-500 dark:text-gray-400"></span>
+        <span id="brainLegalTypeNotice" class="brain-legal-type-notice hidden"></span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ΑΦΜ</label>
+          <input id="brainAfm" type="text" maxlength="9" placeholder="ΑΦΜ"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+          <div id="brainAfmStatus" class="mt-2 hidden rounded-lg px-3 py-2 text-sm"></div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Επωνυμία</label>
+          <input id="brainName" type="text" placeholder="Επωνυμία"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Διεύθυνση έδρας</label>
+          <input id="brainAddress" type="text" placeholder="Διεύθυνση έδρας"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+          <button id="brainFetchAddressBtn" type="button" class="mt-2 bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm font-medium">
+            Ανάκτηση διεύθυνσης
+          </button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">TAXISnet username</label>
+          <input id="brainTaxisUser" type="text" placeholder="TAXISnet username"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">TAXISnet password</label>
+          <input id="brainTaxisPass" type="password" placeholder="TAXISnet password"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+        <div id="brainAmkaWrapper" class="w-full hidden">
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ΑΜΚΑ</label>
+          <input id="brainAmka" type="text" placeholder="ΑΜΚΑ"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">myDATA user</label>
+          <input id="brainMydataUser" type="text" placeholder="myDATA user (aade-user-id)"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">myDATA subscription key</label>
+          <input id="brainMydataKey" type="text" placeholder="myDATA subscription key"
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-3 items-center mb-4">
+        <div class="e3-action-dropdown" tabindex="0">
+          <button type="button" id="brainE3ActionMenuBtn" class="e3-action-button">
+            📋 Δεδομένα E3
+            <span aria-hidden="true">▾</span>
+          </button>
+          <div class="e3-action-menu" role="menu" aria-label="Επιλογές δεδομένων E3">
+            <button type="button" id="brainLoadE3Btn" class="e3-action-item" role="menuitem">
+              📥 myDATA
+            </button>
+            <button type="button" id="brainLoadExcelBtn" class="e3-action-item" role="menuitem">
+              📤 Μεταφόρτωση Ισοζυγίου
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input id="brainRunEfkaTeka" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+          ΕΦΚΑ/ΤΕΚΑ
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input id="brainRunMisth" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+          Μισθωτήρια
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input id="brainRunE9" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+          Ε9
+        </label>
+      </div>
+      <div class="flex flex-wrap gap-3 items-center mb-3">
+        <span id="brainPartnerStatus" class="hidden text-sm text-gray-600 dark:text-gray-300"></span>
+      </div>
+      <div id="brainPartnerFields" class="space-y-4 mb-4 hidden"></div>
+      <div class="flex flex-wrap gap-3 items-center mb-3">
+        <button id="brainRunSingleBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          Εκτέλεση ελέγχου/ελέγχων
+        </button>
+        <button id="brainSaveCredentialsBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          Αποθήκευση Credentials Ομάδας
+        </button>
+      </div>
+    </div>
+
+    <div id="brainTabBulk" class="brain-tab-panel hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <input id="brainYearBulk" type="number" min="2017" max="2100" placeholder="Έτος"
+          class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+        <div class="grid grid-cols-1 gap-2">
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainRunEfkaTekaBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+            ΕΦΚΑ/ΤΕΚΑ
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainRunMisthBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+            Μισθωτήρια
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainRunE9Bulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+            Ε9
+          </label>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-3 items-center mb-4">
+        <button id="brainBulkPickBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          Επιλογή Excel κωδικών
+        </button>
+        <span id="brainBulkFileLabel" class="text-sm text-gray-600 dark:text-gray-300">Δεν έχει επιλεγεί αρχείο</span>
+        <input id="brainBulkFile" type="file" accept=".xlsx,.xls" class="hidden" />
+      </div>
+      <div id="brainBulkPreview" class="mb-4 hidden">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainBulkSelectAll" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            Επιλογή όλων
+          </label>
+          <span id="brainBulkPreviewCount" class="text-sm text-gray-600 dark:text-gray-300"></span>
+        </div>
+        <div id="brainBulkPreviewTable" class="overflow-x-auto"></div>
+      </div>
+      <div class="flex flex-wrap gap-3 items-center mb-2">
+        <button id="brainRunSelectedBulkBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          Εκτέλεση επιλεγμένων ελέγχων
+        </button>
+      </div>
+    </div>
+
+    <div id="brainTabSaved" class="brain-tab-panel hidden">
+      <div class="mb-4 flex flex-wrap items-center gap-3">
         <button id="brainFetchCredsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded-lg text-sm font-medium transition">Ανανέωση/Προβολή</button>
+        <span class="text-sm text-gray-500 dark:text-gray-400">Προβολή αποθηκευμένων credentials ομάδας</span>
       </div>
       <div id="brainCredsList" class="overflow-x-auto w-full max-w-full"></div>
     </div>
 
-
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-          <input id="brainAfm" type="text" maxlength="9" placeholder="ΑΦΜ"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainName" type="text" placeholder="Επωνυμία"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainYear" type="number" min="2017" max="2100" placeholder="Έτος"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainAddress" type="text" placeholder="Διεύθυνση έδρας"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-          <input id="brainTaxisUser" type="text" placeholder="TAXISnet username"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainTaxisPass" type="password" placeholder="TAXISnet password"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainAmka" type="text" placeholder="ΑΜΚΑ"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-          <input id="brainMydataUser" type="text" placeholder="myDATA user (aade-user-id)"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <input id="brainMydataKey" type="text" placeholder="myDATA subscription key"
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-        </div>
-        <div class="flex flex-wrap gap-3 items-center mb-2">
-          <button id="brainRunSingleBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition">
-       Εκτέλεση Single Brain
-          </button>
-          <button id="brainBulkPickBtn" type="button" class="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition">
-       Bulk από Excel
-          </button>
-          <button id="brainSaveCredentialsBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition">
-       Αποθήκευση Credentials Ομάδας
-          </button>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-       <input id="brainRunExtractors" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-       Εκτέλεση EFKA/TEKA/misth/E9 extractors
-          </label>
-          <input id="brainBulkFile" type="file" accept=".xlsx,.xls" class="hidden" />
-        </div>
-
-    <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto" style="max-height: 340px;"></pre>
+    <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto hidden" style="max-height: 340px;display:none;"></pre>
   </div>
 
   <!-- Status Area -->
@@ -592,76 +1057,357 @@
   let E3_OVERLAY_TIMEOUT = null;
   let E3_BRAIN_LAST_RESULT = null;
   let E3_BRAIN_CREDS_CACHE = [];
+  let E3_BRAIN_ACTIVE_CLIENTS = [];
+  let E3_BRAIN_MEMBERS = [];
+  let E3_BRAIN_MEMBER_CREDS = {};
+  let E3_BRAIN_PREVIEW_CLIENTS = [];
+
+  function showBrainFlash(message, type = 'info', ttl = 5000) {
+    if (!message) return;
+    const kind = (type === 'error' || type === 'danger') ? 'error' : (type === 'warning' ? 'warning' : (type === 'info' ? 'info' : 'success'));
+    if (typeof showStandardFetchFlash === 'function') {
+      showStandardFetchFlash(message, kind, ttl, `brainFlashMessage-${Date.now()}`, {});
+      return;
+    }
+    let container = null;
+    if (typeof ensureFlashContainer === 'function') {
+      container = ensureFlashContainer();
+    }
+    if (!container) {
+      container = document.getElementById('flashContainer');
+    }
+    if (!container) {
+      try {
+        container = document.createElement('div');
+        container.id = 'flashContainer';
+        container.className = 'space-y-2 mb-4';
+        container.style.position = 'fixed';
+        container.style.top = 'calc(env(safe-area-inset-top, 0px) + 8.75rem)';
+        container.style.right = '1rem';
+        container.style.zIndex = '100120';
+        container.style.width = 'min(92vw, 380px)';
+        container.style.margin = '0';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '0.5rem';
+        container.style.pointerEvents = 'none';
+        document.body.appendChild(container);
+      } catch (_) {
+        container = document.body;
+      }
+    }
+    const id = `brainFlashMessage-${Date.now()}`;
+    const el = document.createElement('div');
+    el.id = id;
+    el.className = `flash-banner flash-${kind}`;
+    el.setAttribute('data-flash', '');
+    el.setAttribute('data-ttl', '5000');
+    const textNode = document.createElement('span');
+    textNode.textContent = message;
+    textNode.style.flex = '1 1 auto';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '×';
+    closeBtn.style.background = 'transparent';
+    closeBtn.style.border = '0';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.style.fontSize = '20px';
+    closeBtn.style.lineHeight = '1';
+    closeBtn.style.opacity = '0.75';
+    closeBtn.style.marginLeft = '0.75rem';
+    closeBtn.style.pointerEvents = 'auto';
+    closeBtn.addEventListener('click', () => el.remove());
+    el.style.pointerEvents = 'auto';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'space-between';
+    el.style.gap = '0.75rem';
+    el.append(textNode, closeBtn);
+    container.prepend(el);
+    setTimeout(() => el.remove(), 5000);
+  }
+
+  function showBrainAfmStatus(message, type = 'info', ttl = 5000) {
+    const inlineStatus = document.getElementById('brainAfmStatus');
+    if (inlineStatus) {
+      inlineStatus.className = 'hidden';
+      inlineStatus.textContent = '';
+    }
+    const status = document.getElementById('e3Status');
+    if (status) {
+      status.textContent = '';
+      status.className = 'mt-6 text-gray-600 dark:text-gray-400 text-sm';
+    }
+    showBrainFlash(message, type, ttl);
+  }
+
+  function clearBrainAfmStatus() {
+    showBrainAfmStatus('', 'info');
+  }
+
+  function syncTopCredentialToBrain() {
+    const topSelect = document.getElementById('e3Credential') || document.getElementById('e3CredentialLocked');
+    if (!topSelect) return;
+    const selected = topSelect.options[topSelect.selectedIndex];
+    if (!selected || !selected.value) return;
+    const text = selected.textContent || '';
+    const match = text.match(/^(.*) \((\d{9})\)$/);
+    const afm = match ? match[2] : '';
+    const name = match ? match[1].trim() : text.trim();
+    const afmEl = document.getElementById('brainAfm');
+    const nameEl = document.getElementById('brainName');
+    if (afmEl && afm) afmEl.value = afm;
+    if (nameEl && name) nameEl.value = name;
+    clearBrainSingleTypeHint();
+  }
+
   async function fetchE3BrainCredentials() {
     const listDiv = document.getElementById('brainCredsList');
-    listDiv.innerHTML = '<span class="text-gray-500">Φόρτωση...</span>';
+    if (listDiv) listDiv.innerHTML = '<span class="text-gray-500">Φόρτωση...</span>';
     try {
       const resp = await fetch('/api/e3/brain/credentials_store');
       const data = await resp.json();
       if (!data.ok) throw new Error(data.error || 'Σφάλμα ανάκτησης credentials');
       E3_BRAIN_CREDS_CACHE = Array.isArray(data.companies) ? data.companies : [];
       renderBrainCredsList();
+      renderBrainActiveClientSelect();
+      if (data.message) {
+        showBrainFlash(data.message, 'success');
+      }
     } catch (e) {
-      listDiv.innerHTML = `<span class="text-red-600">Σφάλμα: ${e.message}</span>`;
+      if (listDiv) listDiv.innerHTML = `<span class="text-red-600">Σφάλμα: ${e.message}</span>`;
+      showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     }
   }
 
-  function renderBrainCredsList() {
-    const listDiv = document.getElementById('brainCredsList');
-    if (!E3_BRAIN_CREDS_CACHE.length) {
-      listDiv.innerHTML = '<span class="text-gray-400">Δεν υπάρχουν αποθηκευμένα credentials.</span>';
+  async function fetchE3BrainActiveClients() {
+    try {
+      const resp = await fetch('/api/e3/brain/active_group_clients');
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || 'Σφάλμα ανάκτησης πελατών ενεργής ομάδας');
+      E3_BRAIN_ACTIVE_CLIENTS = Array.isArray(data.clients) ? data.clients : [];
+      renderBrainActiveClientSelect();
+      if (data.message) {
+        showBrainFlash(data.message, 'success');
+      }
+      if (!E3_BRAIN_ACTIVE_CLIENTS.length) {
+        showBrainAfmStatus('Δεν βρέθηκαν πελάτες ενεργής ομάδας.', 'error');
+      }
+    } catch (e) {
+      showBrainAfmStatus(`Σφάλμα φόρτωσης ενεργής ομάδας: ${e.message}`, 'error');
+    }
+  }
+
+  function bindBrainActiveClientSelect() {
+    const select = document.getElementById('brainActiveClientSelect');
+    if (!select) return;
+    if (select.dataset.boundActiveClient === '1') return;
+    select.dataset.boundActiveClient = '1';
+    select.addEventListener('change', onBrainActiveClientSelectChange);
+  }
+
+  function renderBrainActiveClientSelect() {
+    const select = document.getElementById('brainActiveClientSelect');
+    if (!select) return;
+    const currentAfm = select.options[select.selectedIndex] ? select.options[select.selectedIndex].value : '';
+    select.innerHTML = '<option value="">-- Επίλεξε πελάτη --</option>';
+    E3_BRAIN_ACTIVE_CLIENTS.forEach((client) => {
+      const afm = String(client.afm || '').trim();
+      const label = `${afm || '---'} — ${client.name || 'Άγνωστη εταιρεία'}`;
+      const option = document.createElement('option');
+      option.value = afm;
+      option.textContent = label;
+      select.appendChild(option);
+    });
+    if (currentAfm) {
+      select.value = currentAfm;
+      if (!select.value) select.selectedIndex = 0;
+    }
+    bindBrainActiveClientSelect();
+  }
+
+  function normalizeTextField(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'object') {
+      if (Array.isArray(value)) return value.filter(Boolean).join(' ').trim();
+      if (value.name) return String(value.name).trim();
+      return Object.values(value).filter((v) => v !== null && v !== undefined && String(v).trim()).join(' ').trim();
+    }
+    return String(value).trim();
+  }
+
+  function normalizeLegalType(value) {
+    const raw = normalizeTextField(value);
+    return raw || '';
+  }
+
+  function applyBrainSingleLegalType(legalType, isIndividual) {
+    const hint = document.getElementById('brainSingleTypeHint');
+    const notice = document.getElementById('brainLegalTypeNotice');
+    if (!hint || !notice) return;
+    const normalizedType = normalizeLegalType(legalType) || (isIndividual ? 'Ατομική επιχείρηση' : 'Εταιρεία');
+    const companyLabel = isIndividual ? 'Ατομική επιχείρηση' : 'Εταιρεία';
+    const noticeLabel = isIndividual ? companyLabel : (normalizedType && normalizedType !== companyLabel ? `${companyLabel} ${normalizedType}` : companyLabel);
+
+    notice.textContent = noticeLabel;
+    notice.classList.remove('hidden');
+
+    if (isIndividual) {
+      hint.textContent = 'Ατομική επιχείρηση: συμπλήρωσε TAXISnet και ΑΜΚΑ.';
+    } else {
+      hint.textContent = 'Συμπλήρωσε τους κωδικούς TAXISnet και τα στοιχεία των μελών παρακάτω.';
+    }
+    updateBrainAmkaVisibility(isIndividual);
+  }
+
+  function updateBrainAmkaVisibility(isIndividual) {
+    const amkaWrapper = document.getElementById('brainAmkaWrapper');
+    const amkaEl = document.getElementById('brainAmka');
+    if (!amkaWrapper || !amkaEl) return;
+    if (isIndividual) {
+      amkaWrapper.classList.remove('hidden');
+      amkaEl.placeholder = 'ΑΜΚΑ';
+      amkaEl.disabled = false;
+    } else {
+      amkaWrapper.classList.add('hidden');
+      amkaEl.value = '';
+      amkaEl.disabled = true;
+    }
+  }
+
+  function clearBrainSingleTypeHint() {
+    const hint = document.getElementById('brainSingleTypeHint');
+    const notice = document.getElementById('brainLegalTypeNotice');
+    if (hint) hint.textContent = '';
+    if (notice) {
+      notice.textContent = '';
+      notice.classList.add('hidden');
+    }
+  }
+
+  function fillBrainSingleClientFromSaved(client) {
+    if (!client) return;
+    const afmEl = document.getElementById('brainAfm');
+    const nameEl = document.getElementById('brainName');
+    const addrEl = document.getElementById('brainAddress');
+    const userEl = document.getElementById('brainTaxisUser');
+    const passEl = document.getElementById('brainTaxisPass');
+    const amkaEl = document.getElementById('brainAmka');
+    const mdUserEl = document.getElementById('brainMydataUser');
+    const mdKeyEl = document.getElementById('brainMydataKey');
+
+    if (afmEl) afmEl.value = client.afm || '';
+    if (nameEl) nameEl.value = client.name || '';
+    if (addrEl && client.address) addrEl.value = client.address;
+    if (userEl) userEl.value = client.taxisnet_username || client.username || '';
+    if (passEl) passEl.value = client.taxisnet_password || client.password || '';
+    if (amkaEl) amkaEl.value = client.amka || '';
+    if (mdUserEl) mdUserEl.value = client.mydata_user || client.user || '';
+    if (mdKeyEl) mdKeyEl.value = client.mydata_key || client.key || '';
+    clearBrainSingleTypeHint();
+  }
+
+  function onBrainActiveClientSelectChange() {
+    const select = document.getElementById('brainActiveClientSelect');
+    if (!select) return;
+    const afm = String(select.value || '').trim();
+    if (!afm) {
+      clearBrainSingleTypeHint();
       return;
     }
-    let html = '<table class="min-w-full text-xs"><thead><tr>' +
-      '<th class="px-2 py-1">ΑΦΜ</th><th class="px-2 py-1">Επωνυμία</th><th class="px-2 py-1">TAXIS user</th><th class="px-2 py-1">myDATA user</th><th class="px-2 py-1">Ενέργειες</th></tr></thead><tbody>';
-    for (const cred of E3_BRAIN_CREDS_CACHE) {
-      const c = cred.company || {};
-      html += `<tr>` +
-        `<td class="border px-2 py-1">${c.afm || ''}</td>` +
-        `<td class="border px-2 py-1">${c.name || ''}</td>` +
-        `<td class="border px-2 py-1">${c.taxisnet_username || ''}</td>` +
-        `<td class="border px-2 py-1">${c.mydata_user || ''}</td>` +
-        `<td class="border px-2 py-1 flex gap-1">` +
-          `<button class="bg-amber-600 hover:bg-amber-700 text-white rounded px-2 py-1 text-xs font-medium" onclick="editBrainCred('${c.afm || ''}')">Επεξεργασία</button>` +
-          `<button class="bg-red-600 hover:bg-red-700 text-white rounded px-2 py-1 text-xs font-medium" onclick="deleteBrainCred('${c.afm || ''}')">Διαγραφή</button>` +
-        `</td>` +
-        `</tr>`;
+    const client = E3_BRAIN_ACTIVE_CLIENTS.find((c) => String(c.afm || '').trim() === afm);
+    if (!client) {
+      clearBrainSingleTypeHint();
+      return;
     }
-    html += '</tbody></table>';
-    listDiv.innerHTML = html;
+    fillBrainSingleClientFromSaved(client);
+  }
 
-    // Modal for editing
-    if (!document.getElementById('brainCredEditModal')) {
-      const modal = document.createElement('div');
-      modal.id = 'brainCredEditModal';
-      modal.style.display = 'none';
-      modal.innerHTML = `
-        <div style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
-          <div style="background:#fff;padding:2rem;border-radius:0.5rem;min-width:340px;max-width:98vw;box-shadow:0 8px 32px #0002;">
-            <h3 class="text-lg font-semibold mb-2">Επεξεργασία Credentials</h3>
-            <form id="brainCredEditForm">
-              <div class="mb-2"><label>ΑΦΜ <input id="editAfm" name="afm" class="border rounded px-2 py-1 w-full" readonly></label></div>
-              <div class="mb-2"><label>Επωνυμία <input id="editName" name="name" class="border rounded px-2 py-1 w-full"></label></div>
-              <div class="mb-2"><label>TAXIS user <input id="editTaxisUser" name="taxisnet_username" class="border rounded px-2 py-1 w-full"></label></div>
-              <div class="mb-2"><label>TAXIS pass <input id="editTaxisPass" name="taxisnet_password" class="border rounded px-2 py-1 w-full" type="password"></label></div>
-              <div class="mb-2"><label>AMKA <input id="editAmka" name="amka" class="border rounded px-2 py-1 w-full"></label></div>
-              <div class="mb-2"><label>myDATA user <input id="editMydataUser" name="mydata_user" class="border rounded px-2 py-1 w-full"></label></div>
-              <div class="mb-2"><label>myDATA key <input id="editMydataKey" name="mydata_key" class="border rounded px-2 py-1 w-full"></label></div>
-              <div class="flex gap-2 mt-4">
-                <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-3 py-1 font-medium">Αποθήκευση</button>
-                <button type="button" id="brainCredEditCancel" class="bg-gray-400 hover:bg-gray-500 text-white rounded px-3 py-1 font-medium">Άκυρο</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      `;
-      document.body.appendChild(modal);
-      document.getElementById('brainCredEditCancel').onclick = () => { modal.style.display = 'none'; };
-      document.getElementById('brainCredEditForm').onsubmit = async function(ev) {
-        ev.preventDefault();
-        await saveBrainCredEdit();
-      };
+  async function loadE3Partners() {
+    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+    const partnerContainer = document.getElementById('brainPartnerFields');
+    if (!afm || afm.length !== 9) {
+      showBrainAfmStatus('Δώσε έγκυρο ΑΦΜ 9 ψηφίων για να ανακτηθεί η έδρα.', 'error');
+      return;
     }
+    showBrainAfmStatus('Αναμονή λήψης διεύθυνσης και νομικής μορφής...', 'info', 0);
+    try {
+      const resp = await fetch('/api/e3/brain/company_members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ afm })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        throw new Error((data && data.error) || 'Αποτυχία φόρτωσης εταιρικών στοιχείων.');
+      }
+      const company = data.company || {};
+      const summary = (data.summary && typeof data.summary === 'object') ? data.summary : {};
+      const legalType = summary.legal_type || company.legal_type || '';
+      const isIndividual = Boolean(data.is_individual);
+      applyBrainSingleLegalType(legalType, isIndividual);
+      const addrEl = document.getElementById('brainAddress');
+      const addressParts = [company.street, company.streetNumber, company.city, company.zipCode].filter(Boolean).map(String);
+      if (addrEl) {
+        addrEl.value = addressParts.length ? addressParts.join(' ').trim() : String(company.headquarter_address || company.address || '').trim();
+      }
+      const amkaEl = document.getElementById('brainAmka');
+      const amkaWrapper = document.getElementById('brainAmkaWrapper');
+      updateBrainAmkaVisibility(isIndividual);
+      E3_BRAIN_MEMBERS = Array.isArray(data.members) ? data.members : [];
+      E3_BRAIN_MEMBER_CREDS = {};
+      renderBrainPartnerFields();
+      const partnerMessage = E3_BRAIN_MEMBERS.length
+        ? `Βρέθηκαν ${E3_BRAIN_MEMBERS.length} ενεργοί εταίροι/ιδιοκτήτες. Συμπλήρωσε τα πεδία.`
+        : (isIndividual ? 'Ατομική επιχείρηση: συμπλήρωσε TAXISnet και ΑΜΚΑ.' : 'Δεν βρέθηκαν ενεργοί εταίροι/ιδιοκτήτες για αυτή την εταιρεία.');
+      const companyMessage = data.message || `Η διεύθυνση και η νομική μορφή ανακτήθηκαν. ${partnerMessage}`;
+      showBrainAfmStatus(companyMessage, E3_BRAIN_MEMBERS.length ? 'success' : (isIndividual ? 'info' : 'warning'));
+    } catch (e) {
+      if (partnerContainer) partnerContainer.classList.add('hidden');
+      showBrainAfmStatus(`Σφάλμα: ${e.message}`, 'error');
+    }
+  }
+
+  function renderBrainPartnerFields() {
+    const partnerContainer = document.getElementById('brainPartnerFields');
+    if (!partnerContainer) return;
+    if (!E3_BRAIN_MEMBERS.length) {
+      partnerContainer.innerHTML = '';
+      partnerContainer.classList.add('hidden');
+      return;
+    }
+    partnerContainer.classList.remove('hidden');
+    let html = '<div class="grid gap-4">';
+    E3_BRAIN_MEMBERS.forEach((member) => {
+      const afm = String(member.afm || '—').trim();
+      const memberName = normalizeTextField(member.name) || '—';
+      const role = normalizeTextField(member.role) || '—';
+      const creds = E3_BRAIN_MEMBER_CREDS[afm] || {};
+      html += '<div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 shadow-sm">';
+      html += '<div class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Στοιχεία συνεργάτη / ιδιοκτήτη</div>';
+      html += '<div class="grid grid-cols-1 xl:grid-cols-3 gap-3 mb-4">';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">ΑΦΜ</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + afm + '</div></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">Επωνυμία</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + memberName + '</div></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">Ρόλος</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + role + '</div></div>';
+      html += '</div>';
+      html += '<div class="grid grid-cols-1 xl:grid-cols-3 gap-3">';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS user</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.taxisnet_username || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'taxisnet_username\', this.value)" /></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS pass</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" type="password" value="' + (creds.taxisnet_password || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'taxisnet_password\', this.value)" /></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">AMKA</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.amka || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'amka\', this.value)" /></div>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    partnerContainer.innerHTML = html;
+  }
+
+  function updateBrainMemberCred(afm, field, value) {
+    if (!afm) return;
+    if (!E3_BRAIN_MEMBER_CREDS[afm]) {
+      E3_BRAIN_MEMBER_CREDS[afm] = { taxisnet_username: '', taxisnet_password: '', amka: '' };
+    }
+    E3_BRAIN_MEMBER_CREDS[afm][field] = String(value || '').trim();
   }
 
   function editBrainCred(afm) {
@@ -875,11 +1621,10 @@
     const dateTo = document.getElementById('e3DateTo').value;
 
     if (!credential || !dateFrom || !dateTo) {
-      alert('Παρακαλώ συμπληρώστε όλα τα πεδία');
+      showBrainFlash('Παρακαλώ συμπληρώστε όλα τα πεδία', 'error');
       return;
     }
 
-    // Cancel any previous pending request
     if (E3_FETCH_CONTROLLER) { try { E3_FETCH_CONTROLLER.abort(); } catch (_) {} }
     E3_FETCH_CONTROLLER = new AbortController();
 
@@ -888,7 +1633,7 @@
     if (btn) btn.disabled = true;
 
     const status = document.getElementById('e3Status');
-    status.textContent = 'Φόρτωση δεδομένων...';
+    if (status) status.textContent = 'Φόρτωση δεδομένων...';
 
     showGlobalWaitOverlay('Φόρτωση δεδομένων E3...', 'Παρακαλώ περιμένετε - γίνεται λήψη και επεξεργασία δεδομένων.');
 
@@ -909,17 +1654,132 @@
       populateE3Tables(data);
       populateUnclassifiedSummary(data);
       document.getElementById('e3DataContainer').style.display = 'block';
-      status.innerHTML = '✅ Δεδομένα φορτωμένα';
+      showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
+      if (status) status.textContent = '';
     } catch (err) {
       if (err.name === 'AbortError') {
-        status.textContent = '';
+        if (status) status.textContent = '';
       } else {
-        status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+        showBrainFlash(`❌ Σφάλμα: ${err.message}`, 'error');
+        if (status) status.textContent = '';
       }
     } finally {
       hideGlobalWaitOverlay();
       E3_LOADING = false;
       if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadBrainE3Data() {
+    if (E3_LOADING) return;
+
+    const activeClientSelect = document.getElementById('brainActiveClientSelect');
+    const selectedAfm = activeClientSelect ? String(activeClientSelect.value || '').trim() : '';
+    let credential = '';
+
+    if (selectedAfm) {
+      const matchingClient = E3_BRAIN_ACTIVE_CLIENTS.find(c => String(c.afm || '').trim() === selectedAfm);
+      if (matchingClient) {
+        credential = String(matchingClient.name || '').trim();
+      }
+      if (!credential) {
+        const matchingCred = E3_BRAIN_CREDS_CACHE.find(c => String((c.company || {}).afm || '').trim() === selectedAfm || String(c.afm || '').trim() === selectedAfm);
+        if (matchingCred) {
+          credential = String(matchingCred.name || '').trim();
+        }
+      }
+    }
+
+    if (!credential) {
+      const credentialSelect = document.querySelector('#brainCredential, #brainCredentialLocked, #e3Credential, #e3CredentialLocked');
+      credential = credentialSelect ? credentialSelect.value : '';
+    }
+    const dateFrom = document.getElementById('brainDateFrom').value;
+    const dateTo = document.getElementById('brainDateTo').value;
+    const status = document.getElementById('brainE3Status');
+
+    if (!credential || !dateFrom || !dateTo) {
+      showBrainFlash('Παρακαλώ συμπληρώστε όλα τα πεδία', 'error');
+      return;
+    }
+
+    if (E3_FETCH_CONTROLLER) { try { E3_FETCH_CONTROLLER.abort(); } catch (_) {} }
+    E3_FETCH_CONTROLLER = new AbortController();
+    E3_LOADING = true;
+
+    const btn = document.getElementById('brainLoadE3Btn');
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = 'Φόρτωση δεδομένων...';
+
+    showGlobalWaitOverlay('Φόρτωση δεδομένων E3...', 'Παρακαλώ περιμένετε - γίνεται λήψη και επεξεργασία δεδομένων.');
+
+    try {
+      const response = await fetch('/api/e3/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential, date_from: dateFrom, date_to: dateTo }),
+        signal: E3_FETCH_CONTROLLER.signal
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
+
+      E3_EXCEL_TOTALS = new Map();
+      E3_LAST_DATA = data;
+      populateE3Tables(data);
+      populateUnclassifiedSummary(data);
+      document.getElementById('e3DataContainer').style.display = 'block';
+      showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
+      if (status) status.textContent = '';
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        if (status) status.textContent = '';
+      } else {
+        showBrainFlash(`❌ Σφάλμα: ${err.message}`, 'error');
+        if (status) status.textContent = '';
+      }
+    } finally {
+      hideGlobalWaitOverlay();
+      E3_LOADING = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function uploadBrainExcelFile(file) {
+    const status = document.getElementById('brainE3Status');
+    if (!file) return;
+    if (status) status.textContent = 'Φόρτωση Excel...';
+    showGlobalWaitOverlay('Φόρτωση Excel...', 'Παρακαλώ περιμένετε - γίνεται ανάγνωση του αρχείου λογιστικών.');
+
+    const formData = new FormData();
+    formData.append('excel_file', file);
+
+    try {
+      const response = await fetch('/api/e3/upload_excel', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
+
+      E3_EXCEL_TOTALS = buildExcelTotalsMap(data);
+      if (E3_LAST_DATA) {
+        populateE3Tables(E3_LAST_DATA);
+        document.getElementById('e3DataContainer').style.display = 'block';
+      }
+      const mappedCount = E3_EXCEL_TOTALS.size;
+      const successMessage = data.message || `Excel φορτώθηκε επιτυχώς (αντιστοιχίστηκαν ${mappedCount} κωδικοί)`;
+      showBrainFlash(successMessage, 'success');
+      if (status) status.textContent = '';
+    } catch (err) {
+      const errorMessage = err.message || 'Σφάλμα κατά τη φόρτωση του Excel';
+      showBrainFlash(errorMessage, 'error');
+      if (status) status.textContent = '';
+    } finally {
+      hideGlobalWaitOverlay();
+      const fileInput = document.getElementById('brainExcelFile');
+      if (fileInput) fileInput.value = '';
     }
   }
 
@@ -934,10 +1794,58 @@
       });
     }
   })();
+
+  const brainLoadExcelBtn = document.getElementById('brainLoadExcelBtn');
+  if (brainLoadExcelBtn) {
+    brainLoadExcelBtn.addEventListener('click', () => {
+      const input = document.getElementById('brainExcelFile');
+      if (input) input.click();
+    });
+  }
+
+  const brainExcelFile = document.getElementById('brainExcelFile');
+  if (brainExcelFile) {
+    brainExcelFile.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      await uploadBrainExcelFile(file);
+    });
+  }
+
+  const brainLoadE3Btn = document.getElementById('brainLoadE3Btn');
+  if (brainLoadE3Btn) {
+    brainLoadE3Btn.addEventListener('click', loadBrainE3Data);
+  }
+
   const e3Form = document.getElementById('e3CheckForm');
   if (e3Form) {
     e3Form.addEventListener('submit', (e) => e.preventDefault());
   }
+
+  const quickCheckTabBtn = document.getElementById('quickCheckTabBtn');
+  const analyticTabBtn = document.getElementById('analyticTabBtn');
+  function showE3PageTab(tabId) {
+    const tabs = ['quickCheckTab', 'analyticTab'];
+    tabs.forEach((id) => {
+      const panel = document.getElementById(id);
+      if (panel) panel.classList.toggle('hidden', id !== tabId);
+    });
+    if (quickCheckTabBtn) quickCheckTabBtn.classList.toggle('active', tabId === 'quickCheckTab');
+    if (analyticTabBtn) analyticTabBtn.classList.toggle('active', tabId === 'analyticTab');
+  }
+
+  function setupE3CheckTabBindings() {
+    if (window.__e3CheckTabBindingsInstalled) return;
+    window.__e3CheckTabBindingsInstalled = true;
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('#quickCheckTabBtn, #analyticTabBtn');
+      if (!button) return;
+      if (button.id === 'quickCheckTabBtn') showE3PageTab('quickCheckTab');
+      if (button.id === 'analyticTabBtn') showE3PageTab('analyticTab');
+    });
+  }
+  setupE3CheckTabBindings();
+  if (quickCheckTabBtn) quickCheckTabBtn.addEventListener('click', () => showE3PageTab('quickCheckTab'));
+  if (analyticTabBtn) analyticTabBtn.addEventListener('click', () => showE3PageTab('analyticTab'));
 
 
   function round2(value) {
@@ -1082,11 +1990,34 @@
       return merged;
     }
 
+    const z3AllowedCodes = new Set([
+      '595', '596', '598',
+      '880', '880.001', '880.002', '880.003', '880.004',
+      '881', '881.001', '881.002', '881.003', '881.004',
+      '882', '882.001', '882.002', '882.003', '882.004',
+      '883', '883.001', '883.002', '883.003', '883.004'
+    ]);
+
+    function filterZ3Rows(rows) {
+      const items = Array.isArray(rows) ? rows : [];
+      return items.filter((row) => {
+        if (!row || typeof row !== 'object') return false;
+        if (row.is_group && String(row.description || '').toUpperCase().includes('Ζ3')) {
+          return true;
+        }
+        const code = String(row.code || '').trim();
+        return z3AllowedCodes.has(code);
+      });
+    }
+
     const sections = {
       revenueBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.revenue, data.revenue)),
       expensesBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.expenses, data.expenses)),
       infoBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.info, data.info)),
-      tableZBody: mergeExcelIntoRows(mergeWithDefaults(E3_STRUCTURE.tableZ, data.tableZ))
+      tableZBody: mergeExcelIntoRows(mergeWithDefaults(
+        filterZ3Rows(E3_STRUCTURE.tableZ),
+        filterZ3Rows(data.tableZ)
+      ))
     };
 
     Object.entries(sections).forEach(([bodyId, rows]) => {
@@ -1147,6 +2078,13 @@
       refreshRowExpansionState(tbody);
       bindRowExpansionToggles(tbody);
     });
+
+    const tableZSection = document.getElementById('tableZSection');
+    if (tableZSection) {
+      const tbody = document.getElementById('tableZBody');
+      const hasRows = tbody && tbody.children.length > 0;
+      tableZSection.style.display = hasRows ? 'block' : 'none';
+    }
   }
 
   function formatNumber(num) {
@@ -1220,32 +2158,31 @@
     const rows = Array.isArray(data.unclassified_invoices) ? data.unclassified_invoices : [];
     const total = Number(data.unclassified_total || 0);
 
+    if (!rows.length) {
+      card.classList.add('e3-hidden');
+      listEl.innerHTML = '';
+      return;
+    }
+
     countEl.textContent = String(rows.length);
     totalEl.textContent = formatNumber(total);
 
     listEl.innerHTML = '';
-    if (!rows.length) {
-      const emptyRow = document.createElement('div');
-      emptyRow.className = 'e3-unclassified-item';
-      emptyRow.textContent = 'Δεν υπάρχουν μη χαρακτηρισμένα παραστατικά για την επιλεγμένη περίοδο.';
-      listEl.appendChild(emptyRow);
-    } else {
-      rows.forEach((row) => {
-        const item = document.createElement('div');
-        item.className = 'e3-unclassified-item';
-        const mark = String(row.mark || '').trim();
-        const issueDate = String(row.issueDate || '').trim();
-        const issuerVat = String(row.issuerVat || '').trim();
-        const issuerName = String(row.issuerName || '').trim();
-        const amount = Number(row.totalValue || 0);
-        item.innerHTML = `
-          <div><strong>MARK:</strong> ${mark || '—'} | <strong>Ημ/νία:</strong> ${issueDate || '—'}</div>
-          <div><strong>Εκδότης:</strong> ${issuerName || '—'} ${issuerVat ? '(' + issuerVat + ')' : ''}</div>
-          <div><strong>Σύνολο:</strong> ${formatNumber(amount)}</div>
-        `;
-        listEl.appendChild(item);
-      });
-    }
+    rows.forEach((row) => {
+      const item = document.createElement('div');
+      item.className = 'e3-unclassified-item';
+      const mark = String(row.mark || '').trim();
+      const issueDate = String(row.issueDate || '').trim();
+      const issuerVat = String(row.issuerVat || '').trim();
+      const issuerName = String(row.issuerName || '').trim();
+      const amount = Number(row.totalValue || 0);
+      item.innerHTML = `
+        <div><strong>MARK:</strong> ${mark || '—'} | <strong>Ημ/νία:</strong> ${issueDate || '—'}</div>
+        <div><strong>Εκδότης:</strong> ${issuerName || '—'} ${issuerVat ? '(' + issuerVat + ')' : ''}</div>
+        <div><strong>Σύνολο:</strong> ${formatNumber(amount)}</div>
+      `;
+      listEl.appendChild(item);
+    });
 
     card.classList.remove('e3-hidden');
     listWrap.classList.add('e3-hidden');
@@ -1270,7 +2207,7 @@
     if (!file) return;
 
     const status = document.getElementById('e3Status');
-    status.textContent = 'Φόρτωση Excel...';
+    if (status) status.textContent = 'Φόρτωση Excel...';
 
     showGlobalWaitOverlay('Φόρτωση Excel...', 'Παρακαλώ περιμένετε - γίνεται ανάγνωση του αρχείου λογιστικών.');
 
@@ -1293,9 +2230,13 @@
       }
 
       const mappedCount = E3_EXCEL_TOTALS.size;
-      status.innerHTML = `✅ Excel φορτώθηκε - ${data.message || 'Δεδομένα ενημερώθηκαν'} (αντιστοιχίστηκαν ${mappedCount} κωδικοί)`;
+      const successMessage = data.message || 'Δεδομένα ενημερώθηκαν';
+      showBrainFlash(`✅ Excel φορτώθηκε - ${successMessage} (αντιστοιχίστηκαν ${mappedCount} κωδικοί)`, 'success');
+      if (status) status.textContent = '';
     } catch (err) {
-      status.innerHTML = `❌ Σφάλμα: ${err.message}`;
+      const errorMessage = `Σφάλμα: ${err.message}`;
+      showBrainFlash(errorMessage, 'error');
+      if (status) status.textContent = '';
     } finally {
       hideGlobalWaitOverlay();
 
@@ -1320,7 +2261,13 @@
   function brainSetResult(data) {
     const pre = document.getElementById('brainResult');
     if (!pre) return;
-    pre.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    if (typeof data === 'string') {
+      pre.textContent = data;
+      pre.style.display = 'block';
+    } else {
+      pre.style.display = 'none';
+      pre.textContent = '';
+    }
   }
 
   async function saveE3BrainCredentials() {
@@ -1341,9 +2288,13 @@
         throw new Error((data && data.error) || 'Αποτυχία αποθήκευσης credentials.');
       }
       const filePart = data.file ? `\nΑρχείο: ${data.file}` : '';
-      brainSetResult(`✅ Αποθηκεύτηκαν ${data.saved || 0} εγγραφές credentials.${filePart}`);
+      const savedMessage = data.message || `✅ Αποθηκεύτηκαν ${data.saved || 0} εγγραφές credentials.${filePart}`;
+      brainSetResult(savedMessage);
+      showBrainFlash(savedMessage, 'success');
     } catch (e) {
-      brainSetResult(`Σφάλμα αποθήκευσης credentials: ${e.message}`);
+      const errorMessage = `Σφάλμα αποθήκευσης credentials: ${e.message}`;
+      brainSetResult(errorMessage);
+      showBrainFlash(errorMessage, 'error');
     } finally {
       hideGlobalWaitOverlay();
     }
@@ -1352,14 +2303,15 @@
   async function runE3BrainSingle() {
     const afmEl = document.getElementById('brainAfm');
     const nameEl = document.getElementById('brainName');
-    const yearEl = document.getElementById('brainYear');
     const addrEl = document.getElementById('brainAddress');
     const userEl = document.getElementById('brainTaxisUser');
     const passEl = document.getElementById('brainTaxisPass');
     const amkaEl = document.getElementById('brainAmka');
     const mdUserEl = document.getElementById('brainMydataUser');
     const mdKeyEl = document.getElementById('brainMydataKey');
-    const runExtractorsEl = document.getElementById('brainRunExtractors');
+    const runEfkaTekaEl = document.getElementById('brainRunEfkaTeka');
+    const runMisthEl = document.getElementById('brainRunMisth');
+    const runE9El = document.getElementById('brainRunE9');
 
     if (!afmEl) return;
     const afm = String(afmEl.value || '').replace(/\D/g, '');
@@ -1378,13 +2330,37 @@
       }
     }
 
-    const year = Number((yearEl && yearEl.value) || new Date().getFullYear());
+    const dateFrom = String((document.getElementById('brainDateFrom') || {}).value || '').trim();
+    const dateTo = String((document.getElementById('brainDateTo') || {}).value || '').trim();
+    const dateRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+    const fromMatch = dateRegex.exec(dateFrom);
+    const toMatch = dateRegex.exec(dateTo);
+    if (!fromMatch || !toMatch) {
+      brainSetResult('Συμπλήρωσε σωστά τις ημερομηνίες Από και Έως με μορφή dd/mm/yyyy.');
+      return;
+    }
+
+    const fromYear = Number(fromMatch[3]);
+    const toYear = Number(toMatch[3]);
+    if (fromYear !== toYear) {
+      brainSetResult('Οι ημερομηνίες Από και Έως πρέπει να ανήκουν στην ίδια χρονιά.');
+      return;
+    }
+
+    const year = fromYear;
     const payload = {
       mode: 'single',
       year,
-      run_extractors: !!(runExtractorsEl && runExtractorsEl.checked),
+      date_from: dateFrom,
+      date_to: dateTo,
+      run_extractors: !!(runEfkaTekaEl && runEfkaTekaEl.checked) || !!(runMisthEl && runMisthEl.checked) || !!(runE9El && runE9El.checked),
+      run_efka_teka: !!(runEfkaTekaEl && runEfkaTekaEl.checked),
+      run_misth: !!(runMisthEl && runMisthEl.checked),
+      run_e9: !!(runE9El && runE9El.checked),
       headed: true,
       auto_active_group_clients: true,
+      date_from: dateFrom,
+      date_to: dateTo,
       single_client: {
         afm,
         name: companyName,
@@ -1393,7 +2369,14 @@
         taxisnet_password: String((passEl && passEl.value) || '').trim(),
         amka: String((amkaEl && amkaEl.value) || '').trim(),
         mydata_user: String((mdUserEl && mdUserEl.value) || '').trim(),
-        mydata_key: String((mdKeyEl && mdKeyEl.value) || '').trim()
+        mydata_key: String((mdKeyEl && mdKeyEl.value) || '').trim(),
+        member_credentials: Object.fromEntries(
+          Object.entries(E3_BRAIN_MEMBER_CREDS).map(([key, val]) => [key, {
+            taxisnet_username: String(val.taxisnet_username || '').trim(),
+            taxisnet_password: String(val.taxisnet_password || '').trim(),
+            amka: String(val.amka || '').trim(),
+          }])
+        )
       }
     };
 
@@ -1411,35 +2394,151 @@
       }
       E3_BRAIN_LAST_RESULT = data;
       brainSetResult(data);
+      showBrainFlash(data.message || 'E3 Brain εκτελέστηκε επιτυχώς.', 'success');
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
+      showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {
       hideGlobalWaitOverlay();
     }
   }
 
-  async function runE3BrainBulk(file) {
-    const yearEl = document.getElementById('brainYear');
-    const runExtractorsEl = document.getElementById('brainRunExtractors');
-    const year = Number((yearEl && yearEl.value) || new Date().getFullYear());
-
-    const payload = {
-      year,
-      run_extractors: !!(runExtractorsEl && runExtractorsEl.checked),
-      headed: true,
-      auto_active_group_clients: true
-    };
+  async function previewE3BrainBulk(file) {
+    const status = document.getElementById('brainBulkFileLabel');
+    const previewPanel = document.getElementById('brainBulkPreview');
+    const previewCount = document.getElementById('brainBulkPreviewCount');
+    if (status) status.textContent = 'Προεπισκόπηση αρχείου...';
+    if (previewPanel) previewPanel.classList.add('hidden');
+    E3_BRAIN_PREVIEW_CLIENTS = [];
 
     const formData = new FormData();
     formData.append('excel_file', file);
-    formData.append('payload_json', JSON.stringify(payload));
 
-    showGlobalWaitOverlay('E3 Brain Bulk', 'Γίνεται επεξεργασία του Excel και εκτέλεση ελέγχων...');
-    brainSetResult('Εκτέλεση bulk...');
     try {
-      const response = await fetch('/api/e3/brain/upload', {
+      const response = await fetch('/api/e3/brain/upload_preview', {
         method: 'POST',
         body: formData
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error((data && data.error) || 'Αποτυχία φόρτωσης αρχείου preview.');
+      }
+      E3_BRAIN_PREVIEW_CLIENTS = Array.isArray(data.clients) ? data.clients : [];
+      const previewMessage = data.message || `Βρέθηκαν ${E3_BRAIN_PREVIEW_CLIENTS.length} πελάτες στο αρχείο.`;
+      showBrainFlash(previewMessage, 'success');
+      if (status) status.textContent = '';
+      renderBulkPreviewTable(E3_BRAIN_PREVIEW_CLIENTS);
+    } catch (e) {
+      const errorMessage = e.message || 'Σφάλμα προεπισκόπησης αρχείου';
+      showBrainFlash(errorMessage, 'error');
+      if (status) status.textContent = '';
+    }
+  }
+
+  function renderBulkPreviewTable(clients) {
+    const previewPanel = document.getElementById('brainBulkPreview');
+    const previewTable = document.getElementById('brainBulkPreviewTable');
+    const previewCount = document.getElementById('brainBulkPreviewCount');
+    if (!previewPanel || !previewTable || !previewCount) return;
+    if (!Array.isArray(clients) || !clients.length) {
+      previewPanel.classList.add('hidden');
+      previewTable.innerHTML = '';
+      previewCount.textContent = '0 πελάτες';
+      return;
+    }
+    previewPanel.classList.remove('hidden');
+    let html = '<table class="min-w-full text-sm border-collapse"><thead><tr class="bg-gray-100 dark:bg-gray-800">';
+    html += '<th class="border px-2 py-2"><input type="checkbox" class="rounded border-gray-300 dark:border-gray-600" disabled /></th>';
+    html += '<th class="border px-2 py-2">ΑΦΜ</th>';
+    html += '<th class="border px-2 py-2">Επωνυμία</th>';
+    html += '<th class="border px-2 py-2">Νομική μορφή</th>';
+    html += '<th class="border px-2 py-2">TAXIS user</th>';
+    html += '<th class="border px-2 py-2">TAXIS pass</th>';
+    html += '<th class="border px-2 py-2">AMKA</th>';
+    html += '<th class="border px-2 py-2">myDATA user</th>';
+    html += '<th class="border px-2 py-2">myDATA key</th>';
+    html += '<th class="border px-2 py-2">Κωδικοί</th>';
+    html += '</tr></thead><tbody>';
+    clients.forEach((client, idx) => {
+      const afm = String(client.afm || '');
+      const creds = client.member_credentials || {};
+      const mydataUser = String(client.mydata_user || '');
+      const mydataKey = String(client.mydata_key || '');
+      const excelValues = client.excel_values || {};
+      html += '<tr class="border-b dark:border-gray-700">';
+      html += `<td class="border px-2 py-2 text-center"><input type="checkbox" class="brainBulkPreviewCheckbox" data-index="${idx}" checked /></td>`;
+      html += `<td class="border px-2 py-2">${afm}</td>`;
+      html += `<td class="border px-2 py-2">${String(client.name || '').replace(/</g, '&lt;')}</td>`;
+      html += `<td class="border px-2 py-2">${String(client.legal_type || 'Άγνωστο').replace(/</g, '&lt;')}</td>`;
+      html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${String(client.taxisnet_username || '').replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'taxisnet_username', this.value)" /></td>`;
+      html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" type="password" value="${String(client.taxisnet_password || '').replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'taxisnet_password', this.value)" /></td>`;
+      html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${String(client.amka || '').replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'amka', this.value)" /></td>`;
+      html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${mydataUser.replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'mydata_user', this.value)" /></td>`;
+      html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${mydataKey.replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'mydata_key', this.value)" /></td>`;
+      html += `<td class="border px-2 py-2">585.007=${Number(excelValues.E3_585_007 || 0).toFixed(2)} / 585.014=${Number(excelValues.E3_585_014 || 0).toFixed(2)}</td>`;
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    previewTable.innerHTML = html;
+    previewCount.textContent = `${clients.length} πελάτες στο αρχείο`;
+    const selectAll = document.getElementById('brainBulkSelectAll');
+    if (selectAll) {
+      selectAll.checked = true;
+      selectAll.addEventListener('change', () => {
+        document.querySelectorAll('.brainBulkPreviewCheckbox').forEach((cb) => {
+          if (cb instanceof HTMLInputElement) cb.checked = selectAll.checked;
+        });
+      });
+    }
+  }
+
+  function updateBulkClient(idx, key, value) {
+    if (!E3_BRAIN_PREVIEW_CLIENTS[idx]) return;
+    E3_BRAIN_PREVIEW_CLIENTS[idx][key] = String(value || '').trim();
+  }
+
+  function getSelectedBulkClients() {
+    return Array.from(document.querySelectorAll('.brainBulkPreviewCheckbox'))
+      .filter((input) => input instanceof HTMLInputElement && input.checked)
+      .map((input) => {
+        const idx = Number(input.dataset.index);
+        const client = E3_BRAIN_PREVIEW_CLIENTS[idx];
+        return client ? { ...client } : null;
+      })
+      .filter(Boolean);
+  }
+
+  async function executeBulkSelectedClients() {
+    const selected = getSelectedBulkClients();
+    if (!selected.length) {
+      alert('Επίλεξε τουλάχιστον έναν πελάτη για έλεγχο.');
+      return;
+    }
+    const yearEl = document.getElementById('brainYearBulk');
+    const runEfkaTekaEl = document.getElementById('brainRunEfkaTekaBulk');
+    const runMisthEl = document.getElementById('brainRunMisthBulk');
+    const runE9El = document.getElementById('brainRunE9Bulk');
+    const year = Number((yearEl && yearEl.value) || new Date().getFullYear());
+
+    const payload = {
+      mode: 'bulk',
+      year,
+      run_extractors: !!(runEfkaTekaEl && runEfkaTekaEl.checked) || !!(runMisthEl && runMisthEl.checked) || !!(runE9El && runE9El.checked),
+      run_efka_teka: !!(runEfkaTekaEl && runEfkaTekaEl.checked),
+      run_misth: !!(runMisthEl && runMisthEl.checked),
+      run_e9: !!(runE9El && runE9El.checked),
+      headed: true,
+      auto_active_group_clients: true,
+      clients: selected,
+    };
+
+    showGlobalWaitOverlay('E3 Brain Bulk', 'Τρέχει ο έλεγχος για τους επιλεγμένους πελάτες...');
+    brainSetResult('Εκτέλεση bulk...');
+    try {
+      const response = await fetch('/api/e3/brain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
@@ -1447,29 +2546,135 @@
       }
       E3_BRAIN_LAST_RESULT = data;
       brainSetResult(data);
+      showBrainFlash(data.message || 'E3 Brain bulk εκτέλεση ολοκληρώθηκε.', 'success');
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
+      showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {
       hideGlobalWaitOverlay();
     }
   }
 
+  function renderBrainCredsList() {
+    const listDiv = document.getElementById('brainCredsList');
+    if (!listDiv) return;
+    if (!E3_BRAIN_CREDS_CACHE.length) {
+      listDiv.innerHTML = '<span class="text-gray-400">Δεν υπάρχουν αποθηκευμένα credentials.</span>';
+      renderBrainActiveClientSelect();
+      return;
+    }
+    let html = '<table class="min-w-full text-xs"><thead><tr>' +
+      '<th class="px-2 py-1">ΑΦΜ</th><th class="px-2 py-1">Επωνυμία</th><th class="px-2 py-1">TAXIS user</th><th class="px-2 py-1">myDATA user</th><th class="px-2 py-1">Ενέργειες</th></tr></thead><tbody>';
+    for (const cred of E3_BRAIN_CREDS_CACHE) {
+      const c = cred.company || {};
+      html += `<tr>` +
+        `<td class="border px-2 py-1">${c.afm || ''}</td>` +
+        `<td class="border px-2 py-1">${c.name || ''}</td>` +
+        `<td class="border px-2 py-1">${c.taxisnet_username || ''}</td>` +
+        `<td class="border px-2 py-1">${c.mydata_user || ''}</td>` +
+        `<td class="border px-2 py-1 flex gap-1">` +
+          `<button class="bg-amber-600 hover:bg-amber-700 text-white rounded px-2 py-1 text-xs font-medium" onclick="editBrainCred('${c.afm || ''}')">Επεξεργασία</button>` +
+          `<button class="bg-red-600 hover:bg-red-700 text-white rounded px-2 py-1 text-xs font-medium" onclick="deleteBrainCred('${c.afm || ''}')">Διαγραφή</button>` +
+        `</td>` +
+        `</tr>`;
+    }
+    html += '</tbody></table>';
+    listDiv.innerHTML = html;
+    renderBrainActiveClientSelect();
+
+    if (!document.getElementById('brainCredEditModal')) {
+      const modal = document.createElement('div');
+      modal.id = 'brainCredEditModal';
+      modal.style.display = 'none';
+      modal.innerHTML = `
+        <div style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
+          <div style="background:#fff;padding:2rem;border-radius:0.5rem;min-width:340px;max-width:98vw;box-shadow:0 8px 32px #0002;">
+            <h3 class="text-lg font-semibold mb-2">Επεξεργασία Credentials</h3>
+            <form id="brainCredEditForm">
+              <div class="mb-2"><label>ΑΦΜ <input id="editAfm" name="afm" class="border rounded px-2 py-1 w-full" readonly></label></div>
+              <div class="mb-2"><label>Επωνυμία <input id="editName" name="name" class="border rounded px-2 py-1 w-full"></label></div>
+              <div class="mb-2"><label>TAXIS user <input id="editTaxisUser" name="taxisnet_username" class="border rounded px-2 py-1 w-full"></label></div>
+              <div class="mb-2"><label>TAXIS pass <input id="editTaxisPass" name="taxisnet_password" class="border rounded px-2 py-1 w-full" type="password"></label></div>
+              <div class="mb-2"><label>AMKA <input id="editAmka" name="amka" class="border rounded px-2 py-1 w-full"></label></div>
+              <div class="mb-2"><label>myDATA user <input id="editMydataUser" name="mydata_user" class="border rounded px-2 py-1 w-full"></label></div>
+              <div class="mb-2"><label>myDATA key <input id="editMydataKey" name="mydata_key" class="border rounded px-2 py-1 w-full"></label></div>
+              <div class="flex gap-2 mt-4">
+                <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-3 py-1 font-medium">Αποθήκευση</button>
+                <button type="button" id="brainCredEditCancel" class="bg-gray-400 hover:bg-gray-500 text-white rounded px-3 py-1 font-medium">Άκυρο</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      document.getElementById('brainCredEditCancel').onclick = () => { modal.style.display = 'none'; };
+      document.getElementById('brainCredEditForm').onsubmit = async function(ev) {
+        ev.preventDefault();
+        await saveBrainCredEdit();
+      };
+    }
+  }
+
+  function syncBrainActiveClientSelection() {
+    const select = document.getElementById('brainActiveClientSelect');
+    if (!select) return;
+    const afm = String(select.value || '').trim();
+    if (!afm) return;
+    const client = E3_BRAIN_ACTIVE_CLIENTS.find((c) => String(c.afm || '').trim() === afm);
+    if (client) {
+      fillBrainSingleClientFromSaved(client);
+    }
+  }
+
+  function showBrainTab(tabId) {
+    const tabs = ['brainTabSingle', 'brainTabBulk', 'brainTabSaved'];
+    const buttons = ['brainTabSingleBtn', 'brainTabBulkBtn', 'brainTabSavedBtn'];
+    tabs.forEach((id, idx) => {
+      const panel = document.getElementById(id);
+      const button = document.getElementById(buttons[idx]);
+      if (panel) panel.classList.toggle('hidden', id !== tabId);
+      if (button) button.classList.toggle('active', id === tabId);
+    });
+    if (tabId === 'brainTabSaved') {
+      fetchE3BrainCredentials();
+    }
+    if (tabId === 'brainTabSingle') {
+      if (!E3_BRAIN_CREDS_CACHE.length) {
+        fetchE3BrainCredentials().catch(() => {});
+      }
+      syncBrainActiveClientSelection();
+    }
+  }
+
   (function bindBrainControls() {
     const runSingleBtn = document.getElementById('brainRunSingleBtn');
-    const fetchCredsBtn = document.getElementById('brainFetchCredsBtn');
-        if (fetchCredsBtn && fetchCredsBtn.dataset.bound !== '1') {
-          fetchCredsBtn.dataset.bound = '1';
-          fetchCredsBtn.addEventListener('click', fetchE3BrainCredentials);
-        }
     const saveCredsBtn = document.getElementById('brainSaveCredentialsBtn');
     const bulkPickBtn = document.getElementById('brainBulkPickBtn');
     const bulkFile = document.getElementById('brainBulkFile');
+    const bulkFileLabel = document.getElementById('brainBulkFileLabel');
+    const runSelectedBulkBtn = document.getElementById('brainRunSelectedBulkBtn');
+    const tabSingleBtn = document.getElementById('brainTabSingleBtn');
+    const tabBulkBtn = document.getElementById('brainTabBulkBtn');
+    const tabSavedBtn = document.getElementById('brainTabSavedBtn');
     const afmEl = document.getElementById('brainAfm');
     const nameEl = document.getElementById('brainName');
 
     if (runSingleBtn && runSingleBtn.dataset.bound !== '1') {
       runSingleBtn.dataset.bound = '1';
       runSingleBtn.addEventListener('click', runE3BrainSingle);
+    }
+
+    const fetchAddressBtn = document.getElementById('brainFetchAddressBtn');
+    if (fetchAddressBtn && fetchAddressBtn.dataset.bound !== '1') {
+      fetchAddressBtn.dataset.bound = '1';
+      fetchAddressBtn.addEventListener('click', loadE3Partners);
+    }
+
+    const topActiveClient = document.getElementById('e3Credential') || document.getElementById('e3CredentialLocked');
+    if (topActiveClient && topActiveClient.dataset.bound !== '1') {
+      topActiveClient.dataset.bound = '1';
+      topActiveClient.addEventListener('change', syncTopCredentialToBrain);
+      syncTopCredentialToBrain();
     }
 
     if (saveCredsBtn && saveCredsBtn.dataset.bound !== '1') {
@@ -1479,32 +2684,78 @@
 
     if (bulkPickBtn && bulkFile && bulkPickBtn.dataset.bound !== '1') {
       bulkPickBtn.dataset.bound = '1';
-      bulkPickBtn.addEventListener('click', () => bulkFile.click());
-      bulkFile.addEventListener('change', async (ev) => {
+      bulkPickBtn.addEventListener('click', () => {
+        if (bulkFile) bulkFile.value = '';
+        bulkFile.click();
+      });
+      bulkFile.addEventListener('change', (ev) => {
         const file = ev && ev.target && ev.target.files ? ev.target.files[0] : null;
         if (!file) return;
-        await runE3BrainBulk(file);
-        bulkFile.value = '';
+        if (bulkFileLabel) bulkFileLabel.textContent = file.name;
+        previewE3BrainBulk(file);
       });
     }
+
+    if (runSelectedBulkBtn && runSelectedBulkBtn.dataset.bound !== '1') {
+      runSelectedBulkBtn.dataset.bound = '1';
+      runSelectedBulkBtn.addEventListener('click', executeBulkSelectedClients);
+    }
+    const activeClientSelect = document.getElementById('brainActiveClientSelect');
+    if (activeClientSelect && activeClientSelect.dataset.bound !== '1') {
+      activeClientSelect.dataset.bound = '1';
+      activeClientSelect.addEventListener('change', onBrainActiveClientSelectChange);
+    }
+
+    if (tabSingleBtn && tabSingleBtn.dataset.bound !== '1') {
+      tabSingleBtn.dataset.bound = '1';
+      tabSingleBtn.addEventListener('click', () => showBrainTab('brainTabSingle'));
+    }
+    if (tabBulkBtn && tabBulkBtn.dataset.bound !== '1') {
+      tabBulkBtn.dataset.bound = '1';
+      tabBulkBtn.addEventListener('click', () => showBrainTab('brainTabBulk'));
+    }
+    if (tabSavedBtn && tabSavedBtn.dataset.bound !== '1') {
+      tabSavedBtn.dataset.bound = '1';
+      tabSavedBtn.addEventListener('click', () => showBrainTab('brainTabSaved'));
+    }
+
+    if (!E3_BRAIN_CREDS_CACHE.length) {
+      fetchE3BrainCredentials().catch(() => {});
+    }
+
+    if (!E3_BRAIN_ACTIVE_CLIENTS.length) {
+      fetchE3BrainActiveClients().catch(() => {});
+    }
+
+    clearBrainSingleTypeHint();
 
     if (afmEl && nameEl && afmEl.dataset.boundNameFetch !== '1') {
       afmEl.dataset.boundNameFetch = '1';
       afmEl.addEventListener('blur', async () => {
         const afm = String(afmEl.value || '').replace(/\D/g, '');
-        if (afm.length !== 9 || String(nameEl.value || '').trim()) return;
+        if (afm.length !== 9) {
+          showBrainAfmStatus('Δώσε έγκυρο ΑΦΜ 9 ψηφίων.', 'error');
+          return;
+        }
+        if (String(nameEl.value || '').trim()) return;
+        showBrainAfmStatus('Αναμονή λήψης ονοματεπωνύμου...', 'info');
         try {
           const nm = await brainFetchVatName(afm);
-          if (nm) nameEl.value = nm;
-        } catch (_) {
-          // Keep silent here; hard errors are shown on execution.
+          if (nm) {
+            nameEl.value = nm;
+            showBrainAfmStatus('Ονοματεπώνυμο ανακτήθηκε.', 'success');
+          } else {
+            showBrainAfmStatus('Δεν βρέθηκε όνομα για το ΑΦΜ.', 'error');
+          }
+        } catch (e) {
+          showBrainAfmStatus(`Προειδοποίηση: ${e.message}`, 'error');
         }
       });
     }
   })();
 
   function ensureE3DatePickerReady() {
-    const inputs = ['e3DateFrom', 'e3DateTo']
+    const inputs = ['e3DateFrom', 'e3DateTo', 'brainDateFrom', 'brainDateTo']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     if (!inputs.length) return;
@@ -1575,7 +2826,13 @@
 
       try {
         inputs.forEach((input) => {
-          window.flatpickr(input, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
+          window.flatpickr(input, {
+            locale: 'el',
+            dateFormat: 'd/m/Y',
+            allowInput: true,
+            appendTo: document.body,
+            position: 'auto'
+          });
         });
       } catch (e) {
         console.warn('E3 page flatpickr init failed', e);
@@ -1594,6 +2851,9 @@
     } else {
       fn();
     }
-  })(ensureE3DatePickerReady);
+  })(function(){
+    ensureE3DatePickerReady();
+    if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings();
+  });
 </script>
 {% endblock %}

@@ -48,6 +48,27 @@ def _find_text_by_localnames(elem, names: set) -> str:
     return ""
 
 
+def _extract_invoice_type(invoice_node) -> str:
+    if invoice_node is None:
+        return ""
+    type_names = {
+        "invoiceType",
+        "InvoiceType",
+        "invoiceTypeCode",
+        "InvoiceTypeCode",
+        "documentType",
+        "docType",
+        "document_type",
+        "doctype",
+        "invoice_category",
+        "documentCategory",
+        "type",
+        "invoiceKind",
+        "kind",
+    }
+    return _find_text_by_localnames(invoice_node, type_names)
+
+
 def _extract_pagination_cursors(root) -> Dict[str, str]:
     cursors = {
         "nextPartitionKey": "",
@@ -135,6 +156,8 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
             if not node_candidates and _local_name(invoice_node.tag) == "E3Info":
                 node_candidates = [invoice_node]
 
+            invoice_type = _extract_invoice_type(invoice_node)
+
             for cls_node in node_candidates:
                 cls_type = _find_text_by_localnames(cls_node, {"classificationType", "V_Class_Type"})
                 m = _CLASS_TYPE_RE.search(_safe_strip(cls_type))
@@ -147,8 +170,22 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
                     {"amount", "V_Amount", "V_Class_Value", "classValue", "classificationValue"},
                 )
                 amount = _to_float(amount_text)
-                if amount <= 0:
+                if amount == 0:
                     continue
+
+                invoice_type_str = str(invoice_type or "").strip()
+                is_negative_type = bool(re.search(r"\b(5\.1|5\.2|11\.4)\b", invoice_type_str))
+                negative_keywords = {"πιστωτ", "πιστωτικό", "πιστωτικο", "credit"}
+                if not is_negative_type:
+                    lower_type = invoice_type_str.lower()
+                    is_negative_type = any(keyword in lower_type for keyword in negative_keywords)
+
+                if is_negative_type:
+                    amount = -abs(amount)
+
+                # If the source amount is already negative, preserve it as subtraction.
+                if amount < 0:
+                    amount = -abs(amount)
 
                 category = _find_text_by_localnames(cls_node, {"classificationCategory", "V_Class_Category"})
                 all_entries.append(
@@ -241,7 +278,7 @@ def build_e3_report(entries: List[dict]) -> dict:
         if not code.isdigit():
             continue
         amount = _to_float(row.get("amount"))
-        if amount <= 0:
+        if amount == 0:
             continue
         totals_by_code[code] += amount
 

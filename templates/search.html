@@ -8515,9 +8515,21 @@ async function partiallyReloadInvoiceTable(options = {}) {
     }
     if (!row) return false;
 
+    const isDarkTheme = () => {
+      try {
+        if (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.theme === 'dark') return true;
+        if (document.body && document.body.dataset && document.body.dataset.theme === 'dark') return true;
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
+      } catch(_) {}
+      return false;
+    };
+    const dark = isDarkTheme();
+    const bg = dark ? '#134e4a' : '#dcfce7';
+    const outline = dark ? '#22c55e' : '#16a34a';
+
     row.classList.add('rc-new-row-highlight');
-    row.style.setProperty('background-color', '#dcfce7', 'important');
-    row.style.setProperty('outline', '2px solid #16a34a', 'important');
+    row.style.setProperty('background-color', bg, 'important');
+    row.style.setProperty('outline', '2px solid ' + outline, 'important');
     row.style.setProperty('outline-offset', '-2px', 'important');
     row.style.setProperty('box-shadow', '0 0 0 3px rgba(34, 197, 94, 0.28)', 'important');
     row.style.setProperty('transition', 'background-color 1.2s ease, box-shadow 1.2s ease, outline-color 1.2s ease', 'important');
@@ -13157,9 +13169,20 @@ RC.handleReceiptAfterScrape = async function(summaryObj, scrapeUrl){
     // Immediate UX + async partial reload
     const savedMark = String((r && r.mark) || summaryObj.mark || '').trim();
     try {
+      let reloaded = false;
       if (typeof rcFastPostSaveRefresh === 'function') {
-        rcFastPostSaveRefresh(savedMark, successMsg);
-      } else {
+        try { reloaded = !!(await rcFastPostSaveRefresh(savedMark, successMsg)); } catch(_) { reloaded = false; }
+      }
+      if (!reloaded && typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+        try { reloaded = !!(await window.FBP_REFRESH_LIST_FRAGMENT()); } catch(_) { reloaded = false; }
+      }
+      if (!reloaded && typeof partiallyReloadInvoiceTable === 'function') {
+        if (savedMark) {
+          try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark; } catch(_) {}
+        }
+        try { reloaded = !!(await partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
+      }
+      if (!reloaded) {
         if (typeof clearSearchInputs === 'function') clearSearchInputs();
         if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd();
       }
@@ -14254,12 +14277,25 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('markInput') && (document.getElementById('markInput').value = '');
       } catch(_) {}
       try {
-        if (typeof partiallyReloadInvoiceTable === 'function') {
-          const savedMark = String((r && r.mark) || normalized.mark || normalized.MARK || '').trim();
+        const savedMark = String((r && r.mark) || normalized.mark || normalized.MARK || '').trim();
+        let reloaded = false;
+        if (typeof rcFastPostSaveRefresh === 'function') {
+          try { reloaded = !!(await rcFastPostSaveRefresh(savedMark, 'Αποθηκεύτηκε η απόδειξη (repeat).')); } catch(_) { reloaded = false; }
+        }
+        if (!reloaded && typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+          try { reloaded = !!(await window.FBP_REFRESH_LIST_FRAGMENT()); } catch(_) { reloaded = false; }
+        }
+        if (!reloaded && typeof partiallyReloadInvoiceTable === 'function') {
           if (savedMark) {
             try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark; } catch(_) {}
           }
-          await partiallyReloadInvoiceTable({ highlightMark: savedMark });
+          try { reloaded = !!(await partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
+        }
+        if (!reloaded) {
+          try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+          try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
+          try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
+          try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {}
         }
       } catch(_) {}
     } catch(err){
@@ -14660,7 +14696,7 @@ document.addEventListener('click', function(e){
   try { rcInstallListFocusGuard(); } catch(_) {}
   try { rcInstallStickySearchFocusGuard(); } catch(_) {}
 
-  function rcFastPostSaveRefresh(savedMark, successMsg){
+  async function rcFastPostSaveRefresh(savedMark, successMsg){
     const mark = String(savedMark || '').trim();
     try { rcLiveDebug('fast-post-save-refresh', { mark: mark, successMsg: String(successMsg || '') }); } catch(_) {}
     try { rcArmStickySearchFocus('fast-post-save', 25000); } catch(_) {}
@@ -14676,14 +14712,16 @@ document.addEventListener('click', function(e){
     try {
       if (successMsg && typeof showFlash === 'function') showFlash(successMsg, 'success', 1800);
     } catch(_) {}
-    setTimeout(async () => {
-      try {
-        const reloaded = await partiallyReloadInvoiceTable({ highlightMark: mark });
-        if (!reloaded && typeof showFlash === 'function') {
-          showFlash('Η αποθήκευση ολοκληρώθηκε, αλλά δεν έγινε ανανέωση πίνακα. Πάτησε αναζήτηση ή ανανέωση λίστας.', 'warning', 4500);
-        }
-      } catch(_) {}
-    }, 0);
+
+    try {
+      const reloaded = !!(await partiallyReloadInvoiceTable({ highlightMark: mark }));
+      if (!reloaded && typeof showFlash === 'function') {
+        showFlash('Η αποθήκευση ολοκληρώθηκε, αλλά δεν έγινε ανανέωση πίνακα. Πάτησε αναζήτηση ή ανανέωση λίστας.', 'warning', 4500);
+      }
+      return reloaded;
+    } catch(_) {
+      return false;
+    }
   }
 
   try { window.clearSearchInputs = clearSearchInputs; } catch(_) {}

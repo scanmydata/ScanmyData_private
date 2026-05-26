@@ -71,6 +71,7 @@ _STRICT_HEADER_ALIASES = {
     "e3_585_007": {"e3_585_007", "585.007", "585_007"},
     "e3_585_014": {"e3_585_014", "585.014", "585_014"},
     "address": {"διευθυνση", "διεύθυνση", "address"},
+    "legal_type": {"νομική μορφή", "νομικη μορφη", "legal type", "legal_type", "νομική", "νομικη"},
 }
 
 
@@ -532,6 +533,7 @@ def _parse_bulk_clients(excel_path: str) -> List[Dict[str, Any]]:
     c_585_007 = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["e3_585_007"]))
     c_585_014 = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["e3_585_014"]))
     c_address = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["address"]))
+    c_legal_type = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["legal_type"]))
 
     if not c_afm:
         raise E3BrainError("Το αρχείο Excel δεν περιέχει αναγνωρίσιμη στήλη ΑΦΜ.")
@@ -555,6 +557,7 @@ def _parse_bulk_clients(excel_path: str) -> List[Dict[str, Any]]:
                     "E3_585_014": _to_float(r.get(c_585_014)) if c_585_014 else 0.0,
                 },
                 "address": _norm_text(r.get(c_address)) if c_address else "",
+                "legal_type": _norm_text(r.get(c_legal_type)) if c_legal_type else "",
             }
         )
     return clients
@@ -1117,12 +1120,17 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     clients: List[Dict[str, Any]] = []
 
     if mode == "bulk":
-        excel_path = _norm_text(payload.get("excel_path"))
-        if not excel_path:
-            raise E3BrainError("Στο bulk mode απαιτείται το excel_path.")
-        clients = _parse_bulk_clients(excel_path)
+        if isinstance(payload.get("clients"), list):
+            clients = [c for c in payload.get("clients") if isinstance(c, dict)]
+            if not clients:
+                raise E3BrainError("Στο bulk mode απαιτείται λίστα με πελάτες για επεξεργασία.")
+        else:
+            excel_path = _norm_text(payload.get("excel_path"))
+            if not excel_path:
+                raise E3BrainError("Στο bulk mode απαιτείται το excel_path.")
+            clients = _parse_bulk_clients(excel_path)
     else:
-        single = payload.get("single_client") if isinstance(payload.get("single_client"), dict) else {}
+        single = payload.get("single_client") if isinstance(payload.get("single_client", {}), dict) else {}
         if not single:
             raise E3BrainError("Στο single mode απαιτείται το single_client.")
         clients = [single]
