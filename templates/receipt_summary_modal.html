@@ -76,6 +76,36 @@
     if (window.__RC_EARLY_MODAL_AJAX_SAVE_BOUND) return;
     window.__RC_EARLY_MODAL_AJAX_SAVE_BOUND = true;
 
+    if (typeof window.clearSearchInputs !== 'function') {
+      window.clearSearchInputs = function(){
+        try { window.__RC_LAST_SEARCH_MARK_OR_URL = ''; } catch(_) {}
+        try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + 5000; } catch(_) {}
+        try { window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 1500; } catch(_) {}
+        try {
+          const markEl = document.getElementById('markInput');
+          if (markEl) {
+            markEl.value = '';
+            markEl.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } catch(_) {}
+        try {
+          const urlEl = document.getElementById('scrapeUrlInput');
+          if (urlEl) {
+            urlEl.value = '';
+            urlEl.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } catch(_) {}
+        try {
+          const hiddenUrl = document.getElementById('scrapeUrlField');
+          if (hiddenUrl) {
+            hiddenUrl.value = '';
+            hiddenUrl.removeAttribute('data-mark');
+          }
+        } catch(_) {}
+        try { if (typeof window.clearReceiptSearchCacheOnClose === 'function') window.clearReceiptSearchCacheOnClose(); } catch(_) {}
+      };
+    }
+
     let inFlight = false;
 
     async function forceAjaxSave(form){

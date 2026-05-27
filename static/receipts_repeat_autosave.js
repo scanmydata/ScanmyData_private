@@ -174,6 +174,31 @@
       .finally(() => {
         (async () => {
           const savedMark = String(obj.mark || obj.MARK || '').trim();
+          try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+          try { window.__RC_LAST_SEARCH_MARK_OR_URL = ''; } catch(_) {}
+          try {
+            if (typeof window.clearSearchInputs === 'function') {
+              window.clearSearchInputs();
+            } else {
+              const markEl = document.getElementById('markInput');
+              if (markEl) {
+                markEl.value = '';
+                markEl.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              const urlEl = document.getElementById('scrapeUrlInput');
+              if (urlEl) {
+                urlEl.value = '';
+                urlEl.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              const hiddenUrl = document.getElementById('scrapeUrlField');
+              if (hiddenUrl) {
+                hiddenUrl.value = '';
+                hiddenUrl.removeAttribute('data-mark');
+              }
+              try { if (typeof window.clearReceiptSearchCacheOnClose === 'function') window.clearReceiptSearchCacheOnClose(); } catch(_) {}
+            }
+          } catch(_) {}
+
           try {
             if (typeof window.rcFastPostSaveRefresh === 'function') {
               await window.rcFastPostSaveRefresh(savedMark, 'Αποθηκεύτηκε η απόδειξη (repeat).');

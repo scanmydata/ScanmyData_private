@@ -720,3 +720,87 @@
     patchOpenModal();
   });
 })();
+
+(function(){
+  function patchHandleReceiptAfterScrape(){
+    if (!(window.RC && typeof window.RC.handleReceiptAfterScrape === 'function')) return false;
+    window.RC.handleReceiptAfterScrape = async function(summaryObj, scrapeUrl){
+      try {
+        const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
+        const forceEdit = (typeof FORCE_EDIT !== 'undefined') ? !!FORCE_EDIT : false;
+        if (!repeatOn || forceEdit || RC.hasWarnings()) return false;
+
+        RC.normalizeReceiptSummary(summaryObj);
+        try {
+          if (rcShouldApplyReceiptProfile(summaryObj) && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+            await RC.applySavedReceiptAnalysisMapping(summaryObj);
+          }
+        } catch(_) {}
+        const summaryInput = document.getElementById('summaryJsonInput');
+        if (summaryInput) summaryInput.value = JSON.stringify(summaryObj);
+
+        const r = await RC.confirmReceiptOnce(summaryObj, scrapeUrl);
+        if (!r.ok) {
+          if (r.reason === 'missing_afm') {
+            window.openReceiptWarning && openReceiptWarning('Λείπει AFM ενεργού πελάτη.');
+          } else {
+            const errMsg = 'Σφάλμα αποθήκευσης: ' + (r.reason || 'άγνωστο');
+            try { if (typeof showFlash === 'function') showFlash(errMsg, 'error', 6000); } catch(_) {}
+            try { persistReceiptFlash(errMsg, 'error'); } catch(_) {}
+          }
+          return false;
+        }
+
+        window.__RC_FLAGS = window.__RC_FLAGS || {};
+        window.__RC_FLAGS.autoHandled = true;
+        const successMsg = 'Αποθηκεύτηκε η απόδειξη (repeat).';
+        try { persistReceiptFlash(successMsg, 'success'); } catch(_) {}
+        try { if (typeof rcResetReceiptCycleState === 'function') rcResetReceiptCycleState(); else if (typeof hideSummaryModal === 'function') hideSummaryModal(); } catch(_) {}
+
+        const savedMark = String((r && (r.mark || r.saved_mark)) || summaryObj.mark || summaryObj.MARK || summaryObj.number || '').trim();
+        try { if (savedMark) window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark; } catch(_) {}
+        try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+        try { window.__RC_LAST_SEARCH_MARK_OR_URL = ''; } catch(_) {}
+        try { if (typeof showFlash === 'function') showFlash(successMsg, 'success', 1800); } catch(_) {}
+
+        let reloaded = false;
+        if (typeof rcFastPostSaveRefresh === 'function') {
+          try { reloaded = !!(await rcFastPostSaveRefresh(savedMark, successMsg)); } catch(_) { reloaded = false; }
+        }
+        if (!reloaded && typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+          try {
+            if (savedMark) window.__RC_PENDING_LIST_HIGHLIGHT_MARK = savedMark;
+            reloaded = !!(await window.FBP_REFRESH_LIST_FRAGMENT());
+          } catch(_) { reloaded = false; }
+        }
+        if (!reloaded && typeof partiallyReloadInvoiceTable === 'function') {
+          try { reloaded = !!(await partiallyReloadInvoiceTable({ highlightMark: savedMark })); } catch(_) { reloaded = false; }
+        }
+
+        try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
+        try { if (typeof rcFocusSearchBoxCursorEnd === 'function') rcFocusSearchBoxCursorEnd(); } catch(_) {}
+        if (!reloaded) {
+          try { if (typeof showFlash === 'function') showFlash('Η αποθήκευση ολοκληρώθηκε, αλλά δεν έγινε ανανέωση πίνακα. Πάτησε αναζήτηση ή ανανέωση λίστας.', 'warning', 4500); } catch(_) {}
+        }
+        return true;
+      } catch (e) {
+        console.warn('patched handleReceiptAfterScrape failed', e);
+        const errMsg = 'Σφάλμα αποθήκευσης: ' + (e && e.message ? e.message : 'άγνωστο σφάλμα');
+        try { if (typeof showFlash === 'function') showFlash(errMsg, 'error', 6000); } catch(_) {}
+        try { persistReceiptFlash(errMsg, 'error'); } catch(_) {}
+        return false;
+      }
+    };
+    window.__RC_PATCHED_HANDLE_RECEIPT_AFTER_SCRAPE = true;
+    return true;
+  }
+
+  if (!patchHandleReceiptAfterScrape()) {
+    const interval = setInterval(() => {
+      if (patchHandleReceiptAfterScrape()) {
+        clearInterval(interval);
+      }
+    }, 150);
+    setTimeout(() => clearInterval(interval), 5000);
+  }
+})();
