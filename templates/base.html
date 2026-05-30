@@ -745,6 +745,35 @@
     .flash-warning { background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
     .flash-info    { background:#e0f2fe; color:#075985; border:1px solid #bae6fd; } */
   </style>
+    <style>
+      /* Ensure header active customer and common inputs are readable in light theme after partial-nav swaps */
+      [data-theme="light"] .layout-header__active-customer a,
+      [data-theme="light"] .layout-header__active-group a,
+      [data-theme="light"] .content-wrap input,
+      [data-theme="light"] .content-wrap select,
+      [data-theme="light"] .content-wrap textarea,
+      [data-theme="light"] .content-wrap .text-gray-600,
+      [data-theme="light"] .content-wrap .text-gray-700,
+      [data-theme="light"] .content-wrap .text-gray-800 {
+        color: #111827 !important; /* black-ish for readability */
+      }
+
+      /* Make header nav links and E3 analytic section text clearly visible in light theme */
+      [data-theme="light"] .layout-header__nav a:not(.bg-sky-600) {
+        color: #111827 !important;
+      }
+
+      [data-theme="light"] #analyticTab,
+      [data-theme="light"] #analyticTab .brain-tab-button,
+      [data-theme="light"] #analyticTab input,
+      [data-theme="light"] #analyticTab select,
+      [data-theme="light"] #analyticTab textarea,
+      [data-theme="light"] #analyticTab .text-gray-600,
+      [data-theme="light"] #analyticTab .text-gray-700,
+      [data-theme="light"] #analyticTab .text-gray-800 {
+        color: #111827 !important;
+      }
+    </style>
   
   <style>
     /* Dark mode toggle switch */
@@ -2000,11 +2029,12 @@
           <!-- 1η γραμμή: Menu buttons + Active credential -->
           <div class="layout-header__top-row flex items-center gap-4">
             {% if current_user.is_authenticated %}
+            {% set _e3_active = (active_page == 'e3_check') %}
             <nav class="layout-header__nav flex gap-3 items-center">
-              <a href="{{ url_for('fetch') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='fetch' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">📥 Λήψη Παραστατικών</a>
-              <a href="{{ url_for('search') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='search' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">🔍 Αναζήτηση MARK</a>
-              <a href="{{ url_for('e3_check') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='e3_check' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">📋 Έλεγχος E3</a>
-              <a href="{{ url_for('credentials') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='credentials' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">🔐 Credentials</a>
+              <a href="{{ url_for('fetch') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='fetch' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">📥 Λήψη Παραστατικών</a>
+              <a href="{{ url_for('search') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='search' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">🔍 Αναζήτηση MARK</a>
+              <a href="{{ url_for('e3_check') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='e3_check' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">📋 Έλεγχος E3</a>
+              <a href="{{ url_for('credentials') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='credentials' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">🔐 Credentials</a>
               {% if current_user.is_admin or current_user.id == ADMIN_USER_ID %}
                 <a href="{{ url_for('admin_dashboard') }}" class="px-3 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700">⚙️ Admin</a>
               {% endif %}
@@ -4453,8 +4483,9 @@
           } catch (_) {}
 
           try {
+            const _useEl = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.el);
             fetchDateInputs.forEach(function(input) {
-              window.flatpickr(input, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useEl ? { locale: 'el' } : {}));
             });
           } catch (e) {
             console.warn('Fetch fallback flatpickr init failed', e);
@@ -4546,8 +4577,9 @@
           } catch (_) {}
 
           try {
+            const _useEl = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.el);
             e3DateInputs.forEach(function(input) {
-              window.flatpickr(input, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useEl ? { locale: 'el' } : {}));
             });
           } catch (e) {
             console.warn('E3 fallback flatpickr init failed', e);
@@ -4960,6 +4992,7 @@
         };
 
         async function executeScripts(scripts, mode) {
+          try { if (typeof cleanupStraySvgTextNodes === 'function') cleanupStraySvgTextNodes(); } catch (_) {}
           for (const oldScript of scripts) {
             await new Promise((resolve, reject) => {
               const script = document.createElement('script');
@@ -4971,16 +5004,48 @@
                 script.onload = () => resolve();
                 script.onerror = () => reject(new Error('Failed loading script: ' + oldScript.src));
               } else {
-                script.textContent = oldScript.textContent || '';
+                try {
+                  const raw = oldScript.textContent || '';
+                  const lines = String(raw).split(/\r?\n/);
+                  const filtered = lines.filter(l => {
+                    const t = l.trim();
+                    if (!t) return false;
+                    if (t.startsWith('<')) return false;
+                    if (/\<\s*(path|svg|g)\b/i.test(t)) return false;
+                    return true;
+                  });
+                  let content = filtered.join('\n');
+
+                  // Convert top-level let/const to var to avoid redeclare errors on re-injection
+                  content = content.replace(/(^|\n)\s*(let|const)\s+/g, '$1var ');
+
+                  script.textContent = content;
+                  if (filtered.length !== lines.length) {
+                    console.info('[partial-nav] sanitized inline script (removed HTML-like lines)');
+                  }
+                } catch (e) {
+                  console.warn('[partial-nav] script sanitization failed, skipping inline content', e);
+                  script.textContent = '';
+                }
               }
 
-              if (mode === 'replace' && oldScript.parentNode) {
-                oldScript.parentNode.replaceChild(script, oldScript);
-              } else if (targetScriptsHost) {
-                targetScriptsHost.appendChild(script);
-              } else {
-                resolve();
-                return;
+              // Try to replace; if that fails, append as fallback.
+              try {
+                if (mode === 'replace' && oldScript.parentNode) {
+                  oldScript.parentNode.replaceChild(script, oldScript);
+                } else if (targetScriptsHost) {
+                  targetScriptsHost.appendChild(script);
+                } else {
+                  resolve();
+                  return;
+                }
+              } catch (err) {
+                console.warn('[partial-nav] replaceChild failed, appending script as fallback', err);
+                try {
+                  (document.head || document.documentElement).appendChild(script);
+                } catch (err2) {
+                  console.error('[partial-nav] fallback append also failed', err2);
+                }
               }
 
               if (!oldScript.src) resolve();
@@ -5144,6 +5209,18 @@
         initSearchReceiptsOutlineSync(url.pathname);
         initSearchRepeatSwitchStateSync(url.pathname);
 
+        // Extra: if we've just swapped to the E3 check page, refresh brain clients
+        try {
+          const p = normalizePath(url.pathname);
+          if (p === '/e3_check') {
+            if (typeof fetchE3BrainActiveClients === 'function') fetchE3BrainActiveClients().catch(()=>{});
+            if (typeof fetchE3BrainCredentials === 'function') fetchE3BrainCredentials().catch(()=>{});
+            if (typeof renderBrainActiveClientSelect === 'function') renderBrainActiveClientSelect();
+            if (typeof syncTopCredentialToBrain === 'function') syncTopCredentialToBrain();
+            if (typeof rebindE3Controls === 'function') rebindE3Controls();
+          }
+        } catch (_) {}
+
         _navBar.done();
 
         try {
@@ -5185,6 +5262,38 @@
           console.warn('partial navigation failed', err);
           window.location.href = url.toString();
         });
+      }, true);
+
+      // Ensure attachments rendered dynamically (help-attachments) open reliably
+      // even after partial page swaps which can interfere with normal anchor behavior.
+      document.addEventListener('click', function(ev) {
+        try {
+          const a = ev.target && ev.target.closest ? ev.target.closest('.help-attachments a[href]') : null;
+          if (!a) return;
+          const href = a.getAttribute('href') || '';
+          if (!href) return;
+          // open in new tab/window to mimic target="_blank" behavior
+          window.open(href, '_blank', 'noopener');
+          ev.preventDefault();
+        } catch (_) {}
+      }, true);
+
+      // Global fallback: ensure E3 page tab buttons toggle panels after partial swaps.
+      document.addEventListener('click', function(ev) {
+        try {
+          const btn = ev.target && ev.target.closest ? ev.target.closest('#quickCheckTabBtn, #analyticTabBtn') : null;
+          if (!btn) return;
+          const tabId = btn.id === 'analyticTabBtn' ? 'analyticTab' : 'quickCheckTab';
+          const tabs = ['quickCheckTab', 'analyticTab'];
+          tabs.forEach((id) => {
+            const panel = document.getElementById(id);
+            if (panel) panel.classList.toggle('hidden', id !== tabId);
+          });
+          const qbtn = document.getElementById('quickCheckTabBtn');
+          const abtn = document.getElementById('analyticTabBtn');
+          if (qbtn) qbtn.classList.toggle('active', tabId === 'quickCheckTab');
+          if (abtn) abtn.classList.toggle('active', tabId === 'analyticTab');
+        } catch (_) {}
       }, true);
 
       window.addEventListener('popstate', function(event) {
@@ -5235,7 +5344,10 @@
 .help-msg.support{margin-right:auto;background:#e2e8f0;color:#0f172a;}
 .help-meta{margin-top:4px;font-size:10px;opacity:.8;}
 .help-attachments{margin-top:6px;display:flex;flex-direction:column;gap:4px;}
-.help-attachments a{font-size:12px;text-decoration:underline;color:inherit;opacity:.95;}
+/* Restore attachments link colors per theme to preserve original appearance */
+.help-attachments a{font-size:12px;text-decoration:underline;opacity:.95;}
+[data-theme="light"] .help-attachments a{color:#0369a1;}
+[data-theme="dark"] .help-attachments a{color:#93c5fd;}
 #helpBotPresence{padding:0 10px 8px 10px;font-size:11px;color:#64748b;min-height:18px;}
 #helpBotForm{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb;align-items:center;}
 #helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
