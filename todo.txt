@@ -10,5 +10,5 @@ page tour
 
 session manager test--
 Ε9 ΤΣΕΚ ΕΝΦΙΑ
-ΑΝΤΙΠΑΡΑΒΟΛΗ ΑΑΔΕ-ΓΕΜΗ ΓΙΑ ΜΕΤΟΧΟΥΣ ΓΙΑ ΤΗΝ ΣΥΓΚΕΚΡΙΜΕΝΗ ΧΡΟΝΙΚΗ ΠΕΡΙΟΔΟ, FIX UI LIGHT MODE
-
+διαχειριστης απο ααδε
+Να ενσωματώσω τις βελτιώσεις στο endpoint `api/e3/brain/member_amka

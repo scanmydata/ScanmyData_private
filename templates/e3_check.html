@@ -652,6 +652,25 @@
   [data-theme="dark"] #waitOverlayMsg {
     color: #cbd5e1 !important;
   }
+  /* Ensure E3 page form labels, inputs and table cells are dark in light theme
+     so member fields and other form text are clearly visible (black, not gray). */
+  [data-theme="light"] .e3-section label,
+  [data-theme="light"] .e3-section .text-gray-700,
+  [data-theme="light"] .e3-section .text-gray-600,
+  [data-theme="light"] .e3-section .text-gray-500,
+  [data-theme="light"] .bg-white label,
+  [data-theme="light"] .bg-white .text-gray-700,
+  [data-theme="light"] .bg-white input,
+  [data-theme="light"] .bg-white select,
+  [data-theme="light"] .bg-white textarea,
+  [data-theme="light"] .e3-table td,
+  [data-theme="light"] .e3-table th,
+  [data-theme="light"] .e3-unclassified-item,
+  [data-theme="light"] .e3-unclassified-card,
+  [data-theme="light"] .brain-tab-panel label,
+  [data-theme="light"] .brain-tab-panel .text-gray-700 {
+    color: #111827 !important; /* near-black for readability */
+  }
 </style>
 
 <div class="max-w-7xl mx-auto p-4">
@@ -907,6 +926,9 @@
           <button id="brainFetchAddressBtn" type="button" class="mt-2 bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm font-medium">
             Ανάκτηση διεύθυνσης
           </button>
+          <button id="brainCheckAadeBtn" type="button" class="mt-2 ml-2 hidden bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium">
+            Έλεγχος μελών ΑΑΔΕ
+          </button>
         </div>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
@@ -1066,7 +1088,8 @@
     if (!message) return;
     const kind = (type === 'error' || type === 'danger') ? 'error' : (type === 'warning' ? 'warning' : (type === 'info' ? 'info' : 'success'));
     if (typeof showStandardFetchFlash === 'function') {
-      showStandardFetchFlash(message, kind, ttl, `brainFlashMessage-${Date.now()}`, {});
+      // use a stable id so repeated calls replace the same flash element
+      showStandardFetchFlash(message, kind, ttl, 'e3BrainFlash', {});
       return;
     }
     let container = null;
@@ -1246,9 +1269,11 @@
     const hint = document.getElementById('brainSingleTypeHint');
     const notice = document.getElementById('brainLegalTypeNotice');
     if (!hint || !notice) return;
-    const normalizedType = normalizeLegalType(legalType) || (isIndividual ? 'Ατομική επιχείρηση' : 'Εταιρεία');
-    const companyLabel = isIndividual ? 'Ατομική επιχείρηση' : 'Εταιρεία';
-    const noticeLabel = isIndividual ? companyLabel : (normalizedType && normalizedType !== companyLabel ? `${companyLabel} ${normalizedType}` : companyLabel);
+    const normalizedType = normalizeLegalType(legalType);
+    // Show "Εταιρεία: <type>" when we have a concise legal type (e.g. "ΟΕ").
+    const noticeLabel = isIndividual
+      ? 'Ατομική επιχείρηση'
+      : (normalizedType ? `Εταιρεία: ${normalizedType}` : 'Εταιρεία');
 
     notice.textContent = noticeLabel;
     notice.classList.remove('hidden');
@@ -1324,19 +1349,30 @@
     fillBrainSingleClientFromSaved(client);
   }
 
-  async function loadE3Partners() {
+  async function loadE3Partners(dateFromIso=null, dateToIso=null) {
     const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
     const partnerContainer = document.getElementById('brainPartnerFields');
+    const taxisUser = String((document.getElementById('brainTaxisUser') || {}).value || '').trim();
+    const taxisPass = String((document.getElementById('brainTaxisPass') || {}).value || '').trim();
+    const initialCompanyTaxisPrefilled = Boolean(taxisUser || taxisPass);
     if (!afm || afm.length !== 9) {
       showBrainAfmStatus('Δώσε έγκυρο ΑΦΜ 9 ψηφίων για να ανακτηθεί η έδρα.', 'error');
       return;
     }
     showBrainAfmStatus('Αναμονή λήψης διεύθυνσης και νομικής μορφής...', 'info', 0);
     try {
+      // show a global overlay for longer operations and ensure it's hidden later
+      try { showGlobalWaitOverlay('Φόρτωση δεδομένων', 'Αναμονή λήψης διεύθυνσης και νομικής μορφής...'); } catch(_){}
+      const payload = { afm };
+      if (dateFromIso) payload.date_from = dateFromIso;
+      if (dateToIso) payload.date_to = dateToIso;
+      if (taxisUser) payload.taxis_user = taxisUser;
+      if (taxisPass) payload.taxis_pass = taxisPass;
+      console.debug('E3: fetching company_members payload=', payload);
       const resp = await fetch('/api/e3/brain/company_members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ afm })
+        body: JSON.stringify(payload)
       });
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
@@ -1355,17 +1391,55 @@
       const amkaEl = document.getElementById('brainAmka');
       const amkaWrapper = document.getElementById('brainAmkaWrapper');
       updateBrainAmkaVisibility(isIndividual);
-      E3_BRAIN_MEMBERS = Array.isArray(data.members) ? data.members : [];
+      // Normalize returned members to a consistent shape so renderBrainPartnerFields can rely on keys
+      const rawMembers = Array.isArray(data.members) ? data.members : (Array.isArray(data.partners) ? data.partners : (Array.isArray(data.partners_raw) ? data.partners_raw : []));
+      const normalized = rawMembers.map((m) => {
+        const obj = m || {};
+        const afm = String(obj.afm || obj.AFM || obj.vat || obj.personAfm || '').trim();
+        const name = String(obj.name || obj.personName || obj.businessName || obj.fullName || obj.personNameLocal || '').trim();
+        const role = String(obj.role || obj.position || obj.roleName || obj.category || '').trim();
+        const dt_from = String(obj.dt_from || obj.dtFrom || obj.fromDate || obj.start || obj.from || '').trim();
+        const dt_to = String(obj.dt_to || obj.dtTo || obj.toDate || obj.end || obj.to || '').trim();
+        const raw = obj.raw || {};
+        return { afm, name, role, dt_from: dt_from || null, dt_to: dt_to || null, raw };
+      }).filter(Boolean);
+      E3_BRAIN_MEMBERS = normalized;
       E3_BRAIN_MEMBER_CREDS = {};
-      renderBrainPartnerFields();
+      console.debug('E3: received members (normalized)', E3_BRAIN_MEMBERS.length, E3_BRAIN_MEMBERS);
+      try { renderBrainPartnerFields(); } catch (err) { console.error('renderBrainPartnerFields failed', err); }
       const partnerMessage = E3_BRAIN_MEMBERS.length
         ? `Βρέθηκαν ${E3_BRAIN_MEMBERS.length} ενεργοί εταίροι/ιδιοκτήτες. Συμπλήρωσε τα πεδία.`
         : (isIndividual ? 'Ατομική επιχείρηση: συμπλήρωσε TAXISnet και ΑΜΚΑ.' : 'Δεν βρέθηκαν ενεργοί εταίροι/ιδιοκτήτες για αυτή την εταιρεία.');
       const companyMessage = data.message || `Η διεύθυνση και η νομική μορφή ανακτήθηκαν. ${partnerMessage}`;
       showBrainAfmStatus(companyMessage, E3_BRAIN_MEMBERS.length ? 'success' : (isIndividual ? 'info' : 'warning'));
+      // If server indicated GEMI-only members, show an explicit warning so user notices
+      if (data.gemi_only) {
+        try {
+          const msg = data.gemi_only_message || 'Οι συνεργάτες προέρχονται μόνο από το ΓΕΜΗ. Συμπλήρωσε κωδικούς TAXISnet για έλεγχο στην ΑΑΔΕ.';
+          showBrainAfmStatus(msg, 'warning', 0);
+        } catch (e) {}
+      }
+
+      // Show AADE-check button only when: company, GEMI-only members, and TAXIS creds were not prefilled
+      try {
+        const checkBtn = document.getElementById('brainCheckAadeBtn');
+        if (checkBtn) {
+          if (!isIndividual && data.gemi_only && !initialCompanyTaxisPrefilled) {
+            checkBtn.classList.remove('hidden');
+          } else {
+            checkBtn.classList.add('hidden');
+          }
+        }
+        // If company and TAXIS creds missing, advise user to fill them for comparison with AADE/ΓΕΜΗ
+        if (!isIndividual && (!taxisUser || !taxisPass)) {
+          showBrainAfmStatus('Για να γίνει αντιπαραβολή με εξωτερικές πηγές (AADE/ΓΕΜΗ) συμπλήρωσε τους κωδικούς TAXISnet.', 'warning', 10000);
+        }
+      } catch(_){}
     } catch (e) {
       if (partnerContainer) partnerContainer.classList.add('hidden');
       showBrainAfmStatus(`Σφάλμα: ${e.message}`, 'error');
+    } finally {
+      try { hideGlobalWaitOverlay(); } catch(_) {}
     }
   }
 
@@ -1380,21 +1454,28 @@
     partnerContainer.classList.remove('hidden');
     let html = '<div class="grid gap-4">';
     E3_BRAIN_MEMBERS.forEach((member) => {
-      const afm = String(member.afm || '—').trim();
+      const rawAfm = String(member.afm || '').trim();
+      const afm = (rawAfm && rawAfm.indexOf('NOAFM_') === 0) ? '—' : (rawAfm || '—');
       const memberName = normalizeTextField(member.name) || '—';
       const role = normalizeTextField(member.role) || '—';
-      const creds = E3_BRAIN_MEMBER_CREDS[afm] || {};
+    const creds = E3_BRAIN_MEMBER_CREDS[rawAfm] || {};
+    const isGemiOnly = member.raw && Array.isArray(member.raw.sources) && member.raw.sources.length === 1 && member.raw.sources[0] === 'gemi';
       html += '<div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 shadow-sm">';
-      html += '<div class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Στοιχεία συνεργάτη / ιδιοκτήτη</div>';
+      const headerBadge = isGemiOnly ? '<span class="ml-2 inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow-400 dark:bg-yellow-500 text-yellow-900 dark:text-yellow-900 text-xs font-semibold" title="Προέρχεται μόνο από ΓΕΜΗ. Δεν ελέγχθηκε στην ΑΑΔΕ.">!</span>' : '';
+      html += '<div class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Στοιχεία συνεργάτη / ιδιοκτήτου ' + headerBadge + '</div>';
       html += '<div class="grid grid-cols-1 xl:grid-cols-3 gap-3 mb-4">';
       html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">ΑΦΜ</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + afm + '</div></div>';
       html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">Επωνυμία</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + memberName + '</div></div>';
       html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">Ρόλος</div><div class="rounded-lg border border-gray-300 dark:border-gray-600 bg-slate-50 dark:bg-gray-800 px-3 py-2 text-sm">' + role + '</div></div>';
       html += '</div>';
       html += '<div class="grid grid-cols-1 xl:grid-cols-3 gap-3">';
-      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS user</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.taxisnet_username || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'taxisnet_username\', this.value)" /></div>';
-      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS pass</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" type="password" value="' + (creds.taxisnet_password || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'taxisnet_password\', this.value)" /></div>';
-      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">AMKA</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.amka || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + afm + '\', \'amka\', this.value)" /></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS user</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.taxisnet_username || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + rawAfm + '\', \'taxisnet_username\', this.value)" /></div>';
+      html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">TAXIS pass</div><input class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" type="password" value="' + (creds.taxisnet_password || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + rawAfm + '\', \'taxisnet_password\', this.value)" /></div>';
+      
+        // AMKA input + retrieval button
+        const btnDisabled = (!creds.taxisnet_username || !creds.taxisnet_password) ? 'disabled' : '';
+        html += '<div class="space-y-1"><div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold">AMKA</div><input id="brainMemberAmkaInput_' + rawAfm + '" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value="' + (creds.amka || '').replace(/"/g, '&quot;') + '" onchange="updateBrainMemberCred(\'' + rawAfm + '\', \'amka\', this.value)" />';
+        html += '<div class="mt-2 flex items-center gap-2"><button id="brainMemberAmkaBtn_' + rawAfm + '" type="button" ' + btnDisabled + ' class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded-lg text-sm font-medium transition" onclick="fetchMemberAmka(\'' + rawAfm + '\')">Ανάκτηση ΑΜΚΑ</button><span id="brainMemberAmkaStatus_' + rawAfm + '" class="text-sm text-gray-500 dark:text-gray-400"></span></div></div>';
       html += '</div>';
       html += '</div>';
     });
@@ -1408,6 +1489,55 @@
       E3_BRAIN_MEMBER_CREDS[afm] = { taxisnet_username: '', taxisnet_password: '', amka: '' };
     }
     E3_BRAIN_MEMBER_CREDS[afm][field] = String(value || '').trim();
+    // Enable/disable AMKA button when TAXIS creds are present
+    try {
+      const btn = document.getElementById('brainMemberAmkaBtn_' + afm);
+      if (btn) {
+        const u = String(E3_BRAIN_MEMBER_CREDS[afm].taxisnet_username || '').trim();
+        const p = String(E3_BRAIN_MEMBER_CREDS[afm].taxisnet_password || '').trim();
+        btn.disabled = !(u && p);
+      }
+    } catch (e) {}
+  }
+
+  async function fetchMemberAmka(afm) {
+    if (!afm) return;
+    const statusEl = document.getElementById('brainMemberAmkaStatus_' + afm);
+    const btn = document.getElementById('brainMemberAmkaBtn_' + afm);
+    try {
+      const creds = E3_BRAIN_MEMBER_CREDS[afm] || {};
+      const taxis_user = String(creds.taxisnet_username || '').trim();
+      const taxis_pass = String(creds.taxisnet_password || '').trim();
+      if (!taxis_user || !taxis_pass) {
+        if (statusEl) statusEl.textContent = 'Συμπλήρωσε τους κωδικούς TAXIS.';
+        return;
+      }
+      if (btn) { btn.disabled = true; }
+      if (statusEl) { statusEl.textContent = 'Αναζήτηση...'; }
+      const member = E3_BRAIN_MEMBERS.find(m => String(m.afm || '').trim() === String(afm).trim());
+      const name = member ? member.name : '';
+      const resp = await fetch('/api/e3/brain/member_amka', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ afm, name, taxis_user, taxis_pass })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        if (statusEl) statusEl.textContent = data.error || 'Σφάλμα ανάκτησης ΑΜΚΑ';
+        if (btn) btn.disabled = false;
+        return;
+      }
+      const amka = data.amka || '';
+      const input = document.getElementById('brainMemberAmkaInput_' + afm);
+      if (input) input.value = amka;
+      if (!E3_BRAIN_MEMBER_CREDS[afm]) E3_BRAIN_MEMBER_CREDS[afm] = {};
+      E3_BRAIN_MEMBER_CREDS[afm].amka = amka;
+      if (statusEl) statusEl.textContent = amka ? 'Ανακτήθηκε' : 'Δεν βρέθηκε ΑΜΚΑ';
+    } catch (e) {
+      try { if (statusEl) statusEl.textContent = 'Σφάλμα'; } catch(_) {}
+    } finally {
+      try { if (btn) { const u = String((E3_BRAIN_MEMBER_CREDS[afm]||{}).taxisnet_username||'').trim(); const p = String((E3_BRAIN_MEMBER_CREDS[afm]||{}).taxisnet_password||'').trim(); btn.disabled = !(u && p); } } catch(_) {}
+    }
   }
 
   function editBrainCred(afm) {
@@ -2348,6 +2478,16 @@
     }
 
     const year = fromYear;
+    const userVal = String((userEl && userEl.value) || '').trim();
+    const passVal = String((passEl && passEl.value) || '').trim();
+
+    // If we have detected partners (company) require top-level TAXIS credentials
+    if (Array.isArray(E3_BRAIN_MEMBERS) && E3_BRAIN_MEMBERS.length && (!userVal || !passVal)) {
+      brainSetResult('Για να γίνει αντιπαραβολή/έλεγχος σε εταιρεία συμπλήρωσε τους κωδικούς TAXISnet στην φόρμα.');
+      showBrainFlash('Συμπλήρωσε κωδικούς TAXISnet για την αντιπαραβολή.', 'error');
+      return;
+    }
+
     const payload = {
       mode: 'single',
       year,
@@ -2646,7 +2786,7 @@
     }
   }
 
-  (function bindBrainControls() {
+  function rebindE3Controls() {
     const runSingleBtn = document.getElementById('brainRunSingleBtn');
     const saveCredsBtn = document.getElementById('brainSaveCredentialsBtn');
     const bulkPickBtn = document.getElementById('brainBulkPickBtn');
@@ -2664,10 +2804,94 @@
       runSingleBtn.addEventListener('click', runE3BrainSingle);
     }
 
+    function _parseDateInputToIso(s) {
+      if (!s) return null;
+      const t = String(s).trim();
+      // ISO yyyy-mm-dd
+      if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+      // Common dd/mm/yyyy
+      const m = t.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const d = m[1]; const mo = m[2]; const y = m[3];
+        return `${y}-${mo}-${d}`;
+      }
+      // Fallback: try to parse with Date
+      const parsed = new Date(t);
+      if (!isNaN(parsed.getTime())) {
+        const y = parsed.getFullYear();
+        const mo = String(parsed.getMonth() + 1).padStart(2, '0');
+        const d = String(parsed.getDate()).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      return null;
+    }
+
     const fetchAddressBtn = document.getElementById('brainFetchAddressBtn');
+      const checkAadeBtn = document.getElementById('brainCheckAadeBtn');
     if (fetchAddressBtn && fetchAddressBtn.dataset.bound !== '1') {
       fetchAddressBtn.dataset.bound = '1';
-      fetchAddressBtn.addEventListener('click', loadE3Partners);
+      fetchAddressBtn.addEventListener('click', function(){
+        const fromEl = document.getElementById('brainDateFrom');
+        const toEl = document.getElementById('brainDateTo');
+        const fromRaw = fromEl ? fromEl.value : '';
+        const toRaw = toEl ? toEl.value : '';
+        if (!fromRaw || !toRaw) {
+          showBrainAfmStatus('Συμπλήρωσε Ημερομηνία Από και Ημερομηνία Έως πριν την ανάκτηση.', 'error');
+          return;
+        }
+        const fromIso = _parseDateInputToIso(fromRaw);
+        const toIso = _parseDateInputToIso(toRaw);
+        if (!fromIso || !toIso) {
+          showBrainAfmStatus('Μη έγκυρη μορφή ημερομηνίας. Χρήση dd/mm/yyyy ή yyyy-mm-dd.', 'error');
+          return;
+        }
+        const yearFrom = Number(fromIso.substring(0,4));
+        const yearTo = Number(toIso.substring(0,4));
+        if (yearFrom !== yearTo) {
+          showBrainAfmStatus('Το εύρος ημερομηνιών πρέπει να ανήκει στο ίδιο έτος.', 'error');
+          return;
+        }
+        loadE3Partners(fromIso, toIso);
+      });
+        // Bind check AADE button to run a dedicated AADE/TAXIS registry fetch (company_info.fetch_registry)
+        if (checkAadeBtn && checkAadeBtn.dataset.bound !== '1') {
+          checkAadeBtn.dataset.bound = '1';
+          checkAadeBtn.addEventListener('click', async function(){
+            const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+            if (!afm || afm.length !== 9) {
+              showBrainAfmStatus('Δώσε έγκυρο ΑΦΜ 9 ψηφίων για να γίνει έλεγχος ΑΑΔΕ.', 'error');
+              return;
+            }
+            const taxisUser = String((document.getElementById('brainTaxisUser')||{}).value||'').trim();
+            const taxisPass = String((document.getElementById('brainTaxisPass')||{}).value||'').trim();
+            if (!taxisUser || !taxisPass) {
+              showBrainAfmStatus('Συμπλήρωσε τους κωδικούς TAXISnet της εταιρείας πριν τον έλεγχο ΑΑΔΕ.', 'error');
+              return;
+            }
+            try { showGlobalWaitOverlay('AADE έλεγχος', 'Εκτέλεση ελέγχου ΑΑΔΕ...'); } catch(_){}
+            try {
+              const fromEl = document.getElementById('brainDateFrom');
+              const toEl = document.getElementById('brainDateTo');
+              const fromIso = _parseDateInputToIso(fromEl ? fromEl.value : null);
+              const toIso = _parseDateInputToIso(toEl ? toEl.value : null);
+              const resp = await fetch('/api/e3/brain/check_members_aade', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ afm, taxis_user: taxisUser, taxis_pass: taxisPass, date_from: fromIso, date_to: toIso })
+              });
+              const data = await resp.json();
+              if (!resp.ok || !data.ok) {
+                throw new Error((data && data.error) || 'Αποτυχία ελέγχου ΑΑΔΕ');
+              }
+              const outMembers = Array.isArray(data.members) ? data.members : [];
+              E3_BRAIN_MEMBERS = outMembers.map(m => ({ afm: String(m.afm||'').trim(), name: String(m.name||'').trim(), role: String(m.role||'').trim(), dt_from: m.dt_from||m.dtFrom||null, dt_to: m.dt_to||m.dtTo||null, raw: m.raw||m }));
+              E3_BRAIN_MEMBER_CREDS = {};
+              try { renderBrainPartnerFields(); } catch(e){ console.error(e); }
+              showBrainAfmStatus('Ολοκληρώθηκε έλεγχος ΑΑΔΕ. Ενημερώθηκαν τα μέλη.', 'success', 8000);
+            } catch (err) {
+              showBrainAfmStatus(err.message || 'Σφάλμα ελέγχου ΑΑΔΕ', 'error', 8000);
+            } finally { try{ hideGlobalWaitOverlay(); } catch(_){} }
+          });
+        }
     }
 
     const topActiveClient = document.getElementById('e3Credential') || document.getElementById('e3CredentialLocked');
@@ -2752,7 +2976,12 @@
         }
       });
     }
-  })();
+    // Ensure datepickers and other page-specific bindings are initialized when rebinding
+    try { if (typeof ensureE3DatePickerReady === 'function') ensureE3DatePickerReady(); } catch (_) {}
+    try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); } catch (_) {}
+  }
+  // Expose and run initial binding. `swapPage` will call `rebindE3Controls()` after partial navigation.
+  try { rebindE3Controls(); } catch (_) {}
 
   function ensureE3DatePickerReady() {
     const inputs = ['e3DateFrom', 'e3DateTo', 'brainDateFrom', 'brainDateTo']

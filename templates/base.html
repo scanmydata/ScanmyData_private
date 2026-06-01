@@ -746,9 +746,8 @@
     .flash-info    { background:#e0f2fe; color:#075985; border:1px solid #bae6fd; } */
   </style>
     <style>
-      /* Ensure header active customer and common inputs are readable in light theme after partial-nav swaps */
-      [data-theme="light"] .layout-header__active-customer a,
-      [data-theme="light"] .layout-header__active-group a,
+      /* Ensure common inputs and non-pill header text are readable in light theme.
+         Exclude colored "pill" links (e.g. .bg-sky-600, .bg-emerald-600) which should keep white text. */
       [data-theme="light"] .content-wrap input,
       [data-theme="light"] .content-wrap select,
       [data-theme="light"] .content-wrap textarea,
@@ -758,8 +757,9 @@
         color: #111827 !important; /* black-ish for readability */
       }
 
-      /* Make header nav links and E3 analytic section text clearly visible in light theme */
-      [data-theme="light"] .layout-header__nav a:not(.bg-sky-600) {
+      /* Make header nav links and E3 analytic section text clearly visible in light theme,
+         but preserve white text for colored pills (sky / emerald). */
+      [data-theme="light"] .layout-header__nav a:not(.bg-sky-600):not(.bg-emerald-600) {
         color: #111827 !important;
       }
 
@@ -772,6 +772,14 @@
       [data-theme="light"] #analyticTab .text-gray-700,
       [data-theme="light"] #analyticTab .text-gray-800 {
         color: #111827 !important;
+      }
+
+      /* Ensure colored header "pills" retain white text in light theme */
+      [data-theme="light"] .layout-header__active-customer a.bg-sky-600,
+      [data-theme="light"] .layout-header__active-customer a.bg-sky-600:hover,
+      [data-theme="light"] .layout-header__active-group a.bg-emerald-600,
+      [data-theme="light"] .layout-header__active-group a.bg-emerald-600:hover {
+        color: #ffffff !important;
       }
     </style>
   
@@ -2590,9 +2598,14 @@
         try {
           if (el.__hideTimer) clearTimeout(el.__hideTimer);
         } catch (_) {}
-        el.__hideTimer = setTimeout(function(){
-          try { el.remove(); } catch(_) {}
-        }, timeoutMs);
+        if (Number(timeoutMs) > 0) {
+          el.__hideTimer = setTimeout(function(){
+            try { el.remove(); } catch(_) {}
+          }, timeoutMs);
+        } else {
+          // ttl === 0 means "persistent" flash: do not auto-remove
+          el.__hideTimer = null;
+        }
       }
 
       function upsertGlobalFetchProgressFlash(state){

@@ -1,349 +1,272 @@
-import argparse
 import asyncio
-import base64
-import json
 import re
-from itertools import product
+import base64
 from pathlib import Path
-from urllib.parse import urljoin
-
-import pdfplumber
-from playwright.async_api import async_playwright
+import json
 
 try:
-    import pytesseract
-    from pdf2image import convert_from_bytes
-    OCR_AVAILABLE = True
-except Exception:
-    OCR_AVAILABLE = False
+    from playwright.async_api import async_playwright
+except Exception as e:
+    raise
 
-AADE_ENTRY = 'https://www.aade.gr/dilosi-forologias-eisodimatos-fp-e1-e2-e3'
-DEFAULT_OUTPUT = Path('downloads/e1_extracted.pdf')
 AFM_RE = re.compile(r"\b(\d{9})\b")
 AMKA_RE = re.compile(r"\b(\d{11})\b")
+AADE_ENTRY = 'https://www.aade.gr/dilosi-forologias-eisodimatos-fp-e1-e2-e3'
 
-async def wait_for_navigation_or_load(page, timeout=10000):
+
+async def _extract_from_text(text: str):
+    if not text:
+        return None, None
+    a = AFM_RE.search(text)
+    m = AMKA_RE.search(text)
+    return (a.group(1) if a else None, m.group(1) if m else None)
+
+
+async def _save_debug(page, screenshot_dir: Path, name: str):
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
     try:
-        await page.wait_for_load_state('networkidle', timeout=timeout)
+        html = await page.content()
+        (screenshot_dir / f"{name}.html").write_text(html, encoding='utf-8')
     except Exception:
-        try:
-            await page.wait_for_load_state('domcontentloaded', timeout=timeout)
-        except Exception:
-            pass
-
-async def extract_from_text(text):
-    if not text:
-        return None, None
-    afm = AFM_RE.search(text)
-    amka = AMKA_RE.search(text)
-    return (afm.group(1) if afm else None, amka.group(1) if amka else None)
-
-async def extract_from_page(page):
+        pass
     try:
-        text = await page.evaluate('() => document.body.innerText')
-        return await extract_from_text(text)
-    except Exception:
-        return None, None
-
-def normalize_name(text):
-    if not text:
-        return ''
-    return text.replace('\u00A0', ' ').casefold().strip()
-
-def find_afm_amka(text):
-    if not text:
-        return None, None
-    afm = AFM_RE.search(text)
-    amka = AMKA_RE.search(text)
-    return (afm.group(1) if afm else None, amka.group(1) if amka else None)
-
-def line_tokens_after_label(line, label):
-    norm_line = normalize_name(line)
-    prefix = normalize_name(label)
-    if not norm_line.startswith(prefix):
-        return []
-    remainder = line[len(label):].strip()
-    return [normalize_name(tok) for tok in remainder.split() if tok.strip()]
-
-
-def find_named_afm_amka_on_page(page_text, name):
-    if not page_text or not name:
-        return None, None
-    lines = [ln.strip() for ln in page_text.splitlines() if ln.strip()]
-    target_surname, target_first = None, None
-    name_parts = [tok for tok in normalize_name(name).split() if tok]
-    if len(name_parts) == 2:
-        target_surname, target_first = name_parts[0], name_parts[1]
-    else:
-        target_surname = name_parts[0] if name_parts else None
-    # Strategy A: look for Table 1 / header-based table (usually on page 2)
-    try:
-        header_idx = None
-        for i, line in enumerate(lines):
-            up = line.upper()
-            if 'ΠΙΝΑΚΑΣ 1' in up or 'ΣΤΟΙΧΕΙΑ ΦΟΡΟΛΟΓΟΥΜΕΝΟΥ' in up:
-                # search next few lines for header containing column labels
-                for j in range(i + 1, min(i + 6, len(lines))):
-                    h = lines[j].upper()
-                    if 'ΕΠΩΝΥΜΟ' in h and 'ΟΝΟΜΑ' in h and ('ΑΜΚΑ' in h or 'ΑΡΙΘΜΟΣ' in h or 'ΦΟΡΟΛ' in h):
-                        header_idx = j
-                        break
-                if header_idx is not None:
-                    break
-        if header_idx is None:
-            for i, line in enumerate(lines):
-                up = line.upper()
-                if 'ΕΠΩΝΥΜΟ' in up and 'ΟΝΟΜΑ' in up and ('ΑΜΚΑ' in up or 'ΑΡΙΘΜΟΣ' in up or 'ΦΟΡΟΛ' in up):
-                    header_idx = i
-                    break
-
-        if header_idx is not None:
-            header_line = lines[header_idx]
-            cols = re.split(r'\s{2,}', header_line)
-            def idx_of(tokens):
-                for k, cell in enumerate(cols):
-                    cu = cell.upper()
-                    for t in tokens:
-                        if t in cu:
-                            return k
-                return None
-            idx_surname = idx_of(['ΕΠΩΝΥΜΟ', 'ΕΠΙΘΕΤΟ'])
-            idx_name = idx_of(['ΟΝΟΜΑ', 'ΟΝ'])
-            idx_afm = idx_of(['ΑΦΜ', 'ΑΡΙΘΜΟΣ ΦΟΡΟΛ', 'ΑΡΙΘΜΟΣ ΦΟΡΟΛ. ΜΗΤΡΩΟΥ'])
-            idx_amka = idx_of(['ΑΜΚΑ'])
-
-            for r in range(header_idx + 1, min(header_idx + 300, len(lines))):
-                row = lines[r]
-                if re.search(r'ΠΙΝΑΚΑΣ\s+\d', row, flags=re.IGNORECASE):
-                    break
-                cells = re.split(r'\s{2,}', row)
-                if idx_surname is None or idx_name is None or idx_afm is None or idx_amka is None:
-                    # header incomplete; fallback to token search within the same row
-                    normrow = normalize_name(row)
-                    if target_surname and target_first:
-                        if target_surname in normrow and target_first in normrow:
-                            afm_m = AFM_RE.search(row)
-                            amka_m = AMKA_RE.search(row)
-                            return (afm_m.group(1) if afm_m else None, amka_m.group(1) if amka_m else None)
-                    continue
-
-                if max(idx_surname, idx_name, idx_afm, idx_amka) >= len(cells):
-                    # sometimes rows wrap; try finding by tokens
-                    normrow = normalize_name(row)
-                    if target_surname and target_first and target_surname in normrow and target_first in normrow:
-                        afm_m = AFM_RE.search(row)
-                        amka_m = AMKA_RE.search(row)
-                        return (afm_m.group(1) if afm_m else None, amka_m.group(1) if amka_m else None)
-                    continue
-
-                surname_cell = cells[idx_surname] if idx_surname < len(cells) else ''
-                name_cell = cells[idx_name] if idx_name < len(cells) else ''
-                afm_cell = cells[idx_afm] if idx_afm < len(cells) else ''
-                amka_cell = cells[idx_amka] if idx_amka < len(cells) else ''
-
-                if target_surname and target_first:
-                    if target_surname in normalize_name(surname_cell) and target_first in normalize_name(name_cell):
-                        afm_m = AFM_RE.search(afm_cell)
-                        amka_m = AMKA_RE.search(amka_cell)
-                        return (afm_m.group(1) if afm_m else None, amka_m.group(1) if amka_m else None)
-                elif target_surname:
-                    if target_surname in normalize_name(surname_cell):
-                        afm_m = AFM_RE.search(afm_cell)
-                        amka_m = AMKA_RE.search(amka_cell)
-                        return (afm_m.group(1) if afm_m else None, amka_m.group(1) if amka_m else None)
+        await page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
     except Exception:
         pass
 
-    # Strategy B: existing labeled-group parsing (keeps compatibility)
-    groups = []
-    for i, line in enumerate(lines):
-        norm = normalize_name(line)
-        if norm.startswith('επωνυμο'):
-            group = {'start': i, 'surname': line_tokens_after_label(line, 'ΕΠΩΝΥΜΟ'), 'name': [], 'afm': [], 'amka': []}
-            for j in range(i + 1, min(i + 10, len(lines))):
-                next_norm = normalize_name(lines[j])
-                if next_norm.startswith(normalize_name('ΟΝΟΜΑ')) and not group['name']:
-                    group['name'] = line_tokens_after_label(lines[j], 'ΟΝΟΜΑ')
-                elif next_norm.startswith(normalize_name('ΑΡΙΘΜΟΣ ΦΟΡΟΛ. ΜΗΤΡΩΟΥ')):
-                    group['afm'] = line_tokens_after_label(lines[j], 'ΑΡΙΘΜΟΣ ΦΟΡΟΛ. ΜΗΤΡΩΟΥ')
-                elif next_norm.startswith(normalize_name('ΑΜΚΑ')):
-                    group['amka'] = line_tokens_after_label(lines[j], 'ΑΜΚΑ')
-                elif next_norm.startswith(normalize_name('ΤΗΛΕΦΩΝΟ')):
-                    break
-            if group['surname'] and group['name'] and group['afm'] and group['amka']:
-                groups.append(group)
 
-    for group in groups:
-        columns = min(len(group['surname']), len(group['name']), len(group['afm']), len(group['amka']))
-        for idx in range(columns):
-            surname = normalize_name(group['surname'][idx])
-            first = normalize_name(group['name'][idx])
-            if target_surname and target_first:
-                if target_surname in surname and target_first in first:
-                    return group['afm'][idx], group['amka'][idx]
-            elif target_surname and target_surname in surname:
-                return group['afm'][idx], group['amka'][idx]
-            elif target_first and target_first in first:
-                return group['afm'][idx], group['amka'][idx]
-
-    return None, None
-
-def find_named_afm_amka(pages, name):
-    if not pages or not name:
-        return None, None
-    # Prefer page 2 (index 1) where Table 1 usually lives
-    if len(pages) > 1:
-        afm, amka = find_named_afm_amka_on_page(pages[1], name)
-        if afm and amka:
-            return afm, amka
-    for page_text in pages:
-        afm, amka = find_named_afm_amka_on_page(page_text, name)
-        if afm and amka:
-            return afm, amka
-    all_text = '\n'.join(pages)
-    return find_named_afm_amka_on_page(all_text, name)
-
-async def save_pdf_bytes(output_path, pdf_bytes):
-    output_path.write_bytes(pdf_bytes)
-
-async def take_screenshot(page, output_dir, name):
-    return
-
-async def run(username, password, year, output_path, headless=False, name=None):
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+async def _run_impl(username, password, year, output_path, headless=True, name=None, initial_storage: str = None):
+    outp = Path(output_path)
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    screenshot_dir = outp.parent / 'screenshots'
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless, args=['--no-sandbox'])
-        context = await browser.new_context()
-        page = await context.new_page()
-        screenshot_dir = output_path.parent / 'screenshots'
-
-        print('START: goto AADE entry', flush=True)
-        await page.goto(AADE_ENTRY)
-        await wait_for_navigation_or_load(page)
-        await take_screenshot(page, screenshot_dir, 'start_entry')
-
-        popup = page
-        print('LOGIN: performing integrated UI flow', flush=True)
-        if await page.locator('a:has-text("Είσοδος στην εφαρμογή")').count() > 0:
+        browser = await p.chromium.launch(headless=headless, args=['--no-sandbox', '--disable-gpu'])
+        ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
+        if initial_storage:
             try:
-                async with context.expect_page() as popup_info:
+                context = await browser.new_context(user_agent=ua, locale='el-GR', storage_state=str(initial_storage))
+            except Exception:
+                context = await browser.new_context(user_agent=ua, locale='el-GR')
+        else:
+            context = await browser.new_context(user_agent=ua, locale='el-GR')
+        page = await context.new_page()
+        page.set_default_navigation_timeout(30000)
+        page.set_default_timeout(30000)
+
+        # start tracing to capture network activity for debugging
+        try:
+            await context.tracing.start(screenshots=True, snapshots=True)
+        except Exception:
+            pass
+
+        await page.goto(AADE_ENTRY)
+        await page.wait_for_timeout(2000)
+
+        # open integrated login if present
+        popup = page
+        try:
+            if await page.locator('a:has-text("Είσοδος στην εφαρμογή")').count() > 0:
+                async with context.expect_page(timeout=5000) as popup_info:
                     await page.locator('a:has-text("Είσοδος στην εφαρμογή")').first.click()
                 popup = await popup_info.value
+        except Exception:
+            popup = page
+
+        await _save_debug(popup, screenshot_dir, 'after_entry')
+
+        # fill credentials if present
+        try:
+            if await popup.locator('input[name="username"]').count() > 0 and await popup.locator('input[name="password"]').count() > 0:
+                await popup.locator('input[name="username"]').fill(username)
+                await popup.locator('input[name="password"]').fill(password)
+                btn = popup.locator('button[name="btn_login"], button:has-text("Συνδεση"), button:has-text("ΣΥΝΔΕΣΗ"), input[type=submit]')
+                if await btn.count() > 0:
+                    await _save_debug(popup, screenshot_dir, 'before_login')
+                    await btn.first.click()
+                    # wait for navigation/networkidle or for an element that indicates successful login
+                    try:
+                        await popup.wait_for_load_state('networkidle', timeout=20000)
+                    except Exception:
+                        pass
+                    await popup.wait_for_timeout(1000)
+                    await _save_debug(popup, screenshot_dir, 'after_login')
+                    # optional interactive pause for debugging (set via CLI flag)
+                    if getattr(_run_impl, '_pause_after_login', False):
+                        try:
+                            await asyncio.get_event_loop().run_in_executor(None, input, 'Paused after login. Inspect browser then press Enter to continue...')
+                        except Exception:
+                            pass
+                    # immediately try clicking the local "Είσοδος στην εφαρμογή" control to enter the app UI
+                    try:
+                        entry_loc = popup.locator('button[name="PB_EKKATH_PDF_SYZ"], a[href*="login.done"], a:has-text("Είσοδος στην εφαρμογή")')
+                        if await entry_loc.count() > 0:
+                            try:
+                                await entry_loc.first().click()
+                            except Exception:
+                                try:
+                                    await popup.click('button[name="PB_EKKATH_PDF_SYZ"], a[href*="login.done"], a:has-text("Είσοδος στην εφαρμογή")')
+                                except Exception:
+                                    pass
+                            try:
+                                await popup.wait_for_load_state('networkidle', timeout=20000)
+                            except Exception:
+                                pass
+                            await popup.wait_for_timeout(1500)
+                            await _save_debug(popup, screenshot_dir, 'after_local_entry_click_post_login')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # try to select the year from an on-page selector first, try clicking local "Είσοδος στην εφαρμογή" button,
+        # then fallback to direct menu URL
+        menu_url = f'https://www1.aade.gr/webtax/incomefp/year{year}-income-menu.do'
+        try:
+            try:
+                # attempt to find and select the year option via JS (handles dynamically populated selects)
+                selected = await popup.evaluate('''async (year) => {
+                    const sel = document.querySelector('select[name="pt1:yearSelect"], select[name="year"], select[id*="year"]');
+                    if (!sel) return false;
+                    for (const opt of Array.from(sel.options)) {
+                        if ((opt.text || '').includes(year) || (opt.value || '').includes(year)) {
+                            sel.value = opt.value;
+                            sel.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                    }
+                    return false;
+                }''', str(year))
+                if selected:
+                    await popup.wait_for_timeout(1500)
+                    await _save_debug(popup, screenshot_dir, 'after_year_selected')
+                else:
+                    # try clicking a local "Είσοδος στην εφαρμογή" button if present (avoids direct goto)
+                    try:
+                        entry_loc = popup.locator('button[name="PB_EKKATH_PDF_SYZ"], a[href*="login.done"], a:has-text("Είσοδος στην εφαρμογή")')
+                        if await entry_loc.count() > 0:
+                            await entry_loc.first().click()
+                            try:
+                                await popup.wait_for_load_state('networkidle', timeout=20000)
+                            except Exception:
+                                pass
+                            await popup.wait_for_timeout(1500)
+                            await _save_debug(popup, screenshot_dir, 'after_local_entry_click')
+                            # try selection again after clicking local entry
+                            selected = await popup.evaluate('''async (year) => {
+                                const sel = document.querySelector('select[name="pt1:yearSelect"], select[name="year"], select[id*="year"]');
+                                if (!sel) return false;
+                                for (const opt of Array.from(sel.options)) {
+                                    if ((opt.text || '').includes(year) || (opt.value || '').includes(year)) {
+                                        sel.value = opt.value;
+                                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }''', str(year))
+                            if selected:
+                                await popup.wait_for_timeout(1000)
+                                await _save_debug(popup, screenshot_dir, 'after_year_selected')
+                                # proceed
+                            else:
+                                await popup.goto(menu_url)
+                        else:
+                            await popup.goto(menu_url)
+                    except Exception:
+                        await popup.goto(menu_url)
+                    try:
+                        await popup.wait_for_url(lambda u: f'year{year}-income-menu.do' in u, timeout=20000)
+                    except Exception:
+                        try:
+                            sel = popup.locator('select[name="pt1:yearSelect"], select[name="year"], select[id*="year"]')
+                            await sel.wait_for(timeout=20000)
+                        except Exception:
+                            pass
+                    await popup.wait_for_timeout(1000)
+                    await _save_debug(popup, screenshot_dir, 'after_year_nav')
             except Exception:
-                await page.locator('a:has-text("Είσοδος στην εφαρμογή")').first.click()
-                popup = page
-
-        await wait_for_navigation_or_load(popup)
-        print('LOGIN: entry opened', popup.url, flush=True)
-
-        if await popup.locator('input[name="username"]').count() > 0 and await popup.locator('input[name="password"]').count() > 0:
-            print('LOGIN: filling credentials', flush=True)
-            await popup.locator('input[name="username"]').fill(username)
-            await popup.locator('input[name="password"]').fill(password)
-            btn = popup.locator('button[name="btn_login"], button:has-text("Συνδεση"), button:has-text("ΣΥΝΔΕΣΗ"), input[type=submit]')
-            if await btn.count() > 0:
-                await take_screenshot(popup, screenshot_dir, 'before_login')
-                await btn.first.click()
-                await wait_for_navigation_or_load(popup)
-                await popup.wait_for_timeout(1500)
-                print('LOGIN: submitted', flush=True)
-                await take_screenshot(popup, screenshot_dir, 'after_login')
-
-                # Detect GSIS/GSIS login failures (OAM-6 session limit or invalid credentials)
+                # if any error selecting, fallback to navigating directly
+                await popup.goto(menu_url)
                 try:
-                    page_content = await popup.content()
-                    if "Error.jsp" in popup.url or "p_error_code" in popup.url or "OAM-6" in popup.url or "OAM-6" in page_content or "Ο χρήστης χρησιμοποιεί ήδη το μέγιστο αριθμό περιόδων λειτουργίας" in page_content:
-                        msg = "GSIS login failed with session limit OAM-6. Close an existing session or use different credentials."
-                        res = {'pdf_path': None, 'afm': None, 'amka': None, 'error': 'oam-6', 'message': msg}
-                        root_json = Path(__file__).resolve().parents[2] / 'e1_result.json'
-                        try:
-                            root_json.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding='utf-8')
-                        except Exception:
-                            pass
-                        await browser.close()
-                        return res
-                    # Generic invalid credential detection by page content
-                    if any(tok in page_content for tok in ("Λάθος", "συνθηματικό", "Λανθασμένο", "Δεν βρέθηκε", "invalid", "Incorrect")):
-                        msg = "GSIS login failed: invalid username or password."
-                        res = {'pdf_path': None, 'afm': None, 'amka': None, 'error': 'login_failed', 'message': msg}
-                        root_json = Path(__file__).resolve().parents[2] / 'e1_result.json'
-                        try:
-                            root_json.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding='utf-8')
-                        except Exception:
-                            pass
-                        await browser.close()
-                        return res
+                    await popup.wait_for_url(lambda u: f'year{year}-income-menu.do' in u, timeout=20000)
                 except Exception:
                     pass
-
-        entry_button = popup.locator('button[name="PB_EKKATH_PDF_SYZ"], button:has-text("Είσοδος στην εφαρμογή"), a:has-text("Είσοδος στην εφαρμογή")')
-        if await entry_button.count() > 0:
-            try:
-                print('CLICK: PB_EKKATH_PDF_SYZ/button', flush=True)
-                await take_screenshot(popup, screenshot_dir, 'before_pb_ekkath')
-                await entry_button.first.click()
-                await wait_for_navigation_or_load(popup)
                 await popup.wait_for_timeout(1000)
-                await take_screenshot(popup, screenshot_dir, 'after_pb_ekkath')
+                await _save_debug(popup, screenshot_dir, 'after_year_nav')
+            # detect temporary loss message and try a recovery by clearing cookies and reloading
+            try:
+                page_text = (await popup.content() or '').lower()
+                if 'προσωρινή απώλεια' in page_text or 'προσωρινη απωλεια' in page_text:
+                    for attempt in range(3):
+                        try:
+                            await context.clear_cookies()
+                            await popup.goto(AADE_ENTRY)
+                            await popup.wait_for_timeout(1500)
+                            await popup.goto(menu_url)
+                            await popup.wait_for_timeout(1500)
+                            await _save_debug(popup, screenshot_dir, f'after_recovery_nav_{attempt}')
+                            pt = (await popup.content() or '').lower()
+                            if 'προσωρινή απώλεια' not in pt and 'προσωρινη απωλεια' not in pt:
+                                break
+                        except Exception:
+                            await popup.wait_for_timeout(1000)
+                            continue
             except Exception:
                 pass
+                # after recovery, if login form present, fill credentials again
+                try:
+                    if await popup.locator('input[name="username"]').count() > 0 and await popup.locator('input[name="password"]').count() > 0:
+                        await popup.locator('input[name="username"]').fill(username)
+                        await popup.locator('input[name="password"]').fill(password)
+                        btn = popup.locator('button[name="btn_login"], button:has-text("Συνδεση"), input[type=submit]')
+                        if await btn.count() > 0:
+                            await _save_debug(popup, screenshot_dir, 'before_login_after_recovery')
+                            await btn.first.click()
+                            try:
+                                await popup.wait_for_load_state('networkidle', timeout=20000)
+                            except Exception:
+                                pass
+                            await popup.wait_for_timeout(1000)
+                            await _save_debug(popup, screenshot_dir, 'after_login_after_recovery')
+                            if getattr(_run_impl, '_pause_after_login', False):
+                                try:
+                                    await asyncio.get_event_loop().run_in_executor(None, input, 'Paused after recovery login. Inspect browser then press Enter to continue...')
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-        menu_url = f'https://www1.aade.gr/webtax/incomefp/year{year}-income-menu.do'
-        if menu_url not in popup.url:
-            try:
-                print('NAVIGATE: direct year menu', menu_url, flush=True)
-                await popup.goto(menu_url)
-                await wait_for_navigation_or_load(popup)
-                await popup.wait_for_timeout(1500)
-                await take_screenshot(popup, screenshot_dir, 'after_direct_menu_nav')
-                print('URL after direct menu:', popup.url, flush=True)
-            except Exception as e:
-                print('NAVIGATE: direct menu failed', repr(e), flush=True)
-
-        print('START YEAR SELECTION', flush=True)
-        await popup.wait_for_timeout(2000)
-        print('WAIT: 2000ms before selecting year', flush=True)
-        year_select = popup.locator('select[name="pt1:yearSelect"], select[id="pt1:yearSelect::content"], select[name="year"], select[name="YEAR"]')
-        year_select_count = await year_select.count()
-        print('YEAR SELECTOR COUNT', year_select_count, flush=True)
-        if year_select_count > 0:
-            try:
-                await take_screenshot(popup, screenshot_dir, 'before_year_select')
-                opts = year_select.locator('option')
-                for i in range(await opts.count()):
-                    opt = opts.nth(i)
-                    txt = (await opt.inner_text()).strip().replace('\u00A0', ' ')
-                    val = (await opt.get_attribute('value')) or ''
-                    if str(year) in txt or str(year) in val:
-                        if val:
-                            await year_select.select_option(value=val)
-                        else:
-                            await year_select.select_option(label=txt)
-                        await popup.wait_for_timeout(1000)
-                        print('SELECT: chose', await year_select.input_value(), flush=True)
-                        break
-                await take_screenshot(popup, screenshot_dir, 'after_year_select')
-            except Exception as e:
-                print('SELECT: error', repr(e), flush=True)
-
+        # find E1 button (wait until the UI loads the menu/actions)
         try:
-            if await year_select.count() > 0:
-                current = await year_select.input_value()
-                if str(current) != str(year):
-                    print('FORCE: SelectMenu submit for year', year, flush=True)
-                    await popup.evaluate('(y) => { document.forms[0]["YEAR"].value = y; document.forms[0].action = "./year"+y+"-income-menu.do"; document.forms[0].submit(); }', year)
-                    await wait_for_navigation_or_load(popup)
-                    await popup.wait_for_timeout(2000)
-        except Exception as e:
-            print('FORCE: SelectMenu submit error', repr(e), flush=True)
+            await popup.wait_for_timeout(500)
+        except Exception:
+            pass
+        # ensure year option selected matches requested year (if selector exists)
+        try:
+            sel = popup.locator('select[name="pt1:yearSelect"], select[name="year"], select[id*="year"]')
+            if await sel.count() > 0:
+                try:
+                    opts = sel.locator('option')
+                    found = False
+                    for i in range(await opts.count()):
+                        txt = (await opts.nth(i).inner_text()).strip()
+                        if str(year) in txt:
+                            found = True
+                            break
+                    if not found:
+                        # try to wait a bit for JS to populate options
+                        await sel.wait_for(timeout=5000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-        print('AFTER YEAR URL:', popup.url, flush=True)
-        await popup.wait_for_timeout(1000)
-
+        # find E1 button
         e1_btn = None
-        for sel in ['button[name*="PBE1"], input[name*="PBE1"], a:has-text("Ε1"), a:has-text("E1")']:
+        for sel in ['button[name*="PBE1"]', 'input[name*="PBE1"]', 'a:has-text("Ε1")', 'a:has-text("E1")']:
             try:
                 loc = popup.locator(sel)
                 if await loc.count() > 0:
@@ -352,385 +275,379 @@ async def run(username, password, year, output_path, headless=False, name=None):
             except Exception:
                 pass
 
-        pdf_bytes = None
-        new_page = None
-        if e1_btn:
-            print('CLICK: E1 button (attempt)', flush=True)
-            pdf_requests = []
-            pdf_responses = []
-            print_candidates = []
-            downloads = []
-            new_pages = []
-            def _on_page(page_obj):
-                new_pages.append(page_obj)
-            def _on_request(r):
-                try:
-                    url = r.url.lower()
-                    if url.endswith('.pdf') or ('e1' in url and '.pdf' in url):
-                        pdf_requests.append(r)
-                except Exception:
-                    pass
-            def _on_response(r):
-                try:
-                    ctype = (r.headers.get('content-type') or '').lower()
-                    url = r.url.lower()
-                    if 'application/pdf' in ctype or 'application/octet-stream' in ctype or url.endswith('.pdf'):
-                        pdf_responses.append(r)
-                    if 'menup' in url or 'print' in url or url.endswith('.pdf'):
-                        print_candidates.append((url, ctype, r.status))
-                except Exception:
-                    pass
-            def _on_download(dl):
-                downloads.append(dl)
-            context.on('page', _on_page)
-            context.on('request', _on_request)
-            context.on('response', _on_response)
-            context.on('download', _on_download)
-            new_page = None
+        # brute-force: search frames/pages for elements with print-related text and click them
+        async def brute_force_click_print(target_context):
+            patterns = ['Εκτύπ', 'Εκτυπ', 'Εκτύπωση', 'Ε1', 'Print', 'PDF', 'Κατέβ', 'Λήψη']
+            # try on main popup first
             try:
-                try:
-                    async with context.expect_page(timeout=5000) as popup_info:
-                        await e1_btn.click()
-                    new_page = await popup_info.value
-                except Exception:
-                    await e1_btn.click()
-                await popup.wait_for_timeout(3000)
-                print('AFTER E1 click pages count', len(context.pages), 'new_pages', len(new_pages), flush=True)
-                for idx, page_obj in enumerate(context.pages):
-                    print(f'PAGE[{idx}] url=', page_obj.url, flush=True)
-                if not new_page and new_pages:
-                    new_page = new_pages[-1]
-                if new_page:
-                    await take_screenshot(new_page, screenshot_dir, 'new_page_after_e1')
+                for p in patterns:
                     try:
-                        await new_page.wait_for_load_state('load', timeout=10000)
-                    except Exception as e:
-                        print('NEWPAGE load state failed', repr(e), flush=True)
-                    try:
-                        async with new_page.expect_response(lambda r: r.url == new_page.url, timeout=10000) as resp_info:
-                            resp = await resp_info.value
-                        ctype = (resp.headers.get('content-type') or '').lower()
-                        print('NEWPAGE response', resp.url, resp.status, ctype, flush=True)
-                        if 'application/pdf' in ctype or 'application/octet-stream' in ctype:
-                            pdf_bytes = await resp.body()
-                            print('NEWPAGE response body captured', len(pdf_bytes) if isinstance(pdf_bytes, (bytes, bytearray)) else None, flush=True)
-                            if not (isinstance(pdf_bytes, (bytes, bytearray)) and pdf_bytes[:4] == b'%PDF'):
-                                print('NEWPAGE response body is not PDF; first bytes', pdf_bytes[:8] if isinstance(pdf_bytes, (bytes, bytearray)) else None, flush=True)
-                    except Exception as e:
-                        print('NEWPAGE expect_response failed', repr(e), flush=True)
-                    try:
-                        new_text = await new_page.evaluate('() => document.documentElement.innerText || ""')
-                        print('NEWPAGE TEXT length', len(new_text), flush=True)
-                        print('NEWPAGE TEXT preview', new_text[:1000], flush=True)
-                    except Exception as e:
-                        print('NEWPAGE text evaluate failed', repr(e), flush=True)
-                print('PDF_REQUESTS', [r.url for r in pdf_requests], flush=True)
-                print('PDF_RESPONSES', [(r.url, (r.headers.get('content-type') or '').lower(), r.status) for r in pdf_responses], flush=True)
-                print('PRINT_CANDIDATES', print_candidates, flush=True)
-                print('DOWNLOADS', len(downloads), flush=True)
-                if print_candidates:
-                    for idx, (url, ctype, status) in enumerate(print_candidates):
-                        print(f'PRINT_CANDIDATE[{idx}]', url, ctype, status, flush=True)
-                if pdf_responses:
-                    for idx, resp in enumerate(pdf_responses):
-                        try:
-                            candidate = await resp.body()
-                            print(f'pdf_responses[{idx}] len', len(candidate), 'first bytes', candidate[:8], flush=True)
-                            if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
-                                pdf_bytes = candidate
-                                print(f'selected pdf_responses[{idx}] as PDF', flush=True)
-                                break
-                            else:
-                                print(f'pdf_responses[{idx}] not PDF', repr(candidate[:16]), flush=True)
-                        except Exception as e:
-                            print(f'pdf_responses[{idx}] body failed', repr(e), flush=True)
-                    if not pdf_bytes:
-                        print('no pdf_responses contained a valid PDF', flush=True)
-                elif pdf_requests:
-                    req = pdf_requests[0]
-                    try:
-                        print('TRYING pdf_requests URL', req.url, flush=True)
-                        resp = await context.request.get(req.url)
-                        print('pdf_requests raw status', resp.status, 'ctype', resp.headers.get('content-type'), flush=True)
-                        if resp.ok:
-                            pdf_bytes = await resp.body()
-                            if not (isinstance(pdf_bytes, (bytes, bytearray)) and pdf_bytes[:4] == b'%PDF'):
-                                pdf_bytes = None
-                    except Exception as e:
-                        print('Fetch request URL failed', repr(e), flush=True)
-                elif downloads:
-                    try:
-                        dl = downloads[0]
-                        await dl.save_as(str(output_path))
-                        pdf_bytes = output_path.read_bytes()
-                        print('Saved PDF from download event to', output_path, flush=True)
-                    except Exception as e:
-                        print('Download save failed', repr(e), flush=True)
-                else:
-                    try:
-                        resp = await context.wait_for_event('response', timeout=5000)
-                        ctype = (resp.headers.get('content-type') or '').lower()
-                        if 'application/pdf' in ctype or 'application/octet-stream' in ctype or resp.url.lower().endswith('.pdf'):
-                            print('PDF response found via context response event', flush=True)
-                            pdf_bytes = await resp.body()
-                            if not (isinstance(pdf_bytes, (bytes, bytearray)) and pdf_bytes[:4] == b'%PDF'):
-                                print('WARNING: context response body is not actual PDF, falling back to new_page extraction', flush=True)
-                                try:
-                                    (output_path.parent / 'debug_response_body.bin').write_bytes(pdf_bytes)
-                                except Exception:
-                                    pass
-                                pdf_bytes = None
+                        res = await popup.evaluate('(pat)=>{const els=Array.from(document.querySelectorAll("a,button,input"));for(const e of els){const t=(e.innerText||e.value||"").trim();if(t.includes(pat)){try{e.click();return true;}catch(e){}}}return false;}', p)
+                        if res:
+                            return True
                     except Exception:
-                        pdf_bytes = None
-            except Exception as e:
-                print('E1 click failed', repr(e), flush=True)
-            finally:
-                try:
-                    context.off('page', _on_page)
-                except Exception:
-                    pass
-                try:
-                    context.off('request', _on_request)
-                except Exception:
-                    pass
-                try:
-                    context.off('response', _on_response)
-                except Exception:
-                    pass
-                try:
-                    context.off('download', _on_download)
-                except Exception:
-                    pass
-
-            if not pdf_bytes and new_page:
-                try:
-                    await wait_for_navigation_or_load(new_page)
-                    await take_screenshot(new_page, screenshot_dir, 'new_page_after_e1')
-                    print('NEWPAGE URL:', new_page.url, flush=True)
-                    # use the opened target page for extraction
-                    target_page = new_page
-                    afm, amka = await extract_from_page(target_page)
-                    if afm or amka:
-                        await browser.close()
-                        return {'pdf_path': None, 'afm': afm, 'amka': amka, 'method': 'newpage'}
-
-                    # inspect embedded frames/objects for real PDF source
-                    try:
-                        src_candidates = await target_page.evaluate('''() => {
-                            const sources = [];
-                            for (const e of document.querySelectorAll('iframe, embed, object')) {
-                                const src = e.src || e.data || e.getAttribute('data');
-                                if (src) sources.push({tag: e.tagName.toLowerCase(), src});
-                            }
-                            return sources;
-                        }''')
-                        print('NEWPAGE sources:', src_candidates, flush=True)
-                        for item in src_candidates or []:
-                            if not item.get('src'):
-                                continue
-                            src = item['src']
-                            if src == 'about:blank':
-                                continue
-                            if src.startswith('data:application/pdf'):
-                                try:
-                                    b64 = src.split(',', 1)[1]
-                                    pdf_bytes = base64.b64decode(b64)
-                                    break
-                                except Exception:
-                                    continue
-                            if src.startswith('blob:'):
-                                try:
-                                    b64 = await target_page.evaluate('(url) => fetch(url).then(r=>r.arrayBuffer()).then(b=>btoa(String.fromCharCode.apply(null,new Uint8Array(b))))', src)
-                                    pdf_bytes = base64.b64decode(b64)
-                                    break
-                                except Exception as e:
-                                    print('Blob PDF fetch failed', repr(e), flush=True)
-                                    continue
-                            if src.startswith('http'):
-                                try:
-                                    resp = await target_page.request.get(src)
-                                    if resp.ok:
-                                        candidate = await resp.body()
-                                        if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
-                                            pdf_bytes = candidate
-                                            print('Fetched PDF from new page src', src, flush=True)
-                                            break
-                                except Exception as e:
-                                    print('Fetch src URL failed', repr(e), flush=True)
-                                    continue
-                    except Exception as e:
-                        print('NEWPAGE inspect failed', repr(e), flush=True)
-
-                    if not pdf_bytes:
-                        target_page = new_page if new_page else popup
-                        if target_page and target_page.url:
-                            try:
-                                print('TRYING raw request to', target_page.url, flush=True)
-                                resp = await target_page.request.get(target_page.url, headers={'accept': 'application/pdf, */*'})
-                                print('RAW REQUEST status', resp.status, 'ctype', resp.headers.get('content-type'), flush=True)
-                                if resp.ok:
-                                    candidate = await resp.body()
-                                    if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
-                                        pdf_bytes = candidate
-                                        print('Fetched PDF from target page URL', target_page.url, flush=True)
-                                    else:
-                                        print('Raw request response not PDF; first bytes', candidate[:8], flush=True)
-                            except Exception as e:
-                                print('Request to target page URL failed', repr(e), flush=True)
-                            if not pdf_bytes:
-                                try:
-                                    print('TRYING browser fetch to', target_page.url, flush=True)
-                                    b64 = await target_page.evaluate('(url) => fetch(url, {credentials: "include", headers: {accept: "application/pdf, */*"}}).then(r => r.arrayBuffer()).then(b => btoa(String.fromCharCode.apply(null, new Uint8Array(b))))', target_page.url)
-                                    pdf_bytes = base64.b64decode(b64)
-                                    if isinstance(pdf_bytes, (bytes, bytearray)) and pdf_bytes[:4] == b'%PDF':
-                                        print('Fetched PDF from browser fetch', flush=True)
-                                    else:
-                                        print('Browser fetch result not PDF; first bytes', pdf_bytes[:8], flush=True)
-                                        pdf_bytes = None
-                                except Exception as e:
-                                    print('Browser fetch to target page failed', repr(e), flush=True)
-                except Exception as e:
-                    print('New page extraction failed', repr(e), flush=True)
-
-            if not pdf_bytes:
-                try:
-                    embed_src = await popup.evaluate('''() => {
-                        const e = document.querySelector('embed[type="application/pdf"], embed');
-                        if (e && e.src) return e.src;
-                        const obj = document.querySelector('object[type="application/pdf"]');
-                        if (obj && obj.data) return obj.data;
-                        const iframe = document.querySelector('iframe');
-                        if (iframe && iframe.src) return iframe.src;
-                        return null;
-                    }''')
-                    if embed_src and embed_src != 'about:blank':
-                        if embed_src.startswith('data:application/pdf'):
-                            b64 = embed_src.split(',', 1)[1]
-                            pdf_bytes = base64.b64decode(b64)
-                        else:
-                            try:
-                                b64 = await popup.evaluate('(url) => fetch(url).then(r=>r.arrayBuffer()).then(b=>btoa(String.fromCharCode.apply(null,new Uint8Array(b))))', embed_src)
-                                pdf_bytes = base64.b64decode(b64)
-                            except Exception as e:
-                                print('PDF fetch via page.evaluate failed', repr(e), flush=True)
-                except Exception as e:
-                    print('Embed inspection failed', repr(e), flush=True)
-
-        if not pdf_bytes:
-            print('NO PDF yet, trying form submit fallback', flush=True)
-            form_page = new_page if new_page else popup
-            form = None
-            for f in await form_page.query_selector_all('form'):
-                try:
-                    action = (await f.get_attribute('action') or '').lower()
-                    if 'menuprint' in action or 'print' in action:
-                        form = f
-                        break
-                except Exception:
-                    pass
-            if form:
-                try:
-                    action = await form.get_attribute('action') or form_page.url
-                    action_url = action if action.startswith('http') else urljoin(form_page.url, action)
-                    params = {}
-                    for inp in await form.query_selector_all('input,select,textarea'):
-                        name = await inp.get_attribute('name')
-                        if not name:
-                            continue
-                        value = (await (await inp.get_property('value')).json_value()) or ''
-                        params[name] = value
-                    if 'PBE1_PRINT_PDF' not in ''.join(params.keys()):
-                        params['PBE1_PRINT_PDF'] = ''
-                    print('POST fallback to', action_url, flush=True)
-                    resp = await form_page.request.post(action_url, data=params, headers={'accept': 'application/pdf, */*'})
-                    pdf_bytes = await resp.body()
-                except Exception as e:
-                    print('Form fallback failed', repr(e), flush=True)
-
-        if not pdf_bytes:
+                        continue
+            except Exception:
+                pass
+            # try each page/frame in context
             try:
-                async with popup.expect_download(timeout=10000) as dl_info:
-                    if e1_btn:
-                        await e1_btn.click()
-                dl = await dl_info.value
-                await dl.save_as(str(output_path))
-                pdf_bytes = output_path.read_bytes()
+                for pg in target_context.pages:
+                    try:
+                        for p in patterns:
+                            try:
+                                res = await pg.evaluate('(pat)=>{const els=Array.from(document.querySelectorAll("a,button,input"));for(const e of els){const t=(e.innerText||e.value||"").trim();if(t.includes(pat)){try{e.click();return true;}catch(e){}}}return false;}', p)
+                                if res:
+                                    return True
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            return False
+
+        pdf_bytes = None
+
+        # listeners
+        pdf_responses = []
+        downloads = []
+        new_pages = []
+        debug = {
+            'responses': [],
+            'downloads': [],
+            'new_pages': [],
+            'events': [],
+        }
+
+        def on_response(r):
+            try:
+                ctype = (r.headers.get('content-type') or '').lower()
+                url = r.url.lower()
+                if 'application/pdf' in ctype or url.endswith('.pdf'):
+                    pdf_responses.append(r)
+                debug['responses'].append({'url': r.url, 'status': getattr(r, 'status', None), 'content-type': r.headers.get('content-type')})
             except Exception:
                 pass
 
+        def on_page(pobj):
+            new_pages.append(pobj)
+            try:
+                debug['new_pages'].append({'url': pobj.url})
+            except Exception:
+                pass
+
+        def on_download(dl):
+            downloads.append(dl)
+            try:
+                debug['downloads'].append({'url': dl.url})
+            except Exception:
+                pass
+
+        context.on('response', on_response)
+        context.on('page', on_page)
+        context.on('download', on_download)
+
+        if e1_btn:
+            try:
+                # click and allow more time for print flow to produce PDF responses
+                await e1_btn.click()
+            except Exception:
+                try:
+                    await popup.click(e1_btn)
+                except Exception:
+                    pass
+            # wait longer for PDF generation / network activity
+            await popup.wait_for_timeout(15000)
+
+        # if no immediate PDF, try brute-force clicking print controls across frames/pages
         if not pdf_bytes:
+            for attempt in range(3):
+                try:
+                    clicked = await brute_force_click_print(context)
+                    if clicked:
+                        await popup.wait_for_timeout(5000 + attempt * 3000)
+                    # check responses/downloads again
+                    for r in pdf_responses:
+                        try:
+                            b = await r.body()
+                            if isinstance(b, (bytes, bytearray)) and b[:4] == b'%PDF':
+                                pdf_bytes = b
+                                break
+                        except Exception:
+                            continue
+                    if pdf_bytes:
+                        break
+                except Exception:
+                    await popup.wait_for_timeout(1000)
+
+        # prefer response bodies
+        for r in pdf_responses:
+            try:
+                b = await r.body()
+                if isinstance(b, (bytes, bytearray)) and b[:4] == b'%PDF':
+                    pdf_bytes = b
+                    break
+            except Exception:
+                continue
+
+        # check downloads
+        if not pdf_bytes and downloads:
+            try:
+                dl = downloads[0]
+                dl_path = outp
+                await dl.save_as(str(dl_path))
+                pdf_bytes = dl_path.read_bytes()
+            except Exception:
+                pass
+
+        # inspect new pages for embedded PDFs
+        if not pdf_bytes and new_pages:
+            for npg in new_pages:
+                try:
+                    await npg.wait_for_load_state('load', timeout=3000)
+                except Exception:
+                    pass
+                await _save_debug(npg, screenshot_dir, 'newpage')
+                try:
+                    debug['events'].append({'type': 'new_page', 'url': npg.url})
+                except Exception:
+                    pass
+                try:
+                    inner = await npg.evaluate('''() => {
+                        const sources = [];
+                        for (const e of document.querySelectorAll('iframe,embed,object')) {
+                            const src = e.src || e.data || e.getAttribute('data');
+                            if (src) sources.push(src);
+                        }
+                        return sources;
+                    }''')
+                    for src in inner or []:
+                        if not src:
+                            continue
+                        if src.startswith('data:application/pdf'):
+                            try:
+                                b64 = src.split(',', 1)[1]
+                                pdf_bytes = base64.b64decode(b64)
+                                break
+                            except Exception:
+                                continue
+                        if src.startswith('blob:'):
+                            try:
+                                b64 = await npg.evaluate('''async (url) => {
+                                    const resp = await fetch(url, { credentials: 'include' });
+                                    if (!resp.ok) return null;
+                                    const ab = await resp.arrayBuffer();
+                                    let binary = '';
+                                    const bytes = new Uint8Array(ab);
+                                    const chunk = 0x8000;
+                                    for (let i = 0; i < bytes.length; i += chunk) {
+                                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                                    }
+                                    return btoa(binary);
+                                }''', src)
+                                if b64:
+                                    pdf_bytes = base64.b64decode(b64)
+                                    break
+                            except Exception:
+                                continue
+                        if src.startswith('http'):
+                            try:
+                                b64 = await npg.evaluate('''async (url) => {
+                                    const resp = await fetch(url, { credentials: 'include' });
+                                    if (!resp.ok) return null;
+                                    const ab = await resp.arrayBuffer();
+                                    let binary = '';
+                                    const bytes = new Uint8Array(ab);
+                                    const chunk = 0x8000;
+                                    for (let i = 0; i < bytes.length; i += chunk) {
+                                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                                    }
+                                    return btoa(binary);
+                                }''', src)
+                                if b64:
+                                    candidate = base64.b64decode(b64)
+                                    if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
+                                        pdf_bytes = candidate
+                                        break
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+                if pdf_bytes:
+                    break
+
+        # form POST fallback
+        if not pdf_bytes:
+            try:
+                forms = await popup.query_selector_all('form')
+                for f in forms:
+                    try:
+                        action = (await f.get_attribute('action')) or popup.url
+                        if 'print' in (action or '').lower() or 'menuprint' in (action or '').lower():
+                            action_url = action if action.startswith('http') else popup.url
+                            params = {}
+                            inputs = await f.query_selector_all('input,select,textarea')
+                            for inp in inputs:
+                                name = await inp.get_attribute('name')
+                                if not name:
+                                    continue
+                                val = await (await inp.get_property('value')).json_value()
+                                params[name] = val or ''
+                            # ensure some print param exists
+                            if 'PBE1_PRINT_PDF' not in ''.join(params.keys()):
+                                params['PBE1_PRINT_PDF'] = ''
+                            try:
+                                b64 = await popup.evaluate('''async (action, params) => {
+                                    const form = new URLSearchParams();
+                                    for (const k of Object.keys(params)) form.append(k, params[k]);
+                                    const resp = await fetch(action, { method: 'POST', body: form, credentials: 'include', headers: { 'accept': 'application/pdf, */*' } });
+                                    if (!resp.ok) return null;
+                                    const ab = await resp.arrayBuffer();
+                                    let binary = '';
+                                    const bytes = new Uint8Array(ab);
+                                    const chunk = 0x8000;
+                                    for (let i = 0; i < bytes.length; i += chunk) {
+                                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                                    }
+                                    return btoa(binary);
+                                }''', action_url, params)
+                                if b64:
+                                    candidate = base64.b64decode(b64)
+                                    if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
+                                        pdf_bytes = candidate
+                                        break
+                            except Exception:
+                                pass
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        # direct print URL fallback: try known menuPrint endpoints using page fetch (include cookies)
+        if not pdf_bytes:
+            try:
+                candidates = [
+                    f'https://www1.aade.gr/webtax/incomefp/year{year}-income-menuPrint.do',
+                    f'https://www1.aade.gr/webtax/incomefp/year{year}-income-menuPrint.action',
+                    f'https://www1.aade.gr/webtax/incomefp/year{year}-income-menuPrint'
+                ]
+                for url in candidates:
+                    try:
+                        b64 = await popup.evaluate('''async (url) => {
+                            const resp = await fetch(url, { credentials: 'include', headers: { accept: 'application/pdf, */*' } });
+                            if (!resp.ok) return null;
+                            const ab = await resp.arrayBuffer();
+                            let binary = '';
+                            const bytes = new Uint8Array(ab);
+                            const chunk = 0x8000;
+                            for (let i = 0; i < bytes.length; i += chunk) {
+                                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                            }
+                            return btoa(binary);
+                        }''', url)
+                        if b64:
+                            candidate = base64.b64decode(b64)
+                            if isinstance(candidate, (bytes, bytearray)) and candidate[:4] == b'%PDF':
+                                pdf_bytes = candidate
+                                debug['events'].append({'type': 'direct_fetch', 'url': url})
+                                break
+                    except Exception:
+                        continue
+                    if pdf_bytes:
+                        break
+            except Exception:
+                pass
+
+        # write debug summary
+        try:
+            (screenshot_dir / 'debug_summary.json').write_text(json.dumps(debug, ensure_ascii=False, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+
+        # cleanup listeners
+        try:
+            context.off('response', on_response)
+        except Exception:
+            pass
+        try:
+            context.off('page', on_page)
+        except Exception:
+            pass
+        try:
+            context.off('download', on_download)
+        except Exception:
+            pass
+
+        if not pdf_bytes:
+            try:
+                await context.storage_state(path=str(screenshot_dir / 'storage_state.json'))
+            except Exception:
+                pass
+            try:
+                await context.tracing.stop(path=str(screenshot_dir / 'trace.zip'))
+            except Exception:
+                pass
             await browser.close()
             raise RuntimeError('Could not obtain PDF from AADE print flow')
 
-        is_pdf = isinstance(pdf_bytes, (bytes, bytearray)) and pdf_bytes[:4] == b'%PDF'
-        if not is_pdf:
-            try:
-                html = pdf_bytes.decode('utf-8', 'ignore')
-                afm, amka = await extract_from_text(re.sub(r'<[^>]+>', ' ', html))
-                if afm or amka:
-                    await browser.close()
-                    return {'pdf_path': None, 'afm': afm, 'amka': amka, 'method': 'html'}
-            except Exception:
-                pass
-            raise RuntimeError('Downloaded content was not a PDF and no AFM/AMKA could be extracted')
-
-        await save_pdf_bytes(output_path, pdf_bytes)
+        outp.write_bytes(pdf_bytes)
 
         afm = None
         amka = None
-        pages = []
         try:
-            with pdfplumber.open(str(output_path)) as pdf:
-                for page in pdf.pages:
-                    pages.append(page.extract_text() or '')
-        except Exception:
+            import pdfplumber
             pages = []
-
-        if name and pages:
-            afm, amka = find_named_afm_amka(pages, name)
-
-        if (not afm or not amka) and pages:
-            combined = '\n'.join(pages)
-            afm, amka = await extract_from_text(combined)
-
-        if (not afm or not amka) and OCR_AVAILABLE:
             try:
-                pages = convert_from_bytes(pdf_bytes)
-                img = pages[1] if len(pages) > 1 else pages[0]
-                try:
-                    ocr_text = pytesseract.image_to_string(img, lang='ell+eng')
-                except Exception:
-                    ocr_text = pytesseract.image_to_string(img)
-                ocr_afm, ocr_amka = await extract_from_text(ocr_text)
-                afm = afm or ocr_afm
-                amka = amka or ocr_amka
+                with pdfplumber.open(str(outp)) as pdf:
+                    for pg in pdf.pages:
+                        pages.append(pg.extract_text() or '')
             except Exception:
-                pass
+                pages = []
+            if pages:
+                combined = '\n'.join(pages)
+                afm, amka = await _extract_from_text(combined)
+        except Exception:
+            try:
+                txt = pdf_bytes.decode('utf-8', 'ignore')
+                afm, amka = await _extract_from_text(txt)
+            except Exception:
+                afm = None
+                amka = None
 
         await browser.close()
-        return {'pdf_path': str(output_path), 'afm': afm, 'amka': amka}
+        return {'pdf_path': str(outp), 'afm': afm, 'amka': amka}
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--username', required=True)
-    parser.add_argument('--password', required=True)
-    parser.add_argument('--year', default='2025')
-    parser.add_argument('--name', default=None)
-    parser.add_argument('--output', default=str(DEFAULT_OUTPUT))
-    parser.add_argument('--headless', action='store_true')
-    args = parser.parse_args()
-
+async def run(username, password, year, output_path, headless=True, name=None):
     try:
-        res = asyncio.run(run(args.username, args.password, args.year, args.output, headless=args.headless, name=args.name))
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-        root_json = Path(__file__).resolve().parents[2] / 'e1_result.json'
-        root_json.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+        return await _run_impl(username, password, year, output_path, headless=headless, name=name)
+    except RuntimeError as e:
+        if headless and 'Could not obtain PDF' in str(e):
+            # retry once in headed mode
+            storage_path = Path(output_path).parent / 'screenshots' / 'storage_state.json'
+            if storage_path.exists():
+                return await _run_impl(username, password, year, output_path, headless=False, name=name, initial_storage=str(storage_path))
+            return await _run_impl(username, password, year, output_path, headless=False, name=name)
         raise
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--username', required=True)
+    parser.add_argument('--password', required=True)
+    parser.add_argument('--year', default='2025')
+    parser.add_argument('--output', default='downloads/e1_extracted.pdf')
+    parser.add_argument('--headless', action='store_true')
+    parser.add_argument('--pause-after-login', action='store_true', help='Pause after login to inspect the headed browser')
+    args = parser.parse_args()
+    try:
+        # support interactive pause by attaching attribute to impl function
+        if args.pause_after_login:
+            setattr(_run_impl, '_pause_after_login', True)
+        res = asyncio.run(run(args.username, args.password, args.year, args.output, headless=args.headless))
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise

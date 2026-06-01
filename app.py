@@ -16858,7 +16858,22 @@ def api_e3_brain_company_members():
             return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
 
         from e3.checks.fetch_business_partners import BusinessPortalFetcher
-        from e3.checks.e3_brain import _extract_active_members, _extract_company_summary, _is_individual_business
+        from e3.checks.e3_brain import (
+            _extract_company_summary,
+            _is_individual_business,
+            _parse_date,
+            _is_active_between,
+            _extract_active_members,
+            _extract_company_info_members,
+            _compare_member_sets,
+            _format_role_for_output,
+            _norm_afm,
+        )
+        # company_info.playwright wrapper to fetch AADE/TAXIS registry when credentials provided
+        try:
+            from e3.checks.company_info import fetch_registry
+        except Exception:
+            fetch_registry = None
 
         fetcher = BusinessPortalFetcher()
         partners_result = fetcher.fetch_partners(afm)
@@ -16878,7 +16893,39 @@ def api_e3_brain_company_members():
         summary = _extract_company_summary(company_payload)
         legal_type = summary.get("legal_type") or company_payload.get("legalType") or ""
         is_individual = _is_individual_business(legal_type)
-        members = _extract_active_members(partners_result, _dt.utcnow().date())
+
+        # Parse optional requested date range from payload. Expect ISO 'YYYY-MM-DD' or common formats.
+        date_from_raw = payload.get('date_from')
+        date_to_raw = payload.get('date_to')
+        date_from = _parse_date(date_from_raw) if date_from_raw else None
+        date_to = _parse_date(date_to_raw) if date_to_raw else None
+
+        # If date range provided, ensure both endpoints exist and are in the same year.
+        if date_from_raw or date_to_raw:
+            if not date_from or not date_to:
+                return jsonify({"ok": False, "error": "Απαιτείται έγκυρο εύρος ημερομηνιών (π.χ. '2026-01-01')."}), 400
+            if date_from.year != date_to.year:
+                return jsonify({"ok": False, "error": "Το εύρος ημερομηνιών πρέπει να ανήκει στο ίδιο έτος."}), 400
+
+        # Determine members active in the requested interval (if provided), otherwise use today's active members
+        partners = partners_result.get('partners') if isinstance(partners_result, dict) else []
+        members = []
+        if date_from and date_to:
+            for p in partners:
+                if not isinstance(p, dict):
+                    continue
+                # member dt fields may vary in naming
+                dt_from = p.get('dtFrom') or p.get('dt_from') or p.get('from') or p.get('start')
+                dt_to = p.get('dtTo') or p.get('dt_to') or p.get('to') or p.get('end')
+                try:
+                    if _is_active_between(date_from, date_to, dt_from, dt_to):
+                        members.append(p)
+                except Exception:
+                    # fall back to not include if parsing fails
+                    continue
+        else:
+            # default: active on today's date
+            members = [m for m in partners if isinstance(m, dict) and _is_active_between(_dt.utcnow().date(), _dt.utcnow().date(), m.get('dtFrom') or m.get('dt_from'), m.get('dtTo') or m.get('dt_to'))]
         company_address = str(
             company_payload.get("address")
             or company_payload.get("address1")
@@ -16897,16 +16944,220 @@ def api_e3_brain_company_members():
                 ]
                 if x and str(x).strip()
             ).strip()
-        members_out = [
-            {
-                "afm": m.get("afm"),
-                "name": m.get("name"),
-                "role": m.get("role"),
-                "dt_from": m.get("dt_from"),
-                "dt_to": m.get("dt_to"),
-            }
-            for m in members
-        ]
+        # Normalize members output to common keys (support various source field names)
+        members_out = []
+        for idx, m in enumerate(members):
+            if not isinstance(m, dict):
+                continue
+            afm_val = (m.get('afm') or m.get('AFM') or m.get('personAfm') or m.get('vat') or '')
+            # normalize afm to digits-only string when present, else empty string
+            try:
+                afm_val = str(afm_val or '').strip()
+            except Exception:
+                afm_val = ''
+            # If there's no real AFM, assign a stable placeholder so UI ids remain unique
+            if not afm_val or not any(ch.isdigit() for ch in afm_val):
+                afm_val = f'NOAFM_{idx}'
+            name_val = m.get('name') or m.get('personName') or m.get('businessName') or m.get('fullName') or ''
+            role_val = m.get('role') or m.get('position') or m.get('category') or ''
+            dt_from_val = m.get('dt_from') or m.get('dtFrom') or m.get('fromDate') or m.get('start') or None
+            dt_to_val = m.get('dt_to') or m.get('dtTo') or m.get('toDate') or m.get('end') or None
+            members_out.append({
+                'afm': afm_val,
+                'name': str(name_val or '').strip(),
+                'role': _format_role_for_output(role_val),
+                'dt_from': dt_from_val,
+                'dt_to': dt_to_val,
+                'raw': m,
+            })
+
+        # If no members were selected for the requested interval but GEMI/search returned partners,
+        # and no TAXIS credentials were provided, include GEMI partners anyway and mark them as GEMI-only
+        gemi_only = False
+        # Use payload fields directly here to avoid referencing taxis_user/taxis_pass
+        payload_has_taxis = bool(payload.get('taxis_user') or payload.get('taxisUser') or payload.get('taxis_pass') or payload.get('taxisPass') or payload.get('taxis_password'))
+        if not members_out and partners and not payload_has_taxis:
+            gemi_only = True
+            members_out = []
+            for m in partners:
+                try:
+                    afm_val = m.get('afm') or m.get('AFM') or m.get('personAfm') or m.get('vat') or ''
+                except Exception:
+                    afm_val = ''
+                try:
+                    name_val = m.get('name') or m.get('personName') or m.get('businessName') or m.get('fullName') or ''
+                except Exception:
+                    name_val = ''
+                try:
+                    role_val = m.get('role') or m.get('position') or m.get('category') or ''
+                except Exception:
+                    role_val = ''
+                try:
+                    dt_from_val = m.get('dtFrom') or m.get('dt_from') or m.get('fromDate') or m.get('start') or None
+                except Exception:
+                    dt_from_val = None
+                try:
+                    dt_to_val = m.get('dtTo') or m.get('dt_to') or m.get('toDate') or m.get('end') or None
+                except Exception:
+                    dt_to_val = None
+                members_out.append({
+                    'afm': afm_val or '',
+                    'name': str(name_val or '').strip(),
+                    'role': _format_role_for_output(role_val),
+                    'dt_from': dt_from_val,
+                    'dt_to': dt_to_val,
+                    'raw': {'sources': ['gemi']},
+                })
+
+        # If TAXIS credentials were provided, attempt to fetch AADE/TAXIS registry and reconcile
+        reconciliation = None
+        company_info_registry = None
+        company_info_error = None
+        taxis_user = (payload.get('taxis_user') or payload.get('taxisUser') or '').strip()
+        taxis_pass = (payload.get('taxis_pass') or payload.get('taxisPass') or payload.get('taxis_password') or '').strip()
+        if fetch_registry and taxis_user and taxis_pass:
+            try:
+                reg_res = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
+                # If non-headed failed to find expected content, retry in headed mode
+                if not reg_res.get('ok') and fetch_registry:
+                    try:
+                        reg_res_retry = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
+                        if reg_res_retry.get('ok'):
+                            reg_res = reg_res_retry
+                    except Exception:
+                        pass
+
+                if reg_res.get('ok'):
+                    company_info_registry = reg_res.get('registry')
+                    # Extract members found in company_info (AADE/TAXIS)
+                    company_info_members = _extract_company_info_members(company_info_registry or {})
+                    # Filter out company-summary rows and completely empty rows
+                    filtered_members = []
+                    for c in company_info_members:
+                        try:
+                            cafm = (c.get('afm') or '').strip()
+                        except Exception:
+                            cafm = ''
+                        try:
+                            cname = (c.get('name') or '').strip()
+                        except Exception:
+                            cname = ''
+                        # skip rows that are the company itself
+                        if cafm and cafm == str(afm):
+                            continue
+                        # skip rows with no afm and no name
+                        if not cafm and not cname:
+                            continue
+                        filtered_members.append(c)
+                    company_info_members = filtered_members
+
+                    # Build gemi members normalized for comparison
+                    gemi_members_norm = []
+                    for m in members_out:
+                        gemi_members_norm.append({
+                            'name': m.get('name'),
+                            'afm': (m.get('afm') or '') if isinstance(m.get('afm'), str) else _norm_afm(m.get('afm') or ''),
+                            'dt_from': m.get('dt_from'),
+                            'dt_to': m.get('dt_to'),
+                            'role': m.get('role') or '',
+                        })
+
+                    # Compare sets and produce reconciliation info
+                    reconciliation = _compare_member_sets(gemi_members_norm, company_info_members)
+
+                    # Reconcile: include union of members where ANY source marks them active in requested interval
+                    reconciled = []
+                    seen_keys = set()
+
+                    def _key_for(item: dict) -> str:
+                        k = (item.get('afm') or '').strip()
+                        if not k:
+                            k = (item.get('name') or '').upper()
+                        return k
+
+                    # helper to determine active for date range
+                    def _active_in_range(item: dict) -> bool:
+                        try:
+                            if date_from and date_to:
+                                # If source has no date boundaries, keep the member (unknown bounds).
+                                if not (item.get('dt_from') or item.get('dt_to')):
+                                    return True
+                                return _is_active_between(date_from, date_to, item.get('dt_from'), item.get('dt_to'))
+                            return True
+                        except Exception:
+                            return False
+
+                    # add gemi members first
+                    for g in gemi_members_norm:
+                        key = _key_for(g)
+                        if key in seen_keys:
+                            continue
+                        included = False
+                        if date_from and date_to:
+                            included = _active_in_range(g)
+                        else:
+                            included = True
+                        if included:
+                            reconciled.append({
+                                'afm': g.get('afm'),
+                                'name': g.get('name'),
+                                'dt_from': g.get('dt_from'),
+                                'dt_to': g.get('dt_to'),
+                                'role': _format_role_for_output(g.get('role') or ''),
+                                'sources': ['gemi'],
+                            })
+                            seen_keys.add(key)
+
+                    # add company_info members (if missing or to mark sources)
+                    for c in company_info_members:
+                        key = _key_for(c)
+                        if key in seen_keys:
+                            # mark source as also 'aade' and update role if empty
+                            for r in reconciled:
+                                rk = _key_for(r)
+                                if rk == key:
+                                    if 'aade' not in r.get('sources', []):
+                                        r['sources'].append('aade')
+                                    # prefer existing role, otherwise fill from AADE
+                                    if not r.get('role') and c.get('role'):
+                                        r['role'] = _format_role_for_output(c.get('role'))
+                                    break
+                            continue
+
+                        # If GEMI didn't have this member, include only if within date range (and if AADE provides dt info)
+                        included = _active_in_range(c)
+                        if included:
+                            reconciled.append({
+                                'afm': c.get('afm'),
+                                'name': c.get('name'),
+                                'dt_from': c.get('dt_from') if isinstance(c.get('dt_from'), str) else None,
+                                'dt_to': c.get('dt_to') if isinstance(c.get('dt_to'), str) else None,
+                                'role': _format_role_for_output(c.get('role') or ''),
+                                'sources': ['aade'],
+                            })
+                            seen_keys.add(key)
+
+                    # Replace members_out with reconciled list for UI consumption when reconciliation performed
+                    members_out = [
+                        {
+                            'afm': r.get('afm'),
+                            'name': r.get('name'),
+                            'role': r.get('role') or '',
+                            'dt_from': r.get('dt_from'),
+                            'dt_to': r.get('dt_to'),
+                            'raw': {'sources': r.get('sources')},
+                        }
+                        for r in reconciled
+                    ]
+                else:
+                    company_info_error = reg_res.get('error') or 'AADE/TAXIS extraction failed.'
+            except Exception as e:
+                company_info_error = str(e)
+                try:
+                    import traceback as _tb
+                    company_info_error += '\n' + _tb.format_exc()
+                except Exception:
+                    pass
 
         return jsonify(
             {
@@ -16926,10 +17177,147 @@ def api_e3_brain_company_members():
                 "summary": summary,
                 "is_individual": is_individual,
                 "members": members_out,
+                "partners_raw": partners,
+                "gemi_only": bool(gemi_only),
+                "gemi_only_message": ("Οι συνεργάτες προέρχονται μόνο από το ΓΕΜΗ. Συμπλήρωσε κωδικούς TAXISnet για έλεγχο στην ΑΑΔΕ.") if gemi_only else None,
             }
         ), 200
     except Exception as e:
         log.exception("api_e3_brain_company_members failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/member_amka", methods=["POST"])
+@login_required
+def api_e3_brain_member_amka():
+    """Attempt to retrieve AMKA for a single member using provided TAXIS credentials.
+
+    Expected JSON: { afm, name, taxis_user, taxis_pass, year }
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        afm = str(payload.get('afm') or '').strip()
+        name = payload.get('name')
+        taxis_user = str(payload.get('taxis_user') or '').strip()
+        taxis_pass = str(payload.get('taxis_pass') or '').strip()
+        year = int(payload.get('year') or _dt.now().year)
+
+        if not taxis_user or not taxis_pass:
+            return jsonify({"ok": False, "error": "Απαιτούνται κωδικοί TAXISnet για αυτήν την ενέργεια."}), 400
+
+        try:
+            from e3.checks.aade_playwright_fetch_e1 import run as aade_run
+        except Exception:
+            return jsonify({"ok": False, "error": "AADE helper unavailable."}), 500
+
+        import asyncio, tempfile, uuid, shutil
+        tmpdir = Path(tempfile.mkdtemp(prefix="aade_amka_"))
+        out_file = tmpdir / f"aade_amka_{uuid.uuid4().hex}.pdf"
+        try:
+            # prefer a headed session to improve AADE reliability on this machine
+            res = asyncio.run(aade_run(taxis_user, taxis_pass, year, str(out_file), headless=False, name=name))
+            # include tmpdir listing for debugging convenience
+            files = []
+            try:
+                files = [str(p.relative_to(tmpdir)) for p in tmpdir.rglob('*') if p.is_file()]
+            except Exception:
+                files = []
+            return jsonify({"ok": True, "afm": res.get("afm"), "amka": res.get("amka"), "raw": res, "debug_files": files, "debug_dir": str(tmpdir)}), 200
+        except Exception as e:
+            # collect debug files if any
+            files = []
+            try:
+                files = [str(p.relative_to(tmpdir)) for p in tmpdir.rglob('*') if p.is_file()]
+            except Exception:
+                files = []
+            import traceback as _tb
+            tb = _tb.format_exc()
+            return jsonify({"ok": False, "error": str(e), "traceback": tb, "debug_files": files, "debug_dir": str(tmpdir)}), 500
+        finally:
+            # keep tmpdir for debugging if needed; do not remove automatically
+            pass
+    except Exception as e:
+        log.exception('api_e3_brain_member_amka failed')
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/check_members_aade", methods=["POST"])
+@login_required
+def api_e3_brain_check_members_aade():
+    """Run AADE/TAXIS registry fetch for a company using provided TAXIS credentials.
+
+    Expected JSON: { afm, taxis_user, taxis_pass, year? }
+    Returns: { ok: bool, members: [...], registry: {...} }
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        afm = str(payload.get('afm') or '').strip()
+        afm = ''.join(ch for ch in afm if ch.isdigit())
+        if len(afm) != 9:
+            return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
+
+        taxis_user = str(payload.get('taxis_user') or payload.get('taxisUser') or '').strip()
+        taxis_pass = str(payload.get('taxis_pass') or payload.get('taxisPass') or payload.get('taxis_password') or '').strip()
+        if not taxis_user or not taxis_pass:
+            return jsonify({"ok": False, "error": "Απαιτούνται κωδικοί TAXISnet για τον έλεγχο στην ΑΑΔΕ."}), 400
+
+        try:
+            from e3.checks.company_info import fetch_registry
+        except Exception:
+            return jsonify({"ok": False, "error": "AADE helper unavailable."}), 500
+
+        # Run registry extraction (non-headed preferred)
+        try:
+            res = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
+            if not res.get('ok'):
+                # try headed fallback
+                try:
+                    res = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
+                except Exception:
+                    pass
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+        if not res.get('ok'):
+            return jsonify({"ok": False, "error": res.get('error') or 'AADE extraction failed.'}), 400
+
+        registry = res.get('registry') or {}
+        # Extract members using existing e3_brain helper
+        try:
+            from e3.checks.e3_brain import _extract_company_info_members, _format_role_for_output, _is_active_between, _parse_date
+        except Exception:
+            return jsonify({"ok": False, "error": "Internal helper unavailable."}), 500
+
+        company_info_members = _extract_company_info_members(registry or {})
+
+        # Optional date filtering
+        date_from_raw = payload.get('date_from') or payload.get('dateFrom') or None
+        date_to_raw = payload.get('date_to') or payload.get('dateTo') or None
+        date_from = _parse_date(date_from_raw) if date_from_raw else None
+        date_to = _parse_date(date_to_raw) if date_to_raw else None
+        out = []
+        for m in company_info_members:
+            out.append({
+                'afm': (m.get('afm') or '') if isinstance(m.get('afm'), str) else str(m.get('afm') or ''),
+                'name': str(m.get('name') or '').strip(),
+                'role': _format_role_for_output(m.get('role') or ''),
+                'dt_from': m.get('dt_from'),
+                'dt_to': m.get('dt_to'),
+                'raw': m,
+            })
+
+        # If date range provided, filter members by activity intersection
+        if date_from or date_to:
+            from datetime import date as _date
+            rs = date_from or _date.min
+            re = date_to or _date.max
+            filtered = [m for m in out if _is_active_between(rs, re, m.get('dt_from'), m.get('dt_to'))]
+        else:
+            filtered = out
+
+        return jsonify({"ok": True, "members": filtered, "registry": registry}), 200
+    except Exception as e:
+        log.exception('api_e3_brain_check_members_aade failed')
         return jsonify({"ok": False, "error": str(e)}), 500
 
 

@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Ensure root project directory is importable when running from e3/.
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -170,9 +172,13 @@ class BusinessPortalFetcher:
                 bootstrap_infisical_secrets(logger=logging.getLogger(__name__))
             except Exception:
                 logging.getLogger(__name__).warning("Infisical bootstrap unavailable. Secrets may not load correctly.")
+        # Attempt to read Business Portal API key; do NOT raise here so caller can continue
+        # even if the Business Portal is unavailable. Upstream logic should handle
+        # a returned result with success==False and/or skipped_comparison==True.
         self.api_key = os.getenv('BUSINESS_PORTAL_KEY')  # Updated to fetch from Infisical after bootstrap
         if not self.api_key:
-            raise ValueError("Business Portal API key not configured (BUSINESS_PORTAL_KEY)")
+            logging.getLogger(__name__).warning("Business Portal API key not configured (BUSINESS_PORTAL_KEY); Business Portal checks will be skipped.")
+            self.api_key = None
 
     def fetch_partners(self, vat_number: str) -> Dict[str, Any]:
         """
@@ -197,6 +203,13 @@ class BusinessPortalFetcher:
         }
 
         try:
+            # If API key missing, skip the external comparison but do not raise
+            if not self.api_key:
+                result['error'] = 'Business Portal API key not configured'
+                result['skipped_comparison'] = True
+                log.warning("Skipping Business Portal call for VAT %s: API key not configured", vat_number)
+                return result
+
             # Prepare API request
             url = self.API_URL.format(arGemi=vat_number)
             headers = {
@@ -204,15 +217,31 @@ class BusinessPortalFetcher:
                 'api_key': self.api_key
             }
 
-            # Resolve AFM to ArGemi if needed and call the documented endpoint.
-            ar_gemi = self._resolve_ar_gemi(vat_number)
-            if not ar_gemi:
-                raise ValueError('Could not resolve ArGemi from AFM')
+            # Create a session with retries/backoff to handle transient timeouts
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET"]
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("https://", adapter)
 
-            url = self.API_URL.format(arGemi=ar_gemi)
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            # First try the search endpoint result (it often contains 'persons' already)
+            search_result = self._search_company_by_afm(vat_number, session=session)
+            if search_result and isinstance(search_result, dict) and search_result.get('persons'):
+                data = search_result
+            else:
+                # Resolve AFM to ArGemi if needed and call the documented endpoint.
+                ar_gemi = self._resolve_ar_gemi(vat_number, session=session)
+                if not ar_gemi:
+                    raise ValueError('Could not resolve ArGemi from AFM')
+
+                url = self.API_URL.format(arGemi=ar_gemi)
+                response = session.get(url, headers=headers, timeout=30)
+                response.raise_for_status()
+                data = response.json()
             result['company'] = self._extract_company(data)
             persons = self._extract_persons(data)
 
@@ -254,8 +283,10 @@ class BusinessPortalFetcher:
             result['success'] = True
 
         except requests.exceptions.Timeout:
+            # Do not abort the caller flow on timeout; mark that comparison was skipped
             result['error'] = 'Business Portal API timeout'
-            log.error(f"Business Portal timeout for VAT {vat_number}")
+            result['skipped_comparison'] = True
+            log.error("Business Portal timeout for VAT %s", vat_number)
 
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else 'unknown'
@@ -330,6 +361,14 @@ class BusinessPortalFetcher:
 
     def _search_company_by_afm(self, vat_number: str) -> Dict[str, Any]:
         """Search company by AFM and return the first result body."""
+        return self._search_company_by_afm(vat_number, session=None)
+
+    def _search_company_by_afm(self, vat_number: str, session: Optional[requests.Session] = None) -> Dict[str, Any]:
+        """Search company by AFM and return the first result body.
+
+        If a `session` is provided it will be used for the HTTP request (and
+        therefore will pick up any retry/backoff strategy attached to it).
+        """
         url = self.SEARCH_URL
         headers = {
             'accept': 'application/json',
@@ -342,15 +381,20 @@ class BusinessPortalFetcher:
             'resultsSize': 10
         }
 
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        getter = session.get if session is not None else requests.get
+        response = getter(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         results = data.get('searchResults') or []
         return results[0] if results else {}
 
-    def _resolve_ar_gemi(self, vat_number: str) -> str:
-        """Resolve AFM to ArGemi using the search endpoint."""
-        company = self._search_company_by_afm(vat_number)
+    def _resolve_ar_gemi(self, vat_number: str, session: Optional[requests.Session] = None) -> str:
+        """Resolve AFM to ArGemi using the search endpoint.
+
+        Accepts an optional `session` which will be used for the HTTP request
+        (so retries/backoff can be applied).
+        """
+        company = self._search_company_by_afm(vat_number, session=session)
         return str(company.get('arGemi') or '').strip()
 
     @staticmethod

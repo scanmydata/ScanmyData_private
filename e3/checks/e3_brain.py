@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -160,10 +161,132 @@ def _is_active_on(ref_date: date, dt_from: Any, dt_to: Any) -> bool:
     return True
 
 
+def _is_active_between(range_start: date, range_end: date, dt_from: Any, dt_to: Any) -> bool:
+    """Return True if the member's active interval intersects [range_start, range_end].
+
+    dt_from/dt_to can be various string formats; we parse them with _parse_date.
+    If dt_from is missing, treat as -infinity; if dt_to is missing, treat as +infinity.
+    """
+    from_date = _parse_date(dt_from)
+    to_date = _parse_date(dt_to)
+
+    # If no range provided, default to checking against today
+    if not range_start and not range_end:
+        try:
+            from datetime import date as _date
+            today = _date.today()
+        except Exception:
+            today = None
+        return _is_active_on(today, dt_from, dt_to) if today else False
+
+    # Normalize missing endpoints
+    rs = range_start
+    re = range_end
+
+    # Member interval: [from_date or -inf, to_date or +inf]
+    m_start = from_date or date.min
+    m_end = to_date or date.max
+
+    # Overlap exists if m_start <= re and m_end >= rs
+    return (m_start <= re) and (m_end >= rs)
+
+
 def _normalize_address(value: str) -> str:
     value = _norm_text(value).lower()
     value = re.sub(r"[^\w\d\sάέήίόύώϊϋΐΰα-ω]", " ", value)
     return " ".join(value.split())
+
+
+def _normalize_role(value: Any) -> str:
+    """Normalize various role abbreviations to canonical Greek phrases.
+
+    Examples:
+    - Ο.Μ., ΟΜ, ομ -> 'Ομόρρυθμο Μέλος'
+    - Ε.Μ., ΕΕ, εε -> 'Ετερόρρυθμο Μέλος'
+    - ΔΙΑΧΕΙΡΙΣΤΗΣ -> 'Διαχειριστής'
+    - ΝΟΜΙΜΟΣ ΕΚΠΡΟΣΩΠΟΣ -> 'Νόμιμος Εκπρόσωπος'
+    """
+    raw = _norm_text(value)
+    if not raw:
+        return ""
+
+    up = raw.upper()
+    up_plain = "".join(ch for ch in unicodedata.normalize("NFD", up) if not unicodedata.combining(ch))
+    # simple token without punctuation/spaces for easy matching
+    token = re.sub(r"[^\wΑ-Ωα-ω0-9]", "", up_plain).lower()
+
+    # Full role phrases coming from business registry
+    if (("ΟΜΟΡΡΥΘ" in up_plain) or ("ΟΜΜΟΡΡΥΘ" in up_plain)) and "ΜΕΛ" in up_plain:
+        return "ομορυθμο μελος"
+    if "ΕΤΕΡΟΡΡΥΘ" in up_plain and "ΜΕΛ" in up_plain:
+        return "ετερορυθμο μελος"
+
+    # Ο.Μ. / ΟΜ / ομ -> ομορυθμο μελος
+    if re.search(r"\bΟ\.?Μ\.?\b", up) or token == "ομ":
+        return "ομορυθμο μελος"
+
+    # Ε.Μ. / ΕΕ / εε / Ε.Ε. -> ετερορυθμο μελος
+    if re.search(r"\bΕ\.?Μ\.?\b", up) or re.search(r"\bΕ\.?Ε\.?\b", up) or token in ("εε", "εμ"):
+        return "ετερορυθμο μελος"
+
+    if "ΔΙΑΧΕΙΡΙΣΤΗΣ" in up:
+        return "διαχειριστης"
+
+    # Match various spellings/abbreviations for 'Νόμιμος Εκπρόσωπος'
+    if "ΝΟΜΙΜΟΣ" in up and ("ΕΚΠΡΟΣΩΠΟΣ" in up or "ΕΚΠΡ" in up or "ΕΚΠΡΟΣ" in up):
+        return "νομιμος εκπροσωπος"
+
+    # Some sources may use shortened 'ΔΙΑΧΕΙΡ' token
+    if "ΔΙΑΧΕΙΡ" in up_plain or "ΔΙΑΧ" in up_plain:
+        return "διαχειριστης"
+
+    # No canonical mapping found
+    # Final fallback: loose substring matches to catch malformed tokens
+    if "ΟΜΟ" in up_plain and "ΜΕΛ" in up_plain:
+        return "ομορυθμο μελος"
+    if "ΕΤΕΡΟ" in up_plain and "ΜΕΛ" in up_plain:
+        return "ετερορυθμο μελος"
+    return ""
+
+
+def _format_role_for_output(value: Any) -> str:
+    norm = _normalize_role(value)
+    mapping = {
+        "ομορυθμο μελος": "Ομόρρυθμο Μέλος",
+        "ετερορυθμο μελος": "Ετερόρρυθμο Μέλος",
+        "διαχειριστης": "Διαχειριστής",
+        "νομιμος εκπροσωπος": "Νόμιμος Εκπρόσωπος",
+    }
+    if norm:
+        return mapping.get(norm, _norm_text(value))
+    return _norm_text(value)
+
+
+def _is_role_token(value: Any) -> bool:
+    v = _norm_text(value)
+    if not v:
+        return False
+    norm = _normalize_role(v)
+    return norm in ("ομορυθμο μελος", "ετερορυθμο μελος", "διαχειριστης", "νομιμος εκπροσωπος")
+
+
+def _looks_like_name(value: Any) -> bool:
+    v = _norm_text(value)
+    if not v:
+        return False
+    # reject pure numeric, AFM, or short tokens
+    if re.fullmatch(r"\d{9}", v) or re.fullmatch(r"\d{1,3}", v) or _parse_date(v):
+        return False
+    # must contain alphabetic characters and at least one space (first+last)
+    if not re.search(r"[Α-Ωα-ωA-Za-z]", v):
+        return False
+    if " " not in v:
+        # single token names possible, but prefer multi-token
+        return len(v) > 3
+    # ensure it's not a role token
+    if _is_role_token(v):
+        return False
+    return True
 
 
 def _pretty_money(value: float) -> str:
@@ -172,7 +295,10 @@ def _pretty_money(value: float) -> str:
 
 def _extract_company_summary(company_payload: Dict[str, Any]) -> Dict[str, Any]:
     company = company_payload.get("company") if isinstance(company_payload.get("company"), dict) else company_payload
-    legal_type = _norm_text(
+    # legalType can sometimes be a dict/object returned from external services
+    # (e.g. {"id": 2, "descr": "ΟΕ"}). Prefer human-friendly fields
+    # such as 'descr', 'description', 'label' or 'name' when present.
+    raw_legal = (
         company.get("legalType")
         or company.get("legalTypeLabel")
         or company.get("coLegalType")
@@ -180,6 +306,21 @@ def _extract_company_summary(company_payload: Dict[str, Any]) -> Dict[str, Any]:
         or company.get("legalForm")
         or ""
     )
+
+    if isinstance(raw_legal, dict):
+        # prefer common descriptive keys
+        legal_type = ""
+        for key in ("descr", "description", "label", "name", "value"):
+            if raw_legal.get(key):
+                legal_type = _norm_text(raw_legal.get(key))
+                break
+        if not legal_type:
+            # fallback: join non-empty values
+            vals = [str(v).strip() for v in raw_legal.values() if v is not None and str(v).strip()]
+            legal_type = " ".join(vals).strip()
+            legal_type = _norm_text(legal_type)
+    else:
+        legal_type = _norm_text(raw_legal)
 
     city = _norm_text(company.get("city") or company.get("coCity") or "")
     street = _norm_text(company.get("street") or company.get("coStreet") or "")
@@ -201,7 +342,12 @@ def _is_individual_business(legal_type: str) -> bool:
     return any(tok in u for tok in _GREEK_INDIVIDUAL_LEGAL_TYPE_TOKENS)
 
 
-def _extract_active_members(partners_result: Dict[str, Any], ref_date: date) -> List[Dict[str, Any]]:
+def _extract_active_members(
+    partners_result: Dict[str, Any],
+    ref_date: Optional[date] = None,
+    range_start: Optional[date] = None,
+    range_end: Optional[date] = None,
+) -> List[Dict[str, Any]]:
     partners = partners_result.get("partners") if isinstance(partners_result, dict) else []
     if not isinstance(partners, list):
         return []
@@ -210,15 +356,23 @@ def _extract_active_members(partners_result: Dict[str, Any], ref_date: date) -> 
     for p in partners:
         if not isinstance(p, dict):
             continue
-        if not _is_active_on(ref_date, p.get("dtFrom"), p.get("dtTo")):
-            continue
+        p_dt_from = p.get("dtFrom")
+        p_dt_to = p.get("dtTo")
+        if range_start and range_end:
+            if not _is_active_between(range_start, range_end, p_dt_from, p_dt_to):
+                continue
+        else:
+            check_date = ref_date or date.today()
+            if not _is_active_on(check_date, p_dt_from, p_dt_to):
+                continue
+
         name = _norm_text(p.get("personName") or p.get("businessName") or "")
         afm = _norm_afm(p.get("vat") or p.get("afm") or p.get("personAfm") or "")
         members.append(
             {
                 "name": name,
                 "afm": afm,
-                "role": _norm_text(p.get("role") or ""),
+                "role": _format_role_for_output(p.get("role") or ""),
                 "dt_from": _norm_text(p.get("dtFrom") or ""),
                 "dt_to": _norm_text(p.get("dtTo") or ""),
             }
@@ -235,15 +389,522 @@ def _extract_company_info_members(company_info_payload: Dict[str, Any]) -> List[
                 continue
             out.append(
                 {
-                    "name": _norm_text(m.get("name") or m.get("full_name") or ""),
-                    "afm": _norm_afm(m.get("afm") or ""),
+                    "name": _norm_text(m.get("name") or m.get("full_name") or m.get("personName") or ""),
+                    "afm": _norm_afm(m.get("afm") or m.get("AFM") or ""),
+                    "dt_from": _norm_text(m.get("dt_from") or m.get("dtFrom") or m.get("start") or ""),
+                    "dt_to": _norm_text(m.get("dt_to") or m.get("dtTo") or m.get("end") or ""),
+                    # Use formatted role with proper capitalization and accents
+                    "role": _format_role_for_output(m.get("role") or m.get("position") or ""),
+                    "percentage": _norm_text(m.get("percentage") or m.get("percent") or ""),
                 }
             )
         return out
 
     # Best-effort parse from extracted registry tables of company_info.py
+    result: List[Dict[str, Any]] = []
+    tables = company_info_payload.get("registryTables") or company_info_payload.get("tables")
+
+    def _is_member_header_row(row: List[Any]) -> bool:
+        vals = [(_normalize_address(str(v)) if v is not None else "") for v in row if _norm_text(v)]
+        if not vals:
+            return False
+        has_afm = any("αφμ" in v or "afm" in v for v in vals)
+        has_name = any("επων" in v or "ονομα" in v or "name" in v for v in vals)
+        # Prefer tables that include both AFM and a name column; don't require date/role tokens
+        return has_afm and has_name
+
+    # Prefer explicit member table named like 'ΑΦΜ μέλους' — use only that table if found
+    if isinstance(tables, list):
+        member_table = None
+        member_header_idx = -1
+        for t in tables:
+            rows = t.get("rows") if isinstance(t, dict) else None
+            if not isinstance(rows, list) or not rows:
+                continue
+
+            # scan first few rows for the explicit header containing 'αφμ' and 'μελ' (μέλους)
+            found = False
+            for i, row in enumerate(rows[:6]):
+                if not isinstance(row, list):
+                    continue
+                for cell in row:
+                    if not _norm_text(cell):
+                        continue
+                    norm = _normalize_address(str(cell))
+                    if "αφμ" in norm and ("μελ" in norm or "μέλ" in norm or "μελους" in norm or "μελών" in norm):
+                        # prefer a following row that contains separated header columns
+                        preferred_idx = -1
+                        for j in range(i, min(i + 8, len(rows))):
+                            r2 = rows[j]
+                            if not isinstance(r2, list):
+                                continue
+                            # skip rows that include data tokens
+                            if any(re.search(r"\d{9}", str(c)) for c in r2) or any(_parse_date(c) for c in r2 if _norm_text(c)):
+                                continue
+                            # detect separate AFM + name tokens across columns
+                            afm_inds = [idx for idx, cell2 in enumerate(r2) if _norm_text(cell2) and ("αφμ" in _normalize_address(str(cell2)) or "afm" in _normalize_address(str(cell2)))]
+                            name_inds = [idx for idx, cell2 in enumerate(r2) if _norm_text(cell2) and any(tok in _normalize_address(str(cell2)) for tok in ("επων", "επωνυ", "ονομα", "name"))]
+                            if afm_inds and name_inds and any(ai != ni for ai in afm_inds for ni in name_inds):
+                                preferred_idx = j
+                                break
+
+                        member_table = t
+                        member_header_idx = preferred_idx if preferred_idx >= 0 else i
+                        found = True
+                        break
+                if found:
+                    break
+            if member_table:
+                break
+
+        if member_table:
+            rows = member_table.get("rows") if isinstance(member_table, dict) else None
+            if isinstance(rows, list) and rows:
+                # Prefer a header row where header tokens appear across multiple columns
+                header_idx = -1
+                for i, row in enumerate(rows):
+                    if not isinstance(row, list):
+                        continue
+                    # skip rows that already contain data tokens (AFM or dates) — likely a concatenated cell
+                    if any(re.search(r"\d{9}", str(c)) for c in row) or any(_parse_date(c) for c in row if _norm_text(c)):
+                        continue
+                    # detect AFM and name tokens in distinct columns (avoid single-cell concatenated headers)
+                    afm_inds = [idx for idx, cell in enumerate(row) if _norm_text(cell) and ("αφμ" in _normalize_address(str(cell)) or "afm" in _normalize_address(str(cell)))]
+                    name_inds = [idx for idx, cell in enumerate(row) if _norm_text(cell) and any(tok in _normalize_address(str(cell)) for tok in ("επων", "επωνυ", "ονομα", "name"))]
+                    if afm_inds and name_inds and any(ai != ni for ai in afm_inds for ni in name_inds):
+                        # ensure there are data rows with AFM after this header
+                        has_data = False
+                        for rr in rows[i + 1 : i + 8]:
+                            if not isinstance(rr, list):
+                                continue
+                            if any(re.search(r"\d{9}", str(c)) for c in rr):
+                                has_data = True
+                                break
+                        if has_data:
+                            header_idx = i
+                            break
+
+                if header_idx < 0:
+                    header_idx = member_header_idx if member_header_idx >= 0 else 0
+
+                # helper: detect header-like rows to skip
+                def _row_looks_like_header(r: List[Any]) -> bool:
+                    if not isinstance(r, list):
+                        return False
+                    norms = [_normalize_address(str(c)) for c in r if _norm_text(c)]
+                    return any("αφμ" in n or "επων" in n or "ημ" in n or "ποσο" in n for n in norms)
+
+                # helper: split a single concatenated cell into logical rows
+                def _split_embedded_rows(cell: str) -> List[List[str]]:
+                    out: List[List[str]] = []
+                    if not cell:
+                        return out
+                    lines = [ln.strip() for ln in re.split(r"[\r\n]+", cell) if ln.strip()]
+                    for ln in lines:
+                        # prefer tab-separated parts
+                        parts = [p for p in re.split(r"\t+", ln) if p and p.strip()]
+                        if len(parts) <= 1:
+                            # fallback: split on multiple spaces
+                            parts = [p for p in re.split(r"\s{2,}", ln) if p and p.strip()]
+                        if parts:
+                            out.append(parts)
+                    return out
+
+                # infer fields from a list of cell-like tokens
+                def _infer_fields_from_cells(cells: List[str]) -> Dict[str, Any]:
+                    cells = [str(c).strip() for c in cells if str(c).strip()]
+                    afm_val = ""
+                    name_val = ""
+                    dt_from_val = ""
+                    dt_to_val = ""
+                    role_val = ""
+                    perc_val = ""
+
+                    # try AFM first and remember its index for positional heuristics
+                    afm_idx = None
+                    for i, c in enumerate(cells):
+                        m = re.search(r"(\d{9})", c)
+                        if m:
+                            afm_val = _norm_afm(m.group(1))
+                            afm_idx = i
+                            break
+
+                    # collect date-like tokens; prefer positional dates relative to AFM if available
+                    date_tokens = [c for c in cells if _parse_date(c)]
+                    if afm_idx is not None:
+                        # common layout: AFM, NAME, DT_FROM, DT_TO, ROLE, PERC
+                        # try to pick dates based on positions after AFM
+                        cand_from = None
+                        cand_to = None
+                        if afm_idx + 2 < len(cells):
+                            cand = cells[afm_idx + 2]
+                            if _parse_date(cand):
+                                cand_from = cand
+                        if afm_idx + 3 < len(cells):
+                            cand = cells[afm_idx + 3]
+                            if _parse_date(cand):
+                                cand_to = cand
+                        if cand_from:
+                            dt_from_val = cand_from
+                            if cand_to:
+                                dt_to_val = cand_to
+                        elif date_tokens:
+                            dt_from_val = date_tokens[0]
+                            if len(date_tokens) > 1:
+                                dt_to_val = date_tokens[1]
+                    else:
+                        if date_tokens:
+                            dt_from_val = date_tokens[0]
+                            if len(date_tokens) > 1:
+                                dt_to_val = date_tokens[1]
+
+                    # percentage: first small integer token
+                    for c in cells[::-1]:
+                        if re.fullmatch(r"\d{1,3}", c):
+                            perc_val = c
+                            break
+
+                    # role: detect only known/expected role tokens (use canonicalizer)
+                    for c in cells:
+                        norm_role = _normalize_role(c)
+                        if norm_role:
+                            role_val = norm_role
+                            break
+
+                    # name: choose the first token that looks like a personal/full name
+                    for c in cells:
+                        if c == afm_val:
+                            continue
+                        if _normalize_role(c) or _parse_date(c) or re.fullmatch(r"\d{1,3}", c):
+                            continue
+                        if _looks_like_name(c):
+                            name_val = c
+                            break
+
+                    # fallback: pick any token that looks name-ish or second token
+                    if not name_val:
+                        for c in cells:
+                            if c == afm_val:
+                                continue
+                            if _parse_date(c) or re.fullmatch(r"\d{1,3}", c):
+                                continue
+                            if not _normalize_role(c):
+                                name_val = c
+                                break
+                    if not name_val and len(cells) >= 2:
+                        name_val = cells[1]
+
+                    return {
+                        "afm": afm_val,
+                        "name": _norm_text(name_val),
+                        "dt_from": dt_from_val,
+                        "dt_to": dt_to_val,
+                        "role": role_val,
+                        "percentage": perc_val,
+                    }
+
+                header_row = rows[header_idx]
+                col_map: Dict[str, int] = {}
+                for j, cell in enumerate(header_row):
+                    n = _normalize_address(str(cell))
+                    if not n:
+                        continue
+                    if "αφμ" in n or "afm" in n:
+                        col_map["afm"] = j
+                    elif any(tok in n for tok in ("επωνυ", "επωνυμια", "επων", "ονομα", "name")):
+                        col_map["name"] = j
+                    elif any(tok in n for tok in ("έναρ", "έναρξη", "έναρξης", "start")):
+                        col_map.setdefault("dt_from", j)
+                    elif any(tok in n for tok in ("διακοπ", "διακοπή", "λήξη", "ληξη", "end")):
+                        col_map["dt_to"] = j
+                    elif any(tok in n for tok in ("ειδο", "συμμετο", "σχέσ", "σχέση")):
+                        col_map.setdefault("role", j)
+                    elif "ποσο" in n:
+                        col_map["percentage"] = j
+
+                members_by_key: Dict[str, Dict[str, Any]] = {}
+                for data_row in rows[header_idx + 1 :]:
+                    if not isinstance(data_row, list):
+                        continue
+                    if not any(_norm_text(c) for c in data_row):
+                        continue
+
+                    # skip repeated header-like rows
+                    if _row_looks_like_header(data_row):
+                        continue
+
+                    # handle concatenated single-cell rows
+                    if len(data_row) == 1 and isinstance(data_row[0], str) and ("\t" in data_row[0] or "\n" in data_row[0]):
+                        embedded = _split_embedded_rows(data_row[0])
+                        for parts in embedded:
+                            parsed = _infer_fields_from_cells(parts)
+                            key = parsed.get("afm") or parsed.get("name", "").upper()
+                            if not key:
+                                continue
+                            exist = members_by_key.get(key)
+                            if exist:
+                                for k in ("dt_from", "dt_to", "role", "percentage", "name", "afm"):
+                                    if not exist.get(k) and parsed.get(k):
+                                        exist[k] = parsed.get(k)
+                            else:
+                                members_by_key[key] = parsed
+                        continue
+
+                    # normal multi-cell row: try to extract via col_map, else infer
+                    cells = [str(c).strip() for c in data_row if _norm_text(c)]
+                    parsed_row: Dict[str, Any] = {"afm": "", "name": "", "dt_from": "", "dt_to": "", "role": "", "percentage": ""}
+
+                    if "afm" in col_map and col_map["afm"] < len(data_row):
+                        parsed_row["afm"] = _norm_afm(data_row[col_map["afm"]])
+                    if "name" in col_map and col_map["name"] < len(data_row):
+                        parsed_row["name"] = _norm_text(data_row[col_map["name"]])
+                        # If the name column actually contains a role token (e.g. 'Ο.Μ.', 'Ε.Μ.'), move it to role
+                        name_candidate = parsed_row.get("name")
+                        if name_candidate:
+                            norm_role_from_name = _normalize_role(name_candidate)
+                            if norm_role_from_name in ("ομορυθμο μελος", "ετερορυθμο μελος", "διαχειριστης", "νομιμος εκπροσωπος"):
+                                parsed_row["role"] = norm_role_from_name
+                                parsed_row["name"] = ""
+                                # Attempt to infer real name from other cells
+                                inferred_name = _infer_fields_from_cells(cells).get("name") if cells else ""
+                                if inferred_name:
+                                    parsed_row["name"] = inferred_name
+                                else:
+                                    # fallback: look for first alphabetic token in the row that's not AFM/date/percentage/role
+                                    for k_idx, k_cell in enumerate(data_row):
+                                        if k_idx == col_map.get("name"):
+                                            continue
+                                        if not _norm_text(k_cell):
+                                            continue
+                                        kc = str(k_cell).strip()
+                                        if re.fullmatch(r"\d{9}", kc) or _parse_date(kc) or re.fullmatch(r"\d{1,3}", kc):
+                                            continue
+                                        if _normalize_role(kc) in ("ομορυθμο μελος", "ετερορυθμο μελος", "διαχειριστης", "νομιμος εκπροσωπος"):
+                                            continue
+                                        parsed_row["name"] = _norm_text(kc)
+                                        break
+                    if "dt_from" in col_map and col_map["dt_from"] < len(data_row):
+                        parsed_row["dt_from"] = _norm_text(data_row[col_map["dt_from"]])
+                    if col_map.get("dt_to") is not None and col_map.get("dt_to") < len(data_row):
+                        parsed_row["dt_to"] = _norm_text(data_row[col_map.get("dt_to")])
+                    if col_map.get("role") is not None and col_map.get("role") < len(data_row):
+                        parsed_row["role"] = _normalize_role(data_row[col_map.get("role")])
+                    if col_map.get("percentage") is not None and col_map.get("percentage") < len(data_row):
+                        parsed_row["percentage"] = _norm_text(data_row[col_map.get("percentage")])
+
+                    # if critical fields look wrong, re-infer from available cells
+                    if (not parsed_row.get("afm") and any(re.search(r"\d{9}", c) for c in cells)) or (parsed_row.get("dt_from") and not _parse_date(parsed_row.get("dt_from")) and any(_parse_date(c) for c in cells)):
+                        inferred = _infer_fields_from_cells(cells)
+                        for k in ("afm", "name", "dt_from", "dt_to", "role", "percentage"):
+                            if not parsed_row.get(k) and inferred.get(k):
+                                parsed_row[k] = inferred.get(k)
+
+                    # If dt_to was placed into the dt_to column but it's not a date
+                    # and it looks like a role token (e.g., 'Ο.Μ.', 'Ε.Μ.'), fix mis-alignment
+                    dt_to_val = parsed_row.get("dt_to")
+                    if dt_to_val and not _parse_date(dt_to_val):
+                        up = dt_to_val.upper()
+                        if any(tok in up for tok in ("Ο.Μ", "Ε.Μ", "ΔΙΑΧΕΙΡ", "ΝΟΜΙΜΟΣ", "ΕΚΠΡ")):
+                            # role likely found in dt_to column
+                            # if 'role' currently holds a numeric percentage, move it to percentage
+                            role_candidate = dt_to_val
+                            perc_candidate = parsed_row.get("role") if re.fullmatch(r"\d{1,3}", str(parsed_row.get("role") or "")) else parsed_row.get("percentage")
+                            parsed_row["role"] = _normalize_role(role_candidate)
+                            parsed_row["percentage"] = _norm_text(perc_candidate) if perc_candidate else parsed_row.get("percentage")
+                            parsed_row["dt_to"] = ""
+
+                    # As a safety net, if dt_to is still not a date, try full inference from tokenized cells
+                    if parsed_row.get("dt_to") and not _parse_date(parsed_row.get("dt_to")):
+                        inferred2 = _infer_fields_from_cells(cells)
+                        # prefer inferred dt_to if it's parseable
+                        if inferred2.get("dt_to") and _parse_date(inferred2.get("dt_to")):
+                            parsed_row["dt_to"] = inferred2.get("dt_to")
+                        # prefer inferred role/name if current values look like role tokens
+                        if parsed_row.get("name"):
+                            norm_role_from_name2 = _normalize_role(parsed_row.get("name"))
+                            if norm_role_from_name2 in ("ομορυθμο μελος", "ετερορυθμο μελος") and inferred2.get("name"):
+                                parsed_row["name"] = inferred2.get("name")
+                                # ensure role is set as canonical
+                                parsed_row["role"] = norm_role_from_name2
+                        if (not parsed_row.get("role") or parsed_row.get("role").isdigit()) and inferred2.get("role"):
+                            parsed_row["role"] = inferred2.get("role")
+                        if (not parsed_row.get("percentage") or not re.fullmatch(r"\d{1,3}", str(parsed_row.get("percentage") or ""))) and inferred2.get("percentage"):
+                            parsed_row["percentage"] = inferred2.get("percentage")
+
+                    # Final heuristic merge: prefer inferred tokens when parsed values are missing or implausible
+                    inferred_all = _infer_fields_from_cells(cells) if cells else {}
+                    # name: replace if missing or looks like a role or not name-like
+                    if (not parsed_row.get("name") or _is_role_token(parsed_row.get("name")) or not _looks_like_name(parsed_row.get("name"))):
+                        if inferred_all.get("name") and _looks_like_name(inferred_all.get("name")):
+                            parsed_row["name"] = inferred_all.get("name")
+                    # dt_from/dt_to: prefer parseable dates
+                    if (not parsed_row.get("dt_from") or not _parse_date(parsed_row.get("dt_from"))):
+                        if inferred_all.get("dt_from") and _parse_date(inferred_all.get("dt_from")):
+                            parsed_row["dt_from"] = inferred_all.get("dt_from")
+                    if (not parsed_row.get("dt_to") or not _parse_date(parsed_row.get("dt_to"))):
+                        if inferred_all.get("dt_to") and _parse_date(inferred_all.get("dt_to")):
+                            parsed_row["dt_to"] = inferred_all.get("dt_to")
+                    # role: prefer inferred role when parsed is empty
+                    if (not parsed_row.get("role") and inferred_all.get("role")):
+                        parsed_row["role"] = inferred_all.get("role")
+                    # percentage: prefer numeric inferred percentage
+                    if (not re.fullmatch(r"\d{1,3}", str(parsed_row.get("percentage") or ""))) and inferred_all.get("percentage") and re.fullmatch(r"\d{1,3}", str(inferred_all.get("percentage"))):
+                        parsed_row["percentage"] = inferred_all.get("percentage")
+
+                    # Normalize date/percentage misplacements found in AADE outputs:
+                    # - If dt_to is a small integer (e.g., '10','90'), treat it as percentage and clear dt_to.
+                    # - If there are multiple date tokens in the row, prefer earliest as dt_from and latest as dt_to.
+                    try:
+                        raw_dt_from = parsed_row.get("dt_from") or ""
+                        raw_dt_to = parsed_row.get("dt_to") or ""
+                        # small integer in dt_to => percentage
+                        if raw_dt_to and not _parse_date(raw_dt_to) and re.fullmatch(r"\d{1,3}", raw_dt_to):
+                            parsed_row["percentage"] = parsed_row.get("percentage") or raw_dt_to
+                            parsed_row["dt_to"] = ""
+
+                        # collect explicit date tokens from the row 'cells' (avoid parsing arbitrary 4-digit numbers)
+                        date_tokens: List[date] = []
+                        date_regex = re.compile(r"\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|\d{2}\.\d{2}\.\d{4}|\d{4}\.\d{2}\.\d{2}")
+                        for c in cells:
+                            s = str(c or "")
+                            for m in date_regex.findall(s):
+                                d = _parse_date(m)
+                                if d:
+                                    date_tokens.append(d)
+                        if date_tokens:
+                            date_tokens = sorted(set(date_tokens))
+                            earliest = date_tokens[0]
+                            latest = date_tokens[-1]
+                            cur_from = _parse_date(parsed_row.get("dt_from"))
+                            cur_to = _parse_date(parsed_row.get("dt_to"))
+                            # prefer earliest available as dt_from if it's earlier than current dt_from or dt_from missing
+                            if not cur_from or earliest < cur_from:
+                                parsed_row["dt_from"] = earliest.strftime("%d/%m/%Y")
+                            # prefer latest available as dt_to if it's later than current dt_to or dt_to missing
+                            if not cur_to or latest > cur_to:
+                                # if earliest == latest then there may be only one date (use as dt_from, leave dt_to empty)
+                                if latest != earliest:
+                                    parsed_row["dt_to"] = latest.strftime("%d/%m/%Y")
+                                else:
+                                    # single date token likely implies start date
+                                    parsed_row["dt_to"] = parsed_row.get("dt_to") or ""
+                    except Exception:
+                        pass
+
+                    key = parsed_row.get("afm") or parsed_row.get("name", "").upper()
+                    if not key:
+                        continue
+
+                    existing = members_by_key.get(key)
+                    if existing:
+                        if not existing.get("dt_from") and parsed_row.get("dt_from"):
+                            existing["dt_from"] = parsed_row.get("dt_from")
+                        if not existing.get("dt_to") and parsed_row.get("dt_to"):
+                            existing["dt_to"] = parsed_row.get("dt_to")
+                        if not existing.get("role") and parsed_row.get("role"):
+                            existing["role"] = parsed_row.get("role")
+                        if not existing.get("percentage") and parsed_row.get("percentage"):
+                            existing["percentage"] = parsed_row.get("percentage")
+                        if not existing.get("name") and parsed_row.get("name"):
+                            existing["name"] = parsed_row.get("name")
+                        if not existing.get("afm") and parsed_row.get("afm"):
+                            existing["afm"] = parsed_row.get("afm")
+                    else:
+                        members_by_key[key] = parsed_row
+
+                # Additionally scan other registry tables for related-person / legal-representative tables
+                # (headers like 'Σχετιζόμενος ΑΦΜ', 'Είδος σχέσης', 'Σχετιζόμενος') and merge results.
+                try:
+                    for t_other in (tables or []):
+                        if not isinstance(t_other, dict):
+                            continue
+                        rows_o = t_other.get('rows')
+                        if not isinstance(rows_o, list) or not rows_o:
+                            continue
+                        # find header row that mentions related/relationship tokens
+                        header_o = -1
+                        for i_o, r_o in enumerate(rows_o[:8]):
+                            if not isinstance(r_o, list):
+                                continue
+                            norms = [_normalize_address(str(c)) for c in r_o if _norm_text(c)]
+                            if not norms:
+                                continue
+                            if any('σχετ' in n or 'σχετι' in n or 'σχετιζ' in n or 'ειδο' in n or 'σχεσ' in n or 'σχεση' in n for n in norms):
+                                header_o = i_o
+                                break
+                        if header_o < 0:
+                            continue
+
+                        # map columns
+                        col_map_o: Dict[str, int] = {}
+                        header_row_o = rows_o[header_o]
+                        for j, cell in enumerate(header_row_o):
+                            n = _normalize_address(str(cell))
+                            if not n:
+                                continue
+                            if 'αφμ' in n or 'afm' in n:
+                                col_map_o['afm'] = j
+                            elif any(tok in n for tok in ('επωνυ','επων','ονομα','name')):
+                                col_map_o['name'] = j
+                            elif 'ειδο' in n or 'σχεσ' in n or 'σχεση' in n:
+                                col_map_o['role'] = j
+                            elif any(tok in n for tok in ('έναρ','έναρχ')):
+                                col_map_o.setdefault('dt_from', j)
+                            elif any(tok in n for tok in ('διακοπ','λήξη','ληξη','end')):
+                                col_map_o['dt_to'] = j
+
+                        # parse data rows
+                        for data_row_o in rows_o[header_o + 1:]:
+                            if not isinstance(data_row_o, list):
+                                continue
+                            if not any(_norm_text(c) for c in data_row_o):
+                                continue
+                            if _row_looks_like_header(data_row_o):
+                                continue
+                            # extract
+                            parsed_o = {'afm':'','name':'','dt_from':'','dt_to':'','role':'','percentage':''}
+                            cells_o = [str(c).strip() for c in data_row_o if _norm_text(c)]
+                            if 'afm' in col_map_o and col_map_o['afm'] < len(data_row_o):
+                                parsed_o['afm'] = _norm_afm(data_row_o[col_map_o['afm']])
+                            if 'name' in col_map_o and col_map_o['name'] < len(data_row_o):
+                                parsed_o['name'] = _norm_text(data_row_o[col_map_o['name']])
+                            if 'dt_from' in col_map_o and col_map_o['dt_from'] < len(data_row_o):
+                                parsed_o['dt_from'] = _norm_text(data_row_o[col_map_o['dt_from']])
+                            if 'dt_to' in col_map_o and col_map_o['dt_to'] < len(data_row_o):
+                                parsed_o['dt_to'] = _norm_text(data_row_o[col_map_o['dt_to']])
+                            if 'role' in col_map_o and col_map_o['role'] < len(data_row_o):
+                                parsed_o['role'] = _normalize_role(data_row_o[col_map_o['role']])
+                            # fallback inference
+                            if (not parsed_o['afm'] or not parsed_o['name']) and cells_o:
+                                inf = _infer_fields_from_cells(cells_o)
+                                for k in ('afm','name','dt_from','dt_to','role','percentage'):
+                                    if not parsed_o.get(k) and inf.get(k):
+                                        parsed_o[k] = inf.get(k)
+
+                            # format role for output
+                            parsed_o['role'] = _format_role_for_output(parsed_o.get('role') or '')
+
+                            key_o = parsed_o.get('afm') or parsed_o.get('name','').upper()
+                            if not key_o:
+                                continue
+                            exist_o = members_by_key.get(key_o)
+                            if exist_o:
+                                if not exist_o.get('dt_from') and parsed_o.get('dt_from'):
+                                    exist_o['dt_from'] = parsed_o.get('dt_from')
+                                if not exist_o.get('dt_to') and parsed_o.get('dt_to'):
+                                    exist_o['dt_to'] = parsed_o.get('dt_to')
+                                if not exist_o.get('role') and parsed_o.get('role'):
+                                    exist_o['role'] = parsed_o.get('role')
+                            else:
+                                members_by_key[key_o] = parsed_o
+                except Exception:
+                    # don't fail parsing extra tables; fall back to existing members
+                    pass
+
+                return list(members_by_key.values())
+
+    # Fallback: previous token-based parsing (kept as conservative fallback)
     result = []
-    tables = company_info_payload.get("registryTables")
     if isinstance(tables, list):
         for t in tables:
             rows = t.get("rows") if isinstance(t, dict) else None
@@ -252,23 +913,231 @@ def _extract_company_info_members(company_info_payload: Dict[str, Any]) -> List[
             for row in rows:
                 if not isinstance(row, list) or not row:
                     continue
-                joined = " ".join(_norm_text(cell) for cell in row)
-                afms = re.findall(r"\b\d{9}\b", joined)
-                if not afms:
+
+                # Tokenize cells conservatively (split on whitespace/tabs/newlines)
+                tokens: List[str] = []
+                for cell in row:
+                    if cell is None:
+                        continue
+                    s = str(cell)
+                    parts = [p for p in re.split(r"[\t\n\r\f\v]+|\s+", s) if p]
+                    tokens.extend(parts)
+
+                i = 0
+                while i < len(tokens):
+                    tok = tokens[i]
+                    # start of a member record: AFM (9 digits)
+                    if re.fullmatch(r"\d{9}", tok):
+                        afm = tok
+                        i += 1
+                        name_parts: List[str] = []
+                        dt_from = ""
+                        dt_to = ""
+                        role_parts: List[str] = []
+                        percentage = ""
+
+                        # gather name tokens until we hit a date-like token
+                        while i < len(tokens):
+                            tkn = tokens[i]
+                            # date token dd/mm/YYYY
+                            if re.fullmatch(r"\d{2}/\d{2}/\d{4}", tkn):
+                                if not dt_from:
+                                    dt_from = tkn
+                                elif not dt_to:
+                                    dt_to = tkn
+                                i += 1
+                                continue
+
+                            # percentage (simple numeric token) after dates
+                            if dt_from and re.fullmatch(r"\d{1,3}", tkn):
+                                percentage = tkn
+                                i += 1
+                                continue
+
+                            # if next token is another AFM, stop current record
+                            if re.fullmatch(r"\d{9}", tkn):
+                                break
+
+                            # Heuristic: after we have a start date, alphabetic tokens are likely role
+                            if dt_from and re.search(r"[Α-Ωα-ωA-Za-z]", tkn):
+                                role_parts.append(tkn)
+                                i += 1
+                                continue
+
+                            # Otherwise accumulate as name
+                            if not dt_from:
+                                name_parts.append(tkn)
+                                i += 1
+                                continue
+
+                            # fallback
+                            i += 1
+
+                        name = _norm_text(" ".join(name_parts))
+                        role = _normalize_role(" ".join(role_parts))
+
+                        result.append(
+                            {
+                                "afm": _norm_afm(afm),
+                                "name": name,
+                                "dt_from": dt_from,
+                                "dt_to": dt_to,
+                                "role": role,
+                                "percentage": percentage,
+                            }
+                        )
+                    else:
+                        i += 1
+    # Deduplicate fallback results
+    by_k: Dict[str, Dict[str, Any]] = {}
+    for m in result:
+        key = m.get("afm") or m.get("name", "").upper()
+        if not key:
+            continue
+        if key in by_k:
+            exist = by_k[key]
+            if not exist.get("name") and m.get("name"):
+                exist["name"] = m.get("name")
+            if not exist.get("dt_from") and m.get("dt_from"):
+                exist["dt_from"] = m.get("dt_from")
+            if not exist.get("dt_to") and m.get("dt_to"):
+                exist["dt_to"] = m.get("dt_to")
+            if not exist.get("role") and m.get("role"):
+                exist["role"] = m.get("role")
+            if not exist.get("percentage") and m.get("percentage"):
+                exist["percentage"] = m.get("percentage")
+        else:
+            by_k[key] = m.copy()
+
+    deduped = list(by_k.values())
+
+    # If the conservative fallbacks produced nothing, try a permissive scan across
+    # all registry tables: look for 9-digit AFM tokens and nearby dates/roles/percentages
+    # (helps when AADE outputs concatenated or oddly-structured rows).
+    if not deduped and isinstance(tables, list):
+        def _robust_scan_tables_for_members(tables_list: List[Any]) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            for t in tables_list:
+                rows = t.get("rows") if isinstance(t, dict) else t
+                if not isinstance(rows, list):
                     continue
-                result.append({"name": _norm_text(joined), "afm": afms[0]})
-    return result
+                for i, row in enumerate(rows):
+                    if not isinstance(row, list) or not any(_norm_text(c) for c in row):
+                        continue
+                    joined = " ".join(str(c) for c in row if _norm_text(c))
+                    afm_matches = re.findall(r"(\d{9})", joined)
+                    if not afm_matches:
+                        # try next row if current row looks like header + data split
+                        if i + 1 < len(rows) and isinstance(rows[i + 1], list):
+                            joined2 = joined + " " + " ".join(str(c) for c in rows[i + 1] if _norm_text(c))
+                            afm_matches = re.findall(r"(\d{9})", joined2)
+                            if afm_matches:
+                                joined = joined2
+                            else:
+                                continue
+                        else:
+                            continue
+
+                    afm = _norm_afm(afm_matches[0])
+                    # extract date tokens (dd/mm/YYYY)
+                    dates = re.findall(r"\d{2}/\d{2}/\d{4}", joined)
+                    dt_from = dates[0] if dates else ""
+                    dt_to = dates[1] if len(dates) > 1 else ""
+
+                    # detect role token in row cells
+                    role_token = ""
+                    for c in row:
+                        if _is_role_token(c):
+                            role_token = str(c)
+                            break
+                    # if not found, look in joined text for common abbreviations
+                    if not role_token:
+                        mrole = re.search(r"\b(Ο\.Μ\.|ΟΜ|Ε\.Μ\.|ΕΜ|ΟΜΟΡΡΥΘ|ΕΤΕΡΟΡΡΥΘ)\b", joined, flags=re.IGNORECASE)
+                        if mrole:
+                            role_token = mrole.group(0)
+
+                    role = _normalize_role(role_token) if role_token else ""
+
+                    # percentage: prefer a trailing small integer token (1-3 digits)
+                    perc_candidates = re.findall(r"\b(\d{1,3})\b", joined)
+                    perc = ""
+                    if perc_candidates:
+                        # pick last numeric token that is plausibly a percentage (not a year/day)
+                        for p in reversed(perc_candidates):
+                            if not re.fullmatch(r"\d{4}", p):
+                                perc = p
+                                break
+
+                    # name: remove AFM, dates, perc and role from joined and normalize
+                    clean = joined
+                    clean = re.sub(r"\d{9}", "", clean)
+                    clean = re.sub(r"\d{2}/\d{2}/\d{4}", "", clean)
+                    if perc:
+                        clean = re.sub(r"\b" + re.escape(perc) + r"\b", "", clean)
+                    if role_token:
+                        clean = clean.replace(role_token, "")
+                    name = _norm_text(clean)
+
+                    out.append({
+                        "afm": afm,
+                        "name": name,
+                        "dt_from": dt_from,
+                        "dt_to": dt_to,
+                        "role": role,
+                        "percentage": _norm_text(perc),
+                    })
+
+            # dedupe by AFM or name
+            unique: Dict[str, Dict[str, Any]] = {}
+            for o in out:
+                k = o.get("afm") or o.get("name", "").upper()
+                if not k:
+                    continue
+                if k not in unique:
+                    unique[k] = o
+            return list(unique.values())
+
+        try:
+            robust = _robust_scan_tables_for_members(tables)
+            if robust:
+                return robust
+        except Exception:
+            # swallow errors from permissive pass and fall through to return conservative result
+            pass
+
+    return deduped
 
 
 def _compare_member_sets(gemi_members: List[Dict[str, Any]], company_info_members: List[Dict[str, Any]]) -> Dict[str, Any]:
-    gemi_by_afm = {m.get("afm"): m for m in gemi_members if m.get("afm")}
-    info_by_afm = {m.get("afm"): m for m in company_info_members if m.get("afm")}
+    def _member_key(m: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(m, dict):
+            return None
+        afm = _norm_afm(m.get("afm") or "")
+        if afm:
+            return f"AFM:{afm}"
+        # fallback: normalized name
+        name = _norm_text(m.get("name") or m.get("full_name") or m.get("personName") or "")
+        if name:
+            return f"NAME:{name.upper()}"
+        return None
 
-    missing_in_company_info = [gemi_by_afm[k] for k in gemi_by_afm.keys() - info_by_afm.keys()]
-    extra_in_company_info = [info_by_afm[k] for k in info_by_afm.keys() - gemi_by_afm.keys()]
+    gemi_by_key: Dict[str, Dict[str, Any]] = {}
+    for m in gemi_members or []:
+        k = _member_key(m)
+        if k:
+            gemi_by_key[k] = m
+
+    info_by_key: Dict[str, Dict[str, Any]] = {}
+    for m in company_info_members or []:
+        k = _member_key(m)
+        if k:
+            info_by_key[k] = m
+
+    missing_in_company_info = [gemi_by_key[k] for k in set(gemi_by_key.keys()) - set(info_by_key.keys())]
+    extra_in_company_info = [info_by_key[k] for k in set(info_by_key.keys()) - set(gemi_by_key.keys())]
 
     return {
-        "ok": not missing_in_company_info and not extra_in_company_info,
+        "ok": (not missing_in_company_info) and (not extra_in_company_info),
         "missing_in_company_info": missing_in_company_info,
         "extra_in_company_info": extra_in_company_info,
     }
@@ -791,7 +1660,7 @@ def _build_company_credential_snapshot(
                 "amka": _norm_text(mcred.get("amka")),
                 "taxisnet_username": _norm_text(mcred.get("taxisnet_username")),
                 "taxisnet_password": _norm_text(mcred.get("taxisnet_password")),
-                "role": _norm_text(m.get("role")),
+                "role": _format_role_for_output(m.get("role")),
             }
         )
 
@@ -814,6 +1683,8 @@ def process_client(
     client: Dict[str, Any],
     year: int,
     ref_date: date,
+    range_start: Optional[date],
+    range_end: Optional[date],
     active_group_clients: Dict[str, Dict[str, Any]],
     run_extractors: bool,
     headed: bool,
@@ -864,7 +1735,12 @@ def process_client(
     legal_type = summary.get("legal_type") or ""
     is_individual = _is_individual_business(legal_type)
 
-    active_members = _extract_active_members(partners_result, ref_date)
+    active_members = _extract_active_members(
+        partners_result,
+        ref_date=ref_date,
+        range_start=range_start,
+        range_end=range_end,
+    )
     company_info_payload = client.get("company_info") if isinstance(client.get("company_info"), dict) else {}
     company_info_members = _extract_company_info_members(company_info_payload)
     member_check = _compare_member_sets(active_members, company_info_members) if company_info_members else {"ok": True, "missing_in_company_info": [], "extra_in_company_info": []}
@@ -1104,7 +1980,14 @@ def process_client(
 
 def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     year = int(payload.get("year") or datetime.utcnow().year)
+    range_start = _parse_date(payload.get("date_from"))
+    range_end = _parse_date(payload.get("date_to"))
     ref_date = _parse_date(payload.get("as_of_date")) or date(year, 12, 31)
+
+    if (range_start and not range_end) or (range_end and not range_start):
+        raise E3BrainError("Όρισε και τα δύο πεδία date_from/date_to για interval έλεγχο.")
+    if range_start and range_end and range_start > range_end:
+        raise E3BrainError("Το date_from δεν μπορεί να είναι μετά το date_to.")
 
     active_group_clients_raw = payload.get("active_group_clients")
     active_group_clients: Dict[str, Dict[str, Any]] = {}
@@ -1143,6 +2026,8 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
             client=c,
             year=year,
             ref_date=ref_date,
+            range_start=range_start,
+            range_end=range_end,
             active_group_clients=active_group_clients,
             run_extractors=run_extractors,
             headed=headed,
@@ -1154,6 +2039,8 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
         "ok": True,
         "mode": mode,
         "year": year,
+        "date_from": range_start.isoformat() if range_start else None,
+        "date_to": range_end.isoformat() if range_end else None,
         "as_of_date": ref_date.isoformat(),
         "total_clients": len(results),
         "clients": results,
