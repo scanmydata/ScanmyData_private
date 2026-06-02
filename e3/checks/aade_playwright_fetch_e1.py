@@ -1,8 +1,9 @@
 import asyncio
 import re
 import base64
-from pathlib import Path
 import json
+import unicodedata
+from pathlib import Path
 
 try:
     from playwright.async_api import async_playwright
@@ -14,9 +15,134 @@ AMKA_RE = re.compile(r"\b(\d{11})\b")
 AADE_ENTRY = 'https://www.aade.gr/dilosi-forologias-eisodimatos-fp-e1-e2-e3'
 
 
-async def _extract_from_text(text: str):
+async def _extract_from_text(text: str, name: str = None, afm_hint: str = None):
     if not text:
         return None, None
+
+    def normalize(s):
+        if not s:
+            return ''
+        nfkd = unicodedata.normalize('NFKD', s)
+        nfkd = ''.join(c for c in nfkd if not unicodedata.combining(c))
+        return nfkd.lower()
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    # Prefer AMKA found near a provided AFM hint
+    if afm_hint:
+        afm_digits = re.sub(r'\D', '', str(afm_hint))
+        if afm_digits:
+            for i, ln in enumerate(lines):
+                if afm_digits in re.sub(r'\D', '', ln):
+                    # build a context block around the AFM occurrence
+                    start = max(0, i - 3)
+                    end = min(len(lines), i + 4)
+                    block = "\n".join(lines[start:end])
+                    # find ordered occurrences of AFM and AMKA in the block
+                    occurrences = []
+                    for m in AFM_RE.finditer(block):
+                        occurrences.append((m.start(), 'afm', m.group(1)))
+                    for m in AMKA_RE.finditer(block):
+                        occurrences.append((m.start(), 'amka', m.group(1)))
+                    occurrences.sort(key=lambda x: x[0])
+                    # First try positional mapping when equal counts of AFMs/AMKAs in block
+                    afms = AFM_RE.findall(block)
+                    amkas = AMKA_RE.findall(block)
+                    if afms and amkas and len(afms) == len(amkas):
+                        try:
+                            pos = afms.index(afm_digits)
+                            return afm_digits, amkas[pos]
+                        except Exception:
+                            pass
+                    # Next, find the AFM occurrence matching afm_digits and pick the next AMKA after it
+                    for idx, (pos, kind, val) in enumerate(occurrences):
+                        if kind == 'afm' and val == afm_digits:
+                            # scan forward for next amka
+                            for fpos, fkind, fval in occurrences[idx+1:]:
+                                if fkind == 'amka':
+                                    return afm_digits, fval
+                            break
+                    # otherwise try simple nearby search
+                    for j in range(start, end):
+                        m = AMKA_RE.search(lines[j])
+                        if m:
+                            return afm_digits, m.group(1)
+
+    # Next, prefer AMKA found near the provided name (label-aware + proximity scoring)
+    if name:
+        name_norm = normalize(name)
+        name_tokens = [t for t in re.split(r'\s+', name_norm) if t and len(t) > 0]
+        # collect lines where name tokens appear
+        name_lines = []
+        for idx, ln in enumerate(lines):
+            ln_norm = normalize(ln)
+            token_matches = [tok for tok in name_tokens if tok in ln_norm]
+            if token_matches:
+                name_lines.append((idx, len(token_matches)))
+
+        # collect AMKA candidates and where they appear
+        amka_candidates = []
+        for idx, ln in enumerate(lines):
+            for m in AMKA_RE.finditer(ln):
+                amka_val = m.group(1)
+                amka_candidates.append({'line': idx, 'amka': amka_val, 'line_text': ln})
+
+        # helper to check label presence
+        def has_amka_label(s):
+            s2 = normalize(s)
+            return 'αμκ' in s2 or 'αμκα' in s2 or 'α.μ.κ' in s2 or 'αριθ' in s2 and 'μητρ' in s2
+
+        # score candidates by proximity to name and label presence
+        scored = []
+        for cand in amka_candidates:
+            idx = cand['line']
+            score = 0
+            # label in same or nearby lines
+            window = '\n'.join(lines[max(0, idx-1):min(len(lines), idx+2)])
+            if has_amka_label(window):
+                score += 50
+            # proximity to any name line
+            if name_lines:
+                dists = [abs(idx - nl) for nl, _ in name_lines]
+                dmin = min(dists)
+                if dmin <= 5:
+                    score += max(0, 20 - dmin*3)
+                    # boost by token match count on closest name line
+                    for nl, cnt in name_lines:
+                        if abs(idx - nl) == dmin:
+                            score += cnt * 5
+                            break
+            # small boost if AFM hint also appears nearby
+            if afm_hint:
+                block = '\n'.join(lines[max(0, idx-3):min(len(lines), idx+4)])
+                if re.search(re.escape(str(afm_hint)), block):
+                    score += 30
+            scored.append((score, cand))
+
+        if scored:
+            scored.sort(key=lambda x: (-x[0], x[1]['line']))
+            best_score, best_cand = scored[0]
+            if best_score > 0:
+                # try to derive AFM in same context
+                ctx = '\n'.join(lines[max(0, best_cand['line']-3):min(len(lines), best_cand['line']+4)])
+                a = AFM_RE.search(ctx)
+                afm_val = a.group(1) if a else (afm_hint if afm_hint else None)
+                return afm_val, best_cand['amka']
+
+        # fallback: previous strict name-token matching (require >=2 token matches)
+        if name_tokens:
+            for i, ln in enumerate(lines):
+                ln_norm = normalize(ln)
+                match_count = sum(1 for tok in name_tokens if tok in ln_norm)
+                if match_count >= min(2, len([t for t in name_tokens if len(t) > 1])):
+                    for j in range(max(0, i - 3), min(len(lines), i + 4)):
+                        m = AMKA_RE.search(lines[j])
+                        if m:
+                            a = AFM_RE.search('\n'.join(lines[max(0, i - 3):min(len(lines), i + 4)]))
+                            afm_val = a.group(1) if a else (afm_hint if afm_hint else None)
+                            return afm_val, m.group(1)
+
+    # Fallback to first occurrences
     a = AFM_RE.search(text)
     m = AMKA_RE.search(text)
     return (a.group(1) if a else None, m.group(1) if m else None)
@@ -35,7 +161,7 @@ async def _save_debug(page, screenshot_dir: Path, name: str):
         pass
 
 
-async def _run_impl(username, password, year, output_path, headless=True, name=None, initial_storage: str = None):
+async def _run_impl(username, password, year, output_path, headless=True, name=None, initial_storage: str = None, afm_hint: str = None):
     outp = Path(output_path)
     outp.parent.mkdir(parents=True, exist_ok=True)
     screenshot_dir = outp.parent / 'screenshots'
@@ -168,7 +294,6 @@ async def _run_impl(username, password, year, output_path, headless=True, name=N
                             if selected:
                                 await popup.wait_for_timeout(1000)
                                 await _save_debug(popup, screenshot_dir, 'after_year_selected')
-                                # proceed
                             else:
                                 await popup.goto(menu_url)
                         else:
@@ -592,8 +717,11 @@ async def _run_impl(username, password, year, output_path, headless=True, name=N
 
         outp.write_bytes(pdf_bytes)
 
+        # try extracting AFM/AMKA from the PDF text first
         afm = None
         amka = None
+        pdf_afm = None
+        pdf_amka = None
         try:
             import pdfplumber
             pages = []
@@ -605,29 +733,121 @@ async def _run_impl(username, password, year, output_path, headless=True, name=N
                 pages = []
             if pages:
                 combined = '\n'.join(pages)
-                afm, amka = await _extract_from_text(combined)
+                pdf_afm, pdf_amka = await _extract_from_text(combined, name=name, afm_hint=afm_hint)
+                try:
+                    debug['pdf_text_len'] = len(combined)
+                    debug['pdf_afm_candidates'] = AFM_RE.findall(combined)
+                    debug['pdf_amka_candidates'] = AMKA_RE.findall(combined)
+                except Exception:
+                    pass
         except Exception:
             try:
                 txt = pdf_bytes.decode('utf-8', 'ignore')
-                afm, amka = await _extract_from_text(txt)
+                pdf_afm, pdf_amka = await _extract_from_text(txt, name=name, afm_hint=afm_hint)
             except Exception:
-                afm = None
-                amka = None
+                pdf_afm = None
+                pdf_amka = None
+
+        # Also try to extract AMKA from the page HTML (some fields may not be embedded in the PDF text)
+        page_html_afm = None
+        page_html_amka = None
+        try:
+            page_html = (await popup.content()) or ''
+            page_html_afm, page_html_amka = await _extract_from_text(page_html, name=name, afm_hint=afm_hint)
+            try:
+                debug['html_amka_candidates'] = AMKA_RE.findall(page_html)
+            except Exception:
+                pass
+        except Exception:
+            page_html = ''
+
+        # check new pages (popups) as well
+        npg_amka = None
+        try:
+            for npg in new_pages:
+                try:
+                    c = (await npg.content()) or ''
+                    a_afm, a_amka = await _extract_from_text(c, name=name, afm_hint=afm_hint)
+                    if a_amka:
+                        npg_amka = a_amka
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # If the page HTML contains the AFM for the target name, prefer it and remap PDF results
+        afm = None
+        amka = None
+        try:
+            # prefer AFM extracted from page HTML to remap PDF values
+            if page_html_afm:
+                # attempt to remap AMKA from PDF using the AFM found in the page HTML
+                try:
+                    if 'combined' in locals() and combined:
+                        mapped_afm, mapped_amka = await _extract_from_text(combined, name=name, afm_hint=page_html_afm)
+                        if mapped_amka:
+                            afm = mapped_afm or page_html_afm
+                            amka = mapped_amka
+                        else:
+                            afm = page_html_afm
+                    else:
+                        afm = page_html_afm
+                except Exception:
+                    afm = page_html_afm
+
+            # if we didn't get an AMKA via remapping, prefer other sources in order
+            if not amka:
+                if page_html_amka:
+                    amka = page_html_amka
+                elif npg_amka:
+                    amka = npg_amka
+                elif pdf_amka:
+                    # if page HTML AFM was present but remapping failed, try remapping again
+                    if page_html_afm and 'combined' in locals() and combined:
+                        try:
+                            mapped_afm, mapped_amka = await _extract_from_text(combined, name=name, afm_hint=page_html_afm)
+                            if mapped_amka:
+                                afm = mapped_afm or page_html_afm
+                                amka = mapped_amka
+                            else:
+                                amka = pdf_amka
+                                afm = afm or pdf_afm
+                        except Exception:
+                            amka = pdf_amka
+                            afm = afm or pdf_afm
+                    else:
+                        amka = pdf_amka
+                        afm = afm or pdf_afm
+                else:
+                    amka = None
+
+            # final fallback for AFM
+            if not afm:
+                afm = pdf_afm or page_html_afm or None
+            debug['final_afm'] = afm
+            debug['final_amka'] = amka
+        except Exception:
+            try:
+                debug['final_afm'] = pdf_afm or page_html_afm or None
+                debug['final_amka'] = pdf_amka
+            except Exception:
+                pass
 
         await browser.close()
         return {'pdf_path': str(outp), 'afm': afm, 'amka': amka}
 
 
-async def run(username, password, year, output_path, headless=True, name=None):
+async def run(username, password, year, output_path, headless=True, name=None, afm_hint: str = None):
     try:
-        return await _run_impl(username, password, year, output_path, headless=headless, name=name)
+        return await _run_impl(username, password, year, output_path, headless=headless, name=name, afm_hint=afm_hint)
     except RuntimeError as e:
         if headless and 'Could not obtain PDF' in str(e):
             # retry once in headed mode
             storage_path = Path(output_path).parent / 'screenshots' / 'storage_state.json'
             if storage_path.exists():
-                return await _run_impl(username, password, year, output_path, headless=False, name=name, initial_storage=str(storage_path))
-            return await _run_impl(username, password, year, output_path, headless=False, name=name)
+                return await _run_impl(username, password, year, output_path, headless=False, name=name, initial_storage=str(storage_path), afm_hint=afm_hint)
+            return await _run_impl(username, password, year, output_path, headless=False, name=name, afm_hint=afm_hint)
         raise
 
 
@@ -640,12 +860,13 @@ if __name__ == '__main__':
     parser.add_argument('--output', default='downloads/e1_extracted.pdf')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--pause-after-login', action='store_true', help='Pause after login to inspect the headed browser')
+    parser.add_argument('--afm-hint', default=None, help='Optional AFM to help disambiguate AMKA extraction')
     args = parser.parse_args()
     try:
         # support interactive pause by attaching attribute to impl function
         if args.pause_after_login:
             setattr(_run_impl, '_pause_after_login', True)
-        res = asyncio.run(run(args.username, args.password, args.year, args.output, headless=args.headless))
+        res = asyncio.run(run(args.username, args.password, args.year, args.output, headless=args.headless, afm_hint=args.afm_hint))
         print(json.dumps(res, ensure_ascii=False, indent=2))
     except Exception as e:
         import traceback

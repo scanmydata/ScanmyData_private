@@ -2753,6 +2753,18 @@
         await saveBrainCredEdit();
       };
     }
+    // Ensure handlers are attached even if the modal already existed (partial reloads can remove handlers)
+    try {
+      const existingModal = document.getElementById('brainCredEditModal');
+      if (existingModal) {
+        const cancelBtn = document.getElementById('brainCredEditCancel');
+        if (cancelBtn) cancelBtn.onclick = () => { existingModal.style.display = 'none'; };
+        const formEl = document.getElementById('brainCredEditForm');
+        if (formEl) formEl.onsubmit = async function(ev) { ev.preventDefault(); await saveBrainCredEdit(); };
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   function syncBrainActiveClientSelection() {

@@ -17215,7 +17215,8 @@ def api_e3_brain_member_amka():
         out_file = tmpdir / f"aade_amka_{uuid.uuid4().hex}.pdf"
         try:
             # prefer a headed session to improve AADE reliability on this machine
-            res = asyncio.run(aade_run(taxis_user, taxis_pass, year, str(out_file), headless=False, name=name))
+            # pass AFM hint so the fetcher can prefer AMKA candidates near this AFM
+            res = asyncio.run(aade_run(taxis_user, taxis_pass, year, str(out_file), headless=False, name=name, afm_hint=afm))
             # include tmpdir listing for debugging convenience
             files = []
             try:

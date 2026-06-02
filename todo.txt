@@ -8,7 +8,6 @@ curl -v \
   
 page tour
 
-session manager test--
 Ε9 ΤΣΕΚ ΕΝΦΙΑ
 διαχειριστης απο ααδε
-Να ενσωματώσω τις βελτιώσεις στο endpoint `api/e3/brain/member_amka
+εννοποιηση ελεγχου
