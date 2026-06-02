@@ -1810,7 +1810,7 @@
       const resp = await fetch('/api/e3/brain/member_amka', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ afm: realAfm, name, taxis_user, taxis_pass })
+        body: JSON.stringify({ afm: realAfm, name, taxis_user, taxis_pass, year: 2025 })
       });
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
@@ -1875,7 +1875,7 @@
       const resp = await fetch('/api/e3/brain/member_amka', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ afm, name, taxis_user: taxisUser, taxis_pass: taxisPass })
+        body: JSON.stringify({ afm, name, taxis_user: taxisUser, taxis_pass: taxisPass, year: 2025 })
       });
       const data = await resp.json();
       if (!data.ok) {
@@ -2326,43 +2326,52 @@
     }
   }
 
-  (function attachLoadBtn() {
-    const btn = document.getElementById('loadE3Btn');
-    if (btn) {
-      btn.addEventListener('click', loadE3Data);
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
-        const b = document.getElementById('loadE3Btn');
-        if (b) b.addEventListener('click', loadE3Data);
+  // Rebind all E3 check event listeners - called after page load and after partial navigation
+  function initE3CheckEventListeners() {
+    // Bind load E3 button
+    const loadE3Btn = document.getElementById('loadE3Btn');
+    if (loadE3Btn && loadE3Btn.dataset.e3Bound !== '1') {
+      loadE3Btn.dataset.e3Bound = '1';
+      loadE3Btn.addEventListener('click', loadE3Data);
+    }
+
+    // Bind brain load excel button
+    const brainLoadExcelBtn = document.getElementById('brainLoadExcelBtn');
+    if (brainLoadExcelBtn && brainLoadExcelBtn.dataset.e3Bound !== '1') {
+      brainLoadExcelBtn.dataset.e3Bound = '1';
+      brainLoadExcelBtn.addEventListener('click', () => {
+        const input = document.getElementById('brainExcelFile');
+        if (input) input.click();
       });
     }
-  })();
 
-  const brainLoadExcelBtn = document.getElementById('brainLoadExcelBtn');
-  if (brainLoadExcelBtn) {
-    brainLoadExcelBtn.addEventListener('click', () => {
-      const input = document.getElementById('brainExcelFile');
-      if (input) input.click();
-    });
+    // Bind brain excel file input
+    const brainExcelFile = document.getElementById('brainExcelFile');
+    if (brainExcelFile && brainExcelFile.dataset.e3Bound !== '1') {
+      brainExcelFile.dataset.e3Bound = '1';
+      brainExcelFile.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        await uploadBrainExcelFile(file);
+      });
+    }
+
+    // Bind brain load E3 button
+    const brainLoadE3Btn = document.getElementById('brainLoadE3Btn');
+    if (brainLoadE3Btn && brainLoadE3Btn.dataset.e3Bound !== '1') {
+      brainLoadE3Btn.dataset.e3Bound = '1';
+      brainLoadE3Btn.addEventListener('click', loadBrainE3Data);
+    }
+
+    // Bind E3 form submit prevention
+    const e3Form = document.getElementById('e3CheckForm');
+    if (e3Form && e3Form.dataset.e3Bound !== '1') {
+      e3Form.dataset.e3Bound = '1';
+      e3Form.addEventListener('submit', (e) => e.preventDefault());
+    }
   }
 
-  const brainExcelFile = document.getElementById('brainExcelFile');
-  if (brainExcelFile) {
-    brainExcelFile.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      await uploadBrainExcelFile(file);
-    });
-  }
-
-  const brainLoadE3Btn = document.getElementById('brainLoadE3Btn');
-  if (brainLoadE3Btn) {
-    brainLoadE3Btn.addEventListener('click', loadBrainE3Data);
-  }
-
-  const e3Form = document.getElementById('e3CheckForm');
-  if (e3Form) {
-    e3Form.addEventListener('submit', (e) => e.preventDefault());
-  }
+  // Call on initial load
+  initE3CheckEventListeners();
 
   function showE3PageTab(tabId) {
     const tabs = ['quickCheckTab', 'analyticTab'];
@@ -3433,6 +3442,7 @@
   }
 
   function rebindE3Controls() {
+    console.log('[E3] rebindE3Controls() called');
     const runSingleBtn = document.getElementById('brainRunSingleBtn');
     const saveCredsBtn = document.getElementById('brainSaveCredentialsBtn');
     const bulkPickBtn = document.getElementById('brainBulkPickBtn');
@@ -3444,6 +3454,7 @@
     const tabSavedBtn = document.getElementById('brainTabSavedBtn');
     const afmEl = document.getElementById('brainAfm');
     const nameEl = document.getElementById('brainName');
+    console.log('[E3] Elements found:', { runSingleBtn: !!runSingleBtn, saveCredsBtn: !!saveCredsBtn, fetchAddressBtn: !!document.getElementById('brainFetchAddressBtn') });
 
     if (runSingleBtn && runSingleBtn.dataset.bound !== '1') {
       runSingleBtn.dataset.bound = '1';
@@ -3475,8 +3486,10 @@
     const fetchAddressBtn = document.getElementById('brainFetchAddressBtn');
       const checkAadeBtn = document.getElementById('brainCheckAadeBtn');
     if (fetchAddressBtn && fetchAddressBtn.dataset.bound !== '1') {
+      console.log('[E3] Binding fetchAddressBtn');
       fetchAddressBtn.dataset.bound = '1';
       fetchAddressBtn.addEventListener('click', function(){
+        console.log('[E3] fetchAddressBtn clicked!');
         const fromEl = document.getElementById('brainDateFrom');
         const toEl = document.getElementById('brainDateTo');
         const fromRaw = fromEl ? fromEl.value : '';
@@ -3626,6 +3639,7 @@
     // Ensure datepickers and other page-specific bindings are initialized when rebinding
     try { if (typeof ensureE3DatePickerReady === 'function') ensureE3DatePickerReady(); } catch (_) {}
     try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); } catch (_) {}
+    try { if (typeof initE3CheckEventListeners === 'function') initE3CheckEventListeners(); } catch (_) {}
     // Re-bind tab buttons on each rebind (partial nav replaces DOM so data-e3TabBound is reset)
     try {
       const qBtn = document.getElementById('quickCheckTabBtn');
@@ -3769,6 +3783,12 @@
   })(function(){
     ensureE3DatePickerReady();
     if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings();
+    // Ensure rebindE3Controls is called after DOM is fully ready (for initial load and partial nav)
+    if (typeof rebindE3Controls === 'function') {
+      rebindE3Controls();
+      // Extra safety: call again after a short delay to catch any late-loaded elements
+      setTimeout(function() { rebindE3Controls(); }, 100);
+    }
   });
 </script>
 {% endblock %}
