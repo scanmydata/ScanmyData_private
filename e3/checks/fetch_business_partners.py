@@ -7,6 +7,9 @@ import os
 import sys
 import json
 import logging
+import threading
+import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +17,91 @@ from dotenv import load_dotenv
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+
+# ---------------------------------------------------------------------------
+# Cross-thread rate limiter + result cache for the Business Portal API.
+#
+# Business Portal limits every key to 8 req/min. Before this module the
+# same VAT could trigger 3-4 outbound calls (search, ArGemi resolve,
+# canonical company fetch, optional second search fallback), and a brain
+# bulk run with N clients could fire 3N+ requests in well under a minute,
+# tripping the limit. The helpers below add:
+#
+#   * `_call_business_portal(method, url, ...)` — a thin wrapper that
+#     respects ≤ MAX_RPM requests/minute across all threads.
+#   * `BUSINESS_PORTAL_CACHE` — keyed by VAT, persists for the process
+#     lifetime (TTL=15 minutes) so consecutive `fetch_partners`/
+#     `fetch_company_profile` calls for the same VAT reuse the result.
+#   * In-flight deduplication so two threads asking for the same VAT
+#     wait on a single request instead of firing two.
+# ---------------------------------------------------------------------------
+
+# Read MAX_RPM from env so the production limit can be raised without code
+# changes; the default matches the documented Business Portal contract.
+try:
+    _MAX_RPM = int(os.getenv("BUSINESS_PORTAL_MAX_RPM", "8"))
+except Exception:
+    _MAX_RPM = 8
+_RATE_WINDOW_SEC = 60.0
+_CACHE_TTL_SEC = float(os.getenv("BUSINESS_PORTAL_CACHE_TTL", "900"))
+
+_rate_lock = threading.Lock()
+_rate_calls: "deque[float]" = deque(maxlen=max(_MAX_RPM * 2, 16))
+_cache_lock = threading.Lock()
+_cache: Dict[str, Dict[str, Any]] = {}
+_inflight_lock = threading.Lock()
+_inflight: Dict[str, threading.Event] = {}
+
+
+def _rate_acquire() -> None:
+    """Block (sleeping) until a new outbound call is allowed."""
+    while True:
+        with _rate_lock:
+            now = time.monotonic()
+            # Drop entries older than the window.
+            while _rate_calls and (now - _rate_calls[0]) > _RATE_WINDOW_SEC:
+                _rate_calls.popleft()
+            if len(_rate_calls) < _MAX_RPM:
+                _rate_calls.append(now)
+                return
+            # Need to wait until the oldest call slides out of the window.
+            wait_for = max(0.0, _RATE_WINDOW_SEC - (now - _rate_calls[0])) + 0.05
+        log.debug("Business Portal rate limit reached — sleeping %.2fs", wait_for)
+        time.sleep(min(wait_for, 5.0))
+
+
+def _cache_get(vat: str) -> Optional[Dict[str, Any]]:
+    if not vat:
+        return None
+    with _cache_lock:
+        entry = _cache.get(vat)
+        if not entry:
+            return None
+        if (time.monotonic() - entry["ts"]) > _CACHE_TTL_SEC:
+            _cache.pop(vat, None)
+            return None
+        return entry["data"]
+
+
+def _cache_put(vat: str, data: Dict[str, Any]) -> None:
+    if not vat or not isinstance(data, dict):
+        return
+    with _cache_lock:
+        _cache[vat] = {"ts": time.monotonic(), "data": data}
+
+
+def _call_business_portal(method: str, url: str, *, session: Optional[requests.Session] = None,
+                          headers: Optional[Dict[str, str]] = None,
+                          params: Optional[Dict[str, Any]] = None,
+                          timeout: int = 30) -> requests.Response:
+    """Single throttled entry point for every outbound Business Portal call."""
+    _rate_acquire()
+    if session is not None:
+        callable_ = getattr(session, method.lower())
+    else:
+        callable_ = getattr(requests, method.lower())
+    return callable_(url, headers=headers, params=params, timeout=timeout)
 
 # Ensure root project directory is importable when running from e3/.
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -195,6 +283,29 @@ class BusinessPortalFetcher:
                 'error': str or None
             }
         """
+        vat_norm = str(vat_number or "").strip()
+
+        # Fast path: serve from cache (avoids the rate-limit + network entirely).
+        cached = _cache_get(vat_norm)
+        if cached is not None:
+            log.debug("Business Portal cache HIT for VAT %s", vat_norm)
+            return dict(cached)
+
+        # In-flight de-dup: only one thread per VAT actually talks to the API.
+        # The others wait for the event and read the freshly cached entry.
+        with _inflight_lock:
+            ev = _inflight.get(vat_norm)
+            if ev is not None:
+                wait_event = ev
+            else:
+                wait_event = None
+                _inflight[vat_norm] = threading.Event()
+        if wait_event is not None:
+            wait_event.wait(timeout=60)
+            cached = _cache_get(vat_norm)
+            if cached is not None:
+                return dict(cached)
+
         result = {
             'success': False,
             'partners': [],
@@ -232,6 +343,7 @@ class BusinessPortalFetcher:
             search_result = self._search_company_by_afm(vat_number, session=session)
             if search_result and isinstance(search_result, dict) and search_result.get('persons'):
                 data = search_result
+                # Cache hit on the search result — no need to hit the ArGemi endpoint.
             else:
                 # Resolve AFM to ArGemi if needed and call the documented endpoint.
                 ar_gemi = self._resolve_ar_gemi(vat_number, session=session)
@@ -239,16 +351,19 @@ class BusinessPortalFetcher:
                     raise ValueError('Could not resolve ArGemi from AFM')
 
                 url = self.API_URL.format(arGemi=ar_gemi)
-                response = session.get(url, headers=headers, timeout=30)
+                response = _call_business_portal('get', url, session=session,
+                                                 headers=headers, timeout=30)
                 response.raise_for_status()
                 data = response.json()
             result['company'] = self._extract_company(data)
             persons = self._extract_persons(data)
 
             if not persons:
-                # Fallback: if no persons found from ArGemi endpoint, try search result persons.
-                data = self._search_company_by_afm(vat_number)
-                result['company'] = self._extract_company(data)
+                # Fallback: try the *already cached* search result before doing
+                # another network round-trip. _search_company_by_afm checks the
+                # cache via _cache_get internally too.
+                data = self._search_company_by_afm(vat_number, session=session)
+                result['company'] = self._extract_company(data) or result['company']
                 persons = self._extract_persons(data)
 
             legal_form = _first_non_empty(result['company'], [
@@ -301,6 +416,17 @@ class BusinessPortalFetcher:
             result['error'] = f'Unexpected error: {str(e)}'
             log.exception(f"Unexpected error for VAT {vat_number}")
 
+        finally:
+            # Always cache the final result (even partial / error) so retry storms
+            # don't keep hammering the API. Release the in-flight latch.
+            try:
+                _cache_put(vat_norm, dict(result))
+            finally:
+                with _inflight_lock:
+                    ev = _inflight.pop(vat_norm, None)
+                if ev is not None:
+                    ev.set()
+
         return result
 
     def fetch_company_profile(self, vat_number: str) -> Dict[str, Any]:
@@ -330,7 +456,7 @@ class BusinessPortalFetcher:
             }
 
             url = self.API_URL.format(arGemi=ar_gemi)
-            response = requests.get(url, headers=headers, timeout=30)
+            response = _call_business_portal('get', url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
 
@@ -359,34 +485,43 @@ class BusinessPortalFetcher:
 
         return result
 
-    def _search_company_by_afm(self, vat_number: str) -> Dict[str, Any]:
-        """Search company by AFM and return the first result body."""
-        return self._search_company_by_afm(vat_number, session=None)
-
     def _search_company_by_afm(self, vat_number: str, session: Optional[requests.Session] = None) -> Dict[str, Any]:
         """Search company by AFM and return the first result body.
 
         If a `session` is provided it will be used for the HTTP request (and
         therefore will pick up any retry/backoff strategy attached to it).
+        Throttled + cached: a 15-min cache means repeated calls within the
+        same brain run hit memory instead of the network.
         """
+        vat_norm = str(vat_number or '').zfill(9)
+        search_cache_key = f"search:{vat_norm}"
+        cached = _cache_get(search_cache_key)
+        if cached is not None:
+            return dict(cached)
+
         url = self.SEARCH_URL
         headers = {
             'accept': 'application/json',
             'api_key': self.api_key
         }
         params = {
-            'afm': str(vat_number).zfill(9),
+            'afm': vat_norm,
             'resultsSortBy': '+arGemi',
             'resultsOffset': 0,
             'resultsSize': 10
         }
 
-        getter = session.get if session is not None else requests.get
-        response = getter(url, headers=headers, params=params, timeout=30)
+        response = _call_business_portal('get', url, session=session,
+                                         headers=headers, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         results = data.get('searchResults') or []
-        return results[0] if results else {}
+        first = results[0] if results else {}
+        try:
+            _cache_put(search_cache_key, dict(first) if isinstance(first, dict) else {})
+        except Exception:
+            pass
+        return first
 
     def _resolve_ar_gemi(self, vat_number: str, session: Optional[requests.Session] = None) -> str:
         """Resolve AFM to ArGemi using the search endpoint.

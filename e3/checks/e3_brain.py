@@ -1458,6 +1458,38 @@ def _extract_numeric_candidates_from_rows(rows: List[Dict[str, Any]], year: int)
     return strict_out or fallback_out
 
 
+def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
+    """Return ``data/<group>/<kind>_pdfs/<owner>/<afm>`` for the active user.
+
+    Best-effort: returns ``None`` if Flask context / active group cannot be
+    resolved (e.g. CLI invocation or unit tests). The extractors will skip
+    PDF downloading silently in that case.
+    """
+    try:
+        from flask import has_request_context
+        if not has_request_context():
+            return None
+    except Exception:
+        return None
+    try:
+        from admin.auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return None
+        folder = str(getattr(grp, "data_folder", "") or "").strip()
+        if not folder:
+            return None
+        root_name = "efka_pdfs" if (kind or "").lower() == "efka" else "teka_pdfs"
+        uid = getattr(current_user, "id", None)
+        owner = f"uid_{uid}" if uid else "anon"
+        target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / owner / afm
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    except Exception:
+        return None
+
+
 def _run_script_and_read_json(args: List[str], cwd: Path, output_file: str) -> Tuple[bool, Dict[str, Any], str]:
     try:
         proc = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, timeout=600)
@@ -1473,6 +1505,19 @@ def _run_script_and_read_json(args: List[str], cwd: Path, output_file: str) -> T
 
 
 def _extract_efka_teka_total(output_data: Dict[str, Any], year: int) -> Optional[float]:
+    """Return the EFKA/TEKA amount for ``year`` from a scraped table.
+
+    Robust against:
+    - Greek headers (Ποσό / Εισφορές / Σύνολο / Οφειλή).
+    - ``col_X`` keys when the DevExpress grid added an extra adaptive cell
+      and the strict header → cell mapping broke (now fixed in the
+      extractors, but old JSON dumps in the wild may still be col_X).
+    - "Οικονομικό Έτος" column containing JUST the 4-digit year, vs the
+      "Ημ/νια Έκδοσης" column containing ``dd/mm/yyyy`` for the NEXT year.
+      We require an EXACT year-only match on at least one cell so a row
+      whose only ``2025`` appears in ``10/03/2025`` of a different period
+      does not steal the amount.
+    """
     rows = output_data.get("rows") if isinstance(output_data, dict) else None
     if not isinstance(rows, list):
         return None
@@ -1480,6 +1525,7 @@ def _extract_efka_teka_total(output_data: Dict[str, Any], year: int) -> Optional
     preferred_headers = {
         "ποσο", "ποσό", "εισφορες", "εισφορές", "συνολο", "σύνολο", "οφειλη", "οφειλή"
     }
+    year_str = str(int(year))
     strict_matches: List[float] = []
     fallback_matches: List[float] = []
 
@@ -1487,11 +1533,26 @@ def _extract_efka_teka_total(output_data: Dict[str, Any], year: int) -> Optional
         if not isinstance(row, dict):
             continue
 
-        norm_items = { _normalize_address(str(k)): _norm_text(v) for k, v in row.items() }
-        joined = " ".join(norm_items.values())
-        if str(year) not in joined and f"/{year}" not in joined:
+        norm_items = {_normalize_address(str(k)): _norm_text(v) for k, v in row.items()}
+
+        # Year detection — prefer cells whose value is EXACTLY the year
+        # (the "Οικονομικό Έτος" column does that). Fall back to a
+        # substring check only if no exact match was found, so that
+        # "10/03/2025" in a different row doesn't accidentally count.
+        exact_year_hit = any(value.strip() == year_str for value in norm_items.values())
+        substr_year_hit = exact_year_hit or any(
+            year_str in value for value in norm_items.values()
+        )
+        if not substr_year_hit:
+            continue
+        # When we have an exact match somewhere on the row, only that row
+        # contributes — drop rows that merely contain the year inside a
+        # date string.
+        if not exact_year_hit:
             continue
 
+        # Strict pass: pick up amounts from cells whose KEY matches a
+        # preferred header (Ποσό / Εισφορές / …).
         row_hit = False
         for nk, value in norm_items.items():
             if any(tok in nk for tok in preferred_headers):
@@ -1499,12 +1560,20 @@ def _extract_efka_teka_total(output_data: Dict[str, Any], year: int) -> Optional
                     strict_matches.append(val)
                     row_hit = True
 
+        # Per-cell fallback: when keys are col_X, find any single cell
+        # whose VALUE parses as a money amount (regex requires ``,\d{2}``
+        # so AFM/AMKA digits are excluded). This is much safer than
+        # scanning the joined row string.
         if not row_hit:
-            fallback_matches.extend(_parse_amount_candidates(joined))
+            for value in norm_items.values():
+                for val in _parse_amount_candidates(value):
+                    fallback_matches.append(val)
 
     candidates = strict_matches or fallback_matches
     if not candidates:
         return None
+    # Use ``max`` so a row that lists both a partial monthly figure and a
+    # consolidated total ends up reporting the total.
     return round(max(candidates), 2)
 
 
@@ -1688,7 +1757,18 @@ def process_client(
     active_group_clients: Dict[str, Dict[str, Any]],
     run_extractors: bool,
     headed: bool,
+    extractor_flags: Optional[Dict[str, bool]] = None,
 ) -> Dict[str, Any]:
+    # ``extractor_flags`` is a per-extractor on/off override coming from the
+    # UI checkboxes. If unset, every extractor inherits the master
+    # ``run_extractors`` switch (back-compat). Callers downstream gate their
+    # specific block via ``_flag_for("efka_teka" / "misth" / "e9")``.
+    _flags = extractor_flags or {}
+
+    def _flag_for(name: str) -> bool:
+        if name in _flags:
+            return bool(_flags[name])
+        return bool(run_extractors)
     messages: List[str] = []
     warnings: List[str] = []
     errors: List[str] = []
@@ -1782,7 +1862,7 @@ def process_client(
     efka_teka_total = 0.0
     efka_teka_available = False
 
-    if run_extractors and not missing_member_credentials:
+    if _flag_for("efka_teka") and not missing_member_credentials:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
 
@@ -1790,6 +1870,11 @@ def process_client(
             with tempfile.TemporaryDirectory(prefix=f"e3brain_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
 
+                # When the UI asked for "Λήψη PDF βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ"
+                # we direct the extractor to drop the PDFs in the per-user,
+                # per-AFM folder the new /api/e3/brain/{kind}_pdfs endpoints
+                # serve from. Falls back gracefully if the folder cannot be
+                # resolved (e.g. unit tests).
                 efka_args = [
                     sys.executable,
                     str(checks_dir / "efka-extractor.py"),
@@ -1802,6 +1887,14 @@ def process_client(
                 ]
                 if not headed:
                     efka_args.append("--headless")
+                # PDF download is OPTIONAL — only opt-in via the UI
+                # checkbox passes the flag here. The table scrape (which
+                # yields the EFKA/TEKA amount used for myDATA/Excel
+                # comparison) ALWAYS runs regardless.
+                if _flag_for("download_efka_pdfs"):
+                    efka_pdf_dir = _resolve_pdfs_dir("efka", afm)
+                    if efka_pdf_dir is not None:
+                        efka_args.extend(["--pdf-dir", str(efka_pdf_dir)])
 
                 ok_efka, efka_json, efka_err = _run_script_and_read_json(efka_args, tmp, "extracted_table_data.json")
                 efka_amount = _extract_efka_teka_total(efka_json, year) if ok_efka else None
@@ -1818,6 +1911,10 @@ def process_client(
                 ]
                 if not headed:
                     teka_args.append("--headless")
+                if _flag_for("download_teka_pdfs"):
+                    teka_pdf_dir = _resolve_pdfs_dir("teka", afm)
+                    if teka_pdf_dir is not None:
+                        teka_args.extend(["--pdf-dir", str(teka_pdf_dir)])
 
                 ok_teka, teka_json, teka_err = _run_script_and_read_json(teka_args, tmp, "extracted_table_data_teka.json")
                 teka_amount = _extract_efka_teka_total(teka_json, year) if ok_teka else None
@@ -1870,7 +1967,7 @@ def process_client(
         company_taxis_user = company_taxis_user or targets[0].taxisnet_username
         company_taxis_pass = company_taxis_pass or targets[0].taxisnet_password
 
-    if run_extractors and headquarter_address and company_taxis_user and company_taxis_pass:
+    if _flag_for("misth") and headquarter_address and company_taxis_user and company_taxis_pass:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
 
@@ -1917,7 +2014,7 @@ def process_client(
             else:
                 warnings.append(f"Misth extractor: {misth_err}")
 
-            if rent_annual is None:
+            if rent_annual is None and _flag_for("e9"):
                 e9_args = [
                     sys.executable,
                     str(checks_dir / "e9.py"),
@@ -2025,22 +2122,72 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise E3BrainError("Στο single mode απαιτείται το single_client.")
         clients = [single]
 
-    run_extractors = bool(payload.get("run_extractors", False))
+    # Honour an optional abort flag set via /api/e3/brain/abort/<job_id>.
+    # The bulk loop checks it between clients so the currently-running
+    # client always finishes, then no further clients are started.
+    job_id = str(payload.get("job_id") or "").strip()
+    _abort_registry = _get_or_init_brain_abort_registry()
+
+    # Per-extractor toggles. `run_extractors` stays as the master switch
+    # but if a specific flag is set to false, the corresponding extractor
+    # must be skipped even when the master is true.
+    run_efka_teka = payload.get("run_efka_teka")
+    run_misth = payload.get("run_misth")
+    run_e9 = payload.get("run_e9")
+    # If any per-extractor flag is provided treat the master as the OR
+    # of the per-extractor flags (so the JS-emitted granular state wins).
+    if run_efka_teka is not None or run_misth is not None or run_e9 is not None:
+        run_extractors = bool(run_efka_teka or run_misth or run_e9)
+    else:
+        run_extractors = bool(payload.get("run_extractors", False))
+    # Persist on the payload so process_client can pick them up.
+    payload["_run_efka_teka"] = bool(run_efka_teka) if run_efka_teka is not None else run_extractors
+    payload["_run_misth"] = bool(run_misth) if run_misth is not None else run_extractors
+    payload["_run_e9"] = bool(run_e9) if run_e9 is not None else run_extractors
+    # PDF certificate downloading is OPTIONAL and separate from the table
+    # scrape that produces the amount used for myDATA / Excel comparison.
+    # We only pass --pdf-dir to the extractor when the user explicitly
+    # opted in via the dedicated UI checkboxes; otherwise the extractor
+    # just scrapes the table and exits in seconds.
+    payload["_download_efka_pdfs"] = bool(payload.get("download_efka_pdfs", False))
+    payload["_download_teka_pdfs"] = bool(payload.get("download_teka_pdfs", False))
     headed = bool(payload.get("headed", False))
 
-    results = [
-        process_client(
-            client=c,
-            year=year,
-            ref_date=ref_date,
-            range_start=range_start,
-            range_end=range_end,
-            active_group_clients=active_group_clients,
-            run_extractors=run_extractors,
-            headed=headed,
+    results: List[Dict[str, Any]] = []
+    aborted = False
+    if job_id:
+        _abort_registry.setdefault(job_id, {"abort": False})
+    for c in clients:
+        # Check abort BEFORE starting a new client so the running one is
+        # always completed first ("finish current, then stop").
+        if job_id and _abort_registry.get(job_id, {}).get("abort"):
+            aborted = True
+            break
+        results.append(
+            process_client(
+                client=c,
+                year=year,
+                ref_date=ref_date,
+                range_start=range_start,
+                range_end=range_end,
+                active_group_clients=active_group_clients,
+                run_extractors=run_extractors,
+                headed=headed,
+                extractor_flags={
+                    "efka_teka": payload["_run_efka_teka"],
+                    "misth": payload["_run_misth"],
+                    "e9": payload["_run_e9"],
+                    "download_efka_pdfs": payload["_download_efka_pdfs"],
+                    "download_teka_pdfs": payload["_download_teka_pdfs"],
+                },
+            )
         )
-        for c in clients
-    ]
+    # Clear the abort registry entry once the run is done.
+    if job_id:
+        try:
+            _abort_registry.pop(job_id, None)
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -2050,8 +2197,38 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
         "date_to": range_end.isoformat() if range_end else None,
         "as_of_date": ref_date.isoformat(),
         "total_clients": len(results),
+        "aborted": aborted,
         "clients": results,
     }
+
+
+def _get_or_init_brain_abort_registry():
+    """Process-wide dict that holds abort flags per ``job_id``.
+
+    Stored on the module so it survives across requests but is shared
+    among workers only if they live in the same process (which is the
+    common gunicorn worker model). For multi-process deployments the
+    abort signal could be lifted to Redis; for now in-process is enough.
+    """
+    global _BRAIN_ABORT_REGISTRY  # noqa: PLW0603 — intentional module-level cache
+    try:
+        return _BRAIN_ABORT_REGISTRY
+    except NameError:
+        _BRAIN_ABORT_REGISTRY = {}
+        return _BRAIN_ABORT_REGISTRY
+
+
+def request_brain_abort(job_id: str) -> bool:
+    """Mark a running brain job for abort. Returns True if found."""
+    reg = _get_or_init_brain_abort_registry()
+    entry = reg.get(job_id)
+    if entry is None:
+        # Pre-register so a slightly-late abort still wins if the brain run
+        # is just about to start.
+        reg[job_id] = {"abort": True}
+        return False
+    entry["abort"] = True
+    return True
 
 
 def _load_payload_from_args(args: argparse.Namespace) -> Dict[str, Any]:

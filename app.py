@@ -17814,9 +17814,177 @@ def handle_unexpected_error(e):
         return "<pre>{}</pre>".format(escape(tb)), 500
     return safe_render("error_generic.html", message="Συνέβη σφάλμα στον server. Δες logs."), 500
 
+@app.route("/api/e3/brain/abort/<job_id>", methods=["POST"])
+@login_required
+def api_e3_brain_abort_job(job_id):
+    """Mark a running E3 Brain job for abort.
+
+    The brain loop checks the abort registry between clients so the
+    currently processing client always finishes ("τελειώνει τον πελάτη
+    που έχει ξεκινήσει και μετά κάνει διακοπή"). Returns 200 even when
+    the job is not (yet) registered — the flag is pre-set, so a late
+    arriving brain run also sees it.
+    """
+    try:
+        from e3.checks.e3_brain import request_brain_abort
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"abort registry unavailable: {exc}"}), 500
+    found = request_brain_abort((job_id or "").strip())
+    return jsonify({"ok": True, "found": bool(found), "job_id": job_id})
+
+
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
+
+
+# ---------------------------------------------------------------------------
+# EFKA / TEKA certificate PDF storage (per user + per AFM).
+#
+# Each certificate set is stored under
+#     data/<group_data_folder>/efka_pdfs/<owner>/<afm>/*.pdf
+# where <owner> is the active user's identity slug ("uid:<id>" for the
+# logged-in user). Members of the group can keep their own per-AFM folders
+# and a future extension can let members address shared folders by passing
+# ``owner`` explicitly. Files are atomically replaced on each download.
+# ---------------------------------------------------------------------------
+
+def _e3_pdfs_root(kind):
+    return "efka_pdfs" if (kind or "").lower() == "efka" else "teka_pdfs"
+
+
+def _e3_pdfs_owner_slug():
+    """Stable per-user slug used as the per-owner sub-directory."""
+    uid = getattr(current_user, "id", None) if current_user and getattr(current_user, "is_authenticated", False) else None
+    if uid is None:
+        return "anon"
+    return f"uid_{uid}"
+
+
+def _e3_pdfs_resolve(kind, afm, owner=None, mkdir=False):
+    """Return the absolute directory where PDFs live for (kind, owner, afm).
+
+    Refuses any path traversal: ``afm`` must be 9 digits, ``owner`` must
+    match ``uid_<int>`` (or ``anon``).
+    """
+    from admin.auth import get_active_group as _gag
+    grp = _gag()
+    if not grp:
+        raise ValueError("Δεν υπάρχει ενεργή ομάδα.")
+    folder = str(getattr(grp, "data_folder", "") or "").strip()
+    if not folder:
+        raise ValueError("Η ομάδα δεν έχει data folder.")
+    afm = (afm or "").strip()
+    if not re.fullmatch(r"\d{9}", afm):
+        raise ValueError("Μη έγκυρος ΑΦΜ.")
+    owner_slug = (owner or _e3_pdfs_owner_slug()).strip()
+    if not re.fullmatch(r"(anon|uid_\d+)", owner_slug):
+        raise ValueError("Μη έγκυρος owner.")
+    root = _e3_pdfs_root(kind)
+    target = os.path.join(BASE_DIR, "data", folder, root, owner_slug, afm)
+    target = os.path.abspath(target)
+    # Refuse to escape data/<folder>/<root>/
+    safe_root = os.path.abspath(os.path.join(BASE_DIR, "data", folder, root))
+    if not target.startswith(safe_root + os.sep) and target != safe_root:
+        raise ValueError("Μη έγκυρη διαδρομή.")
+    if mkdir:
+        os.makedirs(target, exist_ok=True)
+    return target
+
+
+def _e3_pdfs_require_group_access():
+    """Common access check used by all PDF endpoints."""
+    from admin.auth import get_active_group as _gag
+    grp = _gag()
+    if not grp:
+        return None, ({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}, 403)
+    try:
+        role = current_user.role_for_group(grp)
+    except Exception:
+        role = None
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not (is_admin or role in {"admin", "member"}):
+        return None, ({"ok": False, "error": "Δεν έχεις δικαίωμα πρόσβασης."}, 403)
+    return grp, None
+
+
+def _e3_pdfs_list_kind(kind):
+    """Implementation for GET /api/e3/brain/<kind>_pdfs."""
+    grp, err = _e3_pdfs_require_group_access()
+    if err:
+        return jsonify(err[0]), err[1]
+    afm = (request.args.get("afm") or "").strip()
+    owner = (request.args.get("owner") or "").strip() or None
+    try:
+        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    files = []
+    if os.path.isdir(target_dir):
+        for name in sorted(os.listdir(target_dir)):
+            full = os.path.join(target_dir, name)
+            if not os.path.isfile(full):
+                continue
+            if not name.lower().endswith(".pdf"):
+                continue
+            try:
+                st = os.stat(full)
+                files.append({
+                    "name": name,
+                    "size": st.st_size,
+                    "mtime": int(st.st_mtime),
+                })
+            except OSError:
+                continue
+    return jsonify({"ok": True, "afm": afm, "kind": kind, "files": files,
+                    "owner": owner or _e3_pdfs_owner_slug()})
+
+
+def _e3_pdfs_serve_file(kind):
+    grp, err = _e3_pdfs_require_group_access()
+    if err:
+        return jsonify(err[0]), err[1]
+    afm = (request.args.get("afm") or "").strip()
+    owner = (request.args.get("owner") or "").strip() or None
+    name = (request.args.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return jsonify({"ok": False, "error": "Μη έγκυρο όνομα αρχείου."}), 400
+    if not name.lower().endswith(".pdf"):
+        return jsonify({"ok": False, "error": "Μόνο αρχεία .pdf επιτρέπονται."}), 400
+    try:
+        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    full = os.path.join(target_dir, name)
+    if not os.path.isfile(full):
+        return jsonify({"ok": False, "error": "Δεν βρέθηκε το αρχείο."}), 404
+    from flask import send_file
+    return send_file(full, mimetype="application/pdf", as_attachment=False,
+                     download_name=name)
+
+
+@app.route("/api/e3/brain/efka_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_efka_pdfs_list():
+    return _e3_pdfs_list_kind("efka")
+
+
+@app.route("/api/e3/brain/teka_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_teka_pdfs_list():
+    return _e3_pdfs_list_kind("teka")
+
+
+@app.route("/api/e3/brain/efka_pdfs/file", methods=["GET"])
+@login_required
+def api_e3_brain_efka_pdfs_file():
+    return _e3_pdfs_serve_file("efka")
+
+
+@app.route("/api/e3/brain/teka_pdfs/file", methods=["GET"])
+@login_required
+def api_e3_brain_teka_pdfs_file():
+    return _e3_pdfs_serve_file("teka")
 
 @app.route("/credentials", methods=["GET", "POST"])
 def credentials_page():

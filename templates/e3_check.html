@@ -1070,6 +1070,31 @@
           Ε9
         </label>
       </div>
+      <div class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 mb-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">
+          Λήψη &amp; διατήρηση βεβαιώσεων (PDF)
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainDownloadEfkaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            Λήψη PDF βεβαιώσεων ΕΦΚΑ
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input id="brainDownloadTekaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            Λήψη PDF βεβαιώσεων ΤΕΚΑ
+          </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="brainListEfkaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+            📂 ΕΦΚΑ PDFs
+          </button>
+          <button id="brainListTekaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+            📂 ΤΕΚΑ PDFs
+          </button>
+          <span id="brainPdfsStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
+        </div>
+        <div id="brainPdfsList" class="mt-2 text-xs"></div>
+      </div>
       <div class="flex flex-wrap gap-3 items-center mb-3">
         <span id="brainPartnerStatus" class="hidden text-sm text-gray-600 dark:text-gray-300"></span>
       </div>
@@ -1106,6 +1131,9 @@
       <div class="flex flex-wrap gap-3 items-center mb-4">
         <button id="brainBulkPickBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
           Επιλογή Excel κωδικών
+        </button>
+        <button id="brainBulkFromActiveBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition">
+          📥 Από αποθηκευμένους πελάτες ομάδας
         </button>
         <span id="brainBulkFileLabel" class="text-sm text-gray-600 dark:text-gray-300">Δεν έχει επιλεγεί αρχείο</span>
         <input id="brainBulkFile" type="file" accept=".xlsx,.xls" class="hidden" />
@@ -1378,7 +1406,16 @@
     clearBrainSingleTypeHint();
   }
 
-  async function fetchE3BrainCredentials() {
+  // When the page (re)loads, background fetches such as credentials_store
+  // and active_group_clients fire a "Πελάτες ενεργής ομάδας φορτώθηκαν."
+  // success flash. The user has not asked for anything yet and the page
+  // is flooded with toasts. The default is now SILENT — only the explicit
+  // user "Ανανέωση/Προβολή" buttons opt into the loud flash via
+  // `{ verbose: true }`. The silent default keeps automatic background
+  // calls (rebind / swapPage / dropdown lookups) from popping toasts.
+  async function fetchE3BrainCredentials(opts) {
+    opts = opts || {};
+    const silent = !opts.verbose;
     const listDiv = document.getElementById('brainCredsList');
     if (listDiv) listDiv.innerHTML = '<span class="text-gray-500">Φόρτωση...</span>';
     try {
@@ -1388,26 +1425,29 @@
       E3_BRAIN_CREDS_CACHE = Array.isArray(data.companies) ? data.companies : [];
       renderBrainCredsList();
       renderBrainActiveClientSelect();
-      if (data.message) {
+      if (data.message && !silent) {
         showBrainFlash(data.message, 'success');
       }
     } catch (e) {
       if (listDiv) listDiv.innerHTML = `<span class="text-red-600">Σφάλμα: ${e.message}</span>`;
+      // Always announce errors regardless of silent flag.
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     }
   }
 
-  async function fetchE3BrainActiveClients() {
+  async function fetchE3BrainActiveClients(opts) {
+    opts = opts || {};
+    const silent = !opts.verbose;
     try {
       const resp = await fetch('/api/e3/brain/active_group_clients');
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || 'Σφάλμα ανάκτησης πελατών ενεργής ομάδας');
       E3_BRAIN_ACTIVE_CLIENTS = Array.isArray(data.clients) ? data.clients : [];
       renderBrainActiveClientSelect();
-      if (data.message) {
+      if (data.message && !silent) {
         showBrainFlash(data.message, 'success');
       }
-      if (!E3_BRAIN_ACTIVE_CLIENTS.length) {
+      if (!E3_BRAIN_ACTIVE_CLIENTS.length && !silent) {
         showBrainAfmStatus('Δεν βρέθηκαν πελάτες ενεργής ομάδας.', 'error');
       }
     } catch (e) {
@@ -1726,6 +1766,15 @@
           showBrainAfmStatus('Για να γίνει αντιπαραβολή με εξωτερικές πηγές (AADE/ΓΕΜΗ) συμπλήρωσε τους κωδικούς TAXISnet.', 'warning', 10000);
         }
       } catch(_){}
+      // After a successful address fetch, persist the snapshot
+      // (in-memory + group store). Important for ατομική where the user
+      // may never click "Έλεγχος" — they still want the credentials saved.
+      try { saveE3BrainState(); } catch (_) {}
+      try {
+        if (typeof autoSaveBrainCredentialsFromForm === 'function') {
+          autoSaveBrainCredentialsFromForm({ verbose: false }).catch(()=>{});
+        }
+      } catch (_) {}
     } catch (e) {
       if (partnerContainer) partnerContainer.classList.add('hidden');
       showBrainAfmStatus(`Σφάλμα: ${e.message}`, 'error');
@@ -1919,6 +1968,16 @@
       const amka = data.amka || '';
       if (amkaEl) amkaEl.value = amka;
       if (statusEl) statusEl.textContent = amka ? 'Ανακτήθηκε' : 'Δεν βρέθηκε ΑΜΚΑ';
+      // After ΑΜΚΑ is in hand, persist the snapshot in-memory AND to the
+      // group credential store so the user can leave the page / restart
+      // the server without losing progress (covers "δεν κάνει αποθήκευση
+      // credentials ομάδας σε ατομική" complaint).
+      try { saveE3BrainState(); } catch (_) {}
+      try {
+        if (amka && typeof autoSaveBrainCredentialsFromForm === 'function') {
+          autoSaveBrainCredentialsFromForm({ verbose: false }).catch(()=>{});
+        }
+      } catch (_) {}
     } catch (e) {
       if (statusEl) statusEl.textContent = 'Σφάλμα: ' + e.message;
     } finally {
@@ -2045,7 +2104,8 @@
     }
   }
 
-  function showGlobalWaitOverlay(title, message) {
+  function showGlobalWaitOverlay(title, message, opts) {
+    opts = opts || {};
     const localOverlay = document.getElementById('waitOverlay');
     const titleEl = document.getElementById('waitOverlayTitle');
     const msgEl = document.getElementById('waitOverlayMsg');
@@ -2056,9 +2116,28 @@
       localOverlay.style.pointerEvents = 'all';
       localOverlay.setAttribute('aria-hidden', 'false');
     }
-    // Safety: always hide overlay after 90 seconds max
+    // Safety: always hide overlay after a generous timeout. Default 90s,
+    // can be extended for long-running operations by passing opts.timeout.
     if (E3_OVERLAY_TIMEOUT) clearTimeout(E3_OVERLAY_TIMEOUT);
-    E3_OVERLAY_TIMEOUT = setTimeout(() => { hideGlobalWaitOverlay(); E3_LOADING = false; }, 90000);
+    var timeoutMs = Number(opts.timeout) > 0 ? Number(opts.timeout) : 90000;
+    E3_OVERLAY_TIMEOUT = setTimeout(() => { hideGlobalWaitOverlay(); E3_LOADING = false; }, timeoutMs);
+  }
+
+  /**
+   * Helper that cycles a wait overlay message through the enabled
+   * extractors so the user gets visible progress while the backend
+   * crunches each step. Cleared when the run resolves.
+   */
+  function _startSingleProgressCycle(label, steps) {
+    var i = 0;
+    var iv = setInterval(function () {
+      try {
+        var msg = label + ' — ' + steps[i % steps.length];
+        showGlobalWaitOverlay(label, msg, { timeout: 60 * 60 * 1000 });
+        i++;
+      } catch (_) {}
+    }, 2500);
+    return function stop() { clearInterval(iv); };
   }
 
   function hideGlobalWaitOverlay() {
@@ -2894,31 +2973,118 @@
     }
   }
 
-  async function saveE3BrainCredentials() {
-    if (!E3_BRAIN_LAST_RESULT || !E3_BRAIN_LAST_RESULT.ok) {
-      brainSetResult('Δεν υπάρχει διαθέσιμο αποτέλεσμα E3 Brain για αποθήκευση credentials.');
-      return;
+  /**
+   * Build a credential snapshot from the current Ατομικός form so we can
+   * persist what the user has filled in *without* needing a full E3 brain
+   * run. Required for the "save after address+AMKA fetch on ατομική" flow:
+   * the analysis hasn't run yet so E3_BRAIN_LAST_RESULT is null.
+   */
+  function _buildBrainSnapshotFromForm() {
+    const get = (id) => String((document.getElementById(id) || {}).value || '').trim();
+    const afm = get('brainAfm').replace(/\D/g, '');
+    if (!afm || afm.length !== 9) return null;
+    const company = {
+      afm: afm,
+      name: get('brainName'),
+      address: get('brainAddress'),
+      taxisnet_username: get('brainTaxisUser'),
+      taxisnet_password: get('brainTaxisPass'),
+      amka: get('brainAmka'),
+      mydata_user: get('brainMydataUser'),
+      mydata_key: get('brainMydataKey'),
+    };
+    // Build members from E3_BRAIN_MEMBERS + E3_BRAIN_MEMBER_CREDS.
+    const members = [];
+    if (Array.isArray(E3_BRAIN_MEMBERS)) {
+      E3_BRAIN_MEMBERS.forEach((m, idx) => {
+        const credKey = m._credKey || ('_m' + idx);
+        const creds = (E3_BRAIN_MEMBER_CREDS || {})[credKey] || {};
+        members.push({
+          full_name: String(m.name || '').trim(),
+          afm: String(m.afm || '').trim(),
+          amka: String(creds.amka || m.amka || '').trim(),
+          taxisnet_username: String(creds.taxisnet_username || '').trim(),
+          taxisnet_password: String(creds.taxisnet_password || '').trim(),
+        });
+      });
     }
+    return { company, members };
+  }
 
-    showGlobalWaitOverlay('Αποθήκευση Credentials', 'Αποθήκευση στο JSON της ενεργής ομάδας...');
+  async function autoSaveBrainCredentialsFromForm(opts) {
+    opts = opts || {};
+    const snap = _buildBrainSnapshotFromForm();
+    if (!snap) {
+      if (opts.verbose) showBrainFlash('Δώσε έγκυρο ΑΦΜ 9 ψηφίων πριν την αποθήκευση.', 'error');
+      return false;
+    }
+    const ind = (function () {
+      const w = document.getElementById('brainAmkaWrapper');
+      return w && !w.classList.contains('hidden');
+    })();
+    // For ατομική we want at least TAXIS user/pass to save something useful.
+    const co = snap.company;
+    if (ind && !co.taxisnet_username && !co.taxisnet_password && !co.amka && !co.address) {
+      // Nothing meaningful to save yet.
+      return false;
+    }
     try {
-      const response = await fetch('/api/e3/brain/save_credentials', {
+      const resp = await fetch('/api/e3/brain/save_credentials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain_result: E3_BRAIN_LAST_RESULT })
+        body: JSON.stringify({ snapshots: [snap] })
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
         throw new Error((data && data.error) || 'Αποτυχία αποθήκευσης credentials.');
       }
-      const filePart = data.file ? `\nΑρχείο: ${data.file}` : '';
-      const savedMessage = data.message || `✅ Αποθηκεύτηκαν ${data.saved || 0} εγγραφές credentials.${filePart}`;
-      brainSetResult(savedMessage);
-      showBrainFlash(savedMessage, 'success');
+      const msg = data.message || `✅ Αποθηκεύτηκαν credentials για ΑΦΜ ${co.afm}.`;
+      if (opts.verbose !== false) showBrainFlash(msg, 'success');
+      try { fetchE3BrainCredentials().catch(() => {}); } catch (_) {}
+      return true;
     } catch (e) {
-      const errorMessage = `Σφάλμα αποθήκευσης credentials: ${e.message}`;
-      brainSetResult(errorMessage);
-      showBrainFlash(errorMessage, 'error');
+      const errorMsg = `Σφάλμα αυτόματης αποθήκευσης credentials: ${e.message}`;
+      if (opts.verbose !== false) showBrainFlash(errorMsg, 'error');
+      return false;
+    }
+  }
+
+  async function saveE3BrainCredentials() {
+    // Path 1: a full E3 brain run already happened — use that result as before.
+    if (E3_BRAIN_LAST_RESULT && E3_BRAIN_LAST_RESULT.ok) {
+      showGlobalWaitOverlay('Αποθήκευση Credentials', 'Αποθήκευση στο JSON της ενεργής ομάδας...');
+      try {
+        const response = await fetch('/api/e3/brain/save_credentials', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brain_result: E3_BRAIN_LAST_RESULT })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error((data && data.error) || 'Αποτυχία αποθήκευσης credentials.');
+        }
+        const filePart = data.file ? `\nΑρχείο: ${data.file}` : '';
+        const savedMessage = data.message || `✅ Αποθηκεύτηκαν ${data.saved || 0} εγγραφές credentials.${filePart}`;
+        brainSetResult(savedMessage);
+        showBrainFlash(savedMessage, 'success');
+      } catch (e) {
+        const errorMessage = `Σφάλμα αποθήκευσης credentials: ${e.message}`;
+        brainSetResult(errorMessage);
+        showBrainFlash(errorMessage, 'error');
+      } finally {
+        hideGlobalWaitOverlay();
+      }
+      return;
+    }
+    // Path 2: no run yet — derive a snapshot from the form (covers the
+    // common ατομική flow where the user has fetched address + AMKA but
+    // hasn't yet clicked "Έλεγχος").
+    showGlobalWaitOverlay('Αποθήκευση Credentials', 'Αποθήκευση στο JSON της ενεργής ομάδας...');
+    try {
+      const ok = await autoSaveBrainCredentialsFromForm({ verbose: true });
+      if (!ok) {
+        brainSetResult('Δεν βρέθηκε αρκετή πληροφορία για να αποθηκευτούν credentials. Συμπλήρωσε ΑΦΜ + κωδικούς TAXISnet.');
+      }
     } finally {
       hideGlobalWaitOverlay();
     }
@@ -2936,6 +3102,29 @@
     const runEfkaTekaEl = document.getElementById('brainRunEfkaTeka');
     const runMisthEl = document.getElementById('brainRunMisth');
     const runE9El = document.getElementById('brainRunE9');
+
+    // === Pre-flight: capture checkbox + extractor selection BEFORE any
+    // async work so the user-visible "what we are about to run" matches
+    // exactly what the backend receives. Also persist the state so a
+    // sub-tab switch in the middle of preparing does not lose the
+    // selection.
+    const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
+    const runMisth = !!(runMisthEl && runMisthEl.checked);
+    const runE9 = !!(runE9El && runE9El.checked);
+    // Optional EFKA/TEKA PDF download toggles (added below in UI section).
+    const downloadEfkaPdfsEl = document.getElementById('brainDownloadEfkaPdfs');
+    const downloadTekaPdfsEl = document.getElementById('brainDownloadTekaPdfs');
+    const downloadEfkaPdfs = !!(downloadEfkaPdfsEl && downloadEfkaPdfsEl.checked);
+    const downloadTekaPdfs = !!(downloadTekaPdfsEl && downloadTekaPdfsEl.checked);
+
+    if (!runEfkaTeka && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs) {
+      const proceedNoChecks = window.confirm(
+        'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, Μισθωτήρια, Ε9) ή λήψη PDF. ' +
+        'Θέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;'
+      );
+      if (!proceedNoChecks) return;
+    }
+    try { saveE3BrainState(); } catch (_) {}
 
     if (!afmEl) return;
     const afm = String(afmEl.value || '').replace(/\D/g, '');
@@ -3012,10 +3201,12 @@
       year,
       date_from: dateFrom,
       date_to: dateTo,
-      run_extractors: !!(runEfkaTekaEl && runEfkaTekaEl.checked) || !!(runMisthEl && runMisthEl.checked) || !!(runE9El && runE9El.checked),
-      run_efka_teka: !!(runEfkaTekaEl && runEfkaTekaEl.checked),
-      run_misth: !!(runMisthEl && runMisthEl.checked),
-      run_e9: !!(runE9El && runE9El.checked),
+      run_extractors: runEfkaTeka || runMisth || runE9,
+      run_efka_teka: runEfkaTeka,
+      run_misth: runMisth,
+      run_e9: runE9,
+      download_efka_pdfs: downloadEfkaPdfs,
+      download_teka_pdfs: downloadTekaPdfs,
       headed: true,
       auto_active_group_clients: true,
       single_client: {
@@ -3031,7 +3222,18 @@
       }
     };
 
-    showGlobalWaitOverlay('E3 Brain', 'Τρέχει ο ενοποιημένος έλεγχος...');
+    // Build a progress cycle that mentions only the extractors the user
+    // actually enabled. This is best-effort — the backend currently does
+    // not stream progress, so we approximate by cycling labels every 2.5s.
+    const _progressSteps = ['Συλλογή στοιχείων ΑΦΜ'];
+    if (runEfkaTeka) _progressSteps.push('Έλεγχος ΕΦΚΑ/ΤΕΚΑ');
+    if (runMisth) _progressSteps.push('Σύγκριση Μισθωτηρίων');
+    if (runE9) _progressSteps.push('Έλεγχος Ε9');
+    if (downloadEfkaPdfs) _progressSteps.push('Λήψη PDF ΕΦΚΑ');
+    if (downloadTekaPdfs) _progressSteps.push('Λήψη PDF ΤΕΚΑ');
+    _progressSteps.push('Σύγκριση με myDATA');
+    showGlobalWaitOverlay('E3 Brain', 'Τρέχει ο ενοποιημένος έλεγχος...', { timeout: 60 * 60 * 1000 });
+    const stopProgress = _startSingleProgressCycle('E3 Brain', _progressSteps);
     brainSetResult('Εκτέλεση...');
     try {
       const response = await fetch('/api/e3/brain', {
@@ -3051,6 +3253,7 @@
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {
+      try { stopProgress(); } catch (_) {}
       hideGlobalWaitOverlay();
     }
   }
@@ -3261,6 +3464,70 @@
     E3_BRAIN_PREVIEW_CLIENTS[idx][key] = String(value || '').trim();
   }
 
+  /**
+   * Populate the bulk preview table from the saved active-group clients
+   * instead of an Excel upload. Highlights rows whose TAXIS credentials
+   * are missing so the user is forced to fill them before "Εκτέλεση".
+   */
+  async function loadBulkFromActiveGroup() {
+    const status = document.getElementById('brainBulkFileLabel');
+    const previewPanel = document.getElementById('brainBulkPreview');
+    if (status) status.textContent = 'Φόρτωση πελατών...';
+    if (previewPanel) previewPanel.classList.add('hidden');
+    try {
+      // Make sure both stores are fresh — silent so we don't toast on load.
+      await Promise.all([
+        fetchE3BrainActiveClients({ verbose: false }).catch(() => {}),
+        fetchE3BrainCredentials({ verbose: false }).catch(() => {}),
+      ]);
+      const merged = (E3_BRAIN_ACTIVE_CLIENTS || []).map(c => {
+        const afm = String(c.afm || '').trim();
+        const stored = (E3_BRAIN_CREDS_CACHE || []).find(s =>
+          String((s.company || {}).afm || '').trim() === afm
+        );
+        const co = (stored && stored.company) || {};
+        return {
+          afm,
+          name: c.name || co.name || '',
+          legal_type: c.legal_type || '',
+          taxisnet_username: co.taxisnet_username || c.taxisnet_username || '',
+          taxisnet_password: co.taxisnet_password || c.taxisnet_password || '',
+          amka: co.amka || c.amka || '',
+          mydata_user: co.mydata_user || c.mydata_user || c.user || '',
+          mydata_key: co.mydata_key || c.mydata_key || c.key || '',
+          excel_values: { E3_585_007: 0, E3_585_014: 0 },
+          _from: 'active_group',
+        };
+      });
+      E3_BRAIN_PREVIEW_CLIENTS = merged;
+      renderBulkPreviewTable(merged);
+      if (status) status.textContent = `${merged.length} πελάτες από αποθηκευμένα ομάδας`;
+      // Highlight missing credentials.
+      const missing = merged.filter(m => !m.taxisnet_username || !m.taxisnet_password);
+      if (missing.length) {
+        showBrainFlash(
+          `⚠ ${missing.length} πελάτες δεν έχουν κωδικούς TAXISnet. Συμπλήρωσέ τους πριν την εκτέλεση.`,
+          'warning',
+          12000
+        );
+        // Highlight rows so the user can spot them.
+        setTimeout(() => {
+          document.querySelectorAll('.brainBulkPreviewCheckbox').forEach(cb => {
+            const idx = Number(cb.dataset.index);
+            const c = E3_BRAIN_PREVIEW_CLIENTS[idx];
+            if (c && (!c.taxisnet_username || !c.taxisnet_password)) {
+              const row = cb.closest('tr');
+              if (row) row.style.background = '#fff7ed'; // amber-50
+            }
+          });
+        }, 30);
+      }
+    } catch (e) {
+      showBrainFlash('Σφάλμα φόρτωσης αποθηκευμένων πελατών: ' + e.message, 'error');
+      if (status) status.textContent = '';
+    }
+  }
+
   function getSelectedBulkClients() {
     return Array.from(document.querySelectorAll('.brainBulkPreviewCheckbox'))
       .filter((input) => input instanceof HTMLInputElement && input.checked)
@@ -3278,26 +3545,71 @@
       alert('Επίλεξε τουλάχιστον έναν πελάτη για έλεγχο.');
       return;
     }
+    // Force the user to deal with missing TAXIS credentials BEFORE we
+    // start hitting external services for any of the selected clients.
+    const missingCreds = selected.filter(c => !c.taxisnet_username || !c.taxisnet_password);
+    if (missingCreds.length) {
+      const names = missingCreds
+        .slice(0, 5)
+        .map(c => `${c.afm || '???'} — ${c.name || ''}`)
+        .join('\n');
+      const more = missingCreds.length > 5 ? `\n…και ${missingCreds.length - 5} ακόμη.` : '';
+      alert(
+        `${missingCreds.length} πελάτες έχουν λείπουν κωδικοί TAXISnet:\n\n${names}${more}\n\n` +
+        'Συμπλήρωσέ τους στον πίνακα και πάτησε ξανά εκτέλεση.'
+      );
+      return;
+    }
     const yearEl = document.getElementById('brainYearBulk');
     const runEfkaTekaEl = document.getElementById('brainRunEfkaTekaBulk');
     const runMisthEl = document.getElementById('brainRunMisthBulk');
     const runE9El = document.getElementById('brainRunE9Bulk');
     const year = Number((yearEl && yearEl.value) || new Date().getFullYear());
 
+    // Pre-flight snapshot — match runE3BrainSingle so the bulk run can't
+    // diverge from the visible checkbox state.
+    const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
+    const runMisth = !!(runMisthEl && runMisthEl.checked);
+    const runE9 = !!(runE9El && runE9El.checked);
+    if (!runEfkaTeka && !runMisth && !runE9) {
+      const proceedNoChecks = window.confirm(
+        'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, Μισθωτήρια, Ε9). ' +
+        'Θέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;'
+      );
+      if (!proceedNoChecks) return;
+    }
+
+    // Generate a stable job id so the backend can tag this run and the
+    // user can abort it from any page. The cross-page sticky banner shows
+    // a "Διακοπή" button that posts to /api/e3/brain/abort/<job_id>.
+    const jobId = 'bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     const payload = {
       mode: 'bulk',
       year,
-      run_extractors: !!(runEfkaTekaEl && runEfkaTekaEl.checked) || !!(runMisthEl && runMisthEl.checked) || !!(runE9El && runE9El.checked),
-      run_efka_teka: !!(runEfkaTekaEl && runEfkaTekaEl.checked),
-      run_misth: !!(runMisthEl && runMisthEl.checked),
-      run_e9: !!(runE9El && runE9El.checked),
+      run_extractors: runEfkaTeka || runMisth || runE9,
+      run_efka_teka: runEfkaTeka,
+      run_misth: runMisth,
+      run_e9: runE9,
       headed: true,
       auto_active_group_clients: true,
       clients: selected,
+      job_id: jobId,
     };
 
-    showGlobalWaitOverlay('E3 Brain Bulk', 'Τρέχει ο έλεγχος για τους επιλεγμένους πελάτες...');
+    // Don't block the page: only a sticky banner.
     brainSetResult('Εκτέλεση bulk...');
+    try {
+      window.showStickyBanner({
+        id: 'e3-bulk',
+        text: `E3 Bulk: τρέχει για ${selected.length} πελάτες…`,
+        actionText: 'Διακοπή (μετά τον τρέχοντα)',
+        kind: 'info',
+        onAction: function () {
+          window.updateStickyBanner('e3-bulk', { text: 'Αίτημα διακοπής στάλθηκε. Θα ολοκληρωθεί ο τρέχων πελάτης…', actionText: '' });
+          fetch('/api/e3/brain/abort/' + encodeURIComponent(jobId), { method: 'POST' }).catch(() => {});
+        },
+      });
+    } catch (_) {}
     try {
       const response = await fetch('/api/e3/brain', {
         method: 'POST',
@@ -3310,12 +3622,16 @@
       }
       E3_BRAIN_LAST_RESULT = data;
       brainSetResult(data);
-      showBrainFlash(data.message || 'E3 Brain bulk εκτέλεση ολοκληρώθηκε.', 'success');
+      const summary = data.message ||
+        (data.aborted
+          ? `Bulk διεκόπη μετά από ${data.total_clients || 0} πελάτες.`
+          : `E3 Brain bulk εκτέλεση ολοκληρώθηκε για ${data.total_clients || 0} πελάτες.`);
+      showBrainFlash(summary, data.aborted ? 'warning' : 'success');
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {
-      hideGlobalWaitOverlay();
+      try { window.hideStickyBanner('e3-bulk'); } catch (_) {}
     }
   }
 
@@ -3457,6 +3773,10 @@
   }
 
   function showBrainTab(tabId) {
+    // Capture the current Ατομικός form before switching away so the
+    // user does not lose typed values if they pop over to Μαζικός or
+    // Αποθηκευμένα and come back.
+    try { saveE3BrainState(); } catch (_) {}
     const tabs = ['brainTabSingle', 'brainTabBulk', 'brainTabSaved'];
     const buttons = ['brainTabSingleBtn', 'brainTabBulkBtn', 'brainTabSavedBtn'];
     tabs.forEach((id, idx) => {
@@ -3473,6 +3793,8 @@
         fetchE3BrainCredentials().catch(() => {});
       }
       syncBrainActiveClientSelection();
+      // Re-fill from cache when coming back to Ατομικός.
+      try { restoreE3BrainState({ restoreTab: false }); } catch (_) {}
     }
   }
 
@@ -3494,6 +3816,27 @@
     if (runSingleBtn && runSingleBtn.dataset.bound !== '1') {
       runSingleBtn.dataset.bound = '1';
       runSingleBtn.addEventListener('click', runE3BrainSingle);
+    }
+
+    // Bulk: load from active-group saved clients.
+    const bulkFromActiveBtn = document.getElementById('brainBulkFromActiveBtn');
+    if (bulkFromActiveBtn && bulkFromActiveBtn.dataset.bound !== '1') {
+      bulkFromActiveBtn.dataset.bound = '1';
+      bulkFromActiveBtn.addEventListener('click', () => {
+        loadBulkFromActiveGroup().catch(() => {});
+      });
+    }
+
+    // PDF list buttons
+    const listEfkaBtn = document.getElementById('brainListEfkaPdfsBtn');
+    if (listEfkaBtn && listEfkaBtn.dataset.bound !== '1') {
+      listEfkaBtn.dataset.bound = '1';
+      listEfkaBtn.addEventListener('click', () => refreshBrainPdfsList('efka'));
+    }
+    const listTekaBtn = document.getElementById('brainListTekaPdfsBtn');
+    if (listTekaBtn && listTekaBtn.dataset.bound !== '1') {
+      listTekaBtn.dataset.bound = '1';
+      listTekaBtn.addEventListener('click', () => refreshBrainPdfsList('teka'));
     }
 
     function _parseDateInputToIso(s) {
@@ -3637,6 +3980,15 @@
       tabSavedBtn.dataset.bound = '1';
       tabSavedBtn.addEventListener('click', () => showBrainTab('brainTabSaved'));
     }
+    // Explicit user "Refresh" button on the Saved sub-tab — this is the
+    // one place where we want a loud success/error toast.
+    const fetchCredsBtn = document.getElementById('brainFetchCredsBtn');
+    if (fetchCredsBtn && fetchCredsBtn.dataset.bound !== '1') {
+      fetchCredsBtn.dataset.bound = '1';
+      fetchCredsBtn.addEventListener('click', () => {
+        fetchE3BrainCredentials({ verbose: true }).catch(() => {});
+      });
+    }
 
     if (!E3_BRAIN_CREDS_CACHE.length) {
       fetchE3BrainCredentials().catch(() => {});
@@ -3675,6 +4027,9 @@
     try { if (typeof ensureE3DatePickerReady === 'function') ensureE3DatePickerReady(); } catch (_) {}
     try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); } catch (_) {}
     try { if (typeof initE3CheckEventListeners === 'function') initE3CheckEventListeners(); } catch (_) {}
+    // Wire up the brain auto-persist on every rebind so the per-input listeners
+    // exist after partial nav (DOM was replaced).
+    try { if (typeof bindBrainAutoPersist === 'function') bindBrainAutoPersist(); } catch (_) {}
     // Re-bind tab buttons on each rebind (partial nav replaces DOM so data-e3TabBound is reset)
     try {
       const qBtn = document.getElementById('quickCheckTabBtn');
@@ -3684,28 +4039,178 @@
     } catch (_) {}
   }
 
-  // Save non-sensitive brain form inputs to sessionStorage for partial-nav restoration
-  function saveE3BrainState() {
-    try {
-      const state = {};
-      ['brainAfm', 'brainName', 'brainDateFrom', 'brainDateTo', 'brainAddress'].forEach(function(id) {
-        const el = document.getElementById(id);
-        if (el) state[id] = el.value || '';
-      });
-      sessionStorage.setItem('e3BrainState', JSON.stringify(state));
-    } catch(_) {}
+  // Persist the full Ατομικός form (including TAXISnet / myDATA / ΑΜΚΑ /
+  // partner roster) to sessionStorage so switching between Ατομικός /
+  // Μαζικός / Αποθηκευμένα or doing a partial-nav round-trip does NOT
+  // wipe what the user typed. The "Αποθήκευση Credentials" button writes
+  // to the server cache; this is a separate, in-memory safety net.
+  //
+  // ⚠ Sensitive fields (TAXISnet password, myDATA key) are kept here too
+  // because the user explicitly asked for "ασφαλώς να μην γίνει wipe".
+  // They are scoped per-active-credential (VAT) so different clients do
+  // not leak into each other, and they are cleared when the user logs
+  // out or switches groups (the body.dataset.activeVat changes).
+  function _brainStateKey() {
+    var vat = '';
+    try { vat = String(document.body && document.body.dataset && document.body.dataset.activeVat || '').trim(); } catch (_) {}
+    return 'e3BrainState:' + (vat || 'noVat');
   }
 
-  function restoreE3BrainState() {
+  var BRAIN_PERSIST_IDS = [
+    'brainAfm', 'brainName', 'brainAddress',
+    'brainDateFrom', 'brainDateTo',
+    'brainTaxisUser', 'brainTaxisPass',
+    'brainAmka', 'brainMydataUser', 'brainMydataKey'
+  ];
+  // Checkbox IDs whose checked-state we persist (in addition to text inputs).
+  var BRAIN_PERSIST_CHECKBOX_IDS = [
+    'brainRunEfkaTeka', 'brainRunMisth', 'brainRunE9',
+    'brainDownloadEfkaPdfs', 'brainDownloadTekaPdfs',
+    'brainRunEfkaTekaBulk', 'brainRunMisthBulk', 'brainRunE9Bulk'
+  ];
+
+  function saveE3BrainState() {
     try {
-      const raw = sessionStorage.getItem('e3BrainState');
-      if (!raw) return;
-      const state = JSON.parse(raw);
-      Object.keys(state).forEach(function(id) {
-        const el = document.getElementById(id);
-        if (el && !el.value) el.value = state[id];
+      var state = { _ts: Date.now() };
+      BRAIN_PERSIST_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) state[id] = el.value || '';
       });
-    } catch(_) {}
+      BRAIN_PERSIST_CHECKBOX_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) state['_cb_' + id] = !!el.checked;
+      });
+      // Active brain sub-tab (Ατομικός / Μαζικός / Αποθηκευμένα).
+      try {
+        var visiblePanels = ['brainTabSingle', 'brainTabBulk', 'brainTabSaved'].filter(function(id){
+          var el = document.getElementById(id);
+          return el && !el.classList.contains('hidden');
+        });
+        if (visiblePanels.length) state._activeBrainTab = visiblePanels[0];
+      } catch (_) {}
+      // Selected active client (dropdown value).
+      try {
+        var sel = document.getElementById('brainActiveClientSelect');
+        if (sel) state._brainSelAfm = sel.value || '';
+      } catch (_) {}
+      // Members / partner credentials (Ατομική fields can be filled in).
+      try { state._members = E3_BRAIN_MEMBERS || []; } catch (_) {}
+      try { state._memberCreds = E3_BRAIN_MEMBER_CREDS || {}; } catch (_) {}
+      sessionStorage.setItem(_brainStateKey(), JSON.stringify(state));
+    } catch (_) {}
+  }
+
+  function restoreE3BrainState(opts) {
+    opts = opts || {};
+    try {
+      var raw = sessionStorage.getItem(_brainStateKey());
+      if (!raw) return false;
+      var state = JSON.parse(raw);
+      BRAIN_PERSIST_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        // Only fill if empty (don't clobber what user is actively typing).
+        if (!el.value && state[id]) el.value = state[id];
+      });
+      BRAIN_PERSIST_CHECKBOX_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var saved = state['_cb_' + id];
+        if (typeof saved === 'boolean') el.checked = saved;
+      });
+      if (state._members && Array.isArray(state._members) && state._members.length) {
+        try { E3_BRAIN_MEMBERS = state._members; } catch (_) {}
+      }
+      if (state._memberCreds && typeof state._memberCreds === 'object') {
+        try { E3_BRAIN_MEMBER_CREDS = state._memberCreds; } catch (_) {}
+      }
+      try {
+        if (state._members && state._members.length && typeof renderBrainPartnerFields === 'function') {
+          renderBrainPartnerFields();
+        }
+      } catch (_) {}
+      if (state._brainSelAfm) {
+        try {
+          var sel = document.getElementById('brainActiveClientSelect');
+          if (sel && !sel.value) sel.value = state._brainSelAfm;
+        } catch (_) {}
+      }
+      if (opts.restoreTab !== false && state._activeBrainTab && typeof showBrainTab === 'function') {
+        try { showBrainTab(state._activeBrainTab); } catch (_) {}
+      }
+      return true;
+    } catch (_) { return false; }
+  }
+
+  function clearE3BrainState() {
+    try { sessionStorage.removeItem(_brainStateKey()); } catch (_) {}
+  }
+
+  // === EFKA / TEKA certificate PDFs ===
+  async function refreshBrainPdfsList(kind) {
+    // kind in {'efka','teka'}
+    const afmEl = document.getElementById('brainAfm');
+    const afm = String((afmEl && afmEl.value) || '').replace(/\D/g, '');
+    const listDiv = document.getElementById('brainPdfsList');
+    const statusEl = document.getElementById('brainPdfsStatus');
+    if (!afm || afm.length !== 9) {
+      if (listDiv) listDiv.innerHTML = '<span class="text-amber-600">Δώσε έγκυρο ΑΦΜ 9 ψηφίων.</span>';
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Φόρτωση...';
+    try {
+      const resp = await fetch(`/api/e3/brain/${kind}_pdfs?afm=${encodeURIComponent(afm)}`);
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία λήψης λίστας.');
+      const files = Array.isArray(data.files) ? data.files : [];
+      if (statusEl) statusEl.textContent = `${kind.toUpperCase()}: ${files.length} αρχεία για ΑΦΜ ${afm}`;
+      if (!files.length) {
+        if (listDiv) listDiv.innerHTML = '<span class="text-gray-500">Δεν υπάρχουν αποθηκευμένα PDF για αυτόν τον ΑΦΜ.</span>';
+        return;
+      }
+      const rows = files.map(f => {
+        const sizeKb = f.size ? Math.round(f.size / 102.4) / 10 : '';
+        const dl = `/api/e3/brain/${kind}_pdfs/file?afm=${encodeURIComponent(afm)}&name=${encodeURIComponent(f.name)}`;
+        return `<div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 py-1">
+          <span class="truncate">${(f.name || '').replace(/</g,'&lt;')}</span>
+          <span class="text-gray-400 ml-2 mr-2">${sizeKb ? sizeKb + ' KB' : ''}</span>
+          <a class="text-sky-600 hover:underline" target="_blank" rel="noopener" href="${dl}">Άνοιγμα</a>
+        </div>`;
+      }).join('');
+      if (listDiv) listDiv.innerHTML = `<div class="bg-white dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-2 max-h-40 overflow-auto">${rows}</div>`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Σφάλμα: ' + e.message;
+    }
+  }
+
+  // Hook every persisted field with a debounced auto-save so the moment
+  // the user types something it lives until logout / group switch.
+  function bindBrainAutoPersist() {
+    var debounce = null;
+    function schedule() {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(saveE3BrainState, 300);
+    }
+    BRAIN_PERSIST_IDS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el || el.dataset.brainAutoPersist === '1') return;
+      el.dataset.brainAutoPersist = '1';
+      el.addEventListener('input', schedule);
+      el.addEventListener('change', schedule);
+      el.addEventListener('blur', saveE3BrainState);
+    });
+    BRAIN_PERSIST_CHECKBOX_IDS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el || el.dataset.brainAutoPersist === '1') return;
+      el.dataset.brainAutoPersist = '1';
+      el.addEventListener('change', saveE3BrainState);
+    });
+    // Also persist on visibility change so closing/switching tab keeps the data.
+    if (!document.body.dataset.brainAutoPersistGlobal) {
+      document.body.dataset.brainAutoPersistGlobal = '1';
+      document.addEventListener('visibilitychange', saveE3BrainState);
+      window.addEventListener('beforeunload', saveE3BrainState);
+    }
   }
 
   // Expose and run initial binding. `swapPage` will call `rebindE3Controls()` after partial navigation.

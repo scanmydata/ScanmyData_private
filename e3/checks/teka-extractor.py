@@ -7,11 +7,11 @@ from playwright.sync_api import Page, expect, sync_playwright, TimeoutError as P
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-DEFAULT_TIMEOUT = 20000
-NETWORK_TIMEOUT = 20000
-NAVIGATION_TIMEOUT = 20000
-POPUP_TIMEOUT = 15000
-ASSERT_TIMEOUT = 10000
+DEFAULT_TIMEOUT = 30000
+NETWORK_TIMEOUT = 30000
+NAVIGATION_TIMEOUT = 45000
+POPUP_TIMEOUT = 20000
+ASSERT_TIMEOUT = 15000
 SHORT_WAIT = 500
 
 
@@ -27,6 +27,101 @@ def collapse_adjacent_duplicates(values: list[str]) -> list[str]:
         if not collapsed or value != collapsed[-1]:
             collapsed.append(value)
     return collapsed
+
+
+def _safe_filename(token: str, fallback: str = "row") -> str:
+    token = (token or "").strip()
+    token = re.sub(r"[^\w\-Ͱ-Ͽἀ-῿.]+", "_", token, flags=re.U)
+    return token or fallback
+
+
+# Hard caps so a stuck row never blocks the whole brain run. See the
+# matching constants + comment in efka-extractor.py for the rationale.
+PDF_PER_ROW_TIMEOUT = 8000
+PDF_TOTAL_TIMEOUT_SEC = 60.0
+PDF_MAX_CONSEC_FAILS = 3
+PDF_DEFAULT_MAX_ROWS = 60
+
+
+def download_certificate_pdfs(page: Page, output_dir, max_rows: int = None,
+                              prefix: str = "teka_cert") -> list:
+    """Best-effort per-row PDF download for TEKA. NEVER fails the caller."""
+    import time
+    from pathlib import Path as _Path
+    out_dir = _Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        page.wait_for_selector(
+            "#ContentPlaceHolder1_TaxNotificationsGrid_DXMainTable",
+            timeout=NETWORK_TIMEOUT,
+        )
+    except Exception as exc:
+        logging.warning("TEKA PDF download skipped — table did not load (%s)", exc)
+        return []
+
+    rows = page.locator(
+        "#ContentPlaceHolder1_TaxNotificationsGrid_DXMainTable tr[class*='dxgvDataRow']"
+    )
+    total = rows.count()
+    cap = max_rows if max_rows is not None else PDF_DEFAULT_MAX_ROWS
+    total = min(total, cap)
+    logging.info("TEKA PDF download: targeting %d certificate rows (cap=%d)", total, cap)
+
+    saved = []
+    consecutive_fails = 0
+    deadline = time.monotonic() + PDF_TOTAL_TIMEOUT_SEC
+    for i in range(total):
+        if time.monotonic() > deadline:
+            logging.warning(
+                "TEKA PDF deadline reached after %d/%d rows; stopping cleanly",
+                i, total,
+            )
+            break
+        row = rows.nth(i)
+        cells = row.locator("td")
+        label_parts = []
+        try:
+            ncells = min(cells.count(), 6)
+        except Exception:
+            ncells = 0
+        for c in range(ncells):
+            try:
+                txt = clean_text(cells.nth(c).inner_text(timeout=2000))
+            except Exception:
+                txt = ""
+            if txt and txt not in label_parts:
+                label_parts.append(txt[:30])
+        label = " | ".join(label_parts) if label_parts else f"row{i}"
+        safe_label = _safe_filename(label.replace(" | ", "_"), f"row{i}")[:80]
+        out_path = out_dir / f"{prefix}_{i:02d}_{safe_label}.pdf"
+
+        try:
+            print_button = row.locator("a:has(img[title*='Εκτύπωση'])").first
+            if not print_button.count():
+                logging.info("Row %d: no print button found — skip", i)
+                consecutive_fails += 1
+                if consecutive_fails >= PDF_MAX_CONSEC_FAILS:
+                    break
+                continue
+            with page.expect_download(timeout=PDF_PER_ROW_TIMEOUT) as dl_info:
+                print_button.click(timeout=PDF_PER_ROW_TIMEOUT)
+            dl = dl_info.value
+            dl.save_as(str(out_path))
+            saved.append({"row": i, "path": str(out_path), "label": label})
+            consecutive_fails = 0
+            logging.info("Row %d saved: %s", i, out_path.name)
+        except PlaywrightTimeoutError:
+            consecutive_fails += 1
+            logging.info("Row %d: print did not produce a download in %dms — skip", i, PDF_PER_ROW_TIMEOUT)
+        except Exception as exc:
+            consecutive_fails += 1
+            logging.info("Row %d: error during download (%s) — skip", i, exc)
+        if consecutive_fails >= PDF_MAX_CONSEC_FAILS:
+            logging.warning("TEKA PDF download: %d consecutive failures, stopping early", consecutive_fails)
+            break
+    logging.info("TEKA PDF download done: %d/%d saved", len(saved), total)
+    return saved
 
 
 def extract_table_data(page: Page) -> dict:
@@ -58,8 +153,18 @@ def extract_table_data(page: Page) -> dict:
         cells = row.locator("td")
         values = [clean_text(cells.nth(j).inner_text()) for j in range(cells.count())]
 
+        # Strip the trailing empty DevExpress adaptive cell — see
+        # efka-extractor.py for the rationale.
+        if headers and len(values) > len(headers):
+            while values and len(values) > len(headers) and not values[-1].strip():
+                values = values[:-1]
+
         if headers and len(values) == len(headers):
             row_data = {headers[j]: values[j] for j in range(len(headers))}
+        elif headers and len(values) > len(headers):
+            row_data = {headers[j]: values[j] for j in range(len(headers))}
+            for j in range(len(headers), len(values)):
+                row_data[f"col_{j}"] = values[j]
         else:
             row_data = {f"col_{j}": values[j] for j in range(len(values))}
 
@@ -114,11 +219,20 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
 
     page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
 
+    # Robust username/password fallback (see efka-extractor.py for context).
     username_field = page1.get_by_role("textbox", name="Χρήστης:")
+    if username_field.count() == 0:
+        username_field = page1.get_by_role("textbox", name="Όνομα Χρήστη")
+    if username_field.count() == 0:
+        username_field = page1.locator(
+            "input[name='j_username'], input[id*='j_username'], input[id*='username' i], input[name*='user' i]"
+        )
     password_field = page1.get_by_role("textbox", name="Κωδικός:")
+    if password_field.count() == 0:
+        password_field = page1.locator("input[type='password']")
     if username_field.count() and password_field.count():
-        username_field.fill(username)
-        password_field.fill(password)
+        username_field.first.fill(username, timeout=NETWORK_TIMEOUT)
+        password_field.first.fill(password, timeout=NETWORK_TIMEOUT)
     else:
         afm_field = page1.get_by_role("textbox", name="ΑΦΜ:")
         if afm_field.count() == 0:
@@ -217,18 +331,71 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
     page1.wait_for_timeout(SHORT_WAIT)
 
     logging.info("Clicking on the section to scrape the table.")
-    section_button = page1.locator("section div", has_text="Φορολογικές Βεβαιώσεις ΤΕΚΑ").nth(4)
-    section_button.wait_for(state="visible", timeout=NETWORK_TIMEOUT)
+    # Section finder: a TAXISNET user that is NOT enrolled in TEKA simply
+    # does not see the "Φορολογικές Βεβαιώσεις ΤΕΚΑ" section. In that
+    # case, emit an empty JSON so the brain reports "no TEKA amount" but
+    # exits cleanly (returncode 0) — otherwise the brain would treat the
+    # subprocess as a hard failure even though missing TEKA is expected.
+    section_locator = page1.locator("section div", has_text="Φορολογικές Βεβαιώσεις ΤΕΚΑ")
+    section_count = section_locator.count()
+    if section_count == 0:
+        logging.info("No TEKA section visible — user not enrolled in TEKA. Emitting empty result.")
+        with open("extracted_table_data_teka.json", "w", encoding="utf-8") as output_file:
+            json.dump({"headers": [], "header_map": {}, "rows": [], "no_teka": True},
+                      output_file, ensure_ascii=False, indent=4)
+        return
+    # Pick the most specific clickable item — prefer .nth(4) but fall
+    # back through 3,2,1,0 when fewer matches exist (different layout).
+    section_button = None
+    for idx in [4, 3, 2, 1, 0]:
+        if idx < section_count:
+            section_button = section_locator.nth(idx)
+            try:
+                section_button.wait_for(state="visible", timeout=5000)
+                break
+            except PlaywrightTimeoutError:
+                section_button = None
+                continue
+    if section_button is None:
+        logging.info("TEKA section located but no nth() entry was visible — emitting empty result.")
+        with open("extracted_table_data_teka.json", "w", encoding="utf-8") as output_file:
+            json.dump({"headers": [], "header_map": {}, "rows": [], "no_teka": True},
+                      output_file, ensure_ascii=False, indent=4)
+        return
     section_button.click()
 
-    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
-    page1.wait_for_selector("#ContentPlaceHolder1_TaxNotificationsGrid_DXMainTable", timeout=NETWORK_TIMEOUT)
+    try:
+        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    except PlaywrightTimeoutError:
+        logging.info("Networkidle never reached after TEKA section click; continuing anyway.")
+
+    try:
+        page1.wait_for_selector(
+            "#ContentPlaceHolder1_TaxNotificationsGrid_DXMainTable", timeout=NETWORK_TIMEOUT
+        )
+    except PlaywrightTimeoutError:
+        logging.info("TEKA table did not appear — emitting empty result.")
+        with open("extracted_table_data_teka.json", "w", encoding="utf-8") as output_file:
+            json.dump({"headers": [], "header_map": {}, "rows": [], "no_teka": True},
+                      output_file, ensure_ascii=False, indent=4)
+        return
 
     output = extract_table_data(page1)
     with open("extracted_table_data_teka.json", "w", encoding="utf-8") as output_file:
         json.dump(output, output_file, ensure_ascii=False, indent=4)
 
     logging.info("Saved extracted_table_data_teka.json with headers and row mappings.")
+
+    pdf_dir = os.getenv("TEKA_PDF_DIR")
+    if pdf_dir:
+        try:
+            saved = download_certificate_pdfs(page1, pdf_dir, prefix="teka_cert")
+            output["pdfs"] = saved
+            with open("extracted_table_data_teka.json", "w", encoding="utf-8") as f:
+                json.dump(output, f, ensure_ascii=False, indent=4)
+            logging.info("Downloaded %d TEKA PDFs to %s", len(saved), pdf_dir)
+        except Exception as exc:
+            logging.warning("TEKA PDF download skipped: %s", exc)
 
 
 def main() -> None:
@@ -237,7 +404,11 @@ def main() -> None:
     parser.add_argument("--password", default=os.getenv("TEKA_PASSWORD", "159712"), help="TAXISNET password")
     parser.add_argument("--amka", default=os.getenv("TEKA_AMKA", "12019400675"), help="AMKA to fill")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    parser.add_argument("--pdf-dir", default=os.getenv("TEKA_PDF_DIR"),
+                        help="If set, download each certificate PDF into this directory")
     args = parser.parse_args()
+    if args.pdf_dir:
+        os.environ["TEKA_PDF_DIR"] = args.pdf_dir
 
     logging.info("Launching browser in %s mode.", "headless" if args.headless else "headed")
     try:
@@ -261,6 +432,7 @@ def main() -> None:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             locale="el-GR",
             viewport={"width": 1920, "height": 1200},
+            accept_downloads=True,
         )
         page = context.new_page()
         try:

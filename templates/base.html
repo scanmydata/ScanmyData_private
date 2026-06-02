@@ -2022,6 +2022,10 @@
   {% block head_extra %}{% endblock %}
 </head>
 <body data-active-vat="{{ active_credential_vat|default('', true)|e }}">
+  <!-- Persistent global banner (e.g. "E3 Bulk τρέχει — Διακοπή") that must
+       survive partial navigation. Lives OUTSIDE #appShell so swapPage()'s
+       innerHTML replacement does not remove it. -->
+  <div id="globalStickyBannerHost" style="position:fixed;top:0;left:0;right:0;z-index:9990;pointer-events:none;"></div>
   <div class="container">
     <div id="appShell">
     <header class="mb-6">
@@ -3086,6 +3090,74 @@
     window.__registerPageCleanup = function(fn) {
       window.__cleanupPageScripts = typeof fn === 'function' ? fn : null;
     };
+
+    // ============================================================================
+    // Global sticky banner for long-running background jobs (e.g. E3 Brain bulk).
+    // Lives outside #appShell so partial navigation never clears it.
+    //
+    // Usage:
+    //   window.showStickyBanner({ id:'e3-bulk', text:'…', actionText:'Διακοπή',
+    //                             onAction: function(){...} });
+    //   window.updateStickyBanner('e3-bulk', { text:'5/12 ολοκληρώθηκαν' });
+    //   window.hideStickyBanner('e3-bulk');
+    // ============================================================================
+    (function () {
+      var banners = {};
+      function host() { return document.getElementById('globalStickyBannerHost'); }
+      function render() {
+        var h = host(); if (!h) return;
+        var keys = Object.keys(banners);
+        if (!keys.length) { h.innerHTML = ''; return; }
+        var html = '';
+        keys.forEach(function (id) {
+          var b = banners[id];
+          var color = b.kind === 'error' ? '#b91c1c' : (b.kind === 'success' ? '#047857' : '#1d4ed8');
+          html += '<div data-banner-id="' + String(id).replace(/"/g, '&quot;') + '" ' +
+                  'style="pointer-events:auto;margin:6px auto;max-width:1100px;background:' + color + ';color:#fff;' +
+                  'padding:8px 14px;border-radius:0 0 12px 12px;display:flex;align-items:center;gap:10px;' +
+                  'box-shadow:0 6px 14px rgba(0,0,0,0.18);font:500 14px system-ui">' +
+                  '<span style="flex:1 1 auto;line-height:1.35">' + String(b.text || '').replace(/</g, '&lt;') + '</span>';
+          if (b.actionText) {
+            html += '<button type="button" data-banner-action="' + String(id).replace(/"/g, '&quot;') + '" ' +
+                    'style="background:#fff;color:#111;padding:4px 12px;border-radius:8px;border:none;font-weight:600;' +
+                    'cursor:pointer;">' + String(b.actionText).replace(/</g, '&lt;') + '</button>';
+          }
+          html += '<button type="button" data-banner-dismiss="' + String(id).replace(/"/g, '&quot;') + '" ' +
+                  'style="background:transparent;color:#fff;border:none;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;">×</button>';
+          html += '</div>';
+        });
+        h.innerHTML = html;
+        h.querySelectorAll('[data-banner-action]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-banner-action');
+            var b = banners[id];
+            if (b && typeof b.onAction === 'function') { try { b.onAction(); } catch (_) {} }
+          });
+        });
+        h.querySelectorAll('[data-banner-dismiss]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-banner-dismiss');
+            window.hideStickyBanner(id);
+          });
+        });
+      }
+      window.showStickyBanner = function (opts) {
+        if (!opts || !opts.id) return;
+        banners[opts.id] = Object.assign({}, banners[opts.id] || {}, opts);
+        render();
+      };
+      window.updateStickyBanner = function (id, opts) {
+        if (!id || !banners[id]) return;
+        banners[id] = Object.assign({}, banners[id], opts || {});
+        render();
+      };
+      window.hideStickyBanner = function (id) {
+        if (!id) return;
+        delete banners[id];
+        render();
+      };
+      window.__hasStickyBanner = function (id) { return !!banners[id]; };
+    })();
 
     // ============================================================================
     // COOKIE CONSENT MANAGEMENT (GDPR)
