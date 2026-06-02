@@ -1862,8 +1862,15 @@ def process_client(
     rent_annual = None
     rent_source = None
 
-    if run_extractors and headquarter_address and targets:
-        main_target = targets[0]
+    # Prefer company-level TAXIS credentials for misth/E9 (entity-level registrations).
+    # Fall back to first member's credentials if company ones are absent.
+    company_taxis_user = _norm_text(client.get("taxisnet_username"))
+    company_taxis_pass = _norm_text(client.get("taxisnet_password"))
+    if (not company_taxis_user or not company_taxis_pass) and targets:
+        company_taxis_user = company_taxis_user or targets[0].taxisnet_username
+        company_taxis_pass = company_taxis_pass or targets[0].taxisnet_password
+
+    if run_extractors and headquarter_address and company_taxis_user and company_taxis_pass:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
 
@@ -1874,9 +1881,9 @@ def process_client(
                 sys.executable,
                 str(checks_dir / "misth.py"),
                 "--username",
-                main_target.taxisnet_username,
+                company_taxis_user,
                 "--password",
-                main_target.taxisnet_password,
+                company_taxis_pass,
                 "--output",
                 "extracted_misth.json",
             ]
@@ -1915,9 +1922,9 @@ def process_client(
                     sys.executable,
                     str(checks_dir / "e9.py"),
                     "--username",
-                    main_target.taxisnet_username,
+                    company_taxis_user,
                     "--password",
-                    main_target.taxisnet_password,
+                    company_taxis_pass,
                     "--year",
                     str(year),
                     "--address",

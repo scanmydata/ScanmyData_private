@@ -4097,6 +4097,20 @@
         }
       }
 
+      function resetE3CheckPageGlobals(pathname) {
+        if (normalizePath(pathname) !== '/e3_check') return;
+        // Reset one-time guard flags so e3_check.html re-registers its handlers on each partial nav
+        const keysToReset = ['__e3CheckTabBindingsInstalled', '__e3CheckFlatpickrReadyPromise'];
+        for (const k of keysToReset) {
+          try { delete window[k]; } catch (_) { try { window[k] = undefined; } catch(_) {} }
+        }
+        // Ensure any stale wait overlay is hidden when re-entering the page
+        try {
+          const ov = document.getElementById('waitOverlay');
+          if (ov) ov.setAttribute('aria-hidden', 'true');
+        } catch(_) {}
+      }
+
       function initSearchRepeatProfileHintSync(pathname) {
         if (normalizePath(pathname) !== '/search') return;
 
@@ -5163,6 +5177,7 @@
         } catch (_) {}
 
         resetSearchPageGlobals(url.pathname);
+        resetE3CheckPageGlobals(url.pathname);
         cleanupTransientDatepickers();
 
         try {
