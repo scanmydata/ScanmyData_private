@@ -240,10 +240,22 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.info("Launching browser in %s mode.", "headless" if args.headless else "headed")
+    try:
+        from e3.checks import chromium_launch_args as _svfb_args
+    except Exception:
+        def _svfb_args():
+            return [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+            ]
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=args.headless,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            args=_svfb_args(),
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

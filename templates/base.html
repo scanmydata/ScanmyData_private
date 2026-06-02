@@ -5032,27 +5032,114 @@
                 script.onerror = () => reject(new Error('Failed loading script: ' + oldScript.src));
               } else {
                 try {
-                  const raw = oldScript.textContent || '';
-                  const lines = String(raw).split(/\r?\n/);
-                  const filtered = lines.filter(l => {
-                    const t = l.trim();
-                    if (!t) return false;
-                    if (t.startsWith('<')) return false;
-                    if (/\<\s*(path|svg|g)\b/i.test(t)) return false;
-                    return true;
-                  });
-                  let content = filtered.join('\n');
-
-                  // Convert top-level let/const to var to avoid redeclare errors on re-injection
-                  content = content.replace(/(^|\n)\s*(let|const)\s+/g, '$1var ');
+                  const raw = String(oldScript.textContent || '');
+                  // Template-literal-aware sanitization. The previous heuristic
+                  // (strip any line starting with `<`) corrupts multi-line
+                  // template literals containing HTML — those lines must be
+                  // preserved or the literal stays open and later code is
+                  // re-parsed as JS, causing "Unexpected identifier" errors
+                  // that break partial navigation.
+                  let content = '';
+                  let inTpl = false;        // inside backtick template literal
+                  let inSingle = false;     // inside '...'
+                  let inDouble = false;     // inside "..."
+                  let inLineComment = false;
+                  let inBlockComment = false;
+                  let tplExprDepth = 0;     // depth of ${ ... } interpolation
+                  let lineBuf = '';         // current line buffer
+                  let atLineStart = true;
+                  let lineStrippable = true; // true if line so far has only whitespace
+                  let firstNonWsCol = -1;
+                  function flushLine(newline) {
+                    // Only strip lines that look like stray HTML AND are not
+                    // inside a template literal / string / comment.
+                    const trimmed = lineBuf.trim();
+                    const inAnyString = inTpl || inSingle || inDouble;
+                    const inAnyComment = inLineComment || inBlockComment;
+                    if (!inAnyString && !inAnyComment && trimmed &&
+                        (trimmed.startsWith('<') ||
+                         /^<\s*(path|svg|g)\b/i.test(trimmed))) {
+                      // skip stray HTML-ish line outside JS string/comment
+                    } else {
+                      // Replace leading "let "/"const " with "var " only when
+                      // we are at the top of an executable line (not inside a
+                      // string or template literal). Keeps original column.
+                      let outLine = lineBuf;
+                      if (!inAnyString) {
+                        outLine = outLine.replace(/^(\s*)(let|const)(\s+)/, '$1var$3');
+                      }
+                      content += outLine;
+                    }
+                    if (newline !== '') content += newline;
+                    lineBuf = '';
+                    atLineStart = true;
+                    lineStrippable = true;
+                    firstNonWsCol = -1;
+                    inLineComment = false;
+                  }
+                  let i = 0;
+                  const n = raw.length;
+                  while (i < n) {
+                    const ch = raw[i];
+                    const next = i + 1 < n ? raw[i + 1] : '';
+                    if (ch === '\r') { lineBuf += ch; i++; continue; }
+                    if (ch === '\n') {
+                      flushLine('\n');
+                      i++;
+                      continue;
+                    }
+                    if (atLineStart && !/\s/.test(ch)) atLineStart = false;
+                    lineBuf += ch;
+                    // Update lexical state. Skip updates inside line comments
+                    // until newline (already handled above).
+                    if (inBlockComment) {
+                      if (ch === '*' && next === '/') { lineBuf += next; i += 2; inBlockComment = false; continue; }
+                      i++; continue;
+                    }
+                    if (inLineComment) { i++; continue; }
+                    if (inSingle) {
+                      if (ch === '\\' && next) { lineBuf += next; i += 2; continue; }
+                      if (ch === "'") inSingle = false;
+                      i++; continue;
+                    }
+                    if (inDouble) {
+                      if (ch === '\\' && next) { lineBuf += next; i += 2; continue; }
+                      if (ch === '"') inDouble = false;
+                      i++; continue;
+                    }
+                    if (inTpl) {
+                      if (ch === '\\' && next) { lineBuf += next; i += 2; continue; }
+                      if (tplExprDepth === 0) {
+                        if (ch === '`') { inTpl = false; }
+                        else if (ch === '$' && next === '{') { lineBuf += next; i += 2; tplExprDepth = 1; continue; }
+                      } else {
+                        // inside ${ ... }
+                        if (ch === '{') tplExprDepth++;
+                        else if (ch === '}') {
+                          tplExprDepth--;
+                          // exiting back into template literal text
+                        } else if (ch === '`') {
+                          // nested template literal start (rare)
+                          // treat as new template via separate state — simple approach: ignore depth
+                        } else if (ch === "'") { inSingle = true; }
+                        else if (ch === '"') { inDouble = true; }
+                      }
+                      i++; continue;
+                    }
+                    // Outside any string/comment/template
+                    if (ch === '/' && next === '/') { inLineComment = true; lineBuf += next; i += 2; continue; }
+                    if (ch === '/' && next === '*') { inBlockComment = true; lineBuf += next; i += 2; continue; }
+                    if (ch === "'") { inSingle = true; i++; continue; }
+                    if (ch === '"') { inDouble = true; i++; continue; }
+                    if (ch === '`') { inTpl = true; i++; continue; }
+                    i++;
+                  }
+                  if (lineBuf.length) flushLine('');
 
                   script.textContent = content;
-                  if (filtered.length !== lines.length) {
-                    console.info('[partial-nav] sanitized inline script (removed HTML-like lines)');
-                  }
                 } catch (e) {
-                  console.warn('[partial-nav] script sanitization failed, skipping inline content', e);
-                  script.textContent = '';
+                  console.warn('[partial-nav] script sanitization failed, falling back to raw content', e);
+                  try { script.textContent = String(oldScript.textContent || ''); } catch (_) { script.textContent = ''; }
                 }
               }
 

@@ -1258,20 +1258,24 @@
 </div>
 
 <script>
-  let E3_LAST_DATA = null;
-  let E3_EXCEL_TOTALS = new Map();
-  let E3_BRAIN_CHECKS = new Map(); // brain-fetched values per code, for indicator display only
-  const E3_EXPANDED_CODES = new Set();
-  let E3_LOADING = false;
-  let E3_FETCH_CONTROLLER = null;
-  let E3_OVERLAY_TIMEOUT = null;
-  let E3_BRAIN_LAST_RESULT = null;
-  let E3_BRAIN_CREDS_CACHE = [];
-  let E3_BRAIN_ACTIVE_CLIENTS = [];
-  let E3_BRAIN_MEMBERS = [];
-  let E3_BRAIN_MEMBER_CREDS = {};
-  let E3_BRAIN_PREVIEW_CLIENTS = [];
-  let _E3_BRAIN_EDIT_CRED = null; // holds the credential being edited in the modal
+  // Top-level state variables declared with `var` so the inline script can be
+  // safely re-executed by partial navigation without "Identifier already
+  // declared" SyntaxErrors. The base.html partial-nav sanitizer also rewrites
+  // any stray let/const, but using var here is the canonical fix.
+  var E3_LAST_DATA = null;
+  var E3_EXCEL_TOTALS = new Map();
+  var E3_BRAIN_CHECKS = new Map(); // brain-fetched values per code, for indicator display only
+  var E3_EXPANDED_CODES = (typeof E3_EXPANDED_CODES !== 'undefined' && E3_EXPANDED_CODES instanceof Set) ? E3_EXPANDED_CODES : new Set();
+  var E3_LOADING = false;
+  var E3_FETCH_CONTROLLER = null;
+  var E3_OVERLAY_TIMEOUT = null;
+  var E3_BRAIN_LAST_RESULT = null;
+  var E3_BRAIN_CREDS_CACHE = [];
+  var E3_BRAIN_ACTIVE_CLIENTS = [];
+  var E3_BRAIN_MEMBERS = [];
+  var E3_BRAIN_MEMBER_CREDS = {};
+  var E3_BRAIN_PREVIEW_CLIENTS = [];
+  var _E3_BRAIN_EDIT_CRED = null; // holds the credential being edited in the modal
 
   function showBrainFlash(message, type = 'info', ttl = 5000) {
     if (!message) return;
@@ -2067,7 +2071,8 @@
     }
   }
 
-  const E3_STRUCTURE = {
+  // Top-level: var so partial-nav re-execution doesn't throw redeclare error.
+  var E3_STRUCTURE = {
     revenue: [
       { code: '561', description: 'Πωλήσεις αγαθών και υπηρεσιών — Σύνολο' },
       { code: '561.001', description: 'Χονδρικές - Επιτηδευματιών', is_subrow: true, parent_code: '561' },

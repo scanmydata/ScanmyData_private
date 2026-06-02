@@ -10,6 +10,22 @@ try:
 except Exception as e:
     raise
 
+try:
+    from e3.checks import chromium_launch_args
+except Exception:
+    def chromium_launch_args(extra=None):
+        args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+        ]
+        if extra:
+            args.extend(extra)
+        return args
+
 AFM_RE = re.compile(r"\b(\d{9})\b")
 AMKA_RE = re.compile(r"\b(\d{11})\b")
 AADE_ENTRY = 'https://www.aade.gr/dilosi-forologias-eisodimatos-fp-e1-e2-e3'
@@ -167,7 +183,7 @@ async def _run_impl(username, password, year, output_path, headless=True, name=N
     screenshot_dir = outp.parent / 'screenshots'
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless, args=['--no-sandbox', '--disable-gpu'])
+        browser = await p.chromium.launch(headless=headless, args=chromium_launch_args())
         ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
         if initial_storage:
             try:

@@ -497,13 +497,21 @@ async def ensure_logged_in_from_registry(page, username: str, password: str):
 
 
 async def run(playwright: Playwright, username: str, password: str, output_path: Path, headed: bool) -> None:
+    try:
+        from e3.checks import chromium_launch_args as _svfb_args
+    except Exception:
+        def _svfb_args():
+            return [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+            ]
     browser = await playwright.chromium.launch(
         headless=not headed,
-        args=[
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-        ],
+        args=_svfb_args(),
     )
     storage_exists = STORAGE_STATE_PATH.exists()
     attempts = [True, False] if storage_exists else [False]

@@ -432,15 +432,21 @@ async def extract_etak_property_status(page):
 
 
 async def run(playwright: Playwright, username: str, password: str, year: str, address: str, output_path: Path, headed: bool, keep_pdf: bool) -> None:
+    try:
+        from e3.checks import chromium_launch_args as _svfb_args
+    except Exception:
+        def _svfb_args():
+            return [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+            ]
     browser = await playwright.chromium.launch(
         headless=not headed,
-        args=[
-            '--disable-blink-features=AutomationControlled',
-            '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-        ],
+        args=_svfb_args(),
     )
     context_args = {
         'user_agent': USER_AGENT,
