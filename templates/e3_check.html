@@ -1419,6 +1419,29 @@
     select.addEventListener('change', onBrainActiveClientSelectChange);
   }
 
+  function getActiveCredentialAfm() {
+    try {
+      const ds = String((document.body && document.body.dataset && document.body.dataset.activeVat) || '').trim();
+      if (/^\d{9}$/.test(ds)) return ds;
+    } catch (_) {}
+    const topSelect = document.getElementById('e3Credential') || document.getElementById('e3CredentialLocked');
+    if (topSelect) {
+      const v = String(topSelect.value || '').trim();
+      if (/^\d{9}$/.test(v)) return v;
+      const sel = topSelect.options[topSelect.selectedIndex];
+      const txt = sel ? (sel.textContent || '') : '';
+      const m = txt.match(/\((\d{9})\)/);
+      if (m) return m[1];
+    }
+    try {
+      const headerLink = document.querySelector('header a, nav a');
+      const txt = document.body ? document.body.textContent || '' : '';
+      const m = txt.match(/\((\d{9})\)/);
+      if (m) return m[1];
+    } catch (_) {}
+    return '';
+  }
+
   function renderBrainActiveClientSelect() {
     const select = document.getElementById('brainActiveClientSelect');
     if (!select) return;
@@ -1432,8 +1455,15 @@
       option.textContent = label;
       select.appendChild(option);
     });
-    if (currentAfm) {
-      select.value = currentAfm;
+    let targetAfm = currentAfm;
+    if (!targetAfm) {
+      const activeAfm = getActiveCredentialAfm();
+      if (activeAfm && E3_BRAIN_ACTIVE_CLIENTS.some(c => String(c.afm || '').trim() === activeAfm)) {
+        targetAfm = activeAfm;
+      }
+    }
+    if (targetAfm) {
+      select.value = targetAfm;
       if (!select.value) select.selectedIndex = 0;
     }
     bindBrainActiveClientSelect();

@@ -5241,11 +5241,27 @@
         try {
           const p = normalizePath(url.pathname);
           if (p === '/e3_check') {
-            if (typeof fetchE3BrainActiveClients === 'function') fetchE3BrainActiveClients().catch(()=>{});
+            if (typeof fetchE3BrainActiveClients === 'function') {
+              fetchE3BrainActiveClients().then(()=>{
+                try { if (typeof renderBrainActiveClientSelect === 'function') renderBrainActiveClientSelect(); } catch(_) {}
+                try {
+                  const sel = document.getElementById('brainActiveClientSelect');
+                  if (sel && sel.value) sel.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch(_) {}
+              }).catch(()=>{});
+            }
             if (typeof fetchE3BrainCredentials === 'function') fetchE3BrainCredentials().catch(()=>{});
             if (typeof renderBrainActiveClientSelect === 'function') renderBrainActiveClientSelect();
             if (typeof syncTopCredentialToBrain === 'function') syncTopCredentialToBrain();
             if (typeof rebindE3Controls === 'function') rebindE3Controls();
+            // Restore the saved outer tab (Αναλυτικός / Γρήγορος Έλεγχος).
+            // Done here (after script execution + rebinds) to survive any earlier resets.
+            try {
+              const _savedTab = sessionStorage.getItem('e3ActiveTab');
+              if ((_savedTab === 'analyticTab' || _savedTab === 'quickCheckTab') && typeof showE3PageTab === 'function') {
+                showE3PageTab(_savedTab);
+              }
+            } catch (_) {}
           }
         } catch (_) {}
 
