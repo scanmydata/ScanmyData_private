@@ -16784,6 +16784,7 @@ def api_e3_upload_excel():
 
 
 @app.route("/api/e3/brain", methods=["POST"])
+@login_required
 def api_e3_brain():
     """Run the E3 orchestration brain for single or bulk clients.
 
@@ -17850,7 +17851,16 @@ def favicon():
 # ---------------------------------------------------------------------------
 
 def _e3_pdfs_root(kind):
-    return "efka_pdfs" if (kind or "").lower() == "efka" else "teka_pdfs"
+    k = (kind or "").lower()
+    if k == "efka":
+        return "efka_pdfs"
+    if k == "teka":
+        return "teka_pdfs"
+    if k == "misth":
+        return "misth_pdfs"
+    if k == "e9":
+        return "e9_pdfs"
+    return "efka_pdfs"
 
 
 def _e3_pdfs_owner_slug():
@@ -17985,6 +17995,30 @@ def api_e3_brain_efka_pdfs_file():
 @login_required
 def api_e3_brain_teka_pdfs_file():
     return _e3_pdfs_serve_file("teka")
+
+
+@app.route("/api/e3/brain/misth_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_misth_pdfs_list():
+    return _e3_pdfs_list_kind("misth")
+
+
+@app.route("/api/e3/brain/misth_pdfs/file", methods=["GET"])
+@login_required
+def api_e3_brain_misth_pdfs_file():
+    return _e3_pdfs_serve_file("misth")
+
+
+@app.route("/api/e3/brain/e9_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_e9_pdfs_list():
+    return _e3_pdfs_list_kind("e9")
+
+
+@app.route("/api/e3/brain/e9_pdfs/file", methods=["GET"])
+@login_required
+def api_e3_brain_e9_pdfs_file():
+    return _e3_pdfs_serve_file("e9")
 
 @app.route("/credentials", methods=["GET", "POST"])
 def credentials_page():

@@ -147,7 +147,12 @@ def _xlsx_col_to_index(col_ref: str) -> int:
 
 
 def _parse_amount_candidates(text: str) -> List[float]:
-    vals = re.findall(r"\d{1,3}(?:[\.\s]\d{3})*(?:,\d{2})", _norm_text(text))
+    # Greek monetary format: thousands separated by period, decimals by
+    # comma (e.g. 1.250,75). Earlier the pattern allowed any whitespace
+    # as a thousands separator — which joined cell-separated numbers like
+    # "025\t450,00" into "025450,00" → 25450.0. Restricting the
+    # separator to a literal period prevents that.
+    vals = re.findall(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", _norm_text(text))
     return [round(_to_float(v), 2) for v in vals if _to_float(v) > 0]
 
 
@@ -1433,17 +1438,20 @@ def _parse_bulk_clients(excel_path: str) -> List[Dict[str, Any]]:
 
 
 def _extract_numeric_candidates_from_rows(rows: List[Dict[str, Any]], year: int) -> List[float]:
+    """Pull property-value numeric candidates out of the address-matched
+    ENFIA rows. The rows themselves were already filtered by ATAK (which
+    was matched by address) AND the PDF was downloaded for the requested
+    year, so we DO NOT filter by year string here — many ENFIA rows
+    don't repeat the year per line.
+    """
     strict_out: List[float] = []
     fallback_out: List[float] = []
-    year_txt = str(year)
     value_tokens = ("συνολικ", "αξια", "αξία", "ακινητ", "αντικειμεν", "φορολογητε", "φορολογητέ")
     for row in rows:
         txt = _norm_text(row.get("text") or " ".join(str(x) for x in row.get("row", [])))
-        if year_txt not in txt:
-            continue
         vals = [
             _to_float(m.group(0))
-            for m in re.finditer(r"\d{1,3}(?:[\.\s]\d{3})*(?:,\d{2})", txt)
+            for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt)
             if _to_float(m.group(0)) > 0
         ]
         if not vals:
@@ -1480,7 +1488,17 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
         folder = str(getattr(grp, "data_folder", "") or "").strip()
         if not folder:
             return None
-        root_name = "efka_pdfs" if (kind or "").lower() == "efka" else "teka_pdfs"
+        kind_lower = (kind or "").lower()
+        if kind_lower == "efka":
+            root_name = "efka_pdfs"
+        elif kind_lower == "teka":
+            root_name = "teka_pdfs"
+        elif kind_lower == "misth":
+            root_name = "misth_pdfs"
+        elif kind_lower == "e9":
+            root_name = "e9_pdfs"
+        else:
+            return None
         uid = getattr(current_user, "id", None)
         owner = f"uid_{uid}" if uid else "anon"
         target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / owner / afm
@@ -1577,9 +1595,44 @@ def _extract_efka_teka_total(output_data: Dict[str, Any], year: int) -> Optional
     return round(max(candidates), 2)
 
 
+def _address_stems(address: str) -> List[str]:
+    """Token+stem decomposition tolerant of Greek declensions (πειραιασ
+    vs πειραιωσ → both collapse to "πειρα"). Numbers kept verbatim.
+
+    Mirrors the e9.py helper of the same name so both fallbacks treat the
+    address the same way.
+    """
+    import unicodedata
+    if not address:
+        return []
+    nf = unicodedata.normalize('NFD', address)
+    no_marks = ''.join(c for c in nf if unicodedata.category(c) != 'Mn').lower()
+    cleaned = re.sub(r"[^\w\d\s]", " ", no_marks, flags=re.UNICODE)
+    stems = []
+    for tok in cleaned.split():
+        if len(tok) < 3:
+            continue
+        stems.append(tok if tok.isdigit() else tok[:5])
+    return stems
+
+
+def _body_stems(text: str) -> set:
+    import unicodedata
+    if not text:
+        return set()
+    nf = unicodedata.normalize('NFD', text)
+    no_marks = ''.join(c for c in nf if unicodedata.category(c) != 'Mn').lower()
+    cleaned = re.sub(r"[^\w\d\s]", " ", no_marks, flags=re.UNICODE)
+    out = set()
+    for tok in cleaned.split():
+        if len(tok) >= 3:
+            out.add(tok if tok.isdigit() else tok[:5])
+    return out
+
+
 def _pick_latest_lease(leases_payload: Any, address: str) -> Optional[Dict[str, Any]]:
-    target = _normalize_address(address)
-    if not target:
+    needle = _address_stems(address)
+    if not needle:
         return None
 
     best = None
@@ -1600,13 +1653,18 @@ def _pick_latest_lease(leases_payload: Any, address: str) -> Optional[Dict[str, 
             for row in (t.get("rows") if isinstance(t, dict) and isinstance(t.get("rows"), list) else [])
             for cell in (row if isinstance(row, list) else [])
         )
-        norm = _normalize_address(raw_text)
-        if target not in norm:
+        body = _body_stems(raw_text)
+        if not all(stem in body for stem in needle):
             continue
 
         summary = lease.get("summary") if isinstance(lease.get("summary"), list) else []
         summary_txt = " ".join(_norm_text(x) for x in summary)
         dates = re.findall(r"\d{2}/\d{2}/\d{4}", summary_txt)
+        # Summary often empty — fall back to the latest date that
+        # appears anywhere in the detail tables, so we still pick the
+        # "most recent" lease in date order.
+        if not dates:
+            dates = re.findall(r"\d{2}/\d{2}/\d{4}", raw_text)
         submit_dt = _parse_date(dates[-1]) if dates else None
 
         if best is None:
@@ -1891,13 +1949,28 @@ def process_client(
                 # checkbox passes the flag here. The table scrape (which
                 # yields the EFKA/TEKA amount used for myDATA/Excel
                 # comparison) ALWAYS runs regardless.
+                efka_pdf_dir = None
                 if _flag_for("download_efka_pdfs"):
                     efka_pdf_dir = _resolve_pdfs_dir("efka", afm)
                     if efka_pdf_dir is not None:
-                        efka_args.extend(["--pdf-dir", str(efka_pdf_dir)])
+                        efka_args.extend(["--pdf-dir", str(efka_pdf_dir),
+                                          "--pdf-year", str(year)])
 
                 ok_efka, efka_json, efka_err = _run_script_and_read_json(efka_args, tmp, "extracted_table_data.json")
                 efka_amount = _extract_efka_teka_total(efka_json, year) if ok_efka else None
+                if _flag_for("download_efka_pdfs"):
+                    if efka_pdf_dir is None:
+                        warnings.append("PDF ΕΦΚΑ: δεν αναγνωρίστηκε ομάδα/χρήστης — δεν αποθηκεύτηκαν αρχεία.")
+                    else:
+                        try:
+                            saved = [p for p in efka_pdf_dir.iterdir() if p.suffix.lower() == ".pdf"]
+                            if not saved:
+                                warnings.append(
+                                    f"PDF ΕΦΚΑ: δεν βρέθηκε γραμμή για το έτος {year} — "
+                                    "δεν αποθηκεύτηκε κανένα αρχείο (το ποσό έγινε scrape κανονικά)."
+                                )
+                        except Exception:
+                            pass
 
                 teka_args = [
                     sys.executable,
@@ -1911,13 +1984,27 @@ def process_client(
                 ]
                 if not headed:
                     teka_args.append("--headless")
+                teka_pdf_dir = None
                 if _flag_for("download_teka_pdfs"):
                     teka_pdf_dir = _resolve_pdfs_dir("teka", afm)
                     if teka_pdf_dir is not None:
-                        teka_args.extend(["--pdf-dir", str(teka_pdf_dir)])
+                        teka_args.extend(["--pdf-dir", str(teka_pdf_dir),
+                                          "--pdf-year", str(year)])
 
                 ok_teka, teka_json, teka_err = _run_script_and_read_json(teka_args, tmp, "extracted_table_data_teka.json")
                 teka_amount = _extract_efka_teka_total(teka_json, year) if ok_teka else None
+                if _flag_for("download_teka_pdfs") and teka_pdf_dir is not None:
+                    try:
+                        saved_t = [p for p in teka_pdf_dir.iterdir() if p.suffix.lower() == ".pdf"]
+                        # Many members are not enrolled in TEKA — only warn
+                        # when the extractor reported a TEKA amount but no
+                        # PDF made it to disk.
+                        if not saved_t and teka_amount:
+                            warnings.append(
+                                f"PDF ΤΕΚΑ: δεν αποθηκεύτηκε αρχείο για το έτος {year} (το ποσό έγινε scrape κανονικά)."
+                            )
+                    except Exception:
+                        pass
 
                 if efka_amount is None and teka_amount is None:
                     warnings.append(
@@ -1957,7 +2044,27 @@ def process_client(
 
     headquarter_address = summary.get("headquarter_address") or _norm_text(client.get("address"))
     rent_annual = None
+    rent_net = None
+    rent_months = None
     rent_source = None
+    rent_active = None
+    rent_status: Optional[str] = None  # 'active' | 'expired' | 'terminated_mid_period'
+    rent_lease_expiry: Optional[date] = None
+    e9_props: List[Dict[str, Any]] = []  # per-ATAK breakdown for UI popup
+
+    # Compute the period (in months, inclusive) the user asked about. If no
+    # date range was supplied (single mode without dates) default to the
+    # full requested year so the brain still has something sensible to
+    # compare against.
+    period_start = range_start or date(year, 1, 1)
+    period_end = range_end or date(year, 12, 31)
+    months_in_period = (
+        (period_end.year - period_start.year) * 12
+        + (period_end.month - period_start.month)
+        + 1
+    )
+    if months_in_period < 1:
+        months_in_period = 1
 
     # Prefer company-level TAXIS credentials for misth/E9 (entity-level registrations).
     # Fall back to first member's credentials if company ones are absent.
@@ -1987,34 +2094,106 @@ def process_client(
             if headed:
                 misth_args.append("--headed")
 
+            # Per user spec: ALWAYS persist the receipt PDF of every lease
+            # that matches the headquarter address. The brain post-processes
+            # to pick the most recent one for amount/expiry; the user
+            # receives the PDF of the lease used for the calculation,
+            # plus any historical matches for cross-reference.
+            misth_pdf_dir = _resolve_pdfs_dir("misth", afm)
+            if misth_pdf_dir is not None:
+                misth_args.extend([
+                    "--pdf-dir", str(misth_pdf_dir),
+                    "--target-address", headquarter_address,
+                ])
+
             ok_misth, misth_json, misth_err = _run_script_and_read_json(misth_args, tmp, "extracted_misth.json")
+            misth_address_found_in_leases = False
             if ok_misth:
                 matched = _pick_latest_lease(misth_json, headquarter_address)
                 if matched:
+                    misth_address_found_in_leases = True
                     monthly, expiry = _extract_lease_amount_and_expiry(matched)
+                    rent_lease_expiry = expiry
+                    # Three states for the period (period_start … period_end):
+                    #   - active    : expiry is None OR expiry >= period_end
+                    #                 (lease in force across whole period)
+                    #   - expired   : expiry < period_start (lease was already
+                    #                 finished before the period started)
+                    #   - terminated: period_start <= expiry < period_end
+                    #                 (lease ended MID-period)
+                    if expiry is None:
+                        rent_active = True
+                        rent_status = "active"
+                        effective_months = months_in_period
+                    elif expiry < period_start:
+                        rent_active = False
+                        rent_status = "expired"
+                        effective_months = months_in_period  # for reference
+                    elif expiry < period_end:
+                        rent_active = True  # active for part of the period
+                        rent_status = "terminated_mid_period"
+                        # Prorate: count months from period_start to expiry
+                        # (inclusive of the expiry month).
+                        effective_months = (
+                            (expiry.year - period_start.year) * 12
+                            + (expiry.month - period_start.month)
+                            + 1
+                        )
+                        if effective_months < 1:
+                            effective_months = 1
+                    else:
+                        rent_active = True
+                        rent_status = "active"
+                        effective_months = months_in_period
+                    # Always record the amount based on the most recent
+                    # matching lease, even when it's no longer in force —
+                    # the user explicitly wants the 585.014 indicator to
+                    # populate either way, with an informational message
+                    # when the lease is expired or terminated mid-period.
                     if monthly:
-                        rent_annual = round(monthly * 12.0, 2)
+                        # For an expired-before-period lease we still surface
+                        # what the annualised amount WOULD have been (using
+                        # the full period months) — the warning below makes
+                        # it clear it does not apply to the queried year.
+                        amount_months = (
+                            effective_months if rent_status != "expired" else months_in_period
+                        )
+                        rent_annual = round(monthly * amount_months, 2)
+                        rent_net = round(rent_annual / 1.036, 2)
+                        rent_months = amount_months
                         rent_source = "misth"
-                        if mydata_585_014 is not None:
-                            if abs(rent_annual - mydata_585_014) > 0.01:
-                                rent_net = round(rent_annual / 1.036, 2)
-                                if abs(rent_net - mydata_585_014) > 0.01:
-                                    _compare_amount("E3_585_014", "Μισθωτήρια (annual)", rent_annual, "myDATA", mydata_585_014, messages)
-                        if excel_585_014:
-                            if abs(rent_annual - excel_585_014) > 0.01:
-                                rent_net = round(rent_annual / 1.036, 2)
-                                if abs(rent_net - excel_585_014) > 0.01:
-                                    _compare_amount("E3_585_014", "Μισθωτήρια (annual)", rent_annual, "Excel", excel_585_014, messages)
-                    if expiry and expiry < ref_date:
+                        if mydata_585_014 is not None and rent_status == "active":
+                            # Match either the gross-with-χαρτόσημο amount
+                            # OR the net (÷1.036) — myDATA E3 declarations
+                            # sometimes hold one, sometimes the other.
+                            if abs(rent_annual - mydata_585_014) > 0.01 and abs(rent_net - mydata_585_014) > 0.01:
+                                _compare_amount("E3_585_014", "Μισθωτήρια (period)", rent_annual, "myDATA", mydata_585_014, messages)
+                        if excel_585_014 and rent_status == "active":
+                            if abs(rent_annual - excel_585_014) > 0.01 and abs(rent_net - excel_585_014) > 0.01:
+                                _compare_amount("E3_585_014", "Μισθωτήρια (period)", rent_annual, "Excel", excel_585_014, messages)
+                    if rent_status == "expired":
                         warnings.append(
-                            f"Το πιο πρόσφατο μισθωτήριο για την έδρα φαίνεται ληγμένο ({expiry.isoformat()})."
+                            f"Δεν υπάρχει ενεργό μισθωτήριο για την χρήση {year} που επιλέξατε "
+                            f"(πιο πρόσφατο: λήξη {expiry.isoformat() if expiry else 'άγνωστη'})."
+                        )
+                    elif rent_status == "terminated_mid_period":
+                        warnings.append(
+                            f"Η μίσθωση για το ακίνητο στη διεύθυνση «{headquarter_address}» "
+                            f"έληξε στις {expiry.isoformat()} (μέσα στη χρήση {year}). "
+                            f"Υπολογισμός με {effective_months} μήνες."
                         )
                 else:
                     warnings.append("Η διεύθυνση έδρας δεν βρέθηκε στα μισθωτήρια. Έλεγχος fallback με Ε9.")
             else:
                 warnings.append(f"Misth extractor: {misth_err}")
 
-            if rent_annual is None and _flag_for("e9"):
+            # E9/ENFIA fallback fires ONLY when the address was NOT found
+            # among the user's leases. If a lease matches (even expired),
+            # we trust it as the basis for 585.014 and skip the heavier
+            # E9 lookup. This matches the user's explicit ordering:
+            # "αν με τους κωδικους taxisnet ... βρεθει ... τοτε να μην
+            # αναζητουμε περαιτερω".
+            if not misth_address_found_in_leases and _flag_for("e9"):
                 e9_args = [
                     sys.executable,
                     str(checks_dir / "e9.py"),
@@ -2030,14 +2209,53 @@ def process_client(
                     "extracted_etak_property_status.json",
                 ]
                 if headed:
-                    e9_args.extend(["--headed", "--keep-pdf"])
+                    e9_args.append("--headed")
+                # ALWAYS retain the ENFIA PDF when the E9 fallback runs —
+                # it's the source-of-truth for the αξία ακινήτου × 3%
+                # calculation and the user wants the document persisted.
+                e9_args.append("--keep-pdf")
+                e9_pdf_dir = _resolve_pdfs_dir("e9", afm)
 
                 ok_e9, e9_json, e9_err = _run_script_and_read_json(e9_args, tmp, "extracted_etak_property_status.json")
                 if ok_e9:
-                    nums = _extract_numeric_candidates_from_rows(e9_json.get("pdfMatchedRows") or [], year)
-                    if nums:
-                        property_value = max(nums)
-                        rent_annual = round(property_value * 0.03, 2)
+                    # Per-ATAK breakdown so the UI can show a picker when
+                    # the same address resolves to multiple ATAKs
+                    # (διαμέρισμα + αποθήκη + parking → 3 ATAKs).
+                    matched_rows = e9_json.get("pdfMatchedRows") or []
+                    e9_props = []
+                    for r in matched_rows:
+                        atak = (r.get("matchedAtak") or "").strip()
+                        row_cells = r.get("row") or []
+                        # Find the largest "X.XXX,XX" looking number in the
+                        # row — historically the ENFIA "αξία ακινήτου" lives
+                        # in the last few columns and is the largest figure.
+                        txt = _norm_text(r.get("text") or " ".join(str(x) for x in row_cells))
+                        nums = [
+                            _to_float(m.group(0))
+                            for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt)
+                            if _to_float(m.group(0)) > 0
+                        ]
+                        if nums:
+                            e9_props.append({
+                                "atak": atak,
+                                "value": max(nums),
+                                "address_text": " ".join(
+                                    str(c) for c in row_cells[:3] if c
+                                )[:200],
+                            })
+
+                    if e9_props:
+                        # Default rent = SUM of all matched property values × 3%
+                        # (all ATAKs at the address belong to the company's
+                        # ιδιόχρηση). The UI may then let the user uncheck
+                        # ATAKs they don't want included; recomputation
+                        # happens client-side without another brain run.
+                        total_value = round(sum(p["value"] for p in e9_props), 2)
+                        rent_annual = round(total_value * 0.03, 2)
+                        # For E9 we don't apply the 3.6% χαρτόσημο split —
+                        # it's a property-value formula, not a lease amount.
+                        rent_net = rent_annual
+                        rent_months = months_in_period
                         rent_source = "e9_3_percent"
                         if mydata_585_014 is not None:
                             _compare_amount("E3_585_014", "Ε9 x 3%", rent_annual, "myDATA", mydata_585_014, messages)
@@ -2045,6 +2263,28 @@ def process_client(
                             _compare_amount("E3_585_014", "Ε9 x 3%", rent_annual, "Excel", excel_585_014, messages)
                     else:
                         warnings.append("Δεν βρέθηκε αξία ακινήτου από Ε9 για υπολογισμό 3%.")
+                    # Copy the ENFIA PDF (if e9.py wrote one) into the
+                    # user-facing folder so the UI can offer it for download.
+                    # e9.py emits pdfPath RELATIVE TO ITS CWD (= our `tmp`
+                    # tempdir), so resolve it absolute before checking.
+                    if e9_pdf_dir is not None:
+                        try:
+                            import shutil as _sh
+                            src_rel = e9_json.get("pdfPath") if isinstance(e9_json, dict) else None
+                            if src_rel:
+                                src_path = Path(src_rel)
+                                if not src_path.is_absolute():
+                                    src_path = tmp / src_path
+                                if src_path.exists():
+                                    e9_pdf_dir.mkdir(parents=True, exist_ok=True)
+                                    dst = e9_pdf_dir / f"enfia_{year}_{src_path.name}"
+                                    _sh.copy2(str(src_path), str(dst))
+                                else:
+                                    warnings.append(
+                                        f"PDF Ε9/ENFIA: το αρχείο δεν βρέθηκε στο {src_path}."
+                                    )
+                        except Exception:
+                            log.exception("Failed to copy ENFIA PDF for AFM %s", afm)
                 else:
                     warnings.append(f"E9 extractor: {e9_err}")
 
@@ -2073,7 +2313,13 @@ def process_client(
             "mydata_585_014": mydata_585_014,
             "excel_585_014": excel_585_014,
             "rent_annual": rent_annual,
+            "rent_net": rent_net,
+            "rent_months": rent_months,
+            "rent_active": rent_active,
+            "rent_status": rent_status,
+            "rent_lease_expiry": rent_lease_expiry.isoformat() if rent_lease_expiry else None,
             "rent_source": rent_source,
+            "e9_properties": e9_props,  # per-ATAK breakdown for UI ATAK picker
         },
         "credential_snapshot": credential_snapshot,
         "messages": messages,
@@ -2151,6 +2397,8 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     # just scrapes the table and exits in seconds.
     payload["_download_efka_pdfs"] = bool(payload.get("download_efka_pdfs", False))
     payload["_download_teka_pdfs"] = bool(payload.get("download_teka_pdfs", False))
+    payload["_download_misth_pdfs"] = bool(payload.get("download_misth_pdfs", False))
+    payload["_download_e9_pdfs"] = bool(payload.get("download_e9_pdfs", False))
     headed = bool(payload.get("headed", False))
 
     results: List[Dict[str, Any]] = []
@@ -2179,6 +2427,8 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "e9": payload["_run_e9"],
                     "download_efka_pdfs": payload["_download_efka_pdfs"],
                     "download_teka_pdfs": payload["_download_teka_pdfs"],
+                    "download_misth_pdfs": payload["_download_misth_pdfs"],
+                    "download_e9_pdfs": payload["_download_e9_pdfs"],
                 },
             )
         )

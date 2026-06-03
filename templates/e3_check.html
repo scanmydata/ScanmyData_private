@@ -917,21 +917,6 @@
       </div>
     </form>
 
-    <div id="unclassifiedSummaryCard" class="e3-unclassified-card e3-hidden">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <div class="text-sm text-gray-700 dark:text-gray-200">Συνολικό ποσό μη χαρακτηρισμένων παραστατικών</div>
-          <div id="unclassifiedTotal" class="text-xl font-semibold text-amber-700 dark:text-amber-300">0,00</div>
-        </div>
-        <button id="toggleUnclassifiedList" type="button" class="px-3 py-2 rounded-md text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
-          Λίστα μη χαρακτηρισμένων (<span id="unclassifiedCount">0</span>)
-        </button>
-      </div>
-      <div id="unclassifiedListWrap" class="e3-unclassified-list e3-hidden">
-        <div id="unclassifiedList"></div>
-      </div>
-    </div>
-
   </div>
 
 </div>
@@ -1072,24 +1057,38 @@
       </div>
       <div class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 mb-4">
         <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">
-          Λήψη &amp; διατήρηση βεβαιώσεων (PDF)
+          Λήψη &amp; διατήρηση βεβαιώσεων / αποδείξεων (PDF)
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input id="brainDownloadEfkaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-            Λήψη PDF βεβαιώσεων ΕΦΚΑ
+            Λήψη PDF βεβαιώσεων ΕΦΚΑ (μόνο επιλεγμένο έτος)
           </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input id="brainDownloadTekaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-            Λήψη PDF βεβαιώσεων ΤΕΚΑ
+            Λήψη PDF βεβαιώσεων ΤΕΚΑ (μόνο επιλεγμένο έτος)
           </label>
         </div>
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">
+          ℹ️ Τα PDF μισθωτηρίου έδρας και εκκαθαριστικού Ε9/ENFIA αποθηκεύονται
+          αυτόματα όταν τρέχει ο αντίστοιχος έλεγχος (μισθωτήρια / Ε9).
+        </div>
+        <!-- Hidden inputs so existing JS that reads .checked keeps working
+             without changes; they're always-on now. -->
+        <input id="brainDownloadMisthPdfs" type="checkbox" class="hidden" checked />
+        <input id="brainDownloadE9Pdfs" type="checkbox" class="hidden" checked />
         <div class="flex flex-wrap items-center gap-2">
           <button id="brainListEfkaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
             📂 ΕΦΚΑ PDFs
           </button>
           <button id="brainListTekaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
             📂 ΤΕΚΑ PDFs
+          </button>
+          <button id="brainListMisthPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+            📂 Μισθωτήρια PDFs
+          </button>
+          <button id="brainListE9PdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+            📂 Ε9 / ENFIA PDFs
           </button>
           <span id="brainPdfsStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
         </div>
@@ -1168,6 +1167,22 @@
 
   <!-- Status Area -->
   <div id="e3Status" class="mt-6 text-gray-600 dark:text-gray-400 text-sm"></div>
+</div>
+
+<!-- Μη χαρακτηρισμένα παραστατικά (κοινό για γρήγορο & αναλυτικό έλεγχο) -->
+<div id="unclassifiedSummaryCard" class="e3-unclassified-card e3-hidden">
+  <div class="flex items-center justify-between gap-3 flex-wrap">
+    <div>
+      <div class="text-sm text-gray-700 dark:text-gray-200">Συνολικό ποσό μη χαρακτηρισμένων παραστατικών</div>
+      <div id="unclassifiedTotal" class="text-xl font-semibold text-amber-700 dark:text-amber-300">0,00</div>
+    </div>
+    <button id="toggleUnclassifiedList" type="button" class="px-3 py-2 rounded-md text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
+      Λίστα μη χαρακτηρισμένων (<span id="unclassifiedCount">0</span>)
+    </button>
+  </div>
+  <div id="unclassifiedListWrap" class="e3-unclassified-list e3-hidden">
+    <div id="unclassifiedList"></div>
+  </div>
 </div>
 
 <!-- E3 Data Display (hidden until data loaded) -->
@@ -3111,13 +3126,17 @@
     const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
-    // Optional EFKA/TEKA PDF download toggles (added below in UI section).
+    // Optional EFKA/TEKA/MISTH/E9 PDF download toggles (added below in UI section).
     const downloadEfkaPdfsEl = document.getElementById('brainDownloadEfkaPdfs');
     const downloadTekaPdfsEl = document.getElementById('brainDownloadTekaPdfs');
+    const downloadMisthPdfsEl = document.getElementById('brainDownloadMisthPdfs');
+    const downloadE9PdfsEl = document.getElementById('brainDownloadE9Pdfs');
     const downloadEfkaPdfs = !!(downloadEfkaPdfsEl && downloadEfkaPdfsEl.checked);
     const downloadTekaPdfs = !!(downloadTekaPdfsEl && downloadTekaPdfsEl.checked);
+    const downloadMisthPdfs = !!(downloadMisthPdfsEl && downloadMisthPdfsEl.checked);
+    const downloadE9Pdfs = !!(downloadE9PdfsEl && downloadE9PdfsEl.checked);
 
-    if (!runEfkaTeka && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs) {
+    if (!runEfkaTeka && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs) {
       const proceedNoChecks = window.confirm(
         'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, Μισθωτήρια, Ε9) ή λήψη PDF. ' +
         'Θέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;'
@@ -3207,7 +3226,13 @@
       run_e9: runE9,
       download_efka_pdfs: downloadEfkaPdfs,
       download_teka_pdfs: downloadTekaPdfs,
-      headed: true,
+      download_misth_pdfs: downloadMisthPdfs,
+      download_e9_pdfs: downloadE9Pdfs,
+      // Default to headless so the brain works when Flask runs as a
+      // background service (no interactive desktop / no visible
+      // chromium window stealing focus). The extractors still launch
+      // real chromium subprocesses — just headless.
+      headed: false,
       auto_active_group_clients: true,
       single_client: {
         afm,
@@ -3249,6 +3274,35 @@
       brainSetResult(data);
       showBrainFlash(data.message || 'E3 Brain εκτελέστηκε επιτυχώς.', 'success');
       _applyBrainChecksToE3Table(data);
+
+      // After the analytical (brain) run, also surface the "μη χαρακτηρισμένα
+      // παραστατικά" card just like the quick check does. The brain endpoint
+      // does not return that aggregate, so we trigger the same myDATA fetch
+      // used by the quick check — but only if it hasn't already been loaded
+      // in this session (E3_LAST_DATA is empty).
+      try {
+        if (!E3_LAST_DATA || !Array.isArray(E3_LAST_DATA.unclassified_invoices)) {
+          await loadBrainE3Data();
+        }
+      } catch (_) {}
+
+      // If the user opted in to keeping any PDFs, auto-refresh the listing
+      // so the βεβαιώσεις/αποδείξεις/εκκαθαριστικά show up without an
+      // extra click. We render whichever kind has any saved file (last
+      // call wins in #brainPdfsList — the dedicated buttons are still
+      // available for the user to switch).
+      try {
+        if (downloadEfkaPdfs) { await refreshBrainPdfsList('efka'); }
+      } catch (_) {}
+      try {
+        if (downloadTekaPdfs) { await refreshBrainPdfsList('teka'); }
+      } catch (_) {}
+      try {
+        if (downloadMisthPdfs) { await refreshBrainPdfsList('misth'); }
+      } catch (_) {}
+      try {
+        if (downloadE9Pdfs) { await refreshBrainPdfsList('e9'); }
+      } catch (_) {}
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
@@ -3259,7 +3313,14 @@
   }
 
   function _applyBrainChecksToE3Table(data) {
-    const checks = data && data.checks;
+    // The brain endpoint returns { ok, mode, clients: [ { checks: {...} } ] }
+    // for both single and bulk modes — there is NO top-level `data.checks`.
+    // The previous version read `data.checks` and silently bailed out, so the
+    // brain check indicator (!) never appeared on rows 585.007 / 585.014.
+    let checks = data && data.checks;
+    if (!checks && data && Array.isArray(data.clients) && data.clients.length) {
+      checks = data.clients[0] && data.clients[0].checks;
+    }
     if (!checks) return;
     let updated = false;
 
@@ -3274,13 +3335,43 @@
     }
     const rentAnnual = checks.rent_annual;
     if (rentAnnual !== null && rentAnnual !== undefined) {
-      const srcLabel = checks.rent_source === 'e9_3_percent' ? 'E9×3%' : 'Μισθωτήριο';
+      const isE9 = checks.rent_source === 'e9_3_percent';
+      const months = (checks.rent_months !== null && checks.rent_months !== undefined)
+        ? `${checks.rent_months} μήνες` : '';
+      let statusMsg = '';
+      if (checks.rent_status === 'expired') {
+        statusMsg = ` — ⚠ ληγμένο μισθωτήριο (λήξη ${checks.rent_lease_expiry || 'άγνωστη'}), δεν ισχύει για τη χρήση`;
+      } else if (checks.rent_status === 'terminated_mid_period') {
+        statusMsg = ` — ⚠ η μίσθωση έληξε στις ${checks.rent_lease_expiry || ''} (μέσα στη χρήση)`;
+      }
+      let label;
+      if (isE9) {
+        // Fallback μέσω Ε9/ENFIA → αντιμετωπίζεται ως ιδιόχρηση
+        // (αξία ακινήτου × 3%, χωρίς διαχωρισμό χαρτοσήμου).
+        const propsN = Array.isArray(checks.e9_properties) ? checks.e9_properties.length : 0;
+        label = `Ιδιόχρηση (Ε9 × 3%, ${propsN} ακίνητα × ${months})`;
+      } else {
+        const net = (checks.rent_net !== null && checks.rent_net !== undefined)
+          ? ` / άνευ χαρτοσήμου ÷1,036 = ${Number(checks.rent_net).toLocaleString('el-GR', { minimumFractionDigits: 2 })}`
+          : '';
+        label = `Ενοίκιο (Μισθωτήριο, ${months})${net}${statusMsg}`;
+      }
       E3_BRAIN_CHECKS.set('585.014', {
         value: Number(rentAnnual),
-        label: `Ενοίκιο/Ιδιόχρηση (${srcLabel})`,
+        label,
         source: checks.rent_source || 'brain'
       });
       updated = true;
+
+      // If E9 returned multiple ATAKs at the same address, ask the user
+      // which one(s) to include in the ιδιόχρηση calculation. The brain
+      // already defaulted to the SUM of all matched ATAKs × 3%, so we
+      // only prompt when there are 2 or more candidates.
+      try {
+        if (isE9 && Array.isArray(checks.e9_properties) && checks.e9_properties.length > 1) {
+          _showE9AtakPicker(checks.e9_properties, rentAnnual);
+        }
+      } catch (_) {}
     }
 
     if (!updated) return;
@@ -3298,6 +3389,69 @@
       parts.push(`Ενοίκιο 585.014: ${fmt(rentAnnual)} €`);
     if (parts.length)
       showBrainFlash(`E3 Brain ✓ — ${parts.join(' | ')} — δείτε τους δείκτες στον πίνακα`, 'info', 9000);
+  }
+
+  // === Multi-ATAK picker (E9 ιδιόχρηση) ===
+  // The brain may return several ATAKs for the same address (κτίριο +
+  // αποθήκη + parking → 3 ATAKs). Default is SUM × 3%; this picker lets
+  // the user uncheck ATAKs they don't want included, then recomputes the
+  // 585.014 indicator client-side.
+  function _showE9AtakPicker(props, defaultRent) {
+    let modal = document.getElementById('e9AtakPickerModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'e9AtakPickerModal';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem;';
+      modal.innerHTML = `
+        <div style="background:#fff;color:#0f172a;border-radius:.5rem;max-width:640px;width:100%;max-height:80vh;overflow:auto;padding:1.25rem;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+          <div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;">Επιλογή ακινήτων για ιδιόχρηση (Ε9 × 3%)</div>
+          <div style="font-size:.8rem;color:#475569;margin-bottom:.75rem;">
+            Βρέθηκαν πολλαπλά ΑΤΑΚ στην έδρα. Διάλεξε ποια θέλεις να συμπεριλάβεις στον υπολογισμό
+            του ποσού στη γραμμή <strong>585.014 — Ιδιόχρηση</strong>.
+          </div>
+          <div id="e9AtakPickerList" style="margin-bottom:.75rem;"></div>
+          <div style="display:flex;justify-content:flex-end;gap:.5rem;">
+            <button id="e9AtakPickerCancel" type="button" style="background:#64748b;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Άκυρο</button>
+            <button id="e9AtakPickerApply" type="button" style="background:#0ea5e9;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Εφαρμογή επιλογής</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+    }
+    const list = modal.querySelector('#e9AtakPickerList');
+    list.innerHTML = props.map((p, i) => `
+      <label style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid #e2e8f0;font-size:.85rem;">
+        <input type="checkbox" data-i="${i}" checked />
+        <div style="flex:1;">
+          <div><strong>ΑΤΑΚ:</strong> <code>${String(p.atak||'').replace(/</g,'&lt;')}</code></div>
+          <div style="color:#475569;font-size:.78rem;">${String(p.address_text||'').replace(/</g,'&lt;')}</div>
+        </div>
+        <div style="text-align:right;">
+          <div><strong>${Number(p.value||0).toLocaleString('el-GR', {minimumFractionDigits:2})} €</strong></div>
+          <div style="color:#64748b;font-size:.7rem;">× 3% = ${Number((p.value||0)*0.03).toLocaleString('el-GR', {minimumFractionDigits:2})} €</div>
+        </div>
+      </label>`).join('');
+    modal.style.display = 'flex';
+    const cancelBtn = modal.querySelector('#e9AtakPickerCancel');
+    const applyBtn = modal.querySelector('#e9AtakPickerApply');
+    cancelBtn.onclick = () => { modal.style.display = 'none'; };
+    applyBtn.onclick = () => {
+      const chosen = Array.from(list.querySelectorAll('input[type=checkbox]:checked'))
+        .map(cb => props[Number(cb.dataset.i)]);
+      const totalValue = chosen.reduce((s, p) => s + Number(p.value || 0), 0);
+      const newRent = Math.round(totalValue * 0.03 * 100) / 100;
+      const current = E3_BRAIN_CHECKS.get('585.014');
+      if (current) {
+        current.value = newRent;
+        current.label = `Ιδιόχρηση (Ε9 × 3%, ${chosen.length}/${props.length} ακίνητα)`;
+        E3_BRAIN_CHECKS.set('585.014', current);
+        try {
+          const dataToRender = E3_LAST_DATA || {};
+          populateE3Tables(dataToRender);
+        } catch (_) {}
+        showBrainFlash(`Νέα ιδιόχρηση 585.014: ${newRent.toLocaleString('el-GR',{minimumFractionDigits:2})} € (${chosen.length}/${props.length} ΑΤΑΚ)`, 'info', 6000);
+      }
+      modal.style.display = 'none';
+    };
   }
 
   // Tooltip for brain check indicators
@@ -3583,6 +3737,12 @@
     // user can abort it from any page. The cross-page sticky banner shows
     // a "Διακοπή" button that posts to /api/e3/brain/abort/<job_id>.
     const jobId = 'bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    // Bulk runs inherit the same PDF retention toggles from the Ατομικός
+    // tab so the user does not have to re-tick checkboxes per mode.
+    const _bulkEfkaPdf = !!(document.getElementById('brainDownloadEfkaPdfs') || {}).checked;
+    const _bulkTekaPdf = !!(document.getElementById('brainDownloadTekaPdfs') || {}).checked;
+    const _bulkMisthPdf = !!(document.getElementById('brainDownloadMisthPdfs') || {}).checked;
+    const _bulkE9Pdf = !!(document.getElementById('brainDownloadE9Pdfs') || {}).checked;
     const payload = {
       mode: 'bulk',
       year,
@@ -3590,7 +3750,11 @@
       run_efka_teka: runEfkaTeka,
       run_misth: runMisth,
       run_e9: runE9,
-      headed: true,
+      download_efka_pdfs: _bulkEfkaPdf,
+      download_teka_pdfs: _bulkTekaPdf,
+      download_misth_pdfs: _bulkMisthPdf,
+      download_e9_pdfs: _bulkE9Pdf,
+      headed: false,
       auto_active_group_clients: true,
       clients: selected,
       job_id: jobId,
@@ -3743,8 +3907,13 @@
         </div>
       `;
       document.body.appendChild(modal);
-      document.getElementById('brainCredEditCancel').onclick = () => { modal.style.display = 'none'; };
-      document.getElementById('brainCredEditForm').onsubmit = async function(ev) {
+      // Defensive null-checks: the modal HTML is built from a template that
+      // CAN be customised, so don't crash with "Cannot set properties of
+      // null" if either element happens to be absent.
+      const _cancelBtn = document.getElementById('brainCredEditCancel');
+      if (_cancelBtn) _cancelBtn.onclick = () => { modal.style.display = 'none'; };
+      const _formEl = document.getElementById('brainCredEditForm');
+      if (_formEl) _formEl.onsubmit = async function(ev) {
         ev.preventDefault();
         await saveBrainCredEdit();
       };
@@ -3837,6 +4006,16 @@
     if (listTekaBtn && listTekaBtn.dataset.bound !== '1') {
       listTekaBtn.dataset.bound = '1';
       listTekaBtn.addEventListener('click', () => refreshBrainPdfsList('teka'));
+    }
+    const listMisthBtn = document.getElementById('brainListMisthPdfsBtn');
+    if (listMisthBtn && listMisthBtn.dataset.bound !== '1') {
+      listMisthBtn.dataset.bound = '1';
+      listMisthBtn.addEventListener('click', () => refreshBrainPdfsList('misth'));
+    }
+    const listE9Btn = document.getElementById('brainListE9PdfsBtn');
+    if (listE9Btn && listE9Btn.dataset.bound !== '1') {
+      listE9Btn.dataset.bound = '1';
+      listE9Btn.addEventListener('click', () => refreshBrainPdfsList('e9'));
     }
 
     function _parseDateInputToIso(s) {

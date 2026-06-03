@@ -37,15 +37,20 @@ def _safe_filename(token: str, fallback: str = "row") -> str:
 
 # Hard caps so a stuck row never blocks the whole brain run. See the
 # matching constants + comment in efka-extractor.py for the rationale.
-PDF_PER_ROW_TIMEOUT = 8000
-PDF_TOTAL_TIMEOUT_SEC = 60.0
+PDF_PER_ROW_TIMEOUT = 15000
+PDF_TOTAL_TIMEOUT_SEC = 240.0
 PDF_MAX_CONSEC_FAILS = 3
 PDF_DEFAULT_MAX_ROWS = 60
 
 
 def download_certificate_pdfs(page: Page, output_dir, max_rows: int = None,
-                              prefix: str = "teka_cert") -> list:
-    """Best-effort per-row PDF download for TEKA. NEVER fails the caller."""
+                              prefix: str = "teka_cert",
+                              year_filter: int = None) -> list:
+    """Best-effort per-row PDF download for TEKA. NEVER fails the caller.
+
+    When ``year_filter`` is supplied, only the row whose first cell starts
+    with that year is downloaded.
+    """
     import time
     from pathlib import Path as _Path
     out_dir = _Path(output_dir)
@@ -93,27 +98,64 @@ def download_certificate_pdfs(page: Page, output_dir, max_rows: int = None,
             if txt and txt not in label_parts:
                 label_parts.append(txt[:30])
         label = " | ".join(label_parts) if label_parts else f"row{i}"
+
+        if year_filter is not None:
+            first_cell = label_parts[0] if label_parts else ""
+            if not first_cell.strip().startswith(str(year_filter)):
+                logging.info("Row %d: year filter %s skips (first cell=%r)",
+                             i, year_filter, first_cell)
+                continue
+
         safe_label = _safe_filename(label.replace(" | ", "_"), f"row{i}")[:80]
         out_path = out_dir / f"{prefix}_{i:02d}_{safe_label}.pdf"
 
         try:
             print_button = row.locator("a:has(img[title*='Εκτύπωση'])").first
             if not print_button.count():
+                print_img = row.locator("img[title*='Εκτύπωση']").first
+                if print_img.count():
+                    print_button = print_img.locator("xpath=ancestor::a[1]")
+            if not print_button or not print_button.count():
                 logging.info("Row %d: no print button found — skip", i)
                 consecutive_fails += 1
                 if consecutive_fails >= PDF_MAX_CONSEC_FAILS:
                     break
                 continue
-            with page.expect_download(timeout=PDF_PER_ROW_TIMEOUT) as dl_info:
-                print_button.click(timeout=PDF_PER_ROW_TIMEOUT)
-            dl = dl_info.value
-            dl.save_as(str(out_path))
-            saved.append({"row": i, "path": str(out_path), "label": label})
-            consecutive_fails = 0
-            logging.info("Row %d saved: %s", i, out_path.name)
-        except PlaywrightTimeoutError:
-            consecutive_fails += 1
-            logging.info("Row %d: print did not produce a download in %dms — skip", i, PDF_PER_ROW_TIMEOUT)
+
+            # The DevExpress print button fires the PDF download on the MAIN
+            # page (within ~200ms) and ALSO opens a blank popup. We wait for
+            # the download on `page`, then close any spurious blank popups.
+            # See efka-extractor.py for the same logic.
+            download_obj = None
+            try:
+                with page.expect_download(timeout=PDF_PER_ROW_TIMEOUT) as dl_info:
+                    print_button.first.click(timeout=PDF_PER_ROW_TIMEOUT)
+                download_obj = dl_info.value
+            except PlaywrightTimeoutError:
+                download_obj = None
+
+            for p in list(page.context.pages):
+                if p is page:
+                    continue
+                try:
+                    url = p.url or ""
+                except Exception:
+                    url = ""
+                if not url or url == "about:blank":
+                    try:
+                        p.close()
+                    except Exception:
+                        pass
+
+            if download_obj is None:
+                consecutive_fails += 1
+                logging.info("Row %d: print did not produce a download in %dms — skip",
+                             i, PDF_PER_ROW_TIMEOUT)
+            else:
+                download_obj.save_as(str(out_path))
+                saved.append({"row": i, "path": str(out_path), "label": label})
+                consecutive_fails = 0
+                logging.info("Row %d saved: %s", i, out_path.name)
         except Exception as exc:
             consecutive_fails += 1
             logging.info("Row %d: error during download (%s) — skip", i, exc)
@@ -182,12 +224,18 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
     idika_url = "https://www.idika.org.gr/EfkaServices/Application/TekaCertificates.aspx"
 
     page.goto(e_efka_url, timeout=DEFAULT_TIMEOUT)
-    page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    try:
+        page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    except PlaywrightTimeoutError:
+        logging.info("Networkidle never reached on e-EFKA landing; continuing.")
 
     if "blocked" in page.title().lower() or "web page blocked" in page.content().lower():
         logging.warning("Initial e-EFKA page appears blocked; trying direct IDIKA URL.")
         page.goto(idika_url, timeout=DEFAULT_TIMEOUT)
-        page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        try:
+            page.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        except PlaywrightTimeoutError:
+            logging.info("Networkidle never reached on IDIKA fallback; continuing.")
 
     link = page.get_by_role("link", name="Βεβαιώσεις Εισφορών ΤΕΚΑ")
     if link.count() == 0:
@@ -202,7 +250,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         link.first.scroll_into_view_if_needed()
         link.first.click()
     page1 = page1_info.value
-    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    try:
+        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    except PlaywrightTimeoutError:
+        logging.info("Networkidle never reached on TEKA popup; continuing.")
 
     try:
         taxisnet_button = page1.get_by_role("button", name="Συνέχεια στο TAXISNET")
@@ -217,7 +268,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         except PlaywrightTimeoutError:
             raise RuntimeError("Could not find or navigate from the TAXISNET login button on the page.")
 
-    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    try:
+        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+    except PlaywrightTimeoutError:
+        logging.info("Networkidle never reached after TAXISnet on TEKA; continuing.")
 
     # Robust username/password fallback (see efka-extractor.py for context).
     username_field = page1.get_by_role("textbox", name="Χρήστης:")
@@ -230,34 +284,41 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
     password_field = page1.get_by_role("textbox", name="Κωδικός:")
     if password_field.count() == 0:
         password_field = page1.locator("input[type='password']")
+    creds_filled = False
     if username_field.count() and password_field.count():
         username_field.first.fill(username, timeout=NETWORK_TIMEOUT)
         password_field.first.fill(password, timeout=NETWORK_TIMEOUT)
+        creds_filled = True
     else:
-        afm_field = page1.get_by_role("textbox", name="ΑΦΜ:")
-        if afm_field.count() == 0:
-            afm_field = page1.locator("input[name*='afm'], input[id*='afm']")
-        amka_login_field = page1.get_by_role("textbox", name="ΑΜΚΑ:")
-        if amka_login_field.count() == 0:
-            amka_login_field = page1.locator("input[name*='amka'], input[id*='amka']")
-        if afm_field.count() == 0 or amka_login_field.count() == 0:
-            raise RuntimeError("Could not find TAXISNET login fields on the TEKA page.")
-        afm_field.first.fill(username)
-        amka_login_field.first.fill(amka)
+        # The previous fallback filled the TAXISnet `username` argument into
+        # an AFM input — but when this script is launched by the brain,
+        # `username` is the TAXISnet username (e.g. "spiroslougaris"), NOT
+        # the company AFM. Misrouting it rejects the next step. Skip the
+        # credential step instead and trust that downstream (radio + AMKA)
+        # can still proceed if we are already past TAXISnet.
+        logging.warning(
+            "TAXISnet username/password fields not found on this page — "
+            "assuming we are past TAXISnet (or on a consent page) and "
+            "proceeding without filling credentials."
+        )
 
-    login_button = page1.locator("#btn-login-submit")
-    if login_button.count() == 0:
-        login_button = page1.get_by_role("button", name="Σύνδεση")
-    if login_button.count() == 0:
-        login_button = page1.locator("button:has-text('Είσοδος'), input[type='submit'][value*='Εισοδος']").first
-    if login_button.count() == 0:
-        raise RuntimeError("Could not find the login button on the TEKA page.")
-    try:
-        with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+    if creds_filled:
+        login_button = page1.locator("#btn-login-submit")
+        if login_button.count() == 0:
+            login_button = page1.get_by_role("button", name="Σύνδεση")
+        if login_button.count() == 0:
+            login_button = page1.locator("button:has-text('Είσοδος'), input[type='submit'][value*='Εισοδος']").first
+        if login_button.count() == 0:
+            raise RuntimeError("Could not find the login button on the TEKA page.")
+        try:
+            with page1.expect_navigation(timeout=NAVIGATION_TIMEOUT):
+                login_button.click()
+        except PlaywrightTimeoutError:
             login_button.click()
-    except PlaywrightTimeoutError:
-        login_button.click()
-    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        try:
+            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        except PlaywrightTimeoutError:
+            logging.info("Networkidle never reached after TEKA login; continuing.")
 
     if page1.locator("button:has-text('Συνέχεια')").count() > 0:
         continue_button = page1.locator("button:has-text('Συνέχεια')").first
@@ -266,7 +327,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
                 continue_button.click()
         except PlaywrightTimeoutError:
             continue_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        try:
+            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        except PlaywrightTimeoutError:
+            logging.info("Networkidle never reached after TEKA Συνέχεια; continuing.")
 
     if page1.locator("button:has-text('Αποστολή')").count() > 0:
         submit_button = page1.locator("button:has-text('Αποστολή')").first
@@ -275,13 +339,27 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
                 submit_button.click()
         except PlaywrightTimeoutError:
             submit_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        try:
+            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        except PlaywrightTimeoutError:
+            logging.info("Networkidle never reached after TEKA Αποστολή; continuing.")
 
     if page1.locator("input[name*='amka'], input[id*='amka']").count() > 0 and page1.locator("button:has-text('Είσοδος')").count() > 0:
         afm_field = page1.locator("input[name*='afm'], input[id*='afm']")
         amka_field = page1.locator("input[name*='amka'], input[id*='amka']")
         if afm_field.count() > 0 and amka_field.count() > 0:
-            afm_field.first.fill(username)
+            # Only fill AFM here if the supplied `username` actually LOOKS like
+            # a 9-digit AFM. The brain passes the TAXISnet username (e.g.
+            # "spiroslougaris") which must NEVER be filled into the AFM
+            # input — that triggers a validation error and the script hangs.
+            uname_digits = "".join(ch for ch in str(username or "") if ch.isdigit())
+            if len(uname_digits) == 9 and uname_digits == str(username or "").strip():
+                afm_field.first.fill(username)
+            else:
+                logging.info(
+                    "Skipping AFM auto-fill on AMKA login page — supplied "
+                    "username does not look like a 9-digit AFM."
+                )
             amka_field.first.fill(amka)
             enter_button = page1.locator("button:has-text('Είσοδος')").first
             try:
@@ -289,7 +367,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
                     enter_button.click()
             except PlaywrightTimeoutError:
                 enter_button.click()
-            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+            try:
+                page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+            except PlaywrightTimeoutError:
+                logging.info("Networkidle never reached after TEKA AMKA enter; continuing.")
 
     if page1.locator("input[type='radio']").count() > 0 or page1.get_by_role("button", name="Αποστολή").count() > 0:
         page1.wait_for_selector("input[type='radio']", timeout=NETWORK_TIMEOUT)
@@ -308,7 +389,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
         if submit_button.count() == 0:
             submit_button = page1.locator("input[type='submit'][value*='Αποστολή'], button:has-text('Αποστολή')").first
         submit_button.click()
-        page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        try:
+            page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+        except PlaywrightTimeoutError:
+            logging.info("Networkidle never reached after TEKA radio submit; continuing.")
 
         amka_field = page1.get_by_role("textbox", name="ΑΜΚΑ:")
         if amka_field.count() == 0:
@@ -326,7 +410,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
                         enter_button.click()
                 except PlaywrightTimeoutError:
                     enter_button.click()
-                page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+                try:
+                    page1.wait_for_load_state("networkidle", timeout=NETWORK_TIMEOUT)
+                except PlaywrightTimeoutError:
+                    logging.info("Networkidle never reached after TEKA AMKA enter (2nd); continuing.")
 
     page1.wait_for_timeout(SHORT_WAIT)
 
@@ -389,7 +476,10 @@ def test_example(page: Page, username: str, password: str, amka: str) -> None:
     pdf_dir = os.getenv("TEKA_PDF_DIR")
     if pdf_dir:
         try:
-            saved = download_certificate_pdfs(page1, pdf_dir, prefix="teka_cert")
+            year_env = os.getenv("TEKA_PDF_YEAR")
+            year_filter = int(year_env) if year_env and year_env.isdigit() else None
+            saved = download_certificate_pdfs(page1, pdf_dir, prefix="teka_cert",
+                                              year_filter=year_filter)
             output["pdfs"] = saved
             with open("extracted_table_data_teka.json", "w", encoding="utf-8") as f:
                 json.dump(output, f, ensure_ascii=False, indent=4)
@@ -406,9 +496,13 @@ def main() -> None:
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     parser.add_argument("--pdf-dir", default=os.getenv("TEKA_PDF_DIR"),
                         help="If set, download each certificate PDF into this directory")
+    parser.add_argument("--pdf-year", default=os.getenv("TEKA_PDF_YEAR"), type=str,
+                        help="If set with --pdf-dir, only download the row for this year (e.g. 2025).")
     args = parser.parse_args()
     if args.pdf_dir:
         os.environ["TEKA_PDF_DIR"] = args.pdf_dir
+    if args.pdf_year:
+        os.environ["TEKA_PDF_YEAR"] = str(args.pdf_year)
 
     logging.info("Launching browser in %s mode.", "headless" if args.headless else "headed")
     try:

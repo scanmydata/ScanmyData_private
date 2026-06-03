@@ -1,6 +1,9 @@
 import argparse
 import asyncio
 import json
+import os
+import re
+import unicodedata
 from pathlib import Path
 from playwright.async_api import Playwright, async_playwright
 
@@ -123,6 +126,62 @@ async def extract_detail_page(page):
     }
 
 
+def _normalize_for_match(text: str) -> str:
+    """Strip diacritics + lower + collapse whitespace, for address matching."""
+    if not text:
+        return ""
+    s = unicodedata.normalize("NFD", text)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = s.lower()
+    s = re.sub(r"[^\w\d ]+", " ", s, flags=re.UNICODE)
+    return " ".join(s.split()).strip()
+
+
+async def detail_matches_address(detail: dict, target_address: str) -> bool:
+    """Return True when the lease detail tables contain target_address tokens."""
+    if not target_address:
+        return False
+    norm_target = _normalize_for_match(target_address)
+    if not norm_target:
+        return False
+    tables = detail.get("detailTables") if isinstance(detail.get("detailTables"), list) else []
+    joined = []
+    for t in tables:
+        if not isinstance(t, dict):
+            continue
+        for row in (t.get("rows") if isinstance(t.get("rows"), list) else []):
+            if isinstance(row, list):
+                joined.extend(str(c) for c in row)
+    body = _normalize_for_match(" ".join(joined))
+    # Match if every "significant" token of the target appears in the body.
+    target_tokens = [t for t in norm_target.split() if len(t) >= 3]
+    if not target_tokens:
+        return norm_target in body
+    return all(tok in body for tok in target_tokens)
+
+
+async def try_download_receipt_pdf(page, pdf_dir: Path, trans_id: str, label: str) -> str:
+    """Click the lease's receiptButton and save the PDF. Returns path or ''.
+
+    Best-effort: never raises. The user can also bail out of this from the
+    UI (the misth check still works without the PDF).
+    """
+    btn = page.locator("input[name='receiptButton']")
+    if await btn.count() == 0:
+        return ""
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w\-.]+", "_", str(label or trans_id or "lease"))[:80]
+    out = pdf_dir / f"misth_{trans_id}_{safe}.pdf"
+    try:
+        async with page.expect_download(timeout=20000) as dl_info:
+            await btn.first.click(timeout=15000)
+        dl = await dl_info.value
+        await dl.save_as(str(out))
+        return str(out)
+    except Exception:
+        return ""
+
+
 async def back_to_list(page):
     back_link = page.locator('a:has-text("Επιστροφή στη διαχείριση των δηλώσεων")')
     if await back_link.count() > 0:
@@ -153,7 +212,8 @@ async def dump_page_html(page, suffix: str) -> Path:
     return path
 
 
-async def run(playwright: Playwright, username: str, password: str, output_path: Path, headed: bool) -> None:
+async def run(playwright: Playwright, username: str, password: str, output_path: Path, headed: bool,
+              pdf_dir: Path = None, target_address: str = "") -> None:
     try:
         from e3.checks import chromium_launch_args as _svfb_args
     except Exception:
@@ -175,6 +235,7 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
         'locale': 'el-GR',
         'viewport': {'width': 1280, 'height': 1024},
         'extra_http_headers': DEFAULT_HEADERS,
+        'accept_downloads': True,
     }
     if STORAGE_STATE_PATH.exists():
         context_args['storage_state'] = str(STORAGE_STATE_PATH)
@@ -203,11 +264,30 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
         await page1.wait_for_timeout(2000)
 
         detail = await extract_detail_page(page1)
-        results.append({
+        entry_record = {
             'transId': entry['transId'],
             'summary': entry['summary'],
             'detail': detail,
-        })
+        }
+
+        # When pdf_dir + target_address are provided, download the receipt
+        # PDF for EVERY lease that matches the address. The brain
+        # post-process picks the latest one for the period — but having
+        # all matching PDFs lets the UI present them and lets the user
+        # double-check if the brain picked the right one.
+        if pdf_dir is not None and target_address:
+            try:
+                if await detail_matches_address(detail, target_address):
+                    label = " ".join((entry.get('summary') or [])[:3])
+                    saved_pdf_path = await try_download_receipt_pdf(
+                        page1, pdf_dir, entry['transId'], label
+                    )
+                    if saved_pdf_path:
+                        entry_record['receiptPdf'] = saved_pdf_path
+            except Exception as exc:
+                print(f"  receipt PDF skipped for transId={entry['transId']}: {exc}")
+
+        results.append(entry_record)
 
         await back_to_list(page1)
 
@@ -224,10 +304,16 @@ async def main() -> None:
     parser.add_argument('--password', default='aggeliki92')
     parser.add_argument('--output', default='extracted_misth.json')
     parser.add_argument('--headed', action='store_true', help='Run browser in headed mode')
+    parser.add_argument('--pdf-dir', default=os.getenv('MISTH_PDF_DIR'),
+                        help='If set with --target-address, save the lease receipt PDF here.')
+    parser.add_argument('--target-address', default=os.getenv('MISTH_TARGET_ADDRESS', ''),
+                        help='Address used to pick the lease whose receipt PDF to download.')
     args = parser.parse_args()
 
+    pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None
     async with async_playwright() as playwright:
-        await run(playwright, args.username, args.password, Path(args.output), args.headed)
+        await run(playwright, args.username, args.password, Path(args.output), args.headed,
+                  pdf_dir=pdf_dir, target_address=args.target_address)
 
 
 if __name__ == '__main__':

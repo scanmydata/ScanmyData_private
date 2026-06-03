@@ -139,19 +139,48 @@ async def extract_etak_year_options(page):
     }
 
 
+def _strip_greek_diacritics(text: str) -> str:
+    """Strip combining marks so e.g. ΗΛΙΌΥΠΟΛΗ -> ΗΛΙΟΥΠΟΛΗ."""
+    import unicodedata
+    if not text:
+        return ''
+    nf = unicodedata.normalize('NFD', text)
+    return ''.join(c for c in nf if unicodedata.category(c) != 'Mn')
+
+
 def normalize_search_text(text: str) -> str:
     if not text:
         return ''
-    s = text.lower()
+    s = _strip_greek_diacritics(text).lower()
     s = s.replace(' ', ' ')
-    s = ' '.join(s.split())
-    s = re.sub(r'[^\w\dά-ώϊϋΐΰέύώόήάς\s]', ' ', s, flags=re.UNICODE)
-    return s.strip()
+    s = re.sub(r'[^\w\d\s]', ' ', s, flags=re.UNICODE)
+    return ' '.join(s.split()).strip()
+
+
+def _address_stems(address: str) -> list:
+    """Return stems worth matching from an address.
+
+    The original substring matcher failed when the ETAK grid spelled the
+    city in a different declension (e.g. ΗΛΙΟΥΠΟΛΗ vs ΗΛΙΟΥΠΟΛΕΩΣ) or with a missing
+    accent. We normalise + de-accent + lower, then for each word with >= 3
+    chars we keep a 5-char stem so both forms collapse to e.g. "ηλιου".
+    Numbers (street numbers, postal codes) are kept verbatim because they
+    are the most discriminating token.
+    """
+    norm = normalize_search_text(address)
+    if not norm:
+        return []
+    stems = []
+    for tok in norm.split():
+        if len(tok) < 3:
+            continue
+        stems.append(tok if tok.isdigit() else tok[:5])
+    return stems
 
 
 def find_ataks_by_address(grids: list[dict], address: str) -> tuple[list[str], list[dict]]:
-    normalized_address = normalize_search_text(address)
-    if not normalized_address:
+    needle_stems = _address_stems(address)
+    if not needle_stems:
         return [], []
 
     matched_ataks = []
@@ -160,8 +189,13 @@ def find_ataks_by_address(grids: list[dict], address: str) -> tuple[list[str], l
         for row in grid.get('rows', []):
             if not row:
                 continue
-            normalized_cells = [normalize_search_text(str(cell)) for cell in row]
-            if any(normalized_address in cell for cell in normalized_cells):
+            cell_stems = set()
+            for cell in row:
+                norm_cell = normalize_search_text(str(cell))
+                for tok in norm_cell.split():
+                    if len(tok) >= 3:
+                        cell_stems.add(tok if tok.isdigit() else tok[:5])
+            if all(stem in cell_stems for stem in needle_stems):
                 atak = str(row[0]).strip()
                 if atak and atak not in matched_ataks:
                     matched_ataks.append(atak)
@@ -483,8 +517,12 @@ async def run(playwright: Playwright, username: str, password: str, year: str, a
     pdf_path = await download_etak_pdf(page1, selected_year, download_dir)
     pdf_rows = extract_pdf_rows_for_ataks(pdf_path, matched_ataks)
 
+    # Keep the ENFIA PDF when --keep-pdf was requested (the brain copies it
+    # into the per-user/per-AFM folder for the UI). Previously this branch
+    # had an OR that deleted the PDF whenever rows were matched — which is
+    # exactly when we want to KEEP it for evidence.
     pdf_deleted = False
-    if pdf_rows or not keep_pdf:
+    if not keep_pdf:
         if pdf_path.exists():
             pdf_path.unlink()
         if download_dir.exists() and not any(download_dir.iterdir()):
