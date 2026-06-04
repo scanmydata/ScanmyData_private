@@ -1816,6 +1816,7 @@ def process_client(
     run_extractors: bool,
     headed: bool,
     extractor_flags: Optional[Dict[str, bool]] = None,
+    job_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     # ``extractor_flags`` is a per-extractor on/off override coming from the
     # UI checkboxes. If unset, every extractor inherits the master
@@ -1924,6 +1925,7 @@ def process_client(
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
 
+        _publish_brain_step(job_id, f"Έλεγχος ΕΦΚΑ/ΤΕΚΑ — {input_name or afm}", percent=15)
         for t in targets:
             with tempfile.TemporaryDirectory(prefix=f"e3brain_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
@@ -1956,6 +1958,7 @@ def process_client(
                         efka_args.extend(["--pdf-dir", str(efka_pdf_dir),
                                           "--pdf-year", str(year)])
 
+                _publish_brain_step(job_id, f"ΕΦΚΑ scrape για {t.full_name or t.afm}", percent=20)
                 ok_efka, efka_json, efka_err = _run_script_and_read_json(efka_args, tmp, "extracted_table_data.json")
                 efka_amount = _extract_efka_teka_total(efka_json, year) if ok_efka else None
                 if _flag_for("download_efka_pdfs"):
@@ -1991,6 +1994,7 @@ def process_client(
                         teka_args.extend(["--pdf-dir", str(teka_pdf_dir),
                                           "--pdf-year", str(year)])
 
+                _publish_brain_step(job_id, f"ΤΕΚΑ scrape για {t.full_name or t.afm}", percent=30)
                 ok_teka, teka_json, teka_err = _run_script_and_read_json(teka_args, tmp, "extracted_table_data_teka.json")
                 teka_amount = _extract_efka_teka_total(teka_json, year) if ok_teka else None
                 if _flag_for("download_teka_pdfs") and teka_pdf_dir is not None:
@@ -2027,6 +2031,7 @@ def process_client(
     mydata_585_014 = None
     if mydata_user and mydata_key:
         try:
+            _publish_brain_step(job_id, "Σύγκριση με myDATA E3 (585.007 / 585.014)", percent=40)
             mydata_585_007 = _sum_mydata_sub_code(mydata_user, mydata_key, year, "585", "007")
             mydata_585_014 = _sum_mydata_sub_code(mydata_user, mydata_key, year, "585", "014")
         except Exception as exc:
@@ -2051,6 +2056,19 @@ def process_client(
     rent_status: Optional[str] = None  # 'active' | 'expired' | 'terminated_mid_period'
     rent_lease_expiry: Optional[date] = None
     e9_props: List[Dict[str, Any]] = []  # per-ATAK breakdown for UI popup
+    # Per-address breakdown so the UI can show what came from HQ vs each
+    # branch and which source (μισθωτήριο vs Ε9 × 3%) was used.
+    rent_breakdown: List[Dict[str, Any]] = []
+    # Branch addresses the user typed in the analytical form.
+    branch_addresses_raw = client.get("branch_addresses") if isinstance(client.get("branch_addresses"), list) else []
+    branch_addresses = [
+        _norm_text(a) for a in branch_addresses_raw if _norm_text(a)
+    ]
+    # Pre-init misth/E9 locals so the branch loop can reference them even
+    # if the HQ block exits early through a different path.
+    misth_json: Any = None
+    ok_misth: bool = False
+    e9_pdf_dir = None
 
     # Compute the period (in months, inclusive) the user asked about. If no
     # date range was supplied (single mode without dates) default to the
@@ -2106,6 +2124,7 @@ def process_client(
                     "--target-address", headquarter_address,
                 ])
 
+            _publish_brain_step(job_id, f"Σύγκριση Μισθωτηρίων — έδρα «{headquarter_address[:60]}»", percent=55)
             ok_misth, misth_json, misth_err = _run_script_and_read_json(misth_args, tmp, "extracted_misth.json")
             misth_address_found_in_leases = False
             if ok_misth:
@@ -2194,6 +2213,7 @@ def process_client(
             # "αν με τους κωδικους taxisnet ... βρεθει ... τοτε να μην
             # αναζητουμε περαιτερω".
             if not misth_address_found_in_leases and _flag_for("e9"):
+                _publish_brain_step(job_id, "Έλεγχος Ε9/ENFIA (fallback έδρας)", percent=70)
                 e9_args = [
                     sys.executable,
                     str(checks_dir / "e9.py"),
@@ -2217,6 +2237,14 @@ def process_client(
                 e9_pdf_dir = _resolve_pdfs_dir("e9", afm)
 
                 ok_e9, e9_json, e9_err = _run_script_and_read_json(e9_args, tmp, "extracted_etak_property_status.json")
+                # Surface a step right AFTER the subprocess returns so
+                # the user no longer sees the UI frozen at "70%" while
+                # the E9 result is being post-processed.
+                _publish_brain_step(
+                    job_id,
+                    "Επεξεργασία Ε9/ENFIA αποτελεσμάτων" if ok_e9 else "Ε9/ENFIA: αποτυχία scrape",
+                    percent=75,
+                )
                 if ok_e9:
                     # Per-ATAK breakdown so the UI can show a picker when
                     # the same address resolves to multiple ATAKs
@@ -2288,6 +2316,198 @@ def process_client(
                 else:
                     warnings.append(f"E9 extractor: {e9_err}")
 
+            # Capture the HQ result as the first breakdown entry. This
+            # mirrors what the UI will show next to the 585.014 indicator
+            # and lets the branch loop below add to it without losing
+            # context about where each component of the total came from.
+            if rent_source is not None:
+                rent_breakdown.append({
+                    "address": headquarter_address,
+                    "kind": "headquarter",
+                    "source": rent_source,
+                    "amount": rent_annual,
+                    "months": rent_months,
+                    "monthly": (rent_annual / rent_months) if (rent_annual is not None and rent_months) else None,
+                    "amount_net": rent_net,
+                    "status": rent_status,
+                    "expiry": rent_lease_expiry.isoformat() if rent_lease_expiry else None,
+                })
+
+            # === Branch (υποκαταστήματα) loop ===
+            # Per the user's spec: each branch address the user typed in
+            # the analytical form goes through the SAME misth → Ε9
+            # decision tree as the headquarter. We REUSE the misth_json
+            # already scraped above (so no second misth.py login is
+            # needed) for the amount calculation; the Ε9 fallback uses
+            # a fresh per-branch subprocess. Per-branch results are
+            # added to rent_annual / rent_net (totals) and a per-branch
+            # entry lands in rent_breakdown for the UI.
+            if branch_addresses and company_taxis_user and company_taxis_pass:
+                _publish_brain_step(job_id, f"Έλεγχος υποκαταστημάτων ({len(branch_addresses)})", percent=80)
+                for _b_idx, branch_addr in enumerate(branch_addresses, start=1):
+                    _publish_brain_step(
+                        job_id,
+                        f"Υποκατάστημα {_b_idx}/{len(branch_addresses)}: «{branch_addr[:60]}»",
+                        percent=80 + min(15, _b_idx * 3),
+                    )
+                    branch_entry: Dict[str, Any] = {
+                        "address": branch_addr,
+                        "kind": "branch",
+                        "source": None,
+                        "amount": None,
+                        "amount_net": None,
+                        "months": None,
+                        "monthly": None,
+                        "status": None,
+                        "expiry": None,
+                    }
+                    # First try misth (we already have the JSON).
+                    matched_branch = (
+                        _pick_latest_lease(misth_json, branch_addr) if ok_misth and _flag_for("misth")
+                        else None
+                    )
+                    if matched_branch is not None:
+                        b_monthly, b_expiry = _extract_lease_amount_and_expiry(matched_branch)
+                        if b_expiry is None:
+                            b_status = "active"
+                            b_effective_months = months_in_period
+                        elif b_expiry < period_start:
+                            b_status = "expired"
+                            b_effective_months = months_in_period
+                        elif b_expiry < period_end:
+                            b_status = "terminated_mid_period"
+                            b_effective_months = (
+                                (b_expiry.year - period_start.year) * 12
+                                + (b_expiry.month - period_start.month) + 1
+                            )
+                            if b_effective_months < 1:
+                                b_effective_months = 1
+                        else:
+                            b_status = "active"
+                            b_effective_months = months_in_period
+                        if b_monthly:
+                            b_gross = round(b_monthly * b_effective_months, 2)
+                            b_net = round(b_gross / 1.036, 2)
+                            branch_entry.update({
+                                "source": "misth",
+                                "amount": b_gross,
+                                "amount_net": b_net,
+                                "months": b_effective_months,
+                                "monthly": b_monthly,
+                                "status": b_status,
+                                "expiry": b_expiry.isoformat() if b_expiry else None,
+                            })
+                            if b_status == "terminated_mid_period":
+                                warnings.append(
+                                    f"Υποκατάστημα «{branch_addr}»: η μίσθωση έληξε στις "
+                                    f"{b_expiry.isoformat()} (μέσα στη χρήση {year}). "
+                                    f"Υπολογισμός με {b_effective_months} μήνες."
+                                )
+                            elif b_status == "expired":
+                                warnings.append(
+                                    f"Υποκατάστημα «{branch_addr}»: δεν υπάρχει ενεργό "
+                                    f"μισθωτήριο για την χρήση {year} (λήξη {b_expiry.isoformat()})."
+                                )
+                            # Aggregate into totals
+                            rent_annual = round((rent_annual or 0.0) + b_gross, 2)
+                            rent_net = round((rent_net or 0.0) + b_net, 2)
+                            if rent_source is None:
+                                rent_source = "misth"
+                            elif rent_source != "misth":
+                                rent_source = "mixed"
+                    else:
+                        # No lease for this branch → try Ε9/ENFIA fallback
+                        if _flag_for("e9"):
+                            with tempfile.TemporaryDirectory(prefix=f"e3brain_branch_{afm}_") as br_tmp_str:
+                                br_tmp = Path(br_tmp_str)
+                                e9_b_args = [
+                                    sys.executable,
+                                    str(checks_dir / "e9.py"),
+                                    "--username", company_taxis_user,
+                                    "--password", company_taxis_pass,
+                                    "--year", str(year),
+                                    "--address", branch_addr,
+                                    "--output", "extracted_etak_property_status.json",
+                                    "--keep-pdf",
+                                ]
+                                if headed:
+                                    e9_b_args.append("--headed")
+                                ok_e9_b, e9_b_json, e9_b_err = _run_script_and_read_json(
+                                    e9_b_args, br_tmp, "extracted_etak_property_status.json"
+                                )
+                                if ok_e9_b:
+                                    b_rows = e9_b_json.get("pdfMatchedRows") or []
+                                    b_props = []
+                                    for r in b_rows:
+                                        txt_r = _norm_text(r.get("text") or " ".join(str(x) for x in r.get("row", [])))
+                                        b_nums = [
+                                            _to_float(m.group(0))
+                                            for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt_r)
+                                            if _to_float(m.group(0)) > 0
+                                        ]
+                                        if b_nums:
+                                            b_props.append({
+                                                "atak": (r.get("matchedAtak") or "").strip(),
+                                                "value": max(b_nums),
+                                                "address_text": branch_addr,
+                                            })
+                                    if b_props:
+                                        b_total_value = round(sum(p["value"] for p in b_props), 2)
+                                        b_amount = round(b_total_value * 0.03, 2)
+                                        branch_entry.update({
+                                            "source": "e9_3_percent",
+                                            "amount": b_amount,
+                                            "amount_net": b_amount,  # no χαρτόσημο for ιδιόχρηση
+                                            "months": months_in_period,
+                                            "monthly": None,
+                                            "status": "active",
+                                        })
+                                        rent_annual = round((rent_annual or 0.0) + b_amount, 2)
+                                        rent_net = round((rent_net or 0.0) + b_amount, 2)
+                                        if rent_source is None:
+                                            rent_source = "e9_3_percent"
+                                        elif rent_source != "e9_3_percent":
+                                            rent_source = "mixed"
+                                        # Persist this branch's ENFIA PDF too.
+                                        if e9_pdf_dir is not None:
+                                            try:
+                                                import shutil as _sh_b
+                                                b_src_rel = e9_b_json.get("pdfPath")
+                                                if b_src_rel:
+                                                    b_src_path = Path(b_src_rel)
+                                                    if not b_src_path.is_absolute():
+                                                        b_src_path = br_tmp / b_src_path
+                                                    if b_src_path.exists():
+                                                        e9_pdf_dir.mkdir(parents=True, exist_ok=True)
+                                                        safe_addr = re.sub(r"[^\w\-.]+", "_", branch_addr)[:60]
+                                                        b_dst = e9_pdf_dir / f"enfia_{year}_branch_{safe_addr}_{b_src_path.name}"
+                                                        _sh_b.copy2(str(b_src_path), str(b_dst))
+                                            except Exception:
+                                                log.exception(
+                                                    "Failed to copy ENFIA PDF for branch %s of AFM %s",
+                                                    branch_addr, afm,
+                                                )
+                                    else:
+                                        warnings.append(
+                                            f"Υποκατάστημα «{branch_addr}»: δεν βρέθηκε "
+                                            f"στα μισθωτήρια ούτε σε Ε9 — δεν συμπεριλήφθηκε στο 585.014."
+                                        )
+                                else:
+                                    warnings.append(
+                                        f"Υποκατάστημα «{branch_addr}»: αποτυχία Ε9 — {e9_b_err}"
+                                    )
+                        else:
+                            warnings.append(
+                                f"Υποκατάστημα «{branch_addr}»: δεν βρέθηκε σε μισθωτήριο και ο έλεγχος Ε9 είναι απενεργοποιημένος."
+                            )
+                    if branch_entry.get("source") is not None or branch_entry.get("status") is not None:
+                        rent_breakdown.append(branch_entry)
+
+    # Finalisation marker — the long-running scrapes are done; from here
+    # on it's just the dict assembly and the comparison messages. The
+    # banner in the UI was getting stuck at "70%" because no progress
+    # event was published past the e9 step before the function returned.
+    _publish_brain_step(job_id, f"Ολοκλήρωση πελάτη {input_name or afm}", percent=95)
     return {
         "afm": afm,
         "name": input_name or vat_name,
@@ -2320,6 +2540,12 @@ def process_client(
             "rent_lease_expiry": rent_lease_expiry.isoformat() if rent_lease_expiry else None,
             "rent_source": rent_source,
             "e9_properties": e9_props,  # per-ATAK breakdown for UI ATAK picker
+            # Per-address breakdown so the UI can show what came from
+            # HQ vs each branch and which source was used (μισθωτήριο /
+            # Ε9). When branches are present `rent_source` collapses to
+            # 'mixed' if HQ and branches use different sources.
+            "rent_breakdown": rent_breakdown,
+            "branch_addresses": branch_addresses,
         },
         "credential_snapshot": credential_snapshot,
         "messages": messages,
@@ -2403,14 +2629,29 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     results: List[Dict[str, Any]] = []
     aborted = False
+    total_clients = len(clients)
     if job_id:
         _abort_registry.setdefault(job_id, {"abort": False})
-    for c in clients:
+    for client_idx, c in enumerate(clients, start=1):
         # Check abort BEFORE starting a new client so the running one is
         # always completed first ("finish current, then stop").
         if job_id and _abort_registry.get(job_id, {}).get("abort"):
             aborted = True
             break
+        # Publish a bulk-level progress marker BEFORE process_client
+        # runs so the UI banner shows the current client even before
+        # the first per-step event fires. In single mode total=1 so
+        # this is just one event.
+        try:
+            client_name = _norm_text(c.get("name") or "") or _norm_afm(c.get("afm") or "") or "?"
+        except Exception:
+            client_name = "?"
+        if total_clients > 1:
+            _publish_brain_step(
+                job_id,
+                f"Πελάτης {client_idx}/{total_clients}: {client_name}",
+                percent=int((client_idx - 1) * 100 / total_clients),
+            )
         results.append(
             process_client(
                 client=c,
@@ -2430,6 +2671,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "download_misth_pdfs": payload["_download_misth_pdfs"],
                     "download_e9_pdfs": payload["_download_e9_pdfs"],
                 },
+                job_id=job_id,
             )
         )
     # Clear the abort registry entry once the run is done.
@@ -2438,6 +2680,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
             _abort_registry.pop(job_id, None)
         except Exception:
             pass
+        _clear_brain_progress(job_id)
 
     return {
         "ok": True,
@@ -2479,6 +2722,47 @@ def request_brain_abort(job_id: str) -> bool:
         return False
     entry["abort"] = True
     return True
+
+
+# === Brain progress registry ============================================
+# Lightweight in-process pubsub so the UI can poll the actually-running
+# step rather than cycling through hard-coded labels. The brain calls
+# ``_publish_brain_step(job_id, label, percent=...)`` at well-known
+# milestones; the UI hits ``GET /api/e3/brain/progress/<job_id>`` every
+# second or two while the wait overlay is up.
+
+def _get_or_init_brain_progress_registry():
+    global _BRAIN_PROGRESS_REGISTRY  # noqa: PLW0603
+    try:
+        return _BRAIN_PROGRESS_REGISTRY
+    except NameError:
+        _BRAIN_PROGRESS_REGISTRY = {}
+        return _BRAIN_PROGRESS_REGISTRY
+
+
+def _publish_brain_step(job_id: Optional[str], label: str, percent: Optional[int] = None) -> None:
+    """Record the brain's current step under the given job_id."""
+    if not job_id:
+        return
+    reg = _get_or_init_brain_progress_registry()
+    reg[str(job_id)] = {
+        "label": label,
+        "percent": percent,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def get_brain_progress(job_id: str) -> Dict[str, Any]:
+    """Return the latest recorded brain step for job_id (empty dict if none)."""
+    reg = _get_or_init_brain_progress_registry()
+    return dict(reg.get(str(job_id), {}))
+
+
+def _clear_brain_progress(job_id: Optional[str]) -> None:
+    if not job_id:
+        return
+    reg = _get_or_init_brain_progress_registry()
+    reg.pop(str(job_id), None)
 
 
 def _load_payload_from_args(args: argparse.Namespace) -> Dict[str, Any]:

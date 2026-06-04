@@ -17188,6 +17188,52 @@ def api_e3_brain_company_members():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/e3/brain/sub_home", methods=["POST"])
+@login_required
+def api_e3_brain_sub_home():
+    """Run the sub_home.py scraper for the company TAXIS credentials.
+
+    The UI invokes this when the user clicks «Ανάκτηση διεύθυνσης» (or
+    explicitly «Ανάκτηση υποκαταστημάτων») — it logs into the AADE
+    comregistry, navigates to «Τρέχουσα Εικόνα Οντότητας/Επιχείρησης»
+    and pulls «Εγκαταστάσεις Εσωτερικού» + «Εγκαταστάσεις Εξωτερικού».
+    """
+    payload = request.get_json(silent=True) or {}
+    taxis_user = str(payload.get("taxis_user") or payload.get("taxisUser") or "").strip()
+    taxis_pass = str(payload.get("taxis_pass") or payload.get("taxisPass") or payload.get("taxis_password") or "").strip()
+    if not taxis_user or not taxis_pass:
+        return jsonify({"ok": False, "error": "Λείπουν τα TAXISnet credentials εταιρίας."}), 400
+    import subprocess, sys as _sys, tempfile, json as _json
+    from pathlib import Path as _Path
+    script = _Path(__file__).resolve().parent / "e3" / "checks" / "sub_home.py"
+    with tempfile.TemporaryDirectory(prefix="e3_subhome_") as tmpdir:
+        out_path = _Path(tmpdir) / "sub_home.json"
+        args = [
+            _sys.executable, str(script),
+            "--username", taxis_user,
+            "--password", taxis_pass,
+            "--output", str(out_path),
+            "--headless",
+        ]
+        try:
+            proc = subprocess.run(args, capture_output=True, text=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            return jsonify({"ok": False, "error": "Timeout κατά την ανάκτηση υποκαταστημάτων."}), 504
+        if not out_path.exists():
+            err = (proc.stderr or proc.stdout or "Άγνωστο σφάλμα").strip()[-400:]
+            return jsonify({"ok": False, "error": err}), 500
+        try:
+            data = _json.loads(out_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Μη έγκυρο output: {exc}"}), 500
+    return jsonify({
+        "ok": True,
+        "branches_domestic": data.get("branches_domestic") or [],
+        "branches_abroad": data.get("branches_abroad") or [],
+        "warnings": data.get("warnings") or [],
+    })
+
+
 @app.route("/api/e3/brain/member_amka", methods=["POST"])
 @login_required
 def api_e3_brain_member_amka():
@@ -17815,6 +17861,22 @@ def handle_unexpected_error(e):
         return "<pre>{}</pre>".format(escape(tb)), 500
     return safe_render("error_generic.html", message="Συνέβη σφάλμα στον server. Δες logs."), 500
 
+@app.route("/api/e3/brain/progress/<job_id>", methods=["GET"])
+@login_required
+def api_e3_brain_progress(job_id):
+    """Return the current step of a running E3 Brain job.
+
+    The UI polls this while the wait overlay is visible to show the
+    actually-running step (ΕΦΚΑ scrape / Σύγκριση Μισθωτηρίων / Έλεγχος
+    Ε9 / Υποκατάστημα N) instead of cycling through hard-coded labels.
+    """
+    try:
+        from e3.checks.e3_brain import get_brain_progress
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, "progress": get_brain_progress((job_id or "").strip())})
+
+
 @app.route("/api/e3/brain/abort/<job_id>", methods=["POST"])
 @login_required
 def api_e3_brain_abort_job(job_id):
@@ -17968,9 +18030,89 @@ def _e3_pdfs_serve_file(kind):
     full = os.path.join(target_dir, name)
     if not os.path.isfile(full):
         return jsonify({"ok": False, "error": "Δεν βρέθηκε το αρχείο."}), 404
+    if request.method == "DELETE":
+        try:
+            os.remove(full)
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"Αποτυχία διαγραφής: {e}"}), 500
+        return jsonify({"ok": True, "deleted": name}), 200
     from flask import send_file
     return send_file(full, mimetype="application/pdf", as_attachment=False,
                      download_name=name)
+
+
+def _e3_pdfs_bulk_delete(kind):
+    """POST: delete a list of file names under the user's PDF folder."""
+    grp, err = _e3_pdfs_require_group_access()
+    if err:
+        return jsonify(err[0]), err[1]
+    payload = request.get_json(silent=True) or {}
+    afm = (request.args.get("afm") or payload.get("afm") or "").strip()
+    owner = (request.args.get("owner") or payload.get("owner") or "").strip() or None
+    names = payload.get("names") or []
+    if not isinstance(names, list) or not names:
+        return jsonify({"ok": False, "error": "Δεν δόθηκε λίστα ονομάτων."}), 400
+    try:
+        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    deleted = []
+    failed = []
+    for raw in names:
+        name = str(raw or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name or not name.lower().endswith(".pdf"):
+            failed.append({"name": name, "error": "invalid"})
+            continue
+        full = os.path.join(target_dir, name)
+        if not os.path.isfile(full):
+            failed.append({"name": name, "error": "missing"})
+            continue
+        try:
+            os.remove(full)
+            deleted.append(name)
+        except OSError as e:
+            failed.append({"name": name, "error": str(e)})
+    return jsonify({"ok": True, "deleted": deleted, "failed": failed}), 200
+
+
+def _e3_pdfs_zip(kind):
+    """POST: stream a zip with the requested file names."""
+    import io as _io, zipfile as _zip
+    grp, err = _e3_pdfs_require_group_access()
+    if err:
+        return jsonify(err[0]), err[1]
+    # Names come as repeated form fields `name` (matches the simple
+    # <form method=post> approach the UI uses to trigger the download).
+    afm = (request.args.get("afm") or request.form.get("afm") or "").strip()
+    owner = (request.args.get("owner") or request.form.get("owner") or "").strip() or None
+    names = request.form.getlist("name") or []
+    if not names:
+        # Fall back to JSON payload for programmatic callers.
+        body = request.get_json(silent=True) or {}
+        names = body.get("names") or []
+    if not isinstance(names, list) or not names:
+        return jsonify({"ok": False, "error": "Δεν δόθηκε λίστα ονομάτων."}), 400
+    try:
+        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w", compression=_zip.ZIP_DEFLATED) as zf:
+        for raw in names:
+            name = str(raw or "").strip()
+            if not name or "/" in name or "\\" in name or ".." in name or not name.lower().endswith(".pdf"):
+                continue
+            full = os.path.join(target_dir, name)
+            if os.path.isfile(full):
+                zf.write(full, arcname=name)
+    buf.seek(0)
+    from flask import send_file
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{kind}_pdfs_{afm}.zip",
+    )
 
 
 @app.route("/api/e3/brain/efka_pdfs", methods=["GET"])
@@ -17985,13 +18127,13 @@ def api_e3_brain_teka_pdfs_list():
     return _e3_pdfs_list_kind("teka")
 
 
-@app.route("/api/e3/brain/efka_pdfs/file", methods=["GET"])
+@app.route("/api/e3/brain/efka_pdfs/file", methods=["GET", "DELETE"])
 @login_required
 def api_e3_brain_efka_pdfs_file():
     return _e3_pdfs_serve_file("efka")
 
 
-@app.route("/api/e3/brain/teka_pdfs/file", methods=["GET"])
+@app.route("/api/e3/brain/teka_pdfs/file", methods=["GET", "DELETE"])
 @login_required
 def api_e3_brain_teka_pdfs_file():
     return _e3_pdfs_serve_file("teka")
@@ -18003,7 +18145,7 @@ def api_e3_brain_misth_pdfs_list():
     return _e3_pdfs_list_kind("misth")
 
 
-@app.route("/api/e3/brain/misth_pdfs/file", methods=["GET"])
+@app.route("/api/e3/brain/misth_pdfs/file", methods=["GET", "DELETE"])
 @login_required
 def api_e3_brain_misth_pdfs_file():
     return _e3_pdfs_serve_file("misth")
@@ -18015,10 +18157,58 @@ def api_e3_brain_e9_pdfs_list():
     return _e3_pdfs_list_kind("e9")
 
 
-@app.route("/api/e3/brain/e9_pdfs/file", methods=["GET"])
+@app.route("/api/e3/brain/e9_pdfs/file", methods=["GET", "DELETE"])
 @login_required
 def api_e3_brain_e9_pdfs_file():
     return _e3_pdfs_serve_file("e9")
+
+
+@app.route("/api/e3/brain/efka_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_efka_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("efka")
+
+
+@app.route("/api/e3/brain/teka_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_teka_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("teka")
+
+
+@app.route("/api/e3/brain/misth_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_misth_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("misth")
+
+
+@app.route("/api/e3/brain/e9_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_e9_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("e9")
+
+
+@app.route("/api/e3/brain/efka_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_efka_pdfs_zip():
+    return _e3_pdfs_zip("efka")
+
+
+@app.route("/api/e3/brain/teka_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_teka_pdfs_zip():
+    return _e3_pdfs_zip("teka")
+
+
+@app.route("/api/e3/brain/misth_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_misth_pdfs_zip():
+    return _e3_pdfs_zip("misth")
+
+
+@app.route("/api/e3/brain/e9_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_e9_pdfs_zip():
+    return _e3_pdfs_zip("e9")
 
 @app.route("/credentials", methods=["GET", "POST"])
 def credentials_page():

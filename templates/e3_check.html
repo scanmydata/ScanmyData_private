@@ -400,6 +400,219 @@
     border-color: #134e4a;
   }
 
+  /* PDF list (ΕΦΚΑ / ΤΕΚΑ / ΜΙΣΘ / Ε9) — explicit colours so it stays
+     readable in both light and dark mode. The Tailwind dark: classes
+     used previously didn't apply to the dynamically-injected rows. */
+  .brain-pdfs-section {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+    color: #0f172a;
+  }
+  [data-theme="dark"] .brain-pdfs-section {
+    background: #0f172a;
+    border-color: #334155;
+    color: #e2e8f0;
+  }
+  .brain-pdfs-section-title {
+    color: #475569;
+  }
+  [data-theme="dark"] .brain-pdfs-section-title {
+    color: #cbd5e1;
+  }
+  .brain-pdfs-status { color: #475569; }
+  [data-theme="dark"] .brain-pdfs-status { color: #cbd5e1; }
+  .brain-pdf-chip {
+    background: #e2e8f0;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    border-radius: 9999px;
+    padding: 0.18rem 0.7rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .brain-pdf-chip.active {
+    background: #0ea5e9;
+    color: #fff;
+    border-color: #0284c7;
+  }
+  [data-theme="dark"] .brain-pdf-chip {
+    background: #334155;
+    color: #f1f5f9;
+    border-color: #475569;
+  }
+  [data-theme="dark"] .brain-pdf-chip.active {
+    background: #0369a1;
+    color: #fff;
+    border-color: #0284c7;
+  }
+  .brain-pdf-list-wrap {
+    background: #ffffff;
+    color: #0f172a;
+    --brain-pdf-border: #e5e7eb;
+    border: 1px solid var(--brain-pdf-border);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+  }
+  .brain-pdf-list-scroll { max-height: 340px; overflow: auto; }
+  [data-theme="dark"] .brain-pdf-list-wrap {
+    background: #1e293b;
+    color: #e2e8f0;
+    --brain-pdf-border: #334155;
+  }
+  .brain-pdf-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap;
+  }
+  .brain-pdf-select-all-label {
+    display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem;
+  }
+  .brain-pdf-toolbar-actions { display: flex; gap: 0.4rem; }
+  .brain-pdf-btn {
+    color: #fff; border: none; border-radius: 0.375rem;
+    padding: 0.25rem 0.7rem; font-size: 0.75rem; font-weight: 600; cursor: pointer;
+  }
+  .brain-pdf-btn-zip { background: #0ea5e9; }
+  .brain-pdf-btn-zip:hover { background: #0284c7; }
+  .brain-pdf-btn-delete { background: #dc2626; }
+  .brain-pdf-btn-delete:hover { background: #b91c1c; }
+  .brain-pdf-row {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.35rem 0.25rem;
+    border-bottom: 1px solid var(--brain-pdf-border, #e5e7eb);
+  }
+  .brain-pdf-row .brain-pdf-name {
+    flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .brain-pdf-row .brain-pdf-size { opacity: 0.7; font-size: 0.7rem; }
+  .brain-pdf-row .brain-pdf-open {
+    text-decoration: underline; font-size: 0.78rem;
+  }
+  .brain-pdf-row .brain-pdf-delete {
+    background: #ef4444; color: #fff; border: none;
+    border-radius: 0.375rem; padding: 0.18rem 0.55rem;
+    font-size: 0.72rem; font-weight: 600; cursor: pointer;
+  }
+  .brain-pdf-row .brain-pdf-delete:hover { background: #dc2626; }
+  .brain-pdf-list-wrap .brain-pdf-name { color: #0f172a; }
+  [data-theme="dark"] .brain-pdf-list-wrap .brain-pdf-name {
+    color: #e2e8f0;
+  }
+  .brain-pdf-list-wrap .brain-pdf-open { color: #0284c7; }
+  [data-theme="dark"] .brain-pdf-list-wrap .brain-pdf-open {
+    color: #38bdf8 !important;
+  }
+  .brain-pdf-kind-badge {
+    display: inline-block;
+    border-radius: 9999px;
+    padding: 0 0.4rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.4;
+    border: 1px solid transparent;
+    margin-right: 0.3rem;
+  }
+  .brain-pdf-kind-badge.kind-efka { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+  .brain-pdf-kind-badge.kind-teka { background: #ede9fe; color: #5b21b6; border-color: #ddd6fe; }
+  .brain-pdf-kind-badge.kind-misth { background: #dcfce7; color: #166534; border-color: #86efac; }
+  .brain-pdf-kind-badge.kind-e9 { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+  [data-theme="dark"] .brain-pdf-kind-badge.kind-efka { background: #422006; color: #fde047; border-color: #713f12; }
+  [data-theme="dark"] .brain-pdf-kind-badge.kind-teka { background: #2e1065; color: #c4b5fd; border-color: #4c1d95; }
+  [data-theme="dark"] .brain-pdf-kind-badge.kind-misth { background: #14532d; color: #86efac; border-color: #166534; }
+  [data-theme="dark"] .brain-pdf-kind-badge.kind-e9 { background: #172554; color: #bfdbfe; border-color: #1e3a8a; }
+  [data-theme="dark"] #brainPdfsStatus {
+    color: #cbd5e1;
+  }
+
+  /* Bulk results accordion — one card per client, click to toggle. */
+  .brain-bulk-results { display: flex; flex-direction: column; gap: 0.5rem; }
+  .brain-bulk-results-header {
+    display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0;
+    color: #0f172a;
+  }
+  [data-theme="dark"] .brain-bulk-results-header { color: #e2e8f0; }
+  .brain-bulk-count { color: #64748b; font-size: 0.78rem; }
+  [data-theme="dark"] .brain-bulk-count { color: #94a3b8; }
+  .brain-bulk-expand-all {
+    margin-left: auto; background: #0ea5e9; color: #fff; border: 0;
+    border-radius: 0.375rem; padding: 0.25rem 0.7rem;
+    font-size: 0.75rem; font-weight: 600; cursor: pointer;
+  }
+  .brain-bulk-card {
+    border: 1px solid #e2e8f0; border-radius: 0.5rem;
+    background: #ffffff; color: #0f172a; overflow: hidden;
+  }
+  [data-theme="dark"] .brain-bulk-card {
+    border-color: #334155; background: #1e293b; color: #e2e8f0;
+  }
+  .brain-bulk-toggle {
+    width: 100%; display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.55rem 0.75rem; background: transparent;
+    border: 0; cursor: pointer; text-align: left;
+    color: inherit; font-size: 0.85rem;
+  }
+  .brain-bulk-toggle:hover { background: #f1f5f9; }
+  [data-theme="dark"] .brain-bulk-toggle:hover { background: #1f293b; }
+  .brain-bulk-chev { width: 0.9rem; text-align: center; color: #94a3b8; }
+  .brain-bulk-name { font-weight: 700; flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brain-bulk-afm { color: #64748b; font-family: ui-monospace, monospace; font-size: 0.72rem; }
+  [data-theme="dark"] .brain-bulk-afm { color: #94a3b8; }
+  .brain-bulk-amounts { color: #475569; font-size: 0.75rem; }
+  [data-theme="dark"] .brain-bulk-amounts { color: #cbd5e1; }
+  .brain-bulk-status {
+    display: inline-flex; align-items: center;
+    border-radius: 9999px; padding: 0 0.55rem;
+    font-size: 0.65rem; font-weight: 700;
+    border: 1px solid transparent;
+  }
+  .brain-bulk-status-ok {
+    background: #dcfce7; color: #166534; border-color: #86efac;
+  }
+  .brain-bulk-status-err {
+    background: #fef3c7; color: #92400e; border-color: #fcd34d;
+  }
+  [data-theme="dark"] .brain-bulk-status-ok {
+    background: #14532d; color: #86efac; border-color: #166534;
+  }
+  [data-theme="dark"] .brain-bulk-status-err {
+    background: #422006; color: #fde047; border-color: #713f12;
+  }
+  .brain-bulk-body {
+    border-top: 1px solid #e2e8f0; padding: 0.6rem 0.85rem; font-size: 0.8rem;
+  }
+  [data-theme="dark"] .brain-bulk-body { border-top-color: #334155; }
+  .brain-bulk-sublabel {
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    color: #64748b; margin: 0.5rem 0 0.25rem; letter-spacing: 0.02em;
+  }
+  [data-theme="dark"] .brain-bulk-sublabel { color: #94a3b8; }
+  .brain-bulk-sublabel-err { color: #b91c1c; }
+  [data-theme="dark"] .brain-bulk-sublabel-err { color: #fca5a5; }
+  .brain-bulk-table {
+    width: 100%; border-collapse: collapse; font-size: 0.78rem;
+  }
+  .brain-bulk-table th, .brain-bulk-table td {
+    padding: 0.3rem 0.45rem;
+    border-bottom: 1px solid #f1f5f9; text-align: left;
+  }
+  [data-theme="dark"] .brain-bulk-table th,
+  [data-theme="dark"] .brain-bulk-table td {
+    border-bottom-color: #1e293b;
+  }
+  .brain-bulk-table th { color: #64748b; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; }
+  [data-theme="dark"] .brain-bulk-table th { color: #94a3b8; }
+  .brain-bulk-warnings, .brain-bulk-errors, .brain-bulk-messages {
+    margin: 0 0 0.5rem 1.2rem; padding: 0;
+  }
+  .brain-bulk-warnings li { color: #92400e; }
+  .brain-bulk-errors li { color: #b91c1c; font-weight: 600; }
+  .brain-bulk-messages li { color: #1e293b; }
+  [data-theme="dark"] .brain-bulk-warnings li { color: #fde047; }
+  [data-theme="dark"] .brain-bulk-errors li { color: #fca5a5; }
+  [data-theme="dark"] .brain-bulk-messages li { color: #e2e8f0; }
+
   .brain-legal-type-notice {
     display: inline-flex;
     align-items: center;
@@ -410,12 +623,24 @@
     border-radius: 9999px;
     padding: 0.35rem 0.75rem;
     font-size: 0.85rem;
+    font-weight: 700;
+  }
+  /* Ατομική = blue pill (matches the Αποθηκευμένα table chip). */
+  .brain-legal-type-notice.is-individual {
+    background: #dbeafe;
+    color: #1d4ed8;
+    border-color: #93c5fd;
   }
 
   [data-theme="dark"] .brain-legal-type-notice {
     background: #064e3b;
     color: #d1fae5;
     border-color: #0f766e;
+  }
+  [data-theme="dark"] .brain-legal-type-notice.is-individual {
+    background: #172554;
+    color: #bfdbfe;
+    border-color: #1e3a8a;
   }
 
   .e3-file-input {
@@ -989,6 +1214,25 @@
           </button>
         </div>
       </div>
+      <!-- Branches (υποκαταστήματα) — manually entered for now. The brain
+           searches misth + Ε9 for every branch and sums the results into
+           the 585.014 indicator. Each branch can independently be ενοίκιο
+           (μισθωτήριο) ή ιδιόχρηση (Ε9 × 3%). -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-2">
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Διευθύνσεις υποκαταστημάτων (προαιρετικά)</label>
+          <button id="brainAddBranchBtn" type="button"
+            class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded-lg text-xs font-medium">
+            + Προσθήκη υποκαταστήματος
+          </button>
+        </div>
+        <div id="brainBranchList" class="space-y-2"></div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          Συμπληρώστε χειροκίνητα τις διευθύνσεις των υποκαταστημάτων που θέλετε να ψάξει
+          ο έλεγχος σε μισθωτήρια &amp; Ε9. Το ποσό για κάθε υποκατάστημα προστίθεται στη
+          γραμμή 585.014 ως ενοίκιο ή ιδιόχρηση ανάλογα.
+        </p>
+      </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">TAXISnet username</label>
@@ -1026,20 +1270,17 @@
         </div>
       </div>
       <div class="flex flex-wrap gap-3 items-center mb-4">
-        <div class="e3-action-dropdown" tabindex="0">
-          <button type="button" id="brainE3ActionMenuBtn" class="e3-action-button">
-            📋 Δεδομένα E3
-            <span aria-hidden="true">▾</span>
-          </button>
-          <div class="e3-action-menu" role="menu" aria-label="Επιλογές δεδομένων E3">
-            <button type="button" id="brainLoadE3Btn" class="e3-action-item" role="menuitem">
-              📥 myDATA
-            </button>
-            <button type="button" id="brainLoadExcelBtn" class="e3-action-item" role="menuitem">
-              📤 Μεταφόρτωση Ισοζυγίου
-            </button>
-          </div>
-        </div>
+        <!-- Δεδομένα E3 → μόνο μεταφόρτωση ισοζυγίου τώρα. Η λήψη
+             myDATA έχει ενσωματωθεί στο «Εκτέλεση ελέγχου/ελέγχων»
+             ώστε με ένα πάτημα να τρέχει ολόκληρη η ροή. -->
+        <button type="button" id="brainLoadExcelBtn" class="e3-action-button">
+          📤 Μεταφόρτωση Ισοζυγίου
+        </button>
+        <!-- Hidden legacy button: keeps existing bindings on brainLoadE3Btn
+             alive so loadBrainE3Data() is still callable from JS, but the
+             menu/dropdown UI is gone — myDATA fetch now fires as part of
+             the Εκτέλεση ελέγχου flow. -->
+        <button type="button" id="brainLoadE3Btn" style="display:none;"></button>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -1055,8 +1296,8 @@
           Ε9
         </label>
       </div>
-      <div class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 mb-4">
-        <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">
+      <div id="brainPdfsSection" class="brain-pdfs-section border rounded-lg p-3 mb-4">
+        <div class="brain-pdfs-section-title text-xs uppercase tracking-wide font-semibold mb-2">
           Λήψη &amp; διατήρηση βεβαιώσεων / αποδείξεων (PDF)
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
@@ -1078,21 +1319,28 @@
         <input id="brainDownloadMisthPdfs" type="checkbox" class="hidden" checked />
         <input id="brainDownloadE9Pdfs" type="checkbox" class="hidden" checked />
         <div class="flex flex-wrap items-center gap-2">
-          <button id="brainListEfkaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
-            📂 ΕΦΚΑ PDFs
+          <button id="brainListAllPdfsBtn" type="button"
+            style="background:#0ea5e9;color:#fff;border:none;border-radius:.375rem;padding:.32rem .75rem;font-size:.78rem;font-weight:600;cursor:pointer;">
+            📂 Όλα τα διαθέσιμα PDFs
           </button>
-          <button id="brainListTekaPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
-            📂 ΤΕΚΑ PDFs
-          </button>
-          <button id="brainListMisthPdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
-            📂 Μισθωτήρια PDFs
-          </button>
-          <button id="brainListE9PdfsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
-            📂 Ε9 / ENFIA PDFs
-          </button>
-          <span id="brainPdfsStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
+          <!-- Per-kind shortcuts kept as a quick-filter for the unified panel. -->
+          <div class="brain-pdf-kind-chips" style="display:flex;gap:.3rem;flex-wrap:wrap;align-items:center;">
+            <button type="button" class="brain-pdf-chip" data-kind="all">Όλα</button>
+            <button type="button" class="brain-pdf-chip" data-kind="efka">ΕΦΚΑ</button>
+            <button type="button" class="brain-pdf-chip" data-kind="teka">ΤΕΚΑ</button>
+            <button type="button" class="brain-pdf-chip" data-kind="misth">Μισθωτήρια</button>
+            <button type="button" class="brain-pdf-chip" data-kind="e9">Ε9/ENFIA</button>
+          </div>
+          <span id="brainPdfsStatus" class="brain-pdfs-status text-xs"></span>
         </div>
-        <div id="brainPdfsList" class="mt-2 text-xs"></div>
+        <div id="brainPdfsList" class="mt-2 text-xs brain-pdfs-list"></div>
+        <!-- Legacy per-kind buttons (kept for backward compat with any
+             hooks still referencing them). They forward to the unified
+             flow via JS. -->
+        <button id="brainListEfkaPdfsBtn" type="button" style="display:none;"></button>
+        <button id="brainListTekaPdfsBtn" type="button" style="display:none;"></button>
+        <button id="brainListMisthPdfsBtn" type="button" style="display:none;"></button>
+        <button id="brainListE9PdfsBtn" type="button" style="display:none;"></button>
       </div>
       <div class="flex flex-wrap gap-3 items-center mb-3">
         <span id="brainPartnerStatus" class="hidden text-sm text-gray-600 dark:text-gray-300"></span>
@@ -1163,6 +1411,8 @@
     </div>
 
     <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto hidden" style="max-height: 340px;display:none;"></pre>
+    <!-- Bulk results accordion (one card per client, toggle to expand). -->
+    <div id="brainBulkResults" class="mt-4 brain-bulk-results"></div>
   </div>
 
   <!-- Status Area -->
@@ -1555,6 +1805,10 @@
 
     notice.textContent = noticeLabel;
     notice.classList.remove('hidden');
+    // Swap colour: blue pill for ατομική, green for εταιρία (matches
+    // the «Αποθηκευμένα» credentials table chips so the user gets the
+    // same visual cue both in the table and on the form.
+    notice.classList.toggle('is-individual', !!isIndividual);
 
     if (isIndividual) {
       hint.textContent = 'Ατομική επιχείρηση: συμπλήρωσε TAXISnet και ΑΜΚΑ.';
@@ -1643,7 +1897,23 @@
         }
       }
     }
-    clearBrainSingleTypeHint();
+    // Show the legal-type pill ONLY when a saved profile exists for
+    // this AFM. Otherwise hide the section entirely — the user has no
+    // saved Νομική Μορφή to display yet (clarified by the user: "οταν
+    // αλλαζω πελατη πρεπει να ενημερωνεται αν υπαρχει αποθηκευμενο
+    // προφιλ καταλληλα ή αν δεν υπαρχει να κρυβεται το section").
+    try {
+      const stored = E3_BRAIN_CREDS_CACHE.find(c => String((c.company || {}).afm || '').trim() === clientAfm);
+      if (stored) {
+        const isIndividual = !stored.members || !stored.members.length;
+        const legalType = (stored.company && stored.company.legal_type) || client.legal_type || '';
+        applyBrainSingleLegalType(legalType, isIndividual);
+      } else {
+        clearBrainSingleTypeHint();
+      }
+    } catch (_) {
+      clearBrainSingleTypeHint();
+    }
   }
 
   function onBrainActiveClientSelectChange() {
@@ -1741,6 +2011,40 @@
       }
       console.debug('E3: received members (normalized)', E3_BRAIN_MEMBERS.length, E3_BRAIN_MEMBERS);
       try { renderBrainPartnerFields(); } catch (err) { console.error('renderBrainPartnerFields failed', err); }
+
+      // === Υποκαταστήματα (sub_home) ===
+      // Background fetch — runs only if company TAXIS creds are present.
+      // We DON'T await this so the address fetch returns quickly; the
+      // branch fields populate when the slower comregistry scrape
+      // finishes (which is typically 30-60s).
+      if (taxisUser && taxisPass) {
+        (async () => {
+          try {
+            const subResp = await fetch('/api/e3/brain/sub_home', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ taxis_user: taxisUser, taxis_pass: taxisPass }),
+            });
+            const sub = await subResp.json();
+            if (subResp.ok && sub.ok) {
+              const all = [].concat(sub.branches_domestic || [], sub.branches_abroad || []);
+              const addresses = all
+                .map((b) => String(b.address || '').trim())
+                .filter((a) => a.length > 0);
+              if (addresses.length) {
+                try { setBrainBranchAddresses(addresses); } catch (_) {}
+                // Show the type pill next to each branch input.
+                _annotateBrainBranchTypes(all);
+                try { saveE3BrainState(); } catch (_) {}
+                showBrainFlash(
+                  `Βρέθηκαν ${addresses.length} υποκαταστήματα από ΑΑΔΕ.`,
+                  'info', 5000
+                );
+              }
+            }
+          } catch (_) { /* sub_home is best-effort */ }
+        })();
+      }
 
       // For ατομική with TAXIS creds but no ΑΜΚΑ → offer auto-fetch
       if (isIndividual && taxisUser && taxisPass) {
@@ -2048,6 +2352,12 @@
       const sel = document.getElementById('brainActiveClientSelect');
       if (sel) { sel.value = co.afm || ''; }
     } catch(_) {}
+    // Surface the legal-type pill (Ατομική / Εταιρία) so the user sees
+    // the same visual cue as in the «Αποθηκευμένα» table.
+    try {
+      const isIndividual = !stored.members || !stored.members.length;
+      applyBrainSingleLegalType(co.legal_type || '', isIndividual);
+    } catch (_) {}
     showBrainFlash('Φορτώθηκαν τα credentials για ' + (co.name || co.afm || afm), 'success', 4000);
   }
 
@@ -2059,18 +2369,148 @@
     // ατομική = no members saved (company is the person)
     const isIndividual = !cred.members || cred.members.length === 0;
 
-    document.getElementById('editAfm').value = c.afm || '';
-    document.getElementById('editName').value = c.name || '';
-    document.getElementById('editTaxisUser').value = c.taxisnet_username || '';
-    document.getElementById('editTaxisPass').value = '';
-    document.getElementById('editAmka').value = c.amka || '';
-    document.getElementById('editMydataUser').value = c.mydata_user || '';
-    document.getElementById('editMydataKey').value = c.mydata_key || '';
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    setVal('editAfm', c.afm || '');
+    setVal('editName', c.name || '');
+    setVal('editTaxisUser', c.taxisnet_username || '');
+    setVal('editTaxisPass', '');
+    setVal('editAmka', c.amka || '');
+    setVal('editMydataUser', c.mydata_user || '');
+    setVal('editMydataKey', c.mydata_key || '');
+
+    // Νομική μορφή — same convention as the saved-credentials list
+    // (members empty = ατομική). Render a pill that mirrors the
+    // styling of the chip in the «Αποθηκευμένα» table.
+    const legalInput = document.getElementById('editLegalType');
+    const legalPill = document.getElementById('editLegalTypePill');
+    const storedType = c.legal_type || '';
+    const isIndividualResolved = storedType
+      ? storedType.toLowerCase().indexOf('ατομικ') >= 0
+      : isIndividual;
+    const pillLabel = isIndividualResolved ? 'Ατομική' : 'Εταιρία';
+    if (legalInput) legalInput.value = pillLabel;
+    if (legalPill) {
+      legalPill.textContent = pillLabel;
+      if (isIndividualResolved) {
+        legalPill.style.background = '#dbeafe';
+        legalPill.style.color = '#1d4ed8';
+        legalPill.style.borderColor = '#93c5fd';
+      } else {
+        legalPill.style.background = '#f0fdf4';
+        legalPill.style.color = '#166534';
+        legalPill.style.borderColor = '#86efac';
+      }
+    }
 
     const amkaWrapper = document.getElementById('editAmkaWrapper');
     if (amkaWrapper) amkaWrapper.style.display = isIndividual ? '' : 'none';
 
+    // Hide the E3 analysis behind the modal so it doesn't bleed
+    // through the semi-transparent overlay while the user edits creds.
+    const e3Container = document.getElementById('e3DataContainer');
+    if (e3Container) e3Container.dataset._prevDisplay = e3Container.style.display || '';
+    if (e3Container) e3Container.style.display = 'none';
+    document.body.style.overflow = 'hidden';
+
     document.getElementById('brainCredEditModal').style.display = 'flex';
+  }
+
+  // === Branches (υποκαταστήματα) ===
+  // Lightweight UI: a dynamic list of address inputs. Persisted in
+  // sessionStorage along with the rest of the brain form via
+  // saveE3BrainState so the user doesn't lose them after a sub-tab
+  // switch. Each branch is sent as a plain string in the brain payload
+  // (branch_addresses: [...]) and the brain runs misth + Ε9 against
+  // each one independently.
+  // Type/title metadata that came from sub_home — keyed by normalised
+  // address so re-renders preserve the chip next to each input.
+  let _BRAIN_BRANCH_META = new Map();
+  function _renderBrainBranchList(values) {
+    const wrap = document.getElementById('brainBranchList');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    (values || []).forEach((val, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:.5rem;align-items:center;';
+      const meta = _BRAIN_BRANCH_META.get(String(val || '').trim()) || {};
+      const pill = meta.type
+        ? `<span class="brain-branch-type-pill" data-branch-type style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:.18rem .55rem;font-size:.65rem;font-weight:700;white-space:nowrap;">${String(meta.type).replace(/</g,'&lt;')}</span>`
+        : '';
+      row.innerHTML = `
+        <input type="text" data-branch-i="${idx}" value="${String(val||'').replace(/"/g,'&quot;')}"
+          placeholder="π.χ. ΕΡΜΟΥ 12, ΘΕΣΣΑΛΟΝΙΚΗ"
+          class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white flex-1" />
+        ${pill}
+        <button type="button" data-branch-remove="${idx}"
+          class="bg-rose-500 hover:bg-rose-600 text-white px-3 py-2 rounded-lg text-xs font-medium">
+          ✕
+        </button>`;
+      wrap.appendChild(row);
+    });
+    wrap.querySelectorAll('button[data-branch-remove]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.branchRemove);
+        const list = getBrainBranchAddresses();
+        list.splice(i, 1);
+        _renderBrainBranchList(list);
+        try { saveE3BrainState(); } catch (_) {}
+      });
+    });
+    wrap.querySelectorAll('input[data-branch-i]').forEach(inp => {
+      inp.addEventListener('change', () => { try { saveE3BrainState(); } catch (_) {} });
+      inp.addEventListener('blur', () => { try { saveE3BrainState(); } catch (_) {} });
+    });
+  }
+  function getBrainBranchAddresses() {
+    const wrap = document.getElementById('brainBranchList');
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll('input[data-branch-i]'))
+      .map(i => String(i.value || '').trim())
+      .filter(Boolean);
+  }
+  function setBrainBranchAddresses(list) {
+    _renderBrainBranchList(Array.isArray(list) ? list : []);
+  }
+  /**
+   * Apply per-branch metadata (type / title) coming back from sub_home
+   * so each branch input shows a small pill next to it ("ΕΡΓΑΣΤΗΡΙΟ",
+   * "ΑΠΟΘΗΚΗ", "ΥΠΟΚΑΤΑΣΤΗΜΑ"). Persists via _BRAIN_BRANCH_META and
+   * triggers a re-render of the existing branch list.
+   */
+  function _annotateBrainBranchTypes(branches) {
+    if (!Array.isArray(branches)) return;
+    branches.forEach((b) => {
+      const addr = String(b.address || '').trim();
+      if (!addr) return;
+      _BRAIN_BRANCH_META.set(addr, {
+        type: String(b.type || '').trim(),
+        title: String(b.title || '').trim(),
+        valid_from: b.valid_from || null,
+        valid_to: b.valid_to || null,
+      });
+    });
+    _renderBrainBranchList(getBrainBranchAddresses());
+  }
+  (function bindBrainAddBranch() {
+    const btn = document.getElementById('brainAddBranchBtn');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const list = getBrainBranchAddresses();
+      list.push('');
+      _renderBrainBranchList(list);
+    });
+  })();
+
+  function _closeBrainCredEditModal() {
+    const modal = document.getElementById('brainCredEditModal');
+    if (modal) modal.style.display = 'none';
+    const e3Container = document.getElementById('e3DataContainer');
+    if (e3Container) {
+      e3Container.style.display = e3Container.dataset._prevDisplay || '';
+      delete e3Container.dataset._prevDisplay;
+    }
+    document.body.style.overflow = '';
   }
 
   async function saveBrainCredEdit() {
@@ -2085,6 +2525,8 @@
     c.amka = document.getElementById('editAmka').value;
     c.mydata_user = document.getElementById('editMydataUser').value;
     c.mydata_key = document.getElementById('editMydataKey').value;
+    const legalInputSave = document.getElementById('editLegalType');
+    if (legalInputSave && legalInputSave.value) c.legal_type = legalInputSave.value;
     try {
       const resp = await fetch('/api/e3/brain/credentials_store/update', {
         method: 'POST',
@@ -2093,7 +2535,7 @@
       });
       const data = await resp.json();
       if (!data.ok) throw new Error(data.error || 'Σφάλμα αποθήκευσης');
-      document.getElementById('brainCredEditModal').style.display = 'none';
+      _closeBrainCredEditModal();
       _E3_BRAIN_EDIT_CRED = null;
       showBrainFlash('Credentials αποθηκεύτηκαν.', 'success', 3500);
       renderBrainCredsList();
@@ -2144,6 +2586,9 @@
    * crunches each step. Cleared when the run resolves.
    */
   function _startSingleProgressCycle(label, steps) {
+    // Legacy fallback: cycle through the enabled-extractor labels until
+    // the real backend progress arrives. Used as a stop-gap so the user
+    // sees SOMETHING even before the first /progress poll completes.
     var i = 0;
     var iv = setInterval(function () {
       try {
@@ -2153,6 +2598,56 @@
       } catch (_) {}
     }, 2500);
     return function stop() { clearInterval(iv); };
+  }
+
+  /**
+   * Polls /api/e3/brain/progress/<job_id> and feeds the actual current
+   * step into the wait overlay. Falls back to the legacy cycler if the
+   * server hasn't published a step yet. Returns a stop() function.
+   */
+  function _startBrainProgressPoller(label, jobId, fallbackSteps, onProgress, opts) {
+    opts = opts || {};
+    const noOverlay = !!opts.noOverlay;
+    if (!jobId) {
+      // Without a jobId the only feedback path is the cycler — but bulk
+      // explicitly opts out of the overlay, so just return a no-op stop.
+      if (noOverlay) return function() {};
+      return _startSingleProgressCycle(label, fallbackSteps || []);
+    }
+    var stopFallback = noOverlay
+      ? function() {}
+      : _startSingleProgressCycle(label, fallbackSteps || []);
+    var lastLabel = null;
+    var stopped = false;
+    var iv = setInterval(async function () {
+      if (stopped) return;
+      try {
+        const resp = await fetch('/api/e3/brain/progress/' + encodeURIComponent(jobId), { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const p = data && data.progress;
+        if (p && p.label && p.label !== lastLabel) {
+          // First real progress event → silence the fallback cycler.
+          if (stopFallback) { try { stopFallback(); } catch (_) {} stopFallback = null; }
+          lastLabel = p.label;
+          var pct = (typeof p.percent === 'number') ? ` (${p.percent}%)` : '';
+          if (!noOverlay) {
+            showGlobalWaitOverlay(label, label + ' — ' + p.label + pct,
+              { timeout: 60 * 60 * 1000 });
+          }
+          // Optional: feed the live progress into a custom consumer
+          // (e.g. the bulk flash banner). Best-effort, never blocks polling.
+          if (typeof onProgress === 'function') {
+            try { onProgress(p); } catch (_) {}
+          }
+        }
+      } catch (_) { /* network blip — keep polling */ }
+    }, 1500);
+    return function stop() {
+      stopped = true;
+      clearInterval(iv);
+      if (stopFallback) { try { stopFallback(); } catch (_) {} }
+    };
   }
 
   function hideGlobalWaitOverlay() {
@@ -2519,11 +3014,87 @@
   function setupE3CheckTabBindings() {
     if (window.__e3CheckTabBindingsInstalled) return;
     window.__e3CheckTabBindingsInstalled = true;
+    // Document-level delegation — survives any partial-nav re-rendering
+    // because the listener lives on document, not on the (replaced)
+    // button itself. Handles BOTH page-level tabs (Γρήγορος/Αναλυτικός),
+    // brain sub-tabs (Ατομικός/Μαζικός/Αποθηκευμένα), AND the critical
+    // top-level action buttons (Εκτέλεση ελέγχου, Αποθήκευση
+    // Credentials, Από αποθηκευμένους πελάτες ομάδας…) so the page
+    // stays interactive even when per-element bindings fail to
+    // re-attach after multiple partial navigations.
     document.addEventListener('click', (event) => {
-      const button = event.target.closest('#quickCheckTabBtn, #analyticTabBtn');
+      const button = event.target.closest(
+        '#quickCheckTabBtn, #analyticTabBtn, ' +
+        '#brainTabSingleBtn, #brainTabBulkBtn, #brainTabSavedBtn, ' +
+        '#brainRunSingleBtn, #brainSaveCredentialsBtn, ' +
+        '#brainBulkFromActiveBtn, #brainRunSelectedBulkBtn, ' +
+        '#brainFetchAddressBtn, #brainFetchCredsBtn'
+      );
       if (!button) return;
-      if (button.id === 'quickCheckTabBtn') showE3PageTab('quickCheckTab');
-      if (button.id === 'analyticTabBtn') showE3PageTab('analyticTab');
+      // Guard against double-firing if the per-element handler is
+      // ALSO attached. Each handler is idempotent (returns early when
+      // it can't find its dependencies) but we still want to avoid
+      // double network calls.
+      if (button.dataset.delegateFired === '1') {
+        // Allow re-entry next macrotask so subsequent clicks work.
+        setTimeout(() => { try { delete button.dataset.delegateFired; } catch(_) {} }, 0);
+        return;
+      }
+      button.dataset.delegateFired = '1';
+      setTimeout(() => { try { delete button.dataset.delegateFired; } catch(_) {} }, 50);
+      try {
+        switch (button.id) {
+          case 'quickCheckTabBtn':
+            if (typeof showE3PageTab === 'function') showE3PageTab('quickCheckTab');
+            break;
+          case 'analyticTabBtn':
+            if (typeof showE3PageTab === 'function') showE3PageTab('analyticTab');
+            break;
+          case 'brainTabSingleBtn':
+            if (typeof showBrainTab === 'function') showBrainTab('brainTabSingle');
+            break;
+          case 'brainTabBulkBtn':
+            if (typeof showBrainTab === 'function') showBrainTab('brainTabBulk');
+            break;
+          case 'brainTabSavedBtn':
+            if (typeof showBrainTab === 'function') showBrainTab('brainTabSaved');
+            break;
+          case 'brainRunSingleBtn':
+            if (typeof runE3BrainSingle === 'function') runE3BrainSingle();
+            break;
+          case 'brainSaveCredentialsBtn':
+            if (typeof saveE3BrainCredentials === 'function') saveE3BrainCredentials();
+            break;
+          case 'brainBulkFromActiveBtn':
+            if (typeof loadBulkFromActiveGroup === 'function') {
+              loadBulkFromActiveGroup().catch(() => {});
+            }
+            break;
+          case 'brainRunSelectedBulkBtn':
+            if (typeof executeBulkSelectedClients === 'function') executeBulkSelectedClients();
+            break;
+          case 'brainFetchCredsBtn':
+            if (typeof fetchE3BrainCredentials === 'function') {
+              fetchE3BrainCredentials({ verbose: true }).catch(() => {});
+            }
+            break;
+        }
+      } catch (e) {
+        console.warn('[E3] delegated click handler error', e);
+      }
+    });
+    // Also delegate brainActiveClientSelect change events so the
+    // datepicker / partner field flow always fires.
+    document.addEventListener('change', (event) => {
+      const sel = event.target.closest && event.target.closest('#brainActiveClientSelect');
+      if (!sel) return;
+      try {
+        if (typeof onBrainActiveClientSelectChange === 'function') {
+          onBrainActiveClientSelectChange();
+        }
+      } catch (e) {
+        console.warn('[E3] delegated change handler error', e);
+      }
     });
   }
   setupE3CheckTabBindings();
@@ -3215,8 +3786,12 @@
       });
     }
 
+    // Unique id per run so the wait overlay can poll the backend for
+    // real-time step labels (see /api/e3/brain/progress/<job_id>).
+    const singleJobId = 'single-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     const payload = {
       mode: 'single',
+      job_id: singleJobId,
       year,
       date_from: dateFrom,
       date_to: dateTo,
@@ -3238,6 +3813,10 @@
         afm,
         name: companyName,
         address: String((addrEl && addrEl.value) || '').trim(),
+        // Optional list of branch addresses the user typed in. The brain
+        // runs misth + Ε9 against each branch independently and sums
+        // the per-branch results into the 585.014 indicator.
+        branch_addresses: getBrainBranchAddresses(),
         taxisnet_username: String((userEl && userEl.value) || '').trim(),
         taxisnet_password: String((passEl && passEl.value) || '').trim(),
         amka: String((amkaEl && amkaEl.value) || '').trim(),
@@ -3258,8 +3837,23 @@
     if (downloadTekaPdfs) _progressSteps.push('Λήψη PDF ΤΕΚΑ');
     _progressSteps.push('Σύγκριση με myDATA');
     showGlobalWaitOverlay('E3 Brain', 'Τρέχει ο ενοποιημένος έλεγχος...', { timeout: 60 * 60 * 1000 });
-    const stopProgress = _startSingleProgressCycle('E3 Brain', _progressSteps);
+    // Real-time progress: ask the backend what step it's on (every 1.5s)
+    // and reflect it in the overlay. Falls back to the rotating
+    // hard-coded labels until the first real progress event arrives.
+    const stopProgress = _startBrainProgressPoller('E3 Brain', singleJobId, _progressSteps);
     brainSetResult('Εκτέλεση...');
+
+    // myDATA fetch is now part of the single-button run. Kick it off
+    // BEFORE the brain so the unclassified card + comparison data are
+    // available the moment the brain returns. Best-effort: even if the
+    // myDATA fetch fails (e.g. no credential bound), we still proceed
+    // with the brain checks.
+    try {
+      showGlobalWaitOverlay('E3 Brain', 'Λήψη δεδομένων myDATA…',
+        { timeout: 60 * 60 * 1000 });
+      await loadBrainE3Data();
+    } catch (_) { /* silent — brain run continues regardless */ }
+
     try {
       const response = await fetch('/api/e3/brain', {
         method: 'POST',
@@ -3291,18 +3885,12 @@
       // extra click. We render whichever kind has any saved file (last
       // call wins in #brainPdfsList — the dedicated buttons are still
       // available for the user to switch).
-      try {
-        if (downloadEfkaPdfs) { await refreshBrainPdfsList('efka'); }
-      } catch (_) {}
-      try {
-        if (downloadTekaPdfs) { await refreshBrainPdfsList('teka'); }
-      } catch (_) {}
-      try {
-        if (downloadMisthPdfs) { await refreshBrainPdfsList('misth'); }
-      } catch (_) {}
-      try {
-        if (downloadE9Pdfs) { await refreshBrainPdfsList('e9'); }
-      } catch (_) {}
+      // Auto-refresh the unified PDF browser if the brain produced any
+      // βεβαιώσεις / αποδείξεις / εκκαθαριστικά during this run.
+      if (downloadEfkaPdfs || downloadTekaPdfs || downloadMisthPdfs || downloadE9Pdfs ||
+          runMisth || runE9) {
+        try { await refreshBrainAllPdfs(); } catch (_) {}
+      }
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
@@ -3519,7 +4107,7 @@
     const modal = document.getElementById('brainCredEditModal');
     if (!modal || modal.style.display === 'none') return;
     if (ev.target.classList.contains('brain-cred-modal-overlay')) {
-      modal.style.display = 'none';
+      _closeBrainCredEditModal();
       _E3_BRAIN_EDIT_CRED = null;
     }
   });
@@ -3578,7 +4166,14 @@
     html += '<th class="border px-2 py-2">AMKA</th>';
     html += '<th class="border px-2 py-2">myDATA user</th>';
     html += '<th class="border px-2 py-2">myDATA key</th>';
-    html += '<th class="border px-2 py-2">Κωδικοί</th>';
+    // Replaced the "Κωδικοί" column (which exposed the raw 585.007 /
+    // 585.014 amounts from the imported Excel) with a clearer flag of
+    // whether the saved profile already has an address PLUS a quick
+    // action to attach the per-client ισοζύγιο. The amount column was
+    // confusing the user — they care about "do we know where the
+    // company is based" first.
+    html += '<th class="border px-2 py-2">Αποθηκευμένη διεύθυνση</th>';
+    html += '<th class="border px-2 py-2">Ισοζύγιο</th>';
     html += '</tr></thead><tbody>';
     clients.forEach((client, idx) => {
       const afm = String(client.afm || '');
@@ -3586,6 +4181,24 @@
       const mydataUser = String(client.mydata_user || '');
       const mydataKey = String(client.mydata_key || '');
       const excelValues = client.excel_values || {};
+      const savedAddress = String(client.address || '').trim();
+      const addrCell = savedAddress
+        ? `<span style="color:#15803d;font-weight:600;" title="${savedAddress.replace(/"/g, '&quot;')}">✓ ${savedAddress.replace(/</g, '&lt;')}</span>`
+        : `<span style="color:#dc2626;">— χωρίς αποθηκευμένη</span>`;
+      // Per-client Excel ισοζύγιο button. Each row gets its own hidden
+      // file input; the change handler streams the workbook back to
+      // /api/e3/upload_excel and stores the parsed 585.007 / 585.014
+      // values on the client entry so the brain run picks them up.
+      const hasExcel = (Number(excelValues.E3_585_007 || 0) !== 0) ||
+                       (Number(excelValues.E3_585_014 || 0) !== 0);
+      const excelLabel = hasExcel
+        ? `✓ 585.007=${Number(excelValues.E3_585_007 || 0).toFixed(2)} / 585.014=${Number(excelValues.E3_585_014 || 0).toFixed(2)}`
+        : '📎 Προσθήκη';
+      const excelCell =
+        `<button type="button" data-bulk-excel-i="${idx}" ` +
+        `class="px-2 py-1 rounded ${hasExcel ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-sky-600 hover:bg-sky-700 text-white'} text-xs">` +
+        `${excelLabel}</button>` +
+        `<input type="file" data-bulk-excel-file-i="${idx}" accept=".xlsx,.xls" style="display:none;" />`;
       html += '<tr class="border-b dark:border-gray-700">';
       html += `<td class="border px-2 py-2 text-center"><input type="checkbox" class="brainBulkPreviewCheckbox" data-index="${idx}" checked /></td>`;
       html += `<td class="border px-2 py-2">${afm}</td>`;
@@ -3596,7 +4209,8 @@
       html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${String(client.amka || '').replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'amka', this.value)" /></td>`;
       html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${mydataUser.replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'mydata_user', this.value)" /></td>`;
       html += `<td class="border px-2 py-2"><input class="w-full px-2 py-1 border rounded" value="${mydataKey.replace(/"/g, '&quot;')}" onchange="updateBulkClient(${idx}, 'mydata_key', this.value)" /></td>`;
-      html += `<td class="border px-2 py-2">585.007=${Number(excelValues.E3_585_007 || 0).toFixed(2)} / 585.014=${Number(excelValues.E3_585_014 || 0).toFixed(2)}</td>`;
+      html += `<td class="border px-2 py-2 text-xs">${addrCell}</td>`;
+      html += `<td class="border px-2 py-2 text-xs">${excelCell}</td>`;
       html += '</tr>';
     });
     html += '</tbody></table>';
@@ -3611,6 +4225,49 @@
         });
       });
     }
+
+    // Wire each row's "📎 Προσθήκη" button to its hidden file input and
+    // upload to /api/e3/upload_excel. On success we stash the parsed
+    // 585.007/585.014 amounts back onto the client so the brain run
+    // picks them up for the per-row σύγκριση Ισοζυγίου.
+    previewTable.querySelectorAll('button[data-bulk-excel-i]').forEach((btn) => {
+      const idx = Number(btn.dataset.bulkExcelI);
+      const fileInput = previewTable.querySelector(`input[data-bulk-excel-file-i="${idx}"]`);
+      if (!fileInput) return;
+      btn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const client = E3_BRAIN_PREVIEW_CLIENTS[idx];
+        if (!client) return;
+        btn.textContent = '⏳ Φόρτωση...';
+        btn.disabled = true;
+        try {
+          const fd = new FormData();
+          fd.append('excel_file', file);
+          const resp = await fetch('/api/e3/upload_excel', { method: 'POST', body: fd });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Σφάλμα Excel.');
+          // The endpoint returns a totals map keyed by E3 code; pick the
+          // two amounts we care about for the bulk comparison.
+          const totals = (data && (data.totals || data.values || data.codes)) || {};
+          const v585_007 = Number((totals['585.007'] || totals.E3_585_007 || 0) || 0);
+          const v585_014 = Number((totals['585.014'] || totals.E3_585_014 || 0) || 0);
+          client.excel_values = client.excel_values || {};
+          client.excel_values.E3_585_007 = v585_007;
+          client.excel_values.E3_585_014 = v585_014;
+          client.excel_filename = file.name;
+          btn.textContent = `✓ ${file.name.length > 18 ? file.name.slice(0,15)+'…' : file.name}`;
+          btn.classList.remove('bg-sky-600', 'hover:bg-sky-700', 'text-white');
+          btn.classList.add('bg-emerald-100', 'text-emerald-800', 'border', 'border-emerald-300');
+        } catch (e) {
+          alert('Αποτυχία φόρτωσης Excel: ' + e.message);
+          btn.textContent = '📎 Προσθήκη';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   function updateBulkClient(idx, key, value) {
@@ -3640,10 +4297,19 @@
           String((s.company || {}).afm || '').trim() === afm
         );
         const co = (stored && stored.company) || {};
+        // Derive legal_type the same way the "Αποθηκευμένα" table does:
+        // a saved entry with empty members list is ατομική; otherwise
+        // it's an εταιρία. Fall back to whatever the active-group
+        // endpoint returned (in case the legal_type is provided later).
+        let legalType = c.legal_type || co.legal_type || '';
+        if (!legalType && stored) {
+          legalType = (Array.isArray(stored.members) && stored.members.length)
+            ? 'Εταιρία' : 'Ατομική';
+        }
         return {
           afm,
           name: c.name || co.name || '',
-          legal_type: c.legal_type || '',
+          legal_type: legalType,
           taxisnet_username: co.taxisnet_username || c.taxisnet_username || '',
           taxisnet_password: co.taxisnet_password || c.taxisnet_password || '',
           amka: co.amka || c.amka || '',
@@ -3760,20 +4426,23 @@
       job_id: jobId,
     };
 
-    // Don't block the page: only a sticky banner.
+    // Rich, fetch.html-style progress banner. The poller updates it with
+    // the actual brain step while the run is going; the user can hit
+    // Διακοπή to abort after the current client finishes.
     brainSetResult('Εκτέλεση bulk...');
-    try {
-      window.showStickyBanner({
-        id: 'e3-bulk',
-        text: `E3 Bulk: τρέχει για ${selected.length} πελάτες…`,
-        actionText: 'Διακοπή (μετά τον τρέχοντα)',
-        kind: 'info',
-        onAction: function () {
-          window.updateStickyBanner('e3-bulk', { text: 'Αίτημα διακοπής στάλθηκε. Θα ολοκληρωθεί ο τρέχων πελάτης…', actionText: '' });
-          fetch('/api/e3/brain/abort/' + encodeURIComponent(jobId), { method: 'POST' }).catch(() => {});
-        },
-      });
-    } catch (_) {}
+    _showBrainBulkBanner({
+      total: selected.length,
+      current: 0,
+      label: `E3 Bulk — εκκίνηση για ${selected.length} πελάτες…`,
+      jobId,
+    });
+    const stopBulkPoll = _startBrainProgressPoller(
+      'E3 Bulk',
+      jobId,
+      [`Εκτέλεση για ${selected.length} πελάτες…`],
+      (state) => _updateBrainBulkBanner(state, jobId, selected.length),
+      { noOverlay: true },  // bulk = flash banner only, NO wait overlay
+    );
     try {
       const response = await fetch('/api/e3/brain', {
         method: 'POST',
@@ -3791,11 +4460,191 @@
           ? `Bulk διεκόπη μετά από ${data.total_clients || 0} πελάτες.`
           : `E3 Brain bulk εκτέλεση ολοκληρώθηκε για ${data.total_clients || 0} πελάτες.`);
       showBrainFlash(summary, data.aborted ? 'warning' : 'success');
+      try { _renderBulkResultsAccordion(data); } catch (e) { console.error('bulk render failed', e); }
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {
+      try { stopBulkPoll(); } catch (_) {}
+      try { _hideBrainBulkBanner(); } catch (_) {}
       try { window.hideStickyBanner('e3-bulk'); } catch (_) {}
+    }
+  }
+
+  // === Bulk progress banner (fetch.html-style) ===
+  // Mirrors the look + position of templates/fetch.html's
+  // upsertFetchProgressFlash: a flash-info banner at the top of the
+  // page with a percentage line, the current customer, and a red
+  // «Διακοπή» button. The brain doesn't stream progress through HTTP,
+  // so we drive this from /api/e3/brain/progress/<job_id> via the
+  // shared progress poller.
+  function _showBrainBulkBanner(opts) {
+    const container = (typeof getFlashContainerNode === 'function')
+      ? getFlashContainerNode()
+      : (document.querySelector('[data-flash-host]') || document.body);
+    if (!container) return;
+    let banner = document.getElementById('e3BulkBrainBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'e3BulkBrainBanner';
+      banner.setAttribute('data-flash', '');
+      banner.className = 'flash-banner flash-info';
+      banner.style.display = 'flex';
+      banner.style.alignItems = 'center';
+      banner.style.gap = '0.75rem';
+      banner.style.justifyContent = 'space-between';
+      container.prepend(banner);
+    }
+    banner.innerHTML = '';
+    const text = document.createElement('span');
+    text.style.flex = '1 1 auto';
+    text.textContent = opts.label || 'E3 Bulk: σε εξέλιξη…';
+    text.id = 'e3BulkBrainBannerText';
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.textContent = 'Διακοπή (μετά τον τρέχοντα)';
+    stop.className = 'px-3 py-1 rounded-md bg-red-600 hover:bg-red-700 text-white font-semibold border-0';
+    stop.addEventListener('click', () => {
+      text.textContent = 'Αίτημα διακοπής στάλθηκε. Θα ολοκληρωθεί ο τρέχων πελάτης…';
+      stop.disabled = true;
+      fetch('/api/e3/brain/abort/' + encodeURIComponent(opts.jobId), { method: 'POST' })
+        .catch(() => {});
+    });
+    banner.appendChild(text);
+    banner.appendChild(stop);
+  }
+  function _updateBrainBulkBanner(progress, jobId, total) {
+    const text = document.getElementById('e3BulkBrainBannerText');
+    if (!text) return;
+    if (!progress || !progress.label) return;
+    const pct = (typeof progress.percent === 'number') ? ` (${progress.percent}%)` : '';
+    text.textContent = `E3 Bulk — ${progress.label}${pct}`;
+  }
+  function _hideBrainBulkBanner() {
+    const banner = document.getElementById('e3BulkBrainBanner');
+    if (banner) banner.remove();
+  }
+
+  // === Bulk results — per-client toggleable accordion ===
+  // Renders the brain.clients[] array as a list of cards. Each card
+  // header shows ΑΦΜ, επωνυμία, status (success/error), and key
+  // 585.007/585.014 amounts. Clicking expand opens the same detail
+  // pane the αναλυτικός ατομικός shows: rent breakdown per address,
+  // warnings, messages, missing-member-credentials list, etc. The user
+  // explicitly asked for a "toggle on/off ... όπως είναι στον
+  // αναλυτικό" pattern.
+  function _renderBulkResultsAccordion(brainData) {
+    const host = document.getElementById('brainBulkResults');
+    if (!host) return;
+    const clients = (brainData && Array.isArray(brainData.clients)) ? brainData.clients : [];
+    if (!clients.length) { host.innerHTML = ''; return; }
+    const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)))
+      ? '—'
+      : Number(n).toLocaleString('el-GR', { minimumFractionDigits: 2 });
+    const cards = clients.map((c, i) => {
+      const ok = !!c.ok;
+      const checks = c.checks || {};
+      const warnings = Array.isArray(c.warnings) ? c.warnings : [];
+      const errors = Array.isArray(c.errors) ? c.errors : [];
+      const messages = Array.isArray(c.messages) ? c.messages : [];
+      const brk = Array.isArray(checks.rent_breakdown) ? checks.rent_breakdown : [];
+      const efka = checks.efka_teka_total;
+      const rent = checks.rent_annual;
+      const headerSummary = [
+        efka !== null && efka !== undefined ? `585.007: ${fmt(efka)} €` : null,
+        rent !== null && rent !== undefined ? `585.014: ${fmt(rent)} €` : null,
+      ].filter(Boolean).join(' · ');
+      const statusBadge = ok
+        ? '<span class="brain-bulk-status brain-bulk-status-ok">✓ OK</span>'
+        : '<span class="brain-bulk-status brain-bulk-status-err">⚠ Σφάλματα</span>';
+      const breakdownRows = brk.map(b => {
+        const src = b.source === 'e9_3_percent' ? 'Ιδιόχρηση (Ε9×3%)'
+                   : b.source === 'misth' ? 'Ενοίκιο (Μισθωτήριο)'
+                   : (b.source || '—');
+        const status = b.status === 'expired' ? ' — ⚠ ληγμένο'
+                     : b.status === 'terminated_mid_period' ? ` — ⚠ έληξε στις ${b.expiry || ''}`
+                     : '';
+        return `<tr>
+          <td>${b.kind === 'headquarter' ? '🏛️ Έδρα' : '🏪 Υποκατάστημα'}</td>
+          <td>${String(b.address || '').replace(/</g,'&lt;')}</td>
+          <td>${src}${status}</td>
+          <td style="text-align:right;">${fmt(b.amount)} €</td>
+          <td style="text-align:right;">${b.monthly ? fmt(b.monthly) + ' € × ' + (b.months || '?') + ' μήνες' : '—'}</td>
+        </tr>`;
+      }).join('');
+      const warningsHtml = warnings.length
+        ? '<div class="brain-bulk-sublabel">Προειδοποιήσεις</div>' +
+          '<ul class="brain-bulk-warnings">' +
+          warnings.map(w => `<li>${String(w).replace(/</g,'&lt;')}</li>`).join('') +
+          '</ul>'
+        : '';
+      const errorsHtml = errors.length
+        ? '<div class="brain-bulk-sublabel brain-bulk-sublabel-err">Σφάλματα</div>' +
+          '<ul class="brain-bulk-errors">' +
+          errors.map(e => `<li>${String(e).replace(/</g,'&lt;')}</li>`).join('') +
+          '</ul>'
+        : '';
+      const messagesHtml = messages.length
+        ? '<div class="brain-bulk-sublabel">Μηνύματα σύγκρισης</div>' +
+          '<ul class="brain-bulk-messages">' +
+          messages.map(m => `<li>${String(m).replace(/</g,'&lt;')}</li>`).join('') +
+          '</ul>'
+        : '';
+      return (
+        '<div class="brain-bulk-card" data-bulk-i="' + i + '">' +
+          '<button type="button" class="brain-bulk-toggle" aria-expanded="false">' +
+            '<span class="brain-bulk-chev">▸</span>' +
+            '<span class="brain-bulk-name">' + String(c.name || c.afm || '—').replace(/</g,'&lt;') + '</span>' +
+            '<span class="brain-bulk-afm">ΑΦΜ ' + String(c.afm || '—') + '</span>' +
+            statusBadge +
+            '<span class="brain-bulk-amounts">' + headerSummary + '</span>' +
+          '</button>' +
+          '<div class="brain-bulk-body" hidden>' +
+            (brk.length ? (
+              '<div class="brain-bulk-sublabel">Ανάλυση 585.014 ανά ακίνητο</div>' +
+              '<table class="brain-bulk-table">' +
+                '<thead><tr><th>Τύπος</th><th>Διεύθυνση</th><th>Πηγή</th><th>Ποσό</th><th>Λεπτομέρειες</th></tr></thead>' +
+                '<tbody>' + breakdownRows + '</tbody>' +
+              '</table>'
+            ) : '') +
+            warningsHtml + errorsHtml + messagesHtml +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+    host.innerHTML =
+      '<div class="brain-bulk-results-header">' +
+        '<strong>Αναλυτικά αποτελέσματα ανά πελάτη</strong>' +
+        '<span class="brain-bulk-count">' + clients.length + ' πελάτες</span>' +
+        '<button type="button" id="brainBulkExpandAll" class="brain-bulk-expand-all">Άνοιγμα όλων</button>' +
+      '</div>' + cards;
+    host.querySelectorAll('.brain-bulk-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.brain-bulk-card');
+        const body = card && card.querySelector('.brain-bulk-body');
+        const chev = btn.querySelector('.brain-bulk-chev');
+        if (!body) return;
+        const open = !body.hidden;
+        body.hidden = open;
+        btn.setAttribute('aria-expanded', String(!open));
+        if (chev) chev.textContent = open ? '▸' : '▾';
+      });
+    });
+    const expandAll = document.getElementById('brainBulkExpandAll');
+    if (expandAll) {
+      let allOpen = false;
+      expandAll.addEventListener('click', () => {
+        allOpen = !allOpen;
+        host.querySelectorAll('.brain-bulk-card').forEach((card) => {
+          const body = card.querySelector('.brain-bulk-body');
+          const btn = card.querySelector('.brain-bulk-toggle');
+          const chev = card.querySelector('.brain-bulk-chev');
+          if (body) body.hidden = !allOpen;
+          if (btn) btn.setAttribute('aria-expanded', String(allOpen));
+          if (chev) chev.textContent = allOpen ? '▾' : '▸';
+        });
+        expandAll.textContent = allOpen ? 'Κλείσιμο όλων' : 'Άνοιγμα όλων';
+      });
     }
   }
 
@@ -3867,6 +4716,13 @@
                     <label>Επωνυμία</label>
                     <input id="editName" name="name" placeholder="Επωνυμία">
                   </div>
+                  <div class="brain-cred-field" style="grid-column:1/-1;">
+                    <label>Νομική μορφή</label>
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                      <span id="editLegalTypePill" style="display:inline-flex;align-items:center;border-radius:9999px;padding:0.25rem 0.75rem;font-size:0.78rem;font-weight:700;border:1px solid transparent;">—</span>
+                      <input type="hidden" id="editLegalType" name="legal_type" value="" />
+                    </div>
+                  </div>
                   <div class="brain-cred-field">
                     <label>TAXISnet username</label>
                     <input id="editTaxisUser" name="taxisnet_username" placeholder="username" autocomplete="off">
@@ -3911,7 +4767,7 @@
       // CAN be customised, so don't crash with "Cannot set properties of
       // null" if either element happens to be absent.
       const _cancelBtn = document.getElementById('brainCredEditCancel');
-      if (_cancelBtn) _cancelBtn.onclick = () => { modal.style.display = 'none'; };
+      if (_cancelBtn) _cancelBtn.onclick = () => { _closeBrainCredEditModal(); };
       const _formEl = document.getElementById('brainCredEditForm');
       if (_formEl) _formEl.onsubmit = async function(ev) {
         ev.preventDefault();
@@ -3923,7 +4779,7 @@
       const existingModal = document.getElementById('brainCredEditModal');
       if (existingModal) {
         const cancelBtn = document.getElementById('brainCredEditCancel');
-        if (cancelBtn) cancelBtn.onclick = () => { existingModal.style.display = 'none'; };
+        if (cancelBtn) cancelBtn.onclick = () => { _closeBrainCredEditModal(); };
         const formEl = document.getElementById('brainCredEditForm');
         if (formEl) formEl.onsubmit = async function(ev) { ev.preventDefault(); await saveBrainCredEdit(); };
       }
@@ -3996,27 +4852,35 @@
       });
     }
 
-    // PDF list buttons
-    const listEfkaBtn = document.getElementById('brainListEfkaPdfsBtn');
-    if (listEfkaBtn && listEfkaBtn.dataset.bound !== '1') {
-      listEfkaBtn.dataset.bound = '1';
-      listEfkaBtn.addEventListener('click', () => refreshBrainPdfsList('efka'));
+    // Unified PDF browser — single button fetches all kinds + chips
+    // filter the rendered list.
+    const listAllBtn = document.getElementById('brainListAllPdfsBtn');
+    if (listAllBtn && listAllBtn.dataset.bound !== '1') {
+      listAllBtn.dataset.bound = '1';
+      listAllBtn.addEventListener('click', () => refreshBrainAllPdfs());
     }
-    const listTekaBtn = document.getElementById('brainListTekaPdfsBtn');
-    if (listTekaBtn && listTekaBtn.dataset.bound !== '1') {
-      listTekaBtn.dataset.bound = '1';
-      listTekaBtn.addEventListener('click', () => refreshBrainPdfsList('teka'));
-    }
-    const listMisthBtn = document.getElementById('brainListMisthPdfsBtn');
-    if (listMisthBtn && listMisthBtn.dataset.bound !== '1') {
-      listMisthBtn.dataset.bound = '1';
-      listMisthBtn.addEventListener('click', () => refreshBrainPdfsList('misth'));
-    }
-    const listE9Btn = document.getElementById('brainListE9PdfsBtn');
-    if (listE9Btn && listE9Btn.dataset.bound !== '1') {
-      listE9Btn.dataset.bound = '1';
-      listE9Btn.addEventListener('click', () => refreshBrainPdfsList('e9'));
-    }
+    document.querySelectorAll('.brain-pdf-chip').forEach((chip) => {
+      if (chip.dataset.bound === '1') return;
+      chip.dataset.bound = '1';
+      chip.addEventListener('click', () => {
+        _setBrainPdfChipActive(chip.dataset.kind || 'all');
+      });
+    });
+    // Default chip = "Όλα".
+    const allChip = document.querySelector('.brain-pdf-chip[data-kind="all"]');
+    if (allChip && !allChip.classList.contains('active')) allChip.classList.add('active');
+    // Back-compat: keep the legacy hidden per-kind buttons routing to
+    // the unified browser (so any external code calling them still
+    // shows the new UI rather than the dead old one).
+    ['efka','teka','misth','e9'].forEach((k) => {
+      const btn = document.getElementById('brainList' + k.charAt(0).toUpperCase() + k.slice(1) + 'PdfsBtn');
+      if (btn && btn.dataset.bound !== '1') {
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', () => {
+          refreshBrainAllPdfs().then(() => _setBrainPdfChipActive(k));
+        });
+      }
+    });
 
     function _parseDateInputToIso(s) {
       if (!s) return null;
@@ -4325,15 +5189,246 @@
     try { sessionStorage.removeItem(_brainStateKey()); } catch (_) {}
   }
 
-  // === EFKA / TEKA certificate PDFs ===
-  async function refreshBrainPdfsList(kind) {
-    // kind in {'efka','teka'}
+  // === ΕΦΚΑ / ΤΕΚΑ / Μισθωτήρια / Ε9 PDFs ===
+  // Tracks the kind that is currently rendered in #brainPdfsList so the
+  // delete/bulk-download buttons know which folder to hit. For the
+  // unified view this is "all" and per-row actions use each file's own
+  // kind from data-pdf-kind.
+  let _BRAIN_PDFS_KIND = null;
+  let _BRAIN_PDFS_FILTER = 'all';
+  let _BRAIN_PDFS_AGGREGATE = []; // [{kind, name, size, mtime}]
+
+  const _BRAIN_PDFS_KIND_LABELS = {
+    efka: 'ΕΦΚΑ',
+    teka: 'ΤΕΚΑ',
+    misth: 'Μισθωτήρια',
+    e9: 'Ε9/ENFIA',
+  };
+
+  function _setBrainPdfChipActive(kind) {
+    _BRAIN_PDFS_FILTER = kind;
+    document.querySelectorAll('.brain-pdf-chip').forEach((c) => {
+      c.classList.toggle('active', c.dataset.kind === kind);
+    });
+    _renderBrainPdfsAggregate();
+  }
+
+  /**
+   * Convert an internal filename like
+   *   efka_cert_00_2025_ΛΟΥΓΑΡΗΣ_ΣΠΥΡΟΣ_22096604537_036209456_4.332_83_.pdf
+   * into a friendly title:
+   *   "ΕΦΚΑ · 2025 · ΛΟΥΓΑΡΗΣ ΣΠΥΡΟΣ · 4.332,83 €"
+   */
+  function _prettifyPdfName(kind, name) {
+    if (!name) return name;
+    const stem = String(name).replace(/\.pdf$/i, '');
+    const parts = stem.split(/[_\s]+/).filter(Boolean);
+    // Look for a 4-digit year somewhere in the name.
+    const year = (parts.find((p) => /^\d{4}$/.test(p)) || '').trim();
+    // Look for the trailing amount like "4.332_83" → "4.332,83 €".
+    let amount = '';
+    const amountMatch = stem.match(/(\d{1,3}(?:\.\d{3})*)[_\s]+(\d{2})\b/);
+    if (amountMatch) {
+      amount = `${amountMatch[1]},${amountMatch[2]} €`;
+    }
+    // The name is everything that's not numeric / not a 9-digit ΑΦΜ.
+    const nameTokens = parts.filter((p) =>
+      !/^\d{4}$/.test(p) && !/^\d{9}$/.test(p) && !/^\d{11}$/.test(p)
+      && !/^\d+$/.test(p) && !/^cert$|^enfia$|^misth$|^teka$|^efka$/i.test(p)
+    );
+    const niceName = nameTokens
+      .filter((t) => !/^\d+[.,]?\d*$/.test(t))
+      .join(' ')
+      .trim();
+    const pieces = [(_BRAIN_PDFS_KIND_LABELS[kind] || kind).toUpperCase()];
+    if (year) pieces.push(year);
+    if (niceName) pieces.push(niceName);
+    if (amount) pieces.push(amount);
+    return pieces.join(' · ');
+  }
+
+  async function refreshBrainAllPdfs() {
+    _BRAIN_PDFS_KIND = 'all';
     const afmEl = document.getElementById('brainAfm');
     const afm = String((afmEl && afmEl.value) || '').replace(/\D/g, '');
     const listDiv = document.getElementById('brainPdfsList');
     const statusEl = document.getElementById('brainPdfsStatus');
     if (!afm || afm.length !== 9) {
-      if (listDiv) listDiv.innerHTML = '<span class="text-amber-600">Δώσε έγκυρο ΑΦΜ 9 ψηφίων.</span>';
+      if (listDiv) listDiv.innerHTML = '<span class="text-amber-600 dark:text-amber-300">Δώσε έγκυρο ΑΦΜ 9 ψηφίων.</span>';
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Φόρτωση όλων των PDFs...';
+    try {
+      const kinds = ['efka', 'teka', 'misth', 'e9'];
+      const responses = await Promise.all(kinds.map((k) =>
+        fetch(`/api/e3/brain/${k}_pdfs?afm=${encodeURIComponent(afm)}`)
+          .then((r) => r.json()).catch(() => ({ ok: false, files: [] }))
+      ));
+      const agg = [];
+      responses.forEach((data, i) => {
+        const kind = kinds[i];
+        const files = (data && data.files) || [];
+        files.forEach((f) => agg.push({ kind, ...f }));
+      });
+      _BRAIN_PDFS_AGGREGATE = agg;
+      if (statusEl) statusEl.textContent = `Σύνολο: ${agg.length} αρχεία για ΑΦΜ ${afm}`;
+      _renderBrainPdfsAggregate();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Σφάλμα: ' + e.message;
+    }
+  }
+
+  function _renderBrainPdfsAggregate() {
+    const listDiv = document.getElementById('brainPdfsList');
+    if (!listDiv) return;
+    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+    const filter = _BRAIN_PDFS_FILTER;
+    const visible = _BRAIN_PDFS_AGGREGATE.filter((f) =>
+      filter === 'all' ? true : f.kind === filter
+    );
+    if (!visible.length) {
+      listDiv.innerHTML = '<span class="text-gray-600 dark:text-gray-300">Δεν υπάρχουν αποθηκευμένα PDF γι\' αυτό το φίλτρο.</span>';
+      return;
+    }
+    const escAttr = (s) => String(s || '').replace(/"/g, '&quot;');
+    const escText = (s) => String(s || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const rows = visible.map((f, i) => {
+      const sizeKb = f.size ? Math.round(f.size / 102.4) / 10 : '';
+      const dl = '/api/e3/brain/' + f.kind + '_pdfs/file?afm=' +
+        encodeURIComponent(afm) + '&amp;name=' + encodeURIComponent(f.name);
+      const niceName = escText(_prettifyPdfName(f.kind, f.name));
+      const kindBadge = '<span class="brain-pdf-kind-badge kind-' + f.kind + '">' +
+        escText((_BRAIN_PDFS_KIND_LABELS[f.kind] || f.kind).toUpperCase()) + '</span>';
+      return (
+        '<div class="brain-pdf-row" data-pdf-i="' + i +
+          '" data-pdf-name="' + escAttr(f.name) +
+          '" data-pdf-kind="' + f.kind + '">' +
+          '<input type="checkbox" class="brain-pdf-cb" />' +
+          '<span class="brain-pdf-name" title="' + escAttr(f.name) + '">' +
+            kindBadge + niceName +
+          '</span>' +
+          '<span class="brain-pdf-size">' + (sizeKb ? sizeKb + ' KB' : '') + '</span>' +
+          '<a href="' + dl + '" target="_blank" rel="noopener" class="brain-pdf-open">Άνοιγμα</a>' +
+          '<button type="button" class="brain-pdf-delete" ' +
+            'data-pdf-name="' + escAttr(f.name) + '" ' +
+            'data-pdf-kind="' + f.kind + '">🗑</button>' +
+        '</div>'
+      );
+    }).join('');
+    // NOTE: previous version used inline `style="..."` on the dynamically
+    // injected buttons; some browser/template combos rendered those
+    // attributes as literal text (the user reported buttons displayed
+    // as "style=...>" text). Moving to CSS classes side-steps that.
+    listDiv.innerHTML =
+      '<div class="brain-pdf-list-wrap brain-pdf-list-scroll">' +
+        '<div class="brain-pdf-toolbar">' +
+          '<label class="brain-pdf-select-all-label">' +
+            '<input type="checkbox" id="brainPdfSelectAll" /> ' +
+            'Επιλογή όλων (φιλτραρισμένων)' +
+          '</label>' +
+          '<div class="brain-pdf-toolbar-actions">' +
+            '<button type="button" id="brainPdfBulkZipAll" class="brain-pdf-btn brain-pdf-btn-zip">' +
+              '⤓ Λήψη επιλεγμένων (zip)' +
+            '</button>' +
+            '<button type="button" id="brainPdfBulkDeleteAll" class="brain-pdf-btn brain-pdf-btn-delete">' +
+              '🗑 Διαγραφή επιλεγμένων' +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+        rows +
+      '</div>';
+    _bindBrainPdfAggregateActions(afm);
+  }
+
+  function _bindBrainPdfAggregateActions(afm) {
+    const listDiv = document.getElementById('brainPdfsList');
+    if (!listDiv) return;
+    const selAll = listDiv.querySelector('#brainPdfSelectAll');
+    if (selAll) {
+      selAll.addEventListener('change', () => {
+        listDiv.querySelectorAll('.brain-pdf-cb').forEach((cb) => { cb.checked = selAll.checked; });
+      });
+    }
+    listDiv.querySelectorAll('.brain-pdf-delete').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.pdfName;
+        const kind = btn.dataset.pdfKind;
+        if (!name || !kind) return;
+        if (!confirm(`Διαγραφή «${name}»;`)) return;
+        try {
+          const resp = await fetch(`/api/e3/brain/${kind}_pdfs/file?afm=${encodeURIComponent(afm)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+          const data = await resp.json().catch(() => ({ ok: resp.ok }));
+          if (!resp.ok || data.ok === false) throw new Error(data.error || 'Αποτυχία διαγραφής.');
+          await refreshBrainAllPdfs();
+        } catch (e) { alert('Σφάλμα: ' + e.message); }
+      });
+    });
+    const bulkZip = listDiv.querySelector('#brainPdfBulkZipAll');
+    if (bulkZip) {
+      bulkZip.addEventListener('click', async () => {
+        // Group selected files by kind because zips are per-kind on the backend.
+        const checked = Array.from(listDiv.querySelectorAll('.brain-pdf-cb:checked'))
+          .map((cb) => cb.closest('.brain-pdf-row')).filter(Boolean);
+        if (!checked.length) { alert('Δεν επιλέχθηκε κανένα αρχείο.'); return; }
+        const byKind = {};
+        checked.forEach((row) => {
+          const k = row.dataset.pdfKind, n = row.dataset.pdfName;
+          if (!byKind[k]) byKind[k] = []; byKind[k].push(n);
+        });
+        // For each kind, POST to its /zip endpoint via a hidden form
+        // (lets the browser handle the download). When user picked
+        // across kinds they get one zip per kind.
+        Object.keys(byKind).forEach((k) => {
+          const f = document.createElement('form');
+          f.method = 'POST';
+          f.action = `/api/e3/brain/${k}_pdfs/zip?afm=${encodeURIComponent(afm)}`;
+          byKind[k].forEach((n) => {
+            const inp = document.createElement('input');
+            inp.type = 'hidden'; inp.name = 'name'; inp.value = n;
+            f.appendChild(inp);
+          });
+          document.body.appendChild(f);
+          f.submit();
+          setTimeout(() => f.remove(), 1500);
+        });
+      });
+    }
+    const bulkDel = listDiv.querySelector('#brainPdfBulkDeleteAll');
+    if (bulkDel) {
+      bulkDel.addEventListener('click', async () => {
+        const checked = Array.from(listDiv.querySelectorAll('.brain-pdf-cb:checked'))
+          .map((cb) => cb.closest('.brain-pdf-row')).filter(Boolean);
+        if (!checked.length) { alert('Δεν επιλέχθηκε κανένα αρχείο.'); return; }
+        if (!confirm(`Διαγραφή ${checked.length} αρχείων;`)) return;
+        const byKind = {};
+        checked.forEach((row) => {
+          const k = row.dataset.pdfKind, n = row.dataset.pdfName;
+          if (!byKind[k]) byKind[k] = []; byKind[k].push(n);
+        });
+        try {
+          await Promise.all(Object.keys(byKind).map((k) =>
+            fetch(`/api/e3/brain/${k}_pdfs/bulk_delete?afm=${encodeURIComponent(afm)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ names: byKind[k] }),
+            })
+          ));
+          await refreshBrainAllPdfs();
+        } catch (e) { alert('Σφάλμα: ' + e.message); }
+      });
+    }
+  }
+
+  async function refreshBrainPdfsList(kind) {
+    // kind in {'efka','teka','misth','e9'}
+    _BRAIN_PDFS_KIND = kind;
+    const afmEl = document.getElementById('brainAfm');
+    const afm = String((afmEl && afmEl.value) || '').replace(/\D/g, '');
+    const listDiv = document.getElementById('brainPdfsList');
+    const statusEl = document.getElementById('brainPdfsStatus');
+    if (!afm || afm.length !== 9) {
+      if (listDiv) listDiv.innerHTML = '<span class="text-amber-600 dark:text-amber-300">Δώσε έγκυρο ΑΦΜ 9 ψηφίων.</span>';
       return;
     }
     if (statusEl) statusEl.textContent = 'Φόρτωση...';
@@ -4344,21 +5439,121 @@
       const files = Array.isArray(data.files) ? data.files : [];
       if (statusEl) statusEl.textContent = `${kind.toUpperCase()}: ${files.length} αρχεία για ΑΦΜ ${afm}`;
       if (!files.length) {
-        if (listDiv) listDiv.innerHTML = '<span class="text-gray-500">Δεν υπάρχουν αποθηκευμένα PDF για αυτόν τον ΑΦΜ.</span>';
+        if (listDiv) listDiv.innerHTML = '<span class="text-gray-600 dark:text-gray-300">Δεν υπάρχουν αποθηκευμένα PDF για αυτόν τον ΑΦΜ.</span>';
         return;
       }
-      const rows = files.map(f => {
+      // Toolbar (select all + bulk actions) + per-file rows.
+      const rows = files.map((f, i) => {
         const sizeKb = f.size ? Math.round(f.size / 102.4) / 10 : '';
+        const safeName = (f.name || '').replace(/</g,'&lt;');
         const dl = `/api/e3/brain/${kind}_pdfs/file?afm=${encodeURIComponent(afm)}&name=${encodeURIComponent(f.name)}`;
-        return `<div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 py-1">
-          <span class="truncate">${(f.name || '').replace(/</g,'&lt;')}</span>
-          <span class="text-gray-400 ml-2 mr-2">${sizeKb ? sizeKb + ' KB' : ''}</span>
-          <a class="text-sky-600 hover:underline" target="_blank" rel="noopener" href="${dl}">Άνοιγμα</a>
+        return `<div class="brain-pdf-row" data-pdf-i="${i}" data-pdf-name="${(f.name||'').replace(/"/g,'&quot;')}"
+          style="display:flex;align-items:center;gap:.5rem;padding:.35rem .25rem;border-bottom:1px solid var(--brain-pdf-border,#e5e7eb);">
+          <input type="checkbox" class="brain-pdf-cb" />
+          <span class="brain-pdf-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
+          <span class="brain-pdf-size" style="opacity:.7;font-size:.7rem;">${sizeKb ? sizeKb + ' KB' : ''}</span>
+          <a href="${dl}" target="_blank" rel="noopener" class="brain-pdf-open"
+            style="color:#0ea5e9;text-decoration:underline;font-size:.78rem;">Άνοιγμα</a>
+          <button type="button" class="brain-pdf-delete" data-pdf-name="${(f.name||'').replace(/"/g,'&quot;')}"
+            style="background:#ef4444;color:#fff;border:none;border-radius:.375rem;padding:.18rem .55rem;font-size:.72rem;font-weight:600;cursor:pointer;">🗑</button>
         </div>`;
       }).join('');
-      if (listDiv) listDiv.innerHTML = `<div class="bg-white dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-2 max-h-40 overflow-auto">${rows}</div>`;
+      if (listDiv) {
+        listDiv.innerHTML = `
+          <div class="brain-pdf-list-wrap" style="border:1px solid var(--brain-pdf-border,#e5e7eb);border-radius:.375rem;padding:.5rem;max-height:260px;overflow:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem;gap:.5rem;flex-wrap:wrap;">
+              <label style="display:inline-flex;align-items:center;gap:.4rem;font-size:.78rem;">
+                <input type="checkbox" id="brainPdfSelectAll" /> Επιλογή όλων
+              </label>
+              <div style="display:flex;gap:.4rem;">
+                <button type="button" id="brainPdfBulkZip"
+                  style="background:#0ea5e9;color:#fff;border:none;border-radius:.375rem;padding:.25rem .7rem;font-size:.75rem;font-weight:600;">
+                  ⤓ Λήψη επιλεγμένων (zip)
+                </button>
+                <button type="button" id="brainPdfBulkDelete"
+                  style="background:#dc2626;color:#fff;border:none;border-radius:.375rem;padding:.25rem .7rem;font-size:.75rem;font-weight:600;">
+                  🗑 Διαγραφή επιλεγμένων
+                </button>
+              </div>
+            </div>
+            ${rows}
+          </div>`;
+        _bindBrainPdfRowActions(kind, afm);
+      }
     } catch (e) {
       if (statusEl) statusEl.textContent = 'Σφάλμα: ' + e.message;
+    }
+  }
+
+  function _bindBrainPdfRowActions(kind, afm) {
+    const listDiv = document.getElementById('brainPdfsList');
+    if (!listDiv) return;
+    const selAll = listDiv.querySelector('#brainPdfSelectAll');
+    if (selAll) {
+      selAll.addEventListener('change', () => {
+        listDiv.querySelectorAll('.brain-pdf-cb').forEach(cb => { cb.checked = selAll.checked; });
+      });
+    }
+    listDiv.querySelectorAll('.brain-pdf-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.pdfName;
+        if (!name) return;
+        if (!confirm(`Διαγραφή «${name}»;`)) return;
+        try {
+          const resp = await fetch(`/api/e3/brain/${kind}_pdfs/file?afm=${encodeURIComponent(afm)}&name=${encodeURIComponent(name)}`, {
+            method: 'DELETE',
+          });
+          const data = await resp.json().catch(() => ({ ok: resp.ok }));
+          if (!resp.ok || data.ok === false) throw new Error(data.error || 'Αποτυχία διαγραφής.');
+          await refreshBrainPdfsList(kind);
+        } catch (e) {
+          alert('Σφάλμα διαγραφής: ' + e.message);
+        }
+      });
+    });
+    const bulkZipBtn = listDiv.querySelector('#brainPdfBulkZip');
+    if (bulkZipBtn) {
+      bulkZipBtn.addEventListener('click', () => {
+        const names = Array.from(listDiv.querySelectorAll('.brain-pdf-cb:checked'))
+          .map(cb => cb.closest('.brain-pdf-row'))
+          .filter(Boolean)
+          .map(row => row.dataset.pdfName);
+        if (!names.length) { alert('Δεν επιλέχθηκε κανένα αρχείο.'); return; }
+        // Use a form POST so the browser handles the zip download.
+        const f = document.createElement('form');
+        f.method = 'POST';
+        f.action = `/api/e3/brain/${kind}_pdfs/zip?afm=${encodeURIComponent(afm)}`;
+        names.forEach(n => {
+          const i = document.createElement('input');
+          i.type = 'hidden'; i.name = 'name'; i.value = n;
+          f.appendChild(i);
+        });
+        document.body.appendChild(f);
+        f.submit();
+        setTimeout(() => f.remove(), 1500);
+      });
+    }
+    const bulkDelBtn = listDiv.querySelector('#brainPdfBulkDelete');
+    if (bulkDelBtn) {
+      bulkDelBtn.addEventListener('click', async () => {
+        const rows = Array.from(listDiv.querySelectorAll('.brain-pdf-cb:checked'))
+          .map(cb => cb.closest('.brain-pdf-row')).filter(Boolean);
+        const names = rows.map(r => r.dataset.pdfName);
+        if (!names.length) { alert('Δεν επιλέχθηκε κανένα αρχείο.'); return; }
+        if (!confirm(`Διαγραφή ${names.length} αρχείων;`)) return;
+        try {
+          const resp = await fetch(`/api/e3/brain/${kind}_pdfs/bulk_delete?afm=${encodeURIComponent(afm)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ names }),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία ομαδικής διαγραφής.');
+          await refreshBrainPdfsList(kind);
+        } catch (e) {
+          alert('Σφάλμα: ' + e.message);
+        }
+      });
     }
   }
 
@@ -4500,14 +5695,27 @@
       fn();
     }
   })(function(){
-    ensureE3DatePickerReady();
-    if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings();
-    // Ensure rebindE3Controls is called after DOM is fully ready (for initial load and partial nav)
-    if (typeof rebindE3Controls === 'function') {
-      rebindE3Controls();
-      // Extra safety: call again after a short delay to catch any late-loaded elements
-      setTimeout(function() { rebindE3Controls(); }, 100);
-    }
+    // Each init step is independently try/catch'd so a single failure
+    // (e.g. flatpickr CDN blip, stale sessionStorage payload) never
+    // leaves the rest of the page non-interactive — that was the
+    // failure mode the user reported after multiple partial-nav
+    // client switches.
+    try { ensureE3DatePickerReady(); } catch (e) { console.warn('[E3] datepicker init failed', e); }
+    try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); }
+    catch (e) { console.warn('[E3] tab bindings failed', e); }
+    try {
+      if (typeof rebindE3Controls === 'function') {
+        rebindE3Controls();
+        // Extra safety: call again after short delays to catch any
+        // elements injected by templates/scripts that hadn't run yet.
+        setTimeout(function() { try { rebindE3Controls(); } catch (_) {} }, 100);
+        setTimeout(function() { try { rebindE3Controls(); } catch (_) {} }, 350);
+      }
+    } catch (e) { console.warn('[E3] rebind failed', e); }
+    // One last safety net: force datepicker re-init after the rebind
+    // pass so we never end up with bare text inputs when flatpickr's
+    // CDN load completes a beat later than the rebind.
+    setTimeout(function() { try { ensureE3DatePickerReady(); } catch (_) {} }, 400);
   });
 </script>
 {% endblock %}
