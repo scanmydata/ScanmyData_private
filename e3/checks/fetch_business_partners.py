@@ -328,13 +328,19 @@ class BusinessPortalFetcher:
                 'api_key': self.api_key
             }
 
-            # Create a session with retries/backoff to handle transient timeouts
+            # Create a session with retries/backoff to handle transient timeouts.
+            # Explicit `read=` and `connect=` ensure urllib3 retries on
+            # read-timeouts too — the Business Portal API is occasionally slow
+            # and a single 30s read timeout used to fail the whole brain run.
             session = requests.Session()
             retry_strategy = Retry(
-                total=3,
-                backoff_factor=1,
+                total=5,
+                connect=3,
+                read=5,
+                backoff_factor=1.5,
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["GET"]
+                allowed_methods=["GET"],
+                raise_on_status=False,
             )
             adapter = HTTPAdapter(max_retries=retry_strategy)
             session.mount("https://", adapter)
@@ -352,7 +358,7 @@ class BusinessPortalFetcher:
 
                 url = self.API_URL.format(arGemi=ar_gemi)
                 response = _call_business_portal('get', url, session=session,
-                                                 headers=headers, timeout=30)
+                                                 headers=headers, timeout=60)
                 response.raise_for_status()
                 data = response.json()
             result['company'] = self._extract_company(data)
@@ -408,6 +414,20 @@ class BusinessPortalFetcher:
             result['error'] = f'HTTP error {status_code}: {str(e)}'
             log.error(f"HTTP error for VAT {vat_number}: {status_code}")
 
+        except requests.exceptions.ConnectionError as e:
+            # urllib3 wraps exhausted-retry ReadTimeouts as MaxRetryError →
+            # ConnectionError, so the Timeout branch above won't catch them.
+            # Detect that case explicitly so the brain run can keep going
+            # without raising a confusing "Network error" to the user.
+            msg = str(e)
+            if 'ReadTimeoutError' in msg or 'read timeout' in msg.lower() or 'ConnectTimeoutError' in msg:
+                result['error'] = 'Business Portal API timeout (after retries)'
+                result['skipped_comparison'] = True
+                log.error("Business Portal exhausted retries for VAT %s: %s", vat_number, msg)
+            else:
+                result['error'] = f'Network error: {msg}'
+                log.error(f"Network error for VAT {vat_number}: {msg}")
+
         except requests.exceptions.RequestException as e:
             result['error'] = f'Network error: {str(e)}'
             log.error(f"Network error for VAT {vat_number}: {str(e)}")
@@ -456,7 +476,7 @@ class BusinessPortalFetcher:
             }
 
             url = self.API_URL.format(arGemi=ar_gemi)
-            response = _call_business_portal('get', url, headers=headers, timeout=30)
+            response = _call_business_portal('get', url, headers=headers, timeout=60)
             response.raise_for_status()
             data = response.json()
 
@@ -478,6 +498,12 @@ class BusinessPortalFetcher:
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else 'unknown'
             result['error'] = f'HTTP error {status_code}: {str(e)}'
+        except requests.exceptions.ConnectionError as e:
+            msg = str(e)
+            if 'ReadTimeoutError' in msg or 'read timeout' in msg.lower() or 'ConnectTimeoutError' in msg:
+                result['error'] = 'Business Portal API timeout (after retries)'
+            else:
+                result['error'] = f'Network error: {msg}'
         except requests.exceptions.RequestException as e:
             result['error'] = f'Network error: {str(e)}'
         except Exception as e:
@@ -512,7 +538,7 @@ class BusinessPortalFetcher:
         }
 
         response = _call_business_portal('get', url, session=session,
-                                         headers=headers, params=params, timeout=30)
+                                         headers=headers, params=params, timeout=60)
         response.raise_for_status()
         data = response.json()
         results = data.get('searchResults') or []

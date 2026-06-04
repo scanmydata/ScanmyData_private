@@ -17578,6 +17578,33 @@ def api_e3_brain_save_credentials():
             if not cafm:
                 continue
 
+            # Per-year active-members cache. Normalised into {"YYYY": [members]}.
+            mby_raw = snap.get("members_by_year") if isinstance(snap.get("members_by_year"), dict) else {}
+            mby_norm: dict = {}
+            for yr_k, lst in mby_raw.items():
+                yr_str = str(yr_k or "").strip()
+                if not (yr_str.isdigit() and 1900 <= int(yr_str) <= 2200):
+                    continue
+                if not isinstance(lst, list):
+                    continue
+                mby_norm[yr_str] = [
+                    {
+                        "afm": str(m.get("afm") or "").strip(),
+                        "name": str(m.get("name") or m.get("full_name") or "").strip(),
+                        "role": str(m.get("role") or "").strip(),
+                    }
+                    for m in lst
+                    if isinstance(m, dict)
+                ]
+
+            # Preserve any existing per-year cache for AFMs we are not
+            # updating this call (merge instead of overwrite).
+            prev_mby = (by_afm.get(cafm) or {}).get("members_by_year") if isinstance(by_afm.get(cafm), dict) else None
+            if isinstance(prev_mby, dict):
+                merged = dict(prev_mby)
+                merged.update(mby_norm)
+                mby_norm = merged
+
             normalized = {
                 "company": {
                     "afm": cafm,
@@ -17588,6 +17615,7 @@ def api_e3_brain_save_credentials():
                     "mydata_user": str(company.get("mydata_user") or "").strip(),
                     "mydata_key": str(company.get("mydata_key") or "").strip(),
                     "address": str(company.get("address") or "").strip(),
+                    "legal_type": str(company.get("legal_type") or "").strip(),
                 },
                 "members": [
                     {
@@ -17601,6 +17629,7 @@ def api_e3_brain_save_credentials():
                     for m in (snap.get("members") if isinstance(snap.get("members"), list) else [])
                     if isinstance(m, dict)
                 ],
+                "members_by_year": mby_norm,
                 "saved_at": datetime.datetime.utcnow().isoformat(),
             }
 

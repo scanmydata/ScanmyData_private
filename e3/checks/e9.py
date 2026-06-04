@@ -21,8 +21,30 @@ def login_and_open_listing(page, username: str, password: str):
 
 
 async def _login_and_open_listing(page, username: str, password: str):
-    await page.goto(AADE_ENFIA_URL)
-    await page.wait_for_load_state("networkidle")
+    # The aade.gr landing page is occasionally slow to fire `load` (third-party
+    # scripts, government CDN). Use a longer timeout + `domcontentloaded` as
+    # the gate so the navigation doesn't fail when the slow tail scripts time
+    # out — networkidle below still gives the page time to settle for the
+    # entry-link locator.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            await page.goto(AADE_ENFIA_URL, wait_until="domcontentloaded", timeout=90000)
+            break
+        except Exception as exc:
+            last_exc = exc
+            # Brief backoff before retrying. Each retry gives the slow CDN
+            # another chance and avoids tearing the whole bulk run down on a
+            # single transient timeout.
+            await page.wait_for_timeout(2000 * (attempt + 1))
+    else:
+        raise last_exc if last_exc else RuntimeError("Failed to open AADE E9/ENFIA page")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        # networkidle can hang behind a long-poll widget on aade.gr; the
+        # entry-link locator below is the actual readiness signal.
+        pass
 
     entry_link = page.locator('a[href="https://www1.aade.gr/etak/"]')
     if await entry_link.count() == 0:

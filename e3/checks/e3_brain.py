@@ -1967,6 +1967,7 @@ def process_client(
                     else:
                         try:
                             saved = [p for p in efka_pdf_dir.iterdir() if p.suffix.lower() == ".pdf"]
+                            pdfs_saved["efka"] += len(saved)
                             if not saved:
                                 warnings.append(
                                     f"PDF ΕΦΚΑ: δεν βρέθηκε γραμμή για το έτος {year} — "
@@ -2000,6 +2001,7 @@ def process_client(
                 if _flag_for("download_teka_pdfs") and teka_pdf_dir is not None:
                     try:
                         saved_t = [p for p in teka_pdf_dir.iterdir() if p.suffix.lower() == ".pdf"]
+                        pdfs_saved["teka"] += len(saved_t)
                         # Many members are not enrolled in TEKA — only warn
                         # when the extractor reported a TEKA amount but no
                         # PDF made it to disk.
@@ -2070,6 +2072,16 @@ def process_client(
     ok_misth: bool = False
     e9_pdf_dir = None
 
+    # Per-extractor execution flags + persisted-PDF counters. These let the
+    # UI distinguish between "extractor did not run" and "ran but no result"
+    # (which previously both surfaced as "—" in the bulk summary table).
+    misth_ran: bool = False
+    misth_error: Optional[str] = None
+    misth_match_count: int = 0
+    e9_ran: bool = False
+    e9_error: Optional[str] = None
+    pdfs_saved = {"efka": 0, "teka": 0, "misth": 0, "e9": 0}
+
     # Compute the period (in months, inclusive) the user asked about. If no
     # date range was supplied (single mode without dates) default to the
     # full requested year so the brain still has something sensible to
@@ -2126,8 +2138,19 @@ def process_client(
 
             _publish_brain_step(job_id, f"Σύγκριση Μισθωτηρίων — έδρα «{headquarter_address[:60]}»", percent=55)
             ok_misth, misth_json, misth_err = _run_script_and_read_json(misth_args, tmp, "extracted_misth.json")
+            misth_ran = True
+            if not ok_misth:
+                misth_error = str(misth_err or "Άγνωστο σφάλμα μισθωτηρίων").strip()[:500]
+            # Count saved misth PDFs (best-effort: scan the per-AFM dir).
+            if misth_pdf_dir is not None:
+                try:
+                    pdfs_saved["misth"] = len(list(misth_pdf_dir.glob("*.pdf")))
+                except Exception:
+                    pass
             misth_address_found_in_leases = False
             if ok_misth:
+                if isinstance(misth_json, list):
+                    misth_match_count = len(misth_json)
                 matched = _pick_latest_lease(misth_json, headquarter_address)
                 if matched:
                     misth_address_found_in_leases = True
@@ -2237,6 +2260,9 @@ def process_client(
                 e9_pdf_dir = _resolve_pdfs_dir("e9", afm)
 
                 ok_e9, e9_json, e9_err = _run_script_and_read_json(e9_args, tmp, "extracted_etak_property_status.json")
+                e9_ran = True
+                if not ok_e9:
+                    e9_error = str(e9_err or "Άγνωστο σφάλμα E9/ΕΝΦΙΑ").strip()[:500]
                 # Surface a step right AFTER the subprocess returns so
                 # the user no longer sees the UI frozen at "70%" while
                 # the E9 result is being post-processed.
@@ -2307,6 +2333,7 @@ def process_client(
                                     e9_pdf_dir.mkdir(parents=True, exist_ok=True)
                                     dst = e9_pdf_dir / f"enfia_{year}_{src_path.name}"
                                     _sh.copy2(str(src_path), str(dst))
+                                    pdfs_saved["e9"] += 1
                                 else:
                                     warnings.append(
                                         f"PDF Ε9/ENFIA: το αρχείο δεν βρέθηκε στο {src_path}."
@@ -2546,6 +2573,16 @@ def process_client(
             # 'mixed' if HQ and branches use different sources.
             "rent_breakdown": rent_breakdown,
             "branch_addresses": branch_addresses,
+            # === Diagnostic flags ===
+            # The UI uses these to distinguish between "extractor did not
+            # run" (— in the summary) and "ran but produced no result"
+            # (✓ ran, with a tooltip explaining why no amount surfaced).
+            "misth_ran": misth_ran,
+            "misth_error": misth_error,
+            "misth_match_count": misth_match_count,
+            "e9_ran": e9_ran,
+            "e9_error": e9_error,
+            "pdfs_saved": pdfs_saved,
         },
         "credential_snapshot": credential_snapshot,
         "messages": messages,
