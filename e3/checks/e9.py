@@ -121,6 +121,14 @@ async def _login_and_open_listing(page, username: str, password: str):
 
 
 async def dump_page_html(page, suffix: str) -> Path:
+    """Write page HTML for post-mortem debugging — opt-in only.
+
+    Off by default (avoids littering `etak_debug_*.html` into the project
+    root on every run). Set `E3_DEBUG_HTML=1` to re-enable.
+    """
+    import os as _os
+    if not _os.getenv('E3_DEBUG_HTML'):
+        return Path('(debug-html-disabled)')
     path = Path(f'etak_debug_{suffix}.html')
     html = await page.content()
     path.write_text(html, encoding='utf-8')

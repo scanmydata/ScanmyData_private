@@ -138,7 +138,23 @@ def _normalize_for_match(text: str) -> str:
 
 
 async def detail_matches_address(detail: dict, target_address: str) -> bool:
-    """Return True when the lease detail tables contain target_address tokens."""
+    """Return True when the lease detail tables match target_address.
+
+    Two-stage match — kept in sync with `e3_brain._address_loose_match` so
+    the brain's lease picker and this PDF-download gate agree:
+
+    1. STRICT: every significant token of the target (>=3-char word or any
+       digit token) is present in the body. Words are substring-matched so
+       Greek case endings (ΒΑΡΗ ↔ ΒΑΡΗΣ, ΗΛΙΟΥΠΟΛΗ ↔ ΗΛΙΟΥΠΟΛΕΩΣ) still
+       match; numbers must match as standalone tokens so "5" cannot
+       stealth-match inside "16672".
+    2. ΤΚ-ANCHORED FALLBACK: when the strict pass fails, but the target
+       carries a 5-digit ΤΚ and that ΤΚ + every street number + at least
+       one word token all hit the body, we accept anyway. This covers the
+       user's «αν η διεύθυνση είναι σωστή και ο ΤΚ της περιοχής, το όνομα
+       περιοχής δεν πειράζει» rule (e.g. typed ΑΘΗΝΑ vs lease's ΒΑΡΗΣ
+       for ΤΚ 16672 — same property, different city/δήμος label).
+    """
     if not target_address:
         return False
     norm_target = _normalize_for_match(target_address)
@@ -153,11 +169,27 @@ async def detail_matches_address(detail: dict, target_address: str) -> bool:
             if isinstance(row, list):
                 joined.extend(str(c) for c in row)
     body = _normalize_for_match(" ".join(joined))
-    # Match if every "significant" token of the target appears in the body.
-    target_tokens = [t for t in norm_target.split() if len(t) >= 3]
+    target_tokens = [t for t in norm_target.split() if len(t) >= 3 or t.isdigit()]
     if not target_tokens:
         return norm_target in body
-    return all(tok in body for tok in target_tokens)
+    body_tokens = set(body.split())
+
+    def _tok_matches(t: str) -> bool:
+        if t.isdigit():
+            return t in body_tokens
+        return t in body
+
+    if all(_tok_matches(tok) for tok in target_tokens):
+        return True
+
+    zips = [t for t in target_tokens if t.isdigit() and len(t) == 5]
+    other_nums = [t for t in target_tokens if t.isdigit() and len(t) != 5]
+    words = [t for t in target_tokens if not t.isdigit()]
+    if zips and all(z in body_tokens for z in zips):
+        if all(n in body_tokens for n in other_nums):
+            if any(w in body for w in words):
+                return True
+    return False
 
 
 async def try_download_receipt_pdf(page, pdf_dir: Path, trans_id: str, label: str) -> str:
@@ -165,13 +197,26 @@ async def try_download_receipt_pdf(page, pdf_dir: Path, trans_id: str, label: st
 
     Best-effort: never raises. The user can also bail out of this from the
     UI (the misth check still works without the PDF).
+
+    The filename uses ``label`` (typically the matched property address)
+    as the human-readable token, so the user can find the right lease
+    from a directory listing — e.g.
+    ``misth_ΠΑΡΑΔΕΙΣΟΥ_16_ΑΘΗΝΑ_16672_94653948.pdf``. ``trans_id`` lands
+    at the end as a uniqueness suffix.
     """
     btn = page.locator("input[name='receiptButton']")
     if await btn.count() == 0:
         return ""
     pdf_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w\-.]+", "_", str(label or trans_id or "lease"))[:80]
-    out = pdf_dir / f"misth_{trans_id}_{safe}.pdf"
+    # Preserve Greek letters + digits + ` -._`; collapse everything else to
+    # a single underscore. Limit overall length so the path stays under
+    # filesystem limits even with long addresses.
+    safe = re.sub(r"[^\w\-.]+", "_", str(label or trans_id or "lease"), flags=re.UNICODE)
+    safe = re.sub(r"_+", "_", safe).strip("_")[:120]
+    if not safe:
+        safe = str(trans_id or "lease")
+    suffix = f"_{trans_id}" if (trans_id and trans_id not in safe) else ""
+    out = pdf_dir / f"misth_{safe}{suffix}.pdf"
     try:
         async with page.expect_download(timeout=20000) as dl_info:
             await btn.first.click(timeout=15000)
@@ -206,6 +251,14 @@ USER_DATA_DIR = Path('misth_user_data')
 
 
 async def dump_page_html(page, suffix: str) -> Path:
+    """Write page HTML for post-mortem debugging — opt-in only.
+
+    Off by default (the script was littering `misth_debug_*.html` into
+    the project root on every run). Set `E3_DEBUG_HTML=1` to re-enable
+    when you actually need to inspect a failure.
+    """
+    if not os.getenv('E3_DEBUG_HTML'):
+        return Path('(debug-html-disabled)')
     path = Path(f'misth_debug_{suffix}.html')
     html = await page.content()
     path.write_text(html, encoding='utf-8')
@@ -278,7 +331,15 @@ async def run(playwright: Playwright, username: str, password: str, output_path:
         if pdf_dir is not None and target_address:
             try:
                 if await detail_matches_address(detail, target_address):
-                    label = " ".join((entry.get('summary') or [])[:3])
+                    # Use the property address as the human-readable file
+                    # label so directory listings stay self-explanatory
+                    # ("misth_ΠΑΡΑΔΕΙΣΟΥ_16_ΑΘΗΝΑ_16672_<transId>.pdf").
+                    # Fall back to the summary text only when the address
+                    # is empty (which the brain always provides today, but
+                    # keep the fallback for direct CLI usage).
+                    label = (target_address or "").strip()
+                    if not label:
+                        label = " ".join((entry.get('summary') or [])[:3])
                     saved_pdf_path = await try_download_receipt_pdf(
                         page1, pdf_dir, entry['transId'], label
                     )

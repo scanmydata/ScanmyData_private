@@ -1630,9 +1630,76 @@ def _body_stems(text: str) -> set:
     return out
 
 
+def _address_loose_match(target: str, body_text: str) -> bool:
+    """Address matcher tolerant of Greek case endings AND wrong city names.
+
+    Two-stage match:
+    1. STRICT: every significant token of the target (3+ char words OR any
+       digit token) must appear in the body. Words use substring matching
+       so "ΒΑΡΗ" still hits "βαρης" (handles Greek case endings); numbers
+       must match as standalone tokens so "5" does not stealth-match
+       "16672".
+    2. ΤΚ-ANCHORED FALLBACK: if the strict pass fails BUT the target has
+       a 5-digit ΤΚ + that ΤΚ appears as a standalone body token + every
+       street number token also appears + at least one word token still
+       hits the body, we accept anyway. This is the «αν η διεύθυνση είναι
+       σωστή και ο ΤΚ της περιοχής, τότε το όνομα περιοχής δεν πειράζει»
+       rule — user typed «ΠΑΡΑΔΕΙΣΟΥ 16 ΑΘΗΝΑ 16672» but the lease has
+       «ΠΑΡΑΔΕΙΣΟΥ 16 ΒΑΡΗΣ 16672»; the ΤΚ + street + number triangulate
+       the property even when the city/δήμος label differs.
+
+    Mirrors `misth.py.detail_matches_address` so brain ↔ extractor agree
+    on what counts as a match (otherwise the brain rejects a lease while
+    misth.py would still have downloaded its receipt PDF — or vice versa).
+    """
+    import unicodedata
+    if not target or not body_text:
+        return False
+
+    def _n(s):
+        nf = unicodedata.normalize('NFD', s)
+        no_marks = ''.join(c for c in nf if unicodedata.category(c) != 'Mn').lower()
+        return ' '.join(re.sub(r"[^\w\d\s]", " ", no_marks, flags=re.UNICODE).split())
+
+    n_target = _n(target)
+    n_body = _n(body_text)
+    if not n_target:
+        return False
+    # Words >=3 chars OR any digit token (street numbers are often 1–3
+    # digits — we want them as discriminators, not noise).
+    target_tokens = [t for t in n_target.split() if len(t) >= 3 or t.isdigit()]
+    if not target_tokens:
+        return n_target in n_body
+
+    body_tokens = set(n_body.split())
+
+    def _tok_matches(t: str) -> bool:
+        # Digits must align as standalone tokens (avoids "5" matching
+        # inside "16672"); words can be substrings (covers case endings).
+        if t.isdigit():
+            return t in body_tokens
+        return t in n_body
+
+    # Stage 1: strict — every significant token present.
+    if all(_tok_matches(t) for t in target_tokens):
+        return True
+
+    # Stage 2: ΤΚ-anchored fallback. Requires:
+    #   • at least one 5-digit ΤΚ in target AND in body
+    #   • all OTHER numeric tokens (street numbers) present as body tokens
+    #   • at least one word token still hits the body (likely street name)
+    zips = [t for t in target_tokens if t.isdigit() and len(t) == 5]
+    other_nums = [t for t in target_tokens if t.isdigit() and len(t) != 5]
+    words = [t for t in target_tokens if not t.isdigit()]
+    if zips and all(z in body_tokens for z in zips):
+        if all(n in body_tokens for n in other_nums):
+            if any(w in n_body for w in words):
+                return True
+    return False
+
+
 def _pick_latest_lease(leases_payload: Any, address: str) -> Optional[Dict[str, Any]]:
-    needle = _address_stems(address)
-    if not needle:
+    if not address:
         return None
 
     best = None
@@ -1653,8 +1720,7 @@ def _pick_latest_lease(leases_payload: Any, address: str) -> Optional[Dict[str, 
             for row in (t.get("rows") if isinstance(t, dict) and isinstance(t.get("rows"), list) else [])
             for cell in (row if isinstance(row, list) else [])
         )
-        body = _body_stems(raw_text)
-        if not all(stem in body for stem in needle):
+        if not _address_loose_match(address, raw_text):
             continue
 
         summary = lease.get("summary") if isinstance(lease.get("summary"), list) else []
@@ -2124,12 +2190,16 @@ def process_client(
             if headed:
                 misth_args.append("--headed")
 
-            # Per user spec: ALWAYS persist the receipt PDF of every lease
-            # that matches the headquarter address. The brain post-processes
-            # to pick the most recent one for amount/expiry; the user
-            # receives the PDF of the lease used for the calculation,
-            # plus any historical matches for cross-reference.
-            misth_pdf_dir = _resolve_pdfs_dir("misth", afm)
+            # Persist receipt PDFs only when the user opted in via the
+            # «Λήψη PDF μισθωτηρίων» checkbox. The lease amount/expiry the
+            # brain uses for 585.014 comes from the scraped detail tables,
+            # so skipping the PDF here does not affect the comparison —
+            # only whether the receipt PDF lands in the per-AFM folder.
+            misth_pdf_dir = (
+                _resolve_pdfs_dir("misth", afm)
+                if _flag_for("download_misth_pdfs")
+                else None
+            )
             if misth_pdf_dir is not None:
                 misth_args.extend([
                     "--pdf-dir", str(misth_pdf_dir),
@@ -2253,11 +2323,15 @@ def process_client(
                 ]
                 if headed:
                     e9_args.append("--headed")
-                # ALWAYS retain the ENFIA PDF when the E9 fallback runs —
-                # it's the source-of-truth for the αξία ακινήτου × 3%
-                # calculation and the user wants the document persisted.
-                e9_args.append("--keep-pdf")
-                e9_pdf_dir = _resolve_pdfs_dir("e9", afm)
+                # Persist the ENFIA PDF only when the user opted in via the
+                # «Λήψη PDF εκκαθαριστικού Ε9 / ΕΝΦΙΑ» checkbox. e9.py still
+                # downloads the PDF temporarily so pdfplumber can read the
+                # property values for the αξία × 3% calculation; with
+                # --keep-pdf off it is deleted after extraction.
+                keep_e9_pdf = _flag_for("download_e9_pdfs")
+                if keep_e9_pdf:
+                    e9_args.append("--keep-pdf")
+                e9_pdf_dir = _resolve_pdfs_dir("e9", afm) if keep_e9_pdf else None
 
                 ok_e9, e9_json, e9_err = _run_script_and_read_json(e9_args, tmp, "extracted_etak_property_status.json")
                 e9_ran = True
@@ -2455,8 +2529,9 @@ def process_client(
                                     "--year", str(year),
                                     "--address", branch_addr,
                                     "--output", "extracted_etak_property_status.json",
-                                    "--keep-pdf",
                                 ]
+                                if _flag_for("download_e9_pdfs"):
+                                    e9_b_args.append("--keep-pdf")
                                 if headed:
                                     e9_b_args.append("--headed")
                                 ok_e9_b, e9_b_json, e9_b_err = _run_script_and_read_json(

@@ -1265,9 +1265,31 @@
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Διεύθυνση έδρας</label>
           <input id="brainAddress" type="text" placeholder="Διεύθυνση έδρας"
             class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <button id="brainFetchAddressBtn" type="button" class="mt-2 bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm font-medium">
-            Ανάκτηση διεύθυνσης
-          </button>
+          <!-- Split button: primary = «Ανάκτηση διεύθυνσης» (cache-first);
+               caret = dropdown with the "force refresh from ΑΑΔΕ/ΓΕΜΗ" option.
+               Replaces the previous hidden Shift+click affordance with a
+               discoverable menu. -->
+          <div class="mt-2 inline-flex relative" id="brainFetchAddressGroup" style="position:relative;">
+            <button id="brainFetchAddressBtn" type="button" class="bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-l-lg text-sm font-medium" data-fetch-mode="auto">
+              Ανάκτηση διεύθυνσης
+            </button>
+            <button id="brainFetchAddressMenuBtn" type="button" aria-label="Επιλογές ανάκτησης" aria-haspopup="menu" aria-expanded="false" class="bg-slate-700 hover:bg-slate-800 text-white px-2 py-2 rounded-r-lg text-sm font-medium border-l border-slate-500">
+              ▾
+            </button>
+            <div id="brainFetchAddressMenu" role="menu"
+              style="display:none;position:absolute;top:100%;left:0;margin-top:4px;background:#fff;color:#0f172a;border:1px solid #cbd5e1;border-radius:0.375rem;box-shadow:0 6px 16px rgba(0,0,0,0.12);min-width:280px;z-index:60;">
+              <button type="button" role="menuitem" data-fetch-mode="auto"
+                style="display:block;width:100%;text-align:left;padding:.55rem .8rem;background:transparent;border:0;font-size:.82rem;cursor:pointer;border-bottom:1px solid #f1f5f9;">
+                ⚡ Από cache (αν υπάρχει για το έτος)
+                <div style="font-size:.7rem;color:#64748b;">Άμεσο. Διαβάζει αποθηκευμένα μέλη/υποκαταστήματα του ίδιου χρόνου.</div>
+              </button>
+              <button type="button" role="menuitem" data-fetch-mode="force"
+                style="display:block;width:100%;text-align:left;padding:.55rem .8rem;background:transparent;border:0;font-size:.82rem;cursor:pointer;">
+                🔄 Νέα ανάκτηση από ΑΑΔΕ / ΓΕΜΗ
+                <div style="font-size:.7rem;color:#64748b;">Αργό (30-60s). Αγνοεί το cache και ξανατρέχει τους scrapers.</div>
+              </button>
+            </div>
+          </div>
           <button id="brainCheckAadeBtn" type="button" class="mt-2 ml-2 hidden bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium">
             Έλεγχος μελών ΑΑΔΕ
           </button>
@@ -1447,32 +1469,15 @@
       </div>
       <div class="brain-pdfs-section border rounded-lg p-3 mb-4">
         <div class="brain-pdfs-section-title text-xs uppercase tracking-wide font-semibold mb-2">
-          Λήψη &amp; διατήρηση βεβαιώσεων / αποδείξεων (PDF) — Μαζικός
+          Λήψη &amp; διατήρηση PDF — Μαζικός
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainDownloadEfkaPdfsBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" data-bulk-pdf-mirror="brainDownloadEfkaPdfs" />
-            Λήψη PDF βεβαιώσεων ΕΦΚΑ (μόνο επιλεγμένο έτος)
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainDownloadTekaPdfsBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" data-bulk-pdf-mirror="brainDownloadTekaPdfs" />
-            Λήψη PDF βεβαιώσεων ΤΕΚΑ (μόνο επιλεγμένο έτος)
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainDownloadMisthPdfsBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked data-bulk-pdf-mirror="brainDownloadMisthPdfs" />
-            Λήψη PDF μισθωτηρίων (έδρα + υποκαταστήματα)
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainDownloadE9PdfsBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked data-bulk-pdf-mirror="brainDownloadE9Pdfs" />
-            Λήψη PDF εκκαθαριστικού Ε9 / ΕΝΦΙΑ
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 md:col-span-2">
-            <input id="brainSaveComparisonPdfBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" data-bulk-pdf-mirror="brainSaveComparisonPdf" />
-            Αποθήκευση πίνακα αντιπαραβολής σε PDF μετά την εκτέλεση
-          </label>
-        </div>
-        <div class="text-xs text-gray-500 dark:text-gray-400">
-          ℹ️ Οι επιλογές αυτές συγχρονίζονται με τις αντίστοιχες του Ατομικού tab.
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input id="brainBulkSavePdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+          Αποθήκευση όλων των διαθέσιμων PDF (ΕΦΚΑ, ΤΕΚΑ, Μισθωτήρια, Ε9/ΕΝΦΙΑ) ανά πελάτη
+        </label>
+        <div class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+          ℹ️ Στο μαζικό υπάρχει μόνο ένας master διακόπτης — όταν ενεργοποιείται, το backend κρατάει ό,τι PDF παράγεται για κάθε εταιρία στον per-AFM φάκελο.
+          Για επιλογή ανά είδος βεβαίωσης χρησιμοποίησε τον Ατομικό έλεγχο.
         </div>
       </div>
       <div class="flex flex-wrap gap-3 items-center mb-4">
@@ -2031,9 +2036,41 @@
   function onBrainActiveClientSelectChange() {
     const select = document.getElementById('brainActiveClientSelect');
     if (!select) return;
+    // Switching the active client invalidates the E3 table that's currently
+    // on screen — it belongs to the PREVIOUSLY selected client. Hide it and
+    // clear the in-memory brain check overlays so the user doesn't see the
+    // previous client's amounts until the next αντλήση/brain run repopulates.
+    const e3Container = document.getElementById('e3DataContainer');
+    if (e3Container) e3Container.style.display = 'none';
+    try { E3_BRAIN_CHECKS.clear(); } catch (_) {}
+    try { E3_LAST_DATA = null; } catch (_) {}
+    // Wipe the αποθηκευμένα PDFs list immediately — it belongs to the
+    // previous AFM. The refresh below repopulates it for the new client.
+    try {
+      _BRAIN_PDFS_AGGREGATE = [];
+      const pdfsListEl = document.getElementById('brainPdfsList');
+      if (pdfsListEl) pdfsListEl.innerHTML = '';
+      const pdfsStatusEl = document.getElementById('brainPdfsStatus');
+      if (pdfsStatusEl) pdfsStatusEl.textContent = '';
+    } catch (_) {}
     const afm = String(select.value || '').trim();
+    // Refresh the saved-PDFs list for the newly selected AFM. Pass the AFM
+    // explicitly so the refresh doesn't race against #brainAfm being
+    // populated by the parallel fillBrainSingleClientFromSaved path —
+    // previously the status would end up "stuck" on the previous AFM if
+    // refreshBrainAllPdfs read #brainAfm before it was updated.
+    const _refreshPdfsForNewAfm = () => {
+      try {
+        if (typeof refreshBrainAllPdfs === 'function') {
+          refreshBrainAllPdfs({ afm }).catch(() => {});
+        }
+      } catch (_) {}
+    };
     if (!afm) {
       clearBrainSingleTypeHint();
+      // Empty selection → just blank out the panel, nothing to fetch.
+      const pdfsListEl = document.getElementById('brainPdfsList');
+      if (pdfsListEl) pdfsListEl.innerHTML = '';
       return;
     }
     const client = E3_BRAIN_ACTIVE_CLIENTS.find((c) => String(c.afm || '').trim() === afm);
@@ -2045,6 +2082,7 @@
         fillBrainSingleClientFromSaved({ afm: co.afm, name: co.name, address: co.address,
           taxisnet_username: co.taxisnet_username, taxisnet_password: co.taxisnet_password,
           amka: co.amka, mydata_user: co.mydata_user, mydata_key: co.mydata_key });
+        _refreshPdfsForNewAfm();
       } else {
         clearBrainSingleTypeHint();
       }
@@ -2052,13 +2090,60 @@
     }
     // If credentials cache is empty, fetch it first (after partial nav it's reset)
     if (!E3_BRAIN_CREDS_CACHE.length) {
-      fetchE3BrainCredentials().then(() => { fillBrainSingleClientFromSaved(client); }).catch(() => { fillBrainSingleClientFromSaved(client); });
+      fetchE3BrainCredentials()
+        .then(() => { fillBrainSingleClientFromSaved(client); _refreshPdfsForNewAfm(); })
+        .catch(() => { fillBrainSingleClientFromSaved(client); _refreshPdfsForNewAfm(); });
     } else {
       fillBrainSingleClientFromSaved(client);
+      _refreshPdfsForNewAfm();
     }
   }
 
-  async function loadE3Partners(dateFromIso=null, dateToIso=null) {
+  // === Per-(AFM, year) member cache ===
+  // Members + έδρα + νομική μορφή + υποκαταστήματα are stable for a given
+  // χρήση — re-querying ΑΑΔΕ/ΓΕΜΗ on every page visit costs 30-60s for no
+  // new information. Cache hydrates the form instantly on repeat loads;
+  // user can force a refresh by holding Shift while clicking «Ανάκτηση
+  // διεύθυνσης» (see binding below).
+  const _MEMBERS_CACHE_PREFIX = 'E3_BRAIN_MEMBERS_CACHE:';
+  const _MEMBERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+  function _membersCacheKey(afm, year) {
+    return _MEMBERS_CACHE_PREFIX + String(afm || '').trim() + ':' + String(year || '').trim();
+  }
+  function _membersCacheGet(afm, year) {
+    try {
+      const raw = localStorage.getItem(_membersCacheKey(afm, year));
+      if (!raw) return null;
+      const entry = JSON.parse(raw);
+      if (!entry || typeof entry !== 'object') return null;
+      if (entry.ts && (Date.now() - entry.ts) > _MEMBERS_CACHE_TTL_MS) return null;
+      return entry;
+    } catch (_) { return null; }
+  }
+  function _membersCacheSet(afm, year, payload) {
+    try {
+      localStorage.setItem(_membersCacheKey(afm, year), JSON.stringify({ ...payload, ts: Date.now() }));
+    } catch (_) {}
+  }
+  function _membersCacheClear(afm, year) {
+    try {
+      if (year) {
+        localStorage.removeItem(_membersCacheKey(afm, year));
+      } else {
+        // Clear ALL years for this AFM
+        const prefix = _MEMBERS_CACHE_PREFIX + String(afm || '').trim() + ':';
+        const toDrop = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith(prefix)) toDrop.push(k);
+        }
+        toDrop.forEach(k => localStorage.removeItem(k));
+      }
+    } catch (_) {}
+  }
+
+  async function loadE3Partners(dateFromIso=null, dateToIso=null, opts) {
+    const force = !!(opts && opts.force);
     const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
     const partnerContainer = document.getElementById('brainPartnerFields');
     const taxisUser = String((document.getElementById('brainTaxisUser') || {}).value || '').trim();
@@ -2067,6 +2152,41 @@
     if (!afm || afm.length !== 9) {
       showBrainAfmStatus('Δώσε έγκυρο ΑΦΜ 9 ψηφίων για να ανακτηθεί η έδρα.', 'error');
       return;
+    }
+    // Cache hit — hydrate instantly, skip the network round-trips.
+    const cacheYear = dateFromIso ? dateFromIso.substring(0, 4) : '';
+    if (!force && cacheYear) {
+      const cached = _membersCacheGet(afm, cacheYear);
+      if (cached) {
+        try {
+          const company = cached.company || {};
+          const isIndividual = !!cached.is_individual;
+          applyBrainSingleLegalType(cached.legal_type || '', isIndividual);
+          const addrEl = document.getElementById('brainAddress');
+          if (addrEl && cached.address && !addrEl.value) addrEl.value = cached.address;
+          updateBrainAmkaVisibility(isIndividual);
+          const normalized = Array.isArray(cached.members) ? cached.members : [];
+          if (isIndividual) {
+            E3_BRAIN_MEMBERS = [];
+            E3_BRAIN_MEMBER_CREDS = {};
+          } else {
+            E3_BRAIN_MEMBERS = normalized;
+            E3_BRAIN_MEMBER_CREDS = {};
+          }
+          try { renderBrainPartnerFields(); } catch (_) {}
+          if (Array.isArray(cached.branches) && cached.branches.length) {
+            try { setBrainBranchAddresses(cached.branches.map(b => String(b.address || '').trim()).filter(Boolean)); } catch (_) {}
+            try { _annotateBrainBranchTypes(cached.branches); } catch (_) {}
+          }
+          const ageDays = Math.round((Date.now() - (cached.ts || Date.now())) / 86400000);
+          showBrainAfmStatus(
+            `⚡ Φορτώθηκαν από cache (έτος ${cacheYear}, ${normalized.length} μέλη, ηλικία ${ageDays}η). Κράτα Shift+κλικ στην «Ανάκτηση διεύθυνσης» για νέα ανάκτηση.`,
+            'success', 5000
+          );
+          try { saveE3BrainState(); } catch (_) {}
+          return;
+        } catch (_) { /* fall through to live fetch on any cache hydration error */ }
+      }
     }
     showBrainAfmStatus('Αναμονή λήψης διεύθυνσης και νομικής μορφής...', 'info', 0);
     try {
@@ -2078,6 +2198,19 @@
       if (taxisUser) payload.taxis_user = taxisUser;
       if (taxisPass) payload.taxis_pass = taxisPass;
       console.debug('E3: fetching company_members payload=', payload);
+      // Kick off the branches fetch IN PARALLEL with the address/members
+      // fetch — sub_home depends only on TAXIS credentials, not on the
+      // company_members response, so there's no reason to wait. The two
+      // requests then race; whichever finishes first paints its part of
+      // the form. Saves ~30-60s on first-time loads where both endpoints
+      // hit ΑΑΔΕ.
+      const branchesPromise = (taxisUser && taxisPass)
+        ? fetch('/api/e3/brain/sub_home', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taxis_user: taxisUser, taxis_pass: taxisPass }),
+          }).then(r => r.json()).catch(() => null)
+        : Promise.resolve(null);
       const resp = await fetch('/api/e3/brain/company_members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2124,39 +2257,55 @@
       console.debug('E3: received members (normalized)', E3_BRAIN_MEMBERS.length, E3_BRAIN_MEMBERS);
       try { renderBrainPartnerFields(); } catch (err) { console.error('renderBrainPartnerFields failed', err); }
 
+      // Persist to per-(afm, year) cache so the next visit hydrates
+      // instantly without another ΑΑΔΕ + ΓΕΜΗ round-trip. We snapshot the
+      // resolved address + legal type + members + branches (filled below
+      // in the async sub_home block — branches are added with a second
+      // _membersCacheSet call once that resolves).
+      try {
+        if (cacheYear) {
+          _membersCacheSet(afm, cacheYear, {
+            company,
+            address: addrEl ? addrEl.value : '',
+            legal_type: legalType,
+            is_individual: isIndividual,
+            members: normalized,
+            branches: [],
+          });
+        }
+      } catch (_) {}
+
       // === Υποκαταστήματα (sub_home) ===
-      // Background fetch — runs only if company TAXIS creds are present.
-      // We DON'T await this so the address fetch returns quickly; the
-      // branch fields populate when the slower comregistry scrape
-      // finishes (which is typically 30-60s).
-      if (taxisUser && taxisPass) {
-        (async () => {
-          try {
-            const subResp = await fetch('/api/e3/brain/sub_home', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ taxis_user: taxisUser, taxis_pass: taxisPass }),
-            });
-            const sub = await subResp.json();
-            if (subResp.ok && sub.ok) {
-              const all = [].concat(sub.branches_domestic || [], sub.branches_abroad || []);
-              const addresses = all
-                .map((b) => String(b.address || '').trim())
-                .filter((a) => a.length > 0);
-              if (addresses.length) {
-                try { setBrainBranchAddresses(addresses); } catch (_) {}
-                // Show the type pill next to each branch input.
-                _annotateBrainBranchTypes(all);
-                try { saveE3BrainState(); } catch (_) {}
-                showBrainFlash(
-                  `Βρέθηκαν ${addresses.length} υποκαταστήματα από ΑΑΔΕ.`,
-                  'info', 5000
-                );
-              }
+      // Already in-flight (kicked off in parallel with company_members
+      // above). Wait for it in the background and paint when it lands —
+      // typically arrives shortly after company_members since both hit
+      // ΑΑΔΕ.
+      (async () => {
+        try {
+          const sub = await branchesPromise;
+          if (sub && sub.ok) {
+            const all = [].concat(sub.branches_domestic || [], sub.branches_abroad || []);
+            const addresses = all
+              .map((b) => String(b.address || '').trim())
+              .filter((a) => a.length > 0);
+            if (addresses.length) {
+              try { setBrainBranchAddresses(addresses); } catch (_) {}
+              _annotateBrainBranchTypes(all);
+              try { saveE3BrainState(); } catch (_) {}
+              try {
+                if (cacheYear) {
+                  const existing = _membersCacheGet(afm, cacheYear) || {};
+                  _membersCacheSet(afm, cacheYear, { ...existing, branches: all });
+                }
+              } catch (_) {}
+              showBrainFlash(
+                `Βρέθηκαν ${addresses.length} υποκαταστήματα από ΑΑΔΕ.`,
+                'info', 5000
+              );
             }
-          } catch (_) { /* sub_home is best-effort */ }
-        })();
-      }
+          }
+        } catch (_) { /* sub_home is best-effort */ }
+      })();
 
       // For ατομική with TAXIS creds but no ΑΜΚΑ → offer auto-fetch
       if (isIndividual && taxisUser && taxisPass) {
@@ -3012,7 +3161,14 @@
       E3_LAST_DATA = data;
       populateE3Tables(data);
       populateUnclassifiedSummary(data);
-      document.getElementById('e3DataContainer').style.display = 'block';
+      // Only reveal the table when the API actually returned content — keeps
+      // the empty headers-only flash from showing on years/clients with no
+      // myDATA activity (user-reported regression).
+      if (_e3HasRealData(data)) {
+        document.getElementById('e3DataContainer').style.display = 'block';
+      } else {
+        document.getElementById('e3DataContainer').style.display = 'none';
+      }
       showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
       if (status) status.textContent = '';
     } catch (err) {
@@ -3027,6 +3183,18 @@
       E3_LOADING = false;
       if (btn) btn.disabled = false;
     }
+  }
+
+  // Single source of truth for "is this E3 dataset worth rendering?"
+  // — gates every code path that toggles #e3DataContainer to visible.
+  function _e3HasRealData(d) {
+    if (!d || typeof d !== 'object') return false;
+    const keys = ['revenue', 'expenses', 'info', 'tableZ'];
+    for (const k of keys) {
+      const arr = d[k];
+      if (Array.isArray(arr) && arr.length > 0) return true;
+    }
+    return false;
   }
 
   async function loadBrainE3Data() {
@@ -3087,7 +3255,11 @@
       E3_LAST_DATA = data;
       populateE3Tables(data);
       populateUnclassifiedSummary(data);
-      document.getElementById('e3DataContainer').style.display = 'block';
+      if (_e3HasRealData(data)) {
+        document.getElementById('e3DataContainer').style.display = 'block';
+      } else {
+        document.getElementById('e3DataContainer').style.display = 'none';
+      }
       showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
       if (status) status.textContent = '';
     } catch (err) {
@@ -3123,7 +3295,7 @@
       if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
 
       E3_EXCEL_TOTALS = buildExcelTotalsMap(data);
-      if (E3_LAST_DATA) {
+      if (E3_LAST_DATA && _e3HasRealData(E3_LAST_DATA)) {
         populateE3Tables(E3_LAST_DATA);
         document.getElementById('e3DataContainer').style.display = 'block';
       }
@@ -3709,7 +3881,7 @@
       if (!response.ok) throw new Error(data.error || 'Σφάλμα κατά τη φόρτωση');
 
       E3_EXCEL_TOTALS = buildExcelTotalsMap(data);
-      if (E3_LAST_DATA) {
+      if (E3_LAST_DATA && _e3HasRealData(E3_LAST_DATA)) {
         populateE3Tables(E3_LAST_DATA);
         document.getElementById('e3DataContainer').style.display = 'block';
       }
@@ -4171,10 +4343,23 @@
 
     if (!updated) return;
 
-    const dataToRender = E3_LAST_DATA || {};
-    populateE3Tables(dataToRender);
+    // Only render+show the E3 πίνακας when there is REAL myDATA data behind
+    // it — otherwise we end up showing an empty headers-only table (the user
+    // explicitly flagged this regression). The brain values stay in
+    // E3_BRAIN_CHECKS so the next populateE3Tables call still picks them up.
+    const hasMydataData = !!(E3_LAST_DATA && (
+      (Array.isArray(E3_LAST_DATA.revenue) && E3_LAST_DATA.revenue.length) ||
+      (Array.isArray(E3_LAST_DATA.expenses) && E3_LAST_DATA.expenses.length) ||
+      (Array.isArray(E3_LAST_DATA.info) && E3_LAST_DATA.info.length) ||
+      (Array.isArray(E3_LAST_DATA.tableZ) && E3_LAST_DATA.tableZ.length)
+    ));
     const container = document.getElementById('e3DataContainer');
-    if (container) container.style.display = 'block';
+    if (!hasMydataData) {
+      if (container) container.style.display = 'none';
+    } else {
+      populateE3Tables(E3_LAST_DATA);
+      if (container) container.style.display = 'block';
+    }
 
     const fmt = (n) => Number(n).toLocaleString('el-GR', { minimumFractionDigits: 2 });
     const parts = [];
@@ -4831,14 +5016,26 @@
   }
   function _brainBulkApplyYearGate() {
     const ok = _brainBulkYearValid();
-    const ids = ['brainBulkPickBtn', 'brainBulkFromActiveBtn'];
-    ids.forEach((id) => {
+    // Source-picker buttons stay visible but disabled when year is empty
+    // (so the year-missing UX is obvious). The two ACTION buttons further
+    // down — «Εκτέλεση επιλεγμένων ελέγχων» + «💾 Μαζική αποθήκευση
+    // credentials» — are HIDDEN entirely until a year is present, per
+    // user request: «να μην εμφανιζονται τα κουμπια … αν δεν εχει
+    // εισαχθει ετος».
+    const disableIds = ['brainBulkPickBtn', 'brainBulkFromActiveBtn'];
+    disableIds.forEach((id) => {
       const b = document.getElementById(id);
       if (!b) return;
       b.disabled = !ok;
       b.classList.toggle('opacity-60', !ok);
       b.classList.toggle('cursor-not-allowed', !ok);
       b.title = ok ? '' : 'Συμπλήρωσε πρώτα έτος για να ενεργοποιηθεί.';
+    });
+    const hideIds = ['brainRunSelectedBulkBtn', 'brainBulkSaveCredsBtn'];
+    hideIds.forEach((id) => {
+      const b = document.getElementById(id);
+      if (!b) return;
+      b.style.display = ok ? '' : 'none';
     });
     const hint = document.getElementById('brainYearBulkHint');
     if (hint) hint.style.display = ok ? 'none' : '';
@@ -5118,21 +5315,11 @@
     // user can abort it from any page. The cross-page sticky banner shows
     // a "Διακοπή" button that posts to /api/e3/brain/abort/<job_id>.
     const jobId = 'bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-    // Bulk runs inherit the same PDF retention toggles from the Ατομικός
-    // tab so the user does not have to re-tick checkboxes per mode.
-    // Bulk reads its own dedicated PDF checkboxes if present (Bulk tab) and
-    // falls back to the Single-tab versions otherwise — keeps backward
-    // compat with users on older HTML.
-    const _readPdfChk = (bulkId, singleId) => {
-      const b = document.getElementById(bulkId);
-      if (b instanceof HTMLInputElement) return !!b.checked;
-      return !!(document.getElementById(singleId) || {}).checked;
-    };
-    const _bulkEfkaPdf = _readPdfChk('brainDownloadEfkaPdfsBulk', 'brainDownloadEfkaPdfs');
-    const _bulkTekaPdf = _readPdfChk('brainDownloadTekaPdfsBulk', 'brainDownloadTekaPdfs');
-    const _bulkMisthPdf = _readPdfChk('brainDownloadMisthPdfsBulk', 'brainDownloadMisthPdfs');
-    const _bulkE9Pdf = _readPdfChk('brainDownloadE9PdfsBulk', 'brainDownloadE9Pdfs');
-    const _bulkSaveCompPdf = _readPdfChk('brainSaveComparisonPdfBulk', 'brainSaveComparisonPdf');
+    // Bulk has a single master «save all PDFs» switch. When on, every
+    // extractor that ran for a client persists its document to the per-AFM
+    // folder; when off, nothing lands on disk. Per-kind granularity stays
+    // in the Ατομικός tab.
+    const _bulkSaveAllPdfs = !!(document.getElementById('brainBulkSavePdfs') || {}).checked;
     const payload = {
       mode: 'bulk',
       year,
@@ -5140,11 +5327,11 @@
       run_efka_teka: runEfkaTeka,
       run_misth: runMisth,
       run_e9: runE9,
-      download_efka_pdfs: _bulkEfkaPdf,
-      download_teka_pdfs: _bulkTekaPdf,
-      download_misth_pdfs: _bulkMisthPdf,
-      download_e9_pdfs: _bulkE9Pdf,
-      save_comparison_pdf: _bulkSaveCompPdf,
+      download_efka_pdfs: _bulkSaveAllPdfs && runEfkaTeka,
+      download_teka_pdfs: _bulkSaveAllPdfs && runEfkaTeka,
+      download_misth_pdfs: _bulkSaveAllPdfs && runMisth,
+      download_e9_pdfs: _bulkSaveAllPdfs && runE9,
+      save_comparison_pdf: false,
       headed: false,
       auto_active_group_clients: true,
       clients: selected,
@@ -5394,9 +5581,6 @@
     const summaryRows = clients.map((c, i) => {
       const checks = c.checks || {};
       const ranEfka = checks.efka_teka_total !== null && checks.efka_teka_total !== undefined;
-      // Prefer the explicit *_ran flags emitted by the brain (added so the
-      // UI can distinguish «ran but no amount» from «did not run»). Fall
-      // back to inferring from rent_breakdown/rent_source for older payloads.
       const ranMisth = (typeof checks.misth_ran === 'boolean')
         ? checks.misth_ran
         : ((Array.isArray(checks.rent_breakdown) && checks.rent_breakdown.length > 0)
@@ -5407,21 +5591,34 @@
             || (Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0));
       const ranMyData = (checks.mydata_585_007 !== null && checks.mydata_585_007 !== undefined)
                     || (checks.mydata_585_014 !== null && checks.mydata_585_014 !== undefined);
-      // ✓ green = ran and produced an amount, ◐ amber = ran but no result,
-      // — gray = did not run. Tooltip surfaces the brain's misth_error /
-      // e9_error so the user knows WHY there is no amount.
-      const hasMisthAmount = (Array.isArray(checks.rent_breakdown) && checks.rent_breakdown.length > 0)
-        || (checks.rent_annual !== null && checks.rent_annual !== undefined);
-      const hasE9Amount = checks.rent_source === 'e9_3_percent'
-        || (Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0);
-      const tick3 = (ran, hasResult, error) => {
+      // Split rent_breakdown amounts by source so we can show Μισθωτήρια and
+      // Ε9 as separate EUR amounts in the summary table (instead of just ✓/—).
+      const brk = Array.isArray(checks.rent_breakdown) ? checks.rent_breakdown : [];
+      const sumBy = (src) => brk.reduce((s, b) => s + ((b && b.source === src) ? Number(b.amount || 0) : 0), 0);
+      let misthAmount = sumBy('misth');
+      let e9Amount = sumBy('e9_3_percent');
+      // Fallback for payloads without a breakdown: attribute rent_annual to
+      // whichever source the brain reported in rent_source.
+      if (!brk.length && checks.rent_annual !== null && checks.rent_annual !== undefined) {
+        if (checks.rent_source === 'e9_3_percent') e9Amount = Number(checks.rent_annual);
+        else if (checks.rent_source === 'misth') misthAmount = Number(checks.rent_annual);
+      }
+      const hasMisthAmount = misthAmount > 0;
+      const hasE9Amount = e9Amount > 0;
+      // Amount cell: show "X.XXX,XX €" in green when there's a number;
+      // amber ◐ when the extractor ran without finding one (tooltip carries
+      // the brain error); gray — when the extractor never ran.
+      const amountCell = (ran, amount, hasResult, error) => {
         if (!ran) return '<span style="color:#9ca3af;">—</span>';
-        if (hasResult) return '<span style="color:#15803d;font-weight:700;" title="Έτρεξε με επιτυχία">✓</span>';
+        if (hasResult) return '<span style="color:#15803d;font-weight:700;">' + fmt(amount) + ' €</span>';
         const tip = error
           ? ('Έτρεξε χωρίς αποτέλεσμα: ' + String(error).replace(/"/g, "'"))
           : 'Έτρεξε χωρίς να εντοπιστεί ποσό';
         return '<span style="color:#b45309;font-weight:700;cursor:help;" title="' + tip + '">◐</span>';
       };
+      const efkaCell = ranEfka
+        ? '<span style="color:#15803d;font-weight:700;">' + fmt(checks.efka_teka_total) + ' €</span>'
+        : '<span style="color:#9ca3af;">—</span>';
       const tick2 = (b) => b ? '<span style="color:#15803d;font-weight:700;">✓</span>'
                               : '<span style="color:#9ca3af;">—</span>';
       const statusCell = c.ok
@@ -5431,9 +5628,9 @@
         '<td>' + String(c.afm || '—') + '</td>' +
         '<td>' + String(c.name || '—').replace(/</g,'&lt;') + '</td>' +
         '<td style="text-align:center;">' + statusCell + '</td>' +
-        '<td style="text-align:center;">' + tick2(ranEfka) + '</td>' +
-        '<td style="text-align:center;">' + tick3(ranMisth, hasMisthAmount, checks.misth_error) + '</td>' +
-        '<td style="text-align:center;">' + tick3(ranE9, hasE9Amount, checks.e9_error) + '</td>' +
+        '<td style="text-align:right;">' + efkaCell + '</td>' +
+        '<td style="text-align:right;">' + amountCell(ranMisth, misthAmount, hasMisthAmount, checks.misth_error) + '</td>' +
+        '<td style="text-align:right;">' + amountCell(ranE9, e9Amount, hasE9Amount, checks.e9_error) + '</td>' +
         '<td style="text-align:center;">' + tick2(ranMyData) + '</td>' +
       '</tr>';
     }).join('');
@@ -5519,19 +5716,29 @@
             || (Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0));
       const ranMyData = (checks.mydata_585_007 !== null && checks.mydata_585_007 !== undefined)
                     || (checks.mydata_585_014 !== null && checks.mydata_585_014 !== undefined);
-      const hasMisthAmount = (Array.isArray(checks.rent_breakdown) && checks.rent_breakdown.length > 0)
-        || (checks.rent_annual !== null && checks.rent_annual !== undefined);
-      const hasE9Amount = checks.rent_source === 'e9_3_percent'
-        || (Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0);
-      const tick3 = (ran, hasResult) => !ran ? '—' : (hasResult ? '✓' : '◐');
+      const brk = Array.isArray(checks.rent_breakdown) ? checks.rent_breakdown : [];
+      const sumBy = (src) => brk.reduce((s, b) => s + ((b && b.source === src) ? Number(b.amount || 0) : 0), 0);
+      let misthAmount = sumBy('misth');
+      let e9Amount = sumBy('e9_3_percent');
+      if (!brk.length && checks.rent_annual !== null && checks.rent_annual !== undefined) {
+        if (checks.rent_source === 'e9_3_percent') e9Amount = Number(checks.rent_annual);
+        else if (checks.rent_source === 'misth') misthAmount = Number(checks.rent_annual);
+      }
+      const hasMisthAmount = misthAmount > 0;
+      const hasE9Amount = e9Amount > 0;
+      const amountCell = (ran, amount, hasResult) => {
+        if (!ran) return '—';
+        if (hasResult) return fmt(amount) + ' €';
+        return '◐';
+      };
       const tick = (b) => b ? '✓' : '—';
       return '<tr>' +
         '<td>' + esc(c.afm) + '</td>' +
         '<td>' + esc(c.name) + '</td>' +
         '<td style="text-align:center;">' + (c.ok ? '✓ Επιτυχές' : '⚠ Σφάλματα') + '</td>' +
-        '<td style="text-align:center;">' + tick(ranEfka) + '</td>' +
-        '<td style="text-align:center;">' + tick3(ranMisth, hasMisthAmount) + '</td>' +
-        '<td style="text-align:center;">' + tick3(ranE9, hasE9Amount) + '</td>' +
+        '<td style="text-align:right;">' + (ranEfka ? fmt(checks.efka_teka_total) + ' €' : '—') + '</td>' +
+        '<td style="text-align:right;">' + amountCell(ranMisth, misthAmount, hasMisthAmount) + '</td>' +
+        '<td style="text-align:right;">' + amountCell(ranE9, e9Amount, hasE9Amount) + '</td>' +
         '<td style="text-align:center;">' + tick(ranMyData) + '</td>' +
       '</tr>';
     }).join('');
@@ -5835,6 +6042,14 @@
       if (panel) panel.classList.toggle('hidden', id !== tabId);
       if (button) button.classList.toggle('active', id === tabId);
     });
+    // The E3 income/expense table only makes sense in the Ατομικός flow
+    // (γρήγορος + αναλυτικός). In Μαζικός / Αποθηκευμένα the bulk
+    // accordion is the source of truth, so hide it to avoid showing
+    // stale data from a previous individual run.
+    const e3Container = document.getElementById('e3DataContainer');
+    if (e3Container && tabId !== 'brainTabSingle') {
+      e3Container.style.display = 'none';
+    }
     if (tabId === 'brainTabSaved') {
       fetchE3BrainCredentials();
     }
@@ -5972,8 +6187,9 @@
     if (fetchAddressBtn && fetchAddressBtn.dataset.bound !== '1') {
       console.log('[E3] Binding fetchAddressBtn');
       fetchAddressBtn.dataset.bound = '1';
-      fetchAddressBtn.addEventListener('click', function(){
-        console.log('[E3] fetchAddressBtn clicked!');
+      // Primary click — reads data-fetch-mode (set by the dropdown menu
+      // items below). Defaults to "auto" (cache-first).
+      function _runFetchAddress(mode) {
         const fromEl = document.getElementById('brainDateFrom');
         const toEl = document.getElementById('brainDateTo');
         const fromRaw = fromEl ? fromEl.value : '';
@@ -5995,8 +6211,45 @@
           return;
         }
         try { saveE3BrainState(); } catch(_) {}
-        loadE3Partners(fromIso, toIso);
+        loadE3Partners(fromIso, toIso, { force: mode === 'force' });
+      }
+      fetchAddressBtn.addEventListener('click', function(){
+        const mode = fetchAddressBtn.dataset.fetchMode || 'auto';
+        _runFetchAddress(mode);
       });
+      // Dropdown caret toggles the menu; clicking a menu item runs the
+      // fetch in that mode AND updates the primary button's last-chosen
+      // mode so the next plain click repeats the choice.
+      const menuBtn = document.getElementById('brainFetchAddressMenuBtn');
+      const menu = document.getElementById('brainFetchAddressMenu');
+      if (menuBtn && menu && menuBtn.dataset.bound !== '1') {
+        menuBtn.dataset.bound = '1';
+        menuBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const open = menu.style.display !== 'none';
+          menu.style.display = open ? 'none' : 'block';
+          menuBtn.setAttribute('aria-expanded', String(!open));
+        });
+        document.addEventListener('click', (ev) => {
+          if (menu.style.display !== 'none' && !ev.target.closest('#brainFetchAddressGroup')) {
+            menu.style.display = 'none';
+            menuBtn.setAttribute('aria-expanded', 'false');
+          }
+        });
+        menu.querySelectorAll('button[data-fetch-mode]').forEach((mi) => {
+          mi.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const mode = mi.dataset.fetchMode || 'auto';
+            fetchAddressBtn.dataset.fetchMode = mode;
+            fetchAddressBtn.textContent = mode === 'force'
+              ? '🔄 Νέα ανάκτηση από ΑΑΔΕ'
+              : 'Ανάκτηση διεύθυνσης';
+            menu.style.display = 'none';
+            menuBtn.setAttribute('aria-expanded', 'false');
+            _runFetchAddress(mode);
+          });
+        });
+      }
         // Bind check AADE button to run a dedicated AADE/TAXIS registry fetch (company_info.fetch_registry)
         if (checkAadeBtn && checkAadeBtn.dataset.bound !== '1') {
           checkAadeBtn.dataset.bound = '1';
@@ -6311,14 +6564,19 @@
     return pieces.join(' · ');
   }
 
-  async function refreshBrainAllPdfs() {
+  async function refreshBrainAllPdfs(opts) {
     _BRAIN_PDFS_KIND = 'all';
+    // Accept an explicit AFM so callers (e.g. the dropdown-change handler)
+    // can avoid racing against #brainAfm being updated by a parallel
+    // fillBrainSingleClientFromSaved call.
+    const explicitAfm = (opts && String(opts.afm || '')) || '';
     const afmEl = document.getElementById('brainAfm');
-    const afm = String((afmEl && afmEl.value) || '').replace(/\D/g, '');
+    const afm = String(explicitAfm || (afmEl && afmEl.value) || '').replace(/\D/g, '');
     const listDiv = document.getElementById('brainPdfsList');
     const statusEl = document.getElementById('brainPdfsStatus');
     if (!afm || afm.length !== 9) {
       if (listDiv) listDiv.innerHTML = '<span class="text-amber-600 dark:text-amber-300">Δώσε έγκυρο ΑΦΜ 9 ψηφίων.</span>';
+      if (statusEl) statusEl.textContent = '';
       return;
     }
     if (statusEl) statusEl.textContent = 'Φόρτωση όλων των PDFs...';
