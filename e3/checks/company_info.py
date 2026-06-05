@@ -261,6 +261,15 @@ USER_DATA_DIR = Path('misth_user_data')
 
 
 async def dump_page_html(page, suffix: str) -> Path:
+    """Write page HTML for post-mortem debugging — opt-in only.
+
+    Mirrors the gate in misth.py / e9.py: a third script was still
+    littering misth_debug_*.html into the project root because its own
+    dump function wasn't tied to the same env var.
+    """
+    import os as _os
+    if not _os.getenv('E3_DEBUG_HTML'):
+        return Path('(debug-html-disabled)')
     path = Path(f'misth_debug_{suffix}.html')
     html = await page.content()
     path.write_text(html, encoding='utf-8')

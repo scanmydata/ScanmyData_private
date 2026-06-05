@@ -3373,6 +3373,38 @@
     if (qBtn) qBtn.classList.toggle('active', tabId === 'quickCheckTab');
     if (aBtn) aBtn.classList.toggle('active', tabId === 'analyticTab');
     try { sessionStorage.setItem('e3ActiveTab', tabId); } catch(_) {}
+    // Unclassified card visibility — per user spec it must appear in:
+    //   • Γρήγορος Έλεγχος (always)
+    //   • Αναλυτικός Ατομικός (brain sub-tab brainTabSingle)
+    // and STAY HIDDEN in:
+    //   • Αναλυτικός Μαζικός (brainTabBulk)
+    //   • Αναλυτικός Αποθηκευμένα (brainTabSaved)
+    // Switching pages must restore it for quickCheckTab even if it was
+    // previously hidden by a brain-sub-tab switch.
+    try { _refreshUnclassifiedCardVisibility(); } catch (_) {}
+  }
+
+  // Single decision function for «μη χαρακτηρισμένα» card visibility,
+  // used by both showE3PageTab and showBrainTab so they stay in sync.
+  function _refreshUnclassifiedCardVisibility() {
+    const card = document.getElementById('unclassifiedSummaryCard');
+    if (!card) return;
+    const pageTab = (document.querySelector('#quickCheckTab') && !document.querySelector('#quickCheckTab').classList.contains('hidden'))
+      ? 'quickCheckTab'
+      : 'analyticTab';
+    let visible = false;
+    if (pageTab === 'quickCheckTab') {
+      visible = true; // always on for γρήγορος έλεγχος
+    } else {
+      // analytic — only visible when brainTabSingle is the active sub-tab
+      const single = document.getElementById('brainTabSingle');
+      visible = !!(single && !single.classList.contains('hidden'));
+    }
+    card.style.display = visible ? '' : 'none';
+    if (!visible) {
+      const wrap = document.getElementById('unclassifiedListWrap');
+      if (wrap) wrap.classList.add('e3-hidden');
+    }
   }
 
   function setupE3CheckTabBindings() {
@@ -3845,15 +3877,20 @@
     listWrap.classList.add('e3-hidden');
   }
 
-  (function bindUnclassifiedToggle() {
-    const btn = document.getElementById('toggleUnclassifiedList');
-    const wrap = document.getElementById('unclassifiedListWrap');
-    if (!btn || !wrap || btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
+  // Delegated click handler — survives partial-nav re-renders that
+  // would invalidate a once-only `addEventListener` on the button.
+  // (The IIFE was running before #toggleUnclassifiedList existed on
+  //  certain navigation paths → click had no effect.)
+  if (!document.body.dataset.unclassifiedToggleDelegated) {
+    document.body.dataset.unclassifiedToggleDelegated = '1';
+    document.addEventListener('click', (ev) => {
+      const btn = ev.target && ev.target.closest && ev.target.closest('#toggleUnclassifiedList');
+      if (!btn) return;
+      const wrap = document.getElementById('unclassifiedListWrap');
+      if (!wrap) return;
       wrap.classList.toggle('e3-hidden');
     });
-  })();
+  }
 
   document.getElementById('loadExcelBtn').addEventListener('click', () => {
     document.getElementById('excelFile').click();
@@ -4246,6 +4283,22 @@
       E3_BRAIN_LAST_RESULT = data;
       brainSetResult(data);
       showBrainFlash(data.message || 'E3 Brain εκτελέστηκε επιτυχώς.', 'success');
+      // Unambiguous per-extractor PDF feedback so the user sees exactly
+      // what landed on disk (the user kept asking «δεν αποθηκεύεται»
+      // even when the PDF DID save — the answer wasn't visible enough).
+      try {
+        const _ps = (data.clients && data.clients[0] && data.clients[0].checks && data.clients[0].checks.pdfs_saved) || {};
+        const _kinds = [
+          ['misth', 'Μισθωτηρίων'],
+          ['e9',    'Ε9/ΕΝΦΙΑ'],
+          ['efka',  'ΕΦΚΑ'],
+          ['teka',  'ΤΕΚΑ'],
+        ].filter(([k]) => Number(_ps[k] || 0) > 0);
+        if (_kinds.length) {
+          const parts = _kinds.map(([k, label]) => `${label}: ${_ps[k]}`).join(' · ');
+          showBrainFlash(`📎 Αποθηκεύτηκαν PDF — ${parts}`, 'success', 9000);
+        }
+      } catch (_) {}
       _applyBrainChecksToE3Table(data);
 
       // After the analytical (brain) run, also surface the "μη χαρακτηρισμένα
@@ -4270,6 +4323,26 @@
           runMisth || runE9) {
         try { await refreshBrainAllPdfs(); } catch (_) {}
       }
+
+      // «Αποθήκευση πίνακα αντιπαραβολής σε PDF μετά την εκτέλεση»
+      // checkbox: when on, auto-open the same export popup the bulk view
+      // uses. We reuse _brainBulkExportToPdf with a single-client array
+      // so the analytic E3 table + Ισοζύγιο column are included.
+      try {
+        const saveCompEl = document.getElementById('brainSaveComparisonPdf');
+        if (saveCompEl && saveCompEl.checked && typeof _brainBulkExportToPdf === 'function') {
+          // The brain returned `data.clients[0]` for single mode; wrap
+          // it in the same shape the bulk export expects.
+          const wrapped = {
+            ok: data.ok,
+            mode: 'single',
+            clients: Array.isArray(data.clients) ? data.clients : [],
+            aborted: false,
+          };
+          // Tiny defer so the toast above gets to render first.
+          setTimeout(() => { try { _brainBulkExportToPdf(wrapped); } catch (_) {} }, 200);
+        }
+      } catch (_) {}
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
@@ -5095,6 +5168,21 @@
       _brainBulkRenderMembers(idx);
       return;
     }
+    // Third cache layer: the SHARED per-(afm, year) localStorage cache
+    // that the Ατομικός tab populates (`_membersCacheGet`). This means a
+    // member list fetched once via Ατομικός is immediately available in
+    // bulk — and vice versa — instead of each tab re-hitting ΑΑΔΕ.
+    if (yrKey && typeof _membersCacheGet === 'function') {
+      const sharedEntry = _membersCacheGet(client.afm, yrKey);
+      const sharedMembers = sharedEntry && Array.isArray(sharedEntry.members) ? sharedEntry.members : null;
+      if (sharedMembers && sharedMembers.length) {
+        client.members = sharedMembers.map((m) => ({ ...m }));
+        client.members_by_year = client.members_by_year || {};
+        client.members_by_year[yrKey] = client.members.map((m) => ({ ...m }));
+        _brainBulkRenderMembers(idx);
+        return;
+      }
+    }
     host.innerHTML = '<span class="text-gray-500 text-xs">⏳ Φόρτωση μελών εταιρίας…</span>';
     try {
       const taxisUser = String(client.taxisnet_username || '').trim();
@@ -5136,6 +5224,21 @@
       if (yrKey) {
         client.members_by_year = client.members_by_year || {};
         client.members_by_year[yrKey] = client.members.map((m) => ({ ...m }));
+        // Also persist into the SHARED localStorage cache so the
+        // Ατομικός tab can hydrate from this fetch later.
+        if (typeof _membersCacheSet === 'function') {
+          try {
+            const existing = (typeof _membersCacheGet === 'function') ? (_membersCacheGet(client.afm, yrKey) || {}) : {};
+            _membersCacheSet(client.afm, yrKey, {
+              company: existing.company || data.company || {},
+              address: existing.address || '',
+              legal_type: existing.legal_type || (data.summary && data.summary.legal_type) || '',
+              is_individual: typeof existing.is_individual === 'boolean' ? existing.is_individual : !!data.is_individual,
+              members: client.members,
+              branches: existing.branches || [],
+            });
+          } catch (_) {}
+        }
       }
       _brainBulkRenderMembers(idx);
     } catch (e) {
@@ -5338,28 +5441,30 @@
       job_id: jobId,
     };
 
-    // Rich, fetch.html-style progress banner. The poller updates it with
-    // the actual brain step while the run is going; the user can hit
-    // Διακοπή to abort after the current client finishes.
+    // Single source of truth for the bulk progress UI: the right-side
+    // flash defined in base.html (#e3BulkProgressFlash). It survives
+    // navigation via sessionStorage and is rendered into the same slot
+    // as «Αποθηκεύτηκαν N εγγραφές credentials» (discrete, doesn't cover
+    // the header). The in-page top-center banner used to render here
+    // too — removed per user request («θελω να ειναι μονο το δεξιο»).
     brainSetResult('Εκτέλεση bulk...');
-    // Mark the bulk-running flag BEFORE any progress-poller fires so that
-    // any leftover/parallel `showGlobalWaitOverlay` calls are diverted to
-    // the banner instead of popping the modal overlay the user complained
-    // about. Also force-hide any overlay that might still be visible from
-    // an earlier single-mode action.
     window.E3_BRAIN_BULK_RUNNING = true;
     try { hideGlobalWaitOverlay(); } catch (_) {}
-    _showBrainBulkBanner({
-      total: selected.length,
-      current: 0,
-      label: `E3 Bulk — εκκίνηση για ${selected.length} πελάτες…`,
-      jobId,
-    });
+    try {
+      sessionStorage.setItem('e3BulkActiveJob', JSON.stringify({
+        jobId, total: selected.length, startedAt: Date.now(),
+      }));
+    } catch (_) {}
+    // base.html's poller will pick up the sessionStorage entry within ~3s
+    // and render the right-side banner. The progress poller below also
+    // updates it directly while we're still on this page, so the user
+    // sees per-client step changes immediately rather than waiting for
+    // base.html's 3s tick.
     const stopBulkPoll = _startBrainProgressPoller(
       'E3 Bulk',
       jobId,
       [`Εκτέλεση για ${selected.length} πελάτες…`],
-      (state) => _updateBrainBulkBanner(state, jobId, selected.length),
+      null,
       { noOverlay: true },  // bulk = flash banner only, NO wait overlay
     );
     try {
@@ -5386,8 +5491,14 @@
     } finally {
       window.E3_BRAIN_BULK_RUNNING = false;
       try { stopBulkPoll(); } catch (_) {}
-      try { _hideBrainBulkBanner(); } catch (_) {}
-      try { window.hideStickyBanner('e3-bulk'); } catch (_) {}
+      // Remove right-side banner + clear sessionStorage so base.html's
+      // poller stops on the next tick.
+      try {
+        sessionStorage.removeItem('e3BulkActiveJob');
+        var _flashEl = document.getElementById('e3BulkProgressFlash');
+        if (_flashEl) _flashEl.remove();
+        window.hideStickyBanner && window.hideStickyBanner('e3-bulk');
+      } catch (_) {}
     }
   }
 
@@ -5399,10 +5510,16 @@
   // so we drive this from /api/e3/brain/progress/<job_id> via the
   // shared progress poller.
   function _showBrainBulkBanner(opts) {
-    const container = (typeof getFlashContainerNode === 'function')
-      ? getFlashContainerNode()
-      : (document.querySelector('[data-flash-host]') || document.body);
-    if (!container) return;
+    // Land in the SAME slot as the «Αποθηκεύτηκαν N εγγραφές credentials»
+    // success flash so the user reads both events in the same eyeline.
+    // That slot is `#flashContainer` (top-right fixed panel — see
+    // base.html `ensureFlashContainer`). We fall back to body only when
+    // base.html hasn't loaded.
+    let container = null;
+    try {
+      if (typeof ensureFlashContainer === 'function') container = ensureFlashContainer();
+    } catch (_) {}
+    if (!container) container = document.getElementById('flashContainer') || document.body;
     let banner = document.getElementById('e3BulkBrainBanner');
     if (!banner) {
       banner = document.createElement('div');
@@ -5417,11 +5534,10 @@
       banner.style.alignItems = 'center';
       banner.style.gap = '0.75rem';
       banner.style.justifyContent = 'space-between';
-      // Keep the banner visible while the brain run is in flight even if
-      // other flash banners pop above/below it.
-      banner.style.position = 'sticky';
-      banner.style.top = '0';
-      banner.style.zIndex = '50';
+      // Match the flashContainer affordances: re-enable pointer events
+      // (the container disables them globally so flashes don't block
+      // clicks) so the «Διακοπή» button remains clickable.
+      banner.style.pointerEvents = 'auto';
       container.prepend(banner);
     }
     banner.innerHTML = '';
@@ -5820,12 +5936,81 @@
         ? '<div class="notes-block"><strong>Διαγνωστικά εκτέλεσης:</strong><ul>' +
           diagItems.map((x) => '<li>' + x + '</li>').join('') + '</ul></div>'
         : '';
+      // Full analytic E3 table — built from checks.mydata_e3_report when
+      // the brain pulled it (i.e. the client had mydata credentials). The
+      // structure mirrors the Ατομικός's #e3DataContainer: ΕΣΟΔΑ / ΕΞΟΔΑ
+      // / ΠΛΗΡΟΦΟΡΙΑΚΑ / Z3. Includes the user's Excel column when an
+      // Ισοζύγιο is uploaded — same as the Ατομικός view.
+      const analyticTable = (function() {
+        const rpt = checks.mydata_e3_report;
+        if (!rpt || typeof rpt !== 'object') return '';
+        const xlsTotals = (typeof E3_EXCEL_TOTALS !== 'undefined' && E3_EXCEL_TOTALS instanceof Map) ? E3_EXCEL_TOTALS : null;
+        const sections = [
+          { key: 'revenue',  title: '✅ ΕΣΟΔΑ' },
+          { key: 'expenses', title: '💰 ΔΑΠΑΝΕΣ & ΕΞΟΔΑ' },
+          { key: 'info',     title: 'ℹ️ ΠΛΗΡΟΦΟΡΙΑΚΑ ΣΤΟΙΧΕΙΑ' },
+          { key: 'tableZ',   title: '📋 ΠΙΝΑΚΑΣ Ζ' },
+        ];
+        const blocks = sections.map((s) => {
+          const rows = Array.isArray(rpt[s.key]) ? rpt[s.key] : [];
+          if (!rows.length) return '';
+          const showExcel = xlsTotals && xlsTotals.size > 0;
+          const head =
+            '<table><thead><tr>' +
+              '<th>ΚΩΔ</th><th>Περιγραφή</th>' +
+              '<th style="text-align:right;">myDATA</th>' +
+              (showExcel ? '<th style="text-align:right;">Ισοζύγιο</th><th style="text-align:right;">Διαφορά</th>' : '') +
+            '</tr></thead><tbody>';
+          const body = rows.map((r) => {
+            const code = String(r.code || '').trim();
+            const desc = String(r.description || '').trim();
+            const myd  = Number(r.mydata_value || 0);
+            const xls  = (showExcel && code) ? Number(xlsTotals.get(code) || 0) : 0;
+            const diff = showExcel ? (myd - xls) : 0;
+            if (r.is_group) {
+              return '<tr><td colspan="' + (showExcel ? 5 : 3) + '" style="background:#dbe4f0;font-weight:700;">' + esc(desc) + '</td></tr>';
+            }
+            return '<tr>' +
+              '<td>' + esc(code) + '</td>' +
+              '<td>' + esc(desc) + '</td>' +
+              '<td style="text-align:right;">' + fmt(myd) + '</td>' +
+              (showExcel
+                ? '<td style="text-align:right;">' + fmt(xls) + '</td><td style="text-align:right;">' + fmt(diff) + '</td>'
+                : '') +
+              '</tr>';
+          }).join('');
+          return '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">' + esc(s.title) + '</h4>' + head + body + '</tbody></table>';
+        }).filter(Boolean).join('');
+        return blocks;
+      })();
+      // «Λίστα μη χαρακτηρισμένων παραστατικών» per client — surfaces
+      // any invoices that came back from myDATA without a classification
+      // category. The brain keeps them OUT of 585.016 (unlike the
+      // official AADE PDF that dumps them there); we list them so the
+      // accountant can chase them down.
+      const unclassifiedInvoices = Array.isArray(checks.unclassified_invoices) ? checks.unclassified_invoices : [];
+      const unclassifiedTotal = (typeof checks.unclassified_total === 'number') ? checks.unclassified_total : 0;
+      const unclassifiedBlock = unclassifiedInvoices.length
+        ? '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#b45309;">Λίστα μη χαρακτηρισμένων παραστατικών — ' +
+            unclassifiedInvoices.length + ' παραστατικά, σύνολο ' + fmt(unclassifiedTotal) + ' €</h4>' +
+          '<table><thead><tr><th>MARK</th><th>Ημερομηνία</th><th>ΑΦΜ Εκδότη</th><th>Επωνυμία</th><th style="text-align:right;">Αξία</th></tr></thead><tbody>' +
+          unclassifiedInvoices.map((u) =>
+            '<tr><td>' + esc(u.mark) + '</td>' +
+            '<td>' + esc(u.issueDate) + '</td>' +
+            '<td>' + esc(u.issuerVat) + '</td>' +
+            '<td>' + esc(u.issuerName) + '</td>' +
+            '<td style="text-align:right;">' + fmt(u.amount || u.totalValue) + ' €</td></tr>'
+          ).join('') +
+          '</tbody></table>'
+        : '';
       return (
         '<section class="client-block">' +
           '<h3>' + esc(c.name || c.afm || '—') + ' — ΑΦΜ ' + esc(c.afm || '—') + '</h3>' +
           '<h4 style="margin:6px 0 2px 0;font-size:10pt;color:#0f766e;">Πίνακας E3 (βασικοί κωδικοί)</h4>' +
           e3Table +
           (brk.length ? '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">Ανάλυση 585.014 ανά ακίνητο</h4>' + breakdown : '') +
+          analyticTable +
+          unclassifiedBlock +
           diagBlock +
           noteList('Διαφορές / Σφάλματα', errors) +
           noteList('Προειδοποιήσεις', warnings) +
@@ -6050,6 +6235,11 @@
     if (e3Container && tabId !== 'brainTabSingle') {
       e3Container.style.display = 'none';
     }
+    // «μη χαρακτηρισμένα παραστατικά» card visibility is owned by the
+    // single decision function `_refreshUnclassifiedCardVisibility` so
+    // both showBrainTab and showE3PageTab stay in sync (γρήγορος έλεγχος
+    // always on, αναλυτικός only on brainTabSingle, hidden in bulk/saved).
+    try { _refreshUnclassifiedCardVisibility(); } catch (_) {}
     if (tabId === 'brainTabSaved') {
       fetchE3BrainCredentials();
     }
@@ -6063,8 +6253,67 @@
     }
   }
 
+  // Year-change auto-hydrate. When the user picks a different year in
+  // brainDateFrom/brainDateTo and we already have an AFM in the form,
+  // re-query the per-(afm, year) cache: hit → instant members/branches
+  // hydrate; miss → clear the members panel + warn so the user knows
+  // they need to click «Ανάκτηση» for the new year.
+  function _onBrainYearMaybeChanged() {
+    try {
+      const afmEl = document.getElementById('brainAfm');
+      const afm = String((afmEl && afmEl.value) || '').replace(/\D/g, '');
+      if (!afm || afm.length !== 9) return;
+      const fromIso = _parseDateInputToIso(document.getElementById('brainDateFrom')?.value);
+      const toIso = _parseDateInputToIso(document.getElementById('brainDateTo')?.value);
+      if (!fromIso || !toIso) return;
+      const year = fromIso.substring(0, 4);
+      if (year !== toIso.substring(0, 4)) return; // dates span years → ignore
+      const lastKey = window.__brainLastHydratedKey || '';
+      const newKey = afm + ':' + year;
+      if (lastKey === newKey) return;
+      const cached = _membersCacheGet(afm, year);
+      if (cached) {
+        // Cache hit — hydrate inline (without firing the spinner overlay).
+        try {
+          E3_BRAIN_MEMBERS = (cached.is_individual ? [] : (Array.isArray(cached.members) ? cached.members : []));
+          E3_BRAIN_MEMBER_CREDS = {};
+          renderBrainPartnerFields();
+          updateBrainAmkaVisibility(!!cached.is_individual);
+          applyBrainSingleLegalType(cached.legal_type || '', !!cached.is_individual);
+          if (Array.isArray(cached.branches) && cached.branches.length) {
+            setBrainBranchAddresses(cached.branches.map(b => String(b.address||'').trim()).filter(Boolean));
+            _annotateBrainBranchTypes(cached.branches);
+          } else {
+            setBrainBranchAddresses([]);
+          }
+          window.__brainLastHydratedKey = newKey;
+          showBrainAfmStatus(`⚡ Έτος ${year}: φορτώθηκαν ${(cached.members||[]).length} μέλη από cache.`, 'success', 4000);
+        } catch (e) { console.warn('cache hydrate failed', e); }
+      } else {
+        // Cache miss — wipe the old members so the user doesn't think
+        // they belong to the new year. Keep the AFM/address untouched
+        // because those are year-agnostic and the user is mid-edit.
+        E3_BRAIN_MEMBERS = [];
+        E3_BRAIN_MEMBER_CREDS = {};
+        try { renderBrainPartnerFields(); } catch (_) {}
+        try { setBrainBranchAddresses([]); } catch (_) {}
+        window.__brainLastHydratedKey = newKey;
+        showBrainAfmStatus(`Δεν υπάρχει cache για το έτος ${year}. Πάτησε «Ανάκτηση διεύθυνσης» για να γίνει νέα αντλήση.`, 'info', 6000);
+      }
+    } catch (_) {}
+  }
+
   function rebindE3Controls() {
     console.log('[E3] rebindE3Controls() called');
+    // Wire year-change auto-hydrate (idempotent — guarded by data-bound).
+    ['brainDateFrom', 'brainDateTo', 'brainAfm'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.dataset.brainYearChangeBound !== '1') {
+        el.dataset.brainYearChangeBound = '1';
+        el.addEventListener('change', _onBrainYearMaybeChanged);
+        el.addEventListener('blur', _onBrainYearMaybeChanged);
+      }
+    });
     const runSingleBtn = document.getElementById('brainRunSingleBtn');
     const saveCredsBtn = document.getElementById('brainSaveCredentialsBtn');
     const bulkPickBtn = document.getElementById('brainBulkPickBtn');
@@ -6127,6 +6376,25 @@
       yearBulkEl.dataset.bound = '1';
       yearBulkEl.addEventListener('input', _brainBulkApplyYearGate);
       yearBulkEl.addEventListener('change', _brainBulkApplyYearGate);
+      // When the bulk year changes, the members shown under each
+      // expanded preview row belong to the OLD year. Clear them so the
+      // next expand picks up the cache entry (or fetches) for the new
+      // year — same «προσθαφαιρει τα μελη ανάλογα με το έτος» semantic
+      // as the Ατομικός tab gained above.
+      yearBulkEl.addEventListener('change', () => {
+        try {
+          if (!Array.isArray(E3_BRAIN_PREVIEW_CLIENTS)) return;
+          E3_BRAIN_PREVIEW_CLIENTS.forEach((c) => { if (c) c.members = []; });
+          // Re-render any expanded rows so they show the loading-or-empty state
+          document.querySelectorAll('[data-bulk-expand-row]').forEach((row) => {
+            const idx = Number(row.dataset.bulkExpandRow);
+            const host = document.querySelector(`[data-bulk-members-host="${idx}"]`);
+            if (host && !row.classList.contains('hidden')) {
+              host.innerHTML = '<span class="text-gray-500 text-xs">↻ Έτος άλλαξε — ξανα-κάνε κλικ στο ▼ για να φορτωθούν τα μέλη του νέου έτους.</span>';
+            }
+          });
+        } catch (_) {}
+      });
     }
     _brainBulkApplyYearGate();
 
@@ -6340,15 +6608,12 @@
       tabSavedBtn.dataset.bound = '1';
       tabSavedBtn.addEventListener('click', () => showBrainTab('brainTabSaved'));
     }
-    // Explicit user "Refresh" button on the Saved sub-tab — this is the
-    // one place where we want a loud success/error toast.
-    const fetchCredsBtn = document.getElementById('brainFetchCredsBtn');
-    if (fetchCredsBtn && fetchCredsBtn.dataset.bound !== '1') {
-      fetchCredsBtn.dataset.bound = '1';
-      fetchCredsBtn.addEventListener('click', () => {
-        fetchE3BrainCredentials({ verbose: true }).catch(() => {});
-      });
-    }
+    // «Ανανέωση/Προβολή» button is already wired through the document-
+    // level delegated handler (`case 'brainFetchCredsBtn'`) — adding a
+    // direct addEventListener here too caused the
+    // «Αποθηκευμένα credentials φορτώθηκαν.» flash to appear twice
+    // (delegated fired once, direct fired once). Keep the delegated
+    // path only.
 
     if (!E3_BRAIN_CREDS_CACHE.length) {
       fetchE3BrainCredentials().catch(() => {});

@@ -16828,6 +16828,45 @@ def api_e3_brain():
 
             payload["active_group_clients"] = active_group_clients
 
+        # === myDATA credential enrichment (bulk & single) ===
+        # In the Ατομικός flow `/api/e3/fetch` looks the credential up by
+        # NAME in credentials.json and uses its `user`/`key`. The brain
+        # itself takes whatever `mydata_user`/`mydata_key` the JS forwards,
+        # which for bulk clients comes from the e3_company_credentials
+        # store — sometimes a different (or stale) value than what
+        # credentials.json holds. Force-overlay credentials.json by AFM so
+        # bulk hits the SAME endpoint with the SAME creds the user sees
+        # working in the Ατομικός tab.
+        try:
+            _creds_by_afm = {}
+            for _cred in (load_credentials() or []):
+                if not isinstance(_cred, dict):
+                    continue
+                _afm = _canon_afm(_cred.get("vat") or "")
+                if _afm:
+                    _creds_by_afm[_afm] = _cred
+            def _overlay_mydata(_cli):
+                if not isinstance(_cli, dict):
+                    return _cli
+                _src = _creds_by_afm.get(_canon_afm(_cli.get("afm") or ""))
+                if not _src:
+                    return _cli
+                _u = str(_src.get("user") or "").strip()
+                _k = str(_src.get("key") or "").strip()
+                # Only overlay when credentials.json has a value — never
+                # downgrade a working pair to empty.
+                if _u:
+                    _cli["mydata_user"] = _u
+                if _k:
+                    _cli["mydata_key"] = _k
+                return _cli
+            if isinstance(payload.get("single_client"), dict):
+                payload["single_client"] = _overlay_mydata(payload["single_client"])
+            if isinstance(payload.get("clients"), list):
+                payload["clients"] = [_overlay_mydata(c) for c in payload["clients"]]
+        except Exception:
+            log.exception("api_e3_brain: myDATA credential overlay failed")
+
         from e3.checks.e3_brain import run_brain, E3BrainError
 
         result = run_brain(payload)
@@ -17070,10 +17109,32 @@ def api_e3_brain_company_members():
                     reconciled = []
                     seen_keys = set()
 
+                    # Normalize a Greek name for fuzzy dedup: strip diacritics,
+                    # uppercase, collapse whitespace, sort tokens so
+                    # "ΔΟΥΡΑΜΑΝΗΣ ΓΕΩΡΓΙΟΣ ΑΝΤΩΝΙΟΣ" and
+                    # "ΓΕΩΡΓΙΟΣ ΑΝΤΩΝΙΟΣ ΔΟΥΡΑΜΑΝΗΣ" collapse to the same key.
+                    # The previous matcher used AFM only, so a GEMI row with
+                    # no AFM and an AADE row with the same person's AFM
+                    # appeared as two separate members.
+                    import unicodedata as _u
+                    def _name_key(name: str) -> str:
+                        if not name:
+                            return ''
+                        nf = _u.normalize('NFD', str(name))
+                        no_marks = ''.join(c for c in nf if _u.category(c) != 'Mn')
+                        toks = [t for t in no_marks.upper().split() if t]
+                        toks.sort()
+                        return ' '.join(toks)
+
                     def _key_for(item: dict) -> str:
                         k = (item.get('afm') or '').strip()
+                        # Treat the NOAFM_<idx> placeholders the brain uses
+                        # for AFM-less members the same as «no AFM» — they
+                        # must still fall through to name-based matching.
+                        if k.startswith('NOAFM_'):
+                            k = ''
                         if not k:
-                            k = (item.get('name') or '').upper()
+                            k = 'NAME:' + _name_key(item.get('name') or '')
                         return k
 
                     # helper to determine active for date range
@@ -17112,14 +17173,31 @@ def api_e3_brain_company_members():
                     # add company_info members (if missing or to mark sources)
                     for c in company_info_members:
                         key = _key_for(c)
+                        # Primary match: exact key (AFM, or NAME-fallback).
+                        # Secondary match: when AADE has a real AFM but GEMI
+                        # had only NAME for the same person, the two keys
+                        # differ — rescue by walking the reconciled list
+                        # for a name-equivalent entry and MERGE the AFM
+                        # back in (so the AADE-provided ΑΦΜ surfaces in
+                        # the UI instead of a duplicate row).
+                        merged_into = None
                         if key in seen_keys:
-                            # mark source as also 'aade' and update role if empty
+                            merged_into = key
+                        else:
+                            c_name_k = _name_key(c.get('name') or '')
+                            if c_name_k:
+                                for r in reconciled:
+                                    if _name_key(r.get('name') or '') == c_name_k:
+                                        merged_into = _key_for(r)
+                                        # Backfill AADE's AFM onto the GEMI row.
+                                        if c.get('afm') and not (r.get('afm') and not str(r.get('afm')).startswith('NOAFM_')):
+                                            r['afm'] = c.get('afm')
+                                        break
+                        if merged_into is not None:
                             for r in reconciled:
-                                rk = _key_for(r)
-                                if rk == key:
+                                if _key_for(r) == merged_into or _name_key(r.get('name') or '') == _name_key(c.get('name') or ''):
                                     if 'aade' not in r.get('sources', []):
                                         r['sources'].append('aade')
-                                    # prefer existing role, otherwise fill from AADE
                                     if not r.get('role') and c.get('role'):
                                         r['role'] = _format_role_for_output(c.get('role'))
                                     break

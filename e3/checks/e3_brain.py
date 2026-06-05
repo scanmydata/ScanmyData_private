@@ -1149,8 +1149,10 @@ def _compare_member_sets(gemi_members: List[Dict[str, Any]], company_info_member
 
 
 def _sum_mydata_sub_code(aade_user: str, aade_key: str, year: int, code: str, sub_code: str) -> float:
-    date_from = f"{year}-01-01"
-    date_to = f"{year}-12-31"
+    # AADE's RequestE3Info expects dd/mm/yyyy here; ISO is silently
+    # accepted but matches NO rows (see process_client comment).
+    date_from = f"01/01/{year}"
+    date_to = f"31/12/{year}"
     entries = fetch_e3_entries("0", date_from, date_to, aade_user, aade_key, debug=False)
     total = 0.0
     for row in entries:
@@ -2097,11 +2099,84 @@ def process_client(
     mydata_key = _norm_text(client.get("mydata_key"))
     mydata_585_007 = None
     mydata_585_014 = None
+    mydata_e3_report: Optional[Dict[str, Any]] = None
+    unclassified_total: float = 0.0
+    unclassified_invoices: List[Dict[str, Any]] = []
     if mydata_user and mydata_key:
         try:
-            _publish_brain_step(job_id, "Σύγκριση με myDATA E3 (585.007 / 585.014)", percent=40)
-            mydata_585_007 = _sum_mydata_sub_code(mydata_user, mydata_key, year, "585", "007")
-            mydata_585_014 = _sum_mydata_sub_code(mydata_user, mydata_key, year, "585", "014")
+            _publish_brain_step(job_id, "Σύγκριση με myDATA E3 (πλήρης πίνακας)", percent=40)
+            # Pull the full E3 once and reuse — saves two extra round-trips
+            # vs the previous code which only summed two sub-codes. The
+            # full report flows back to the client so the bulk PDF export
+            # can render the same πίνακας that the Ατομικός builds.
+            #
+            # NOTE: AADE's RequestE3Info expects `dd/mm/yyyy` for
+            # dateFrom/dateTo. ISO `yyyy-mm-dd` is silently accepted but
+            # matches NO entries — which is how the bulk pathway was
+            # quietly returning empty reports while /api/e3/fetch (which
+            # passes the user's raw dd/mm/yyyy input) was returning 4000+
+            # entries for the same period.
+            from .fetch_e3 import build_e3_report as _build_e3_report
+            from collections import defaultdict as _dd
+            _df = f"01/01/{year}"
+            _dt = f"31/12/{year}"
+            _entries = fetch_e3_entries("0", _df, _dt, mydata_user, mydata_key, debug=False)
+
+            # Same unclassified-vs-classified split that `/api/e3/fetch`
+            # performs — keeps μη-χαρακτηρισμένα out of 585.016 and
+            # surfaces them as their own list so the bulk PDF export can
+            # render «Λίστα μη χαρακτηρισμένων» per client.
+            _mark_totals: Dict[str, float] = _dd(float)
+            _mark_is_un: Dict[str, bool] = {}
+            for _r in (_entries or []):
+                _mk = str(_r.get("invoice_mark") or "").strip()
+                if not _mk:
+                    continue
+                _mark_totals[_mk] += float(_r.get("amount") or 0.0)
+                _cat = str(_r.get("classification_category") or "").strip().upper()
+                _u = _cat.startswith("ΜΗ") and ("ΧΑΡΑΚΤΗΡΙΣΜ" in _cat)
+                if _mk not in _mark_is_un:
+                    _mark_is_un[_mk] = bool(_u)
+                elif _u:
+                    _mark_is_un[_mk] = True
+            _classified_marks = set()
+            for _mk, _u in _mark_is_un.items():
+                if _u:
+                    _amt = round(float(_mark_totals.get(_mk, 0.0)), 2)
+                    unclassified_total += _amt
+                    unclassified_invoices.append({
+                        "mark": _mk, "amount": _amt,
+                        "issueDate": "", "issuerVat": "", "issuerName": "",
+                    })
+                else:
+                    _classified_marks.add(_mk)
+            _classified_entries = [
+                _r for _r in (_entries or [])
+                if str(_r.get("invoice_mark") or "").strip() in _classified_marks
+            ]
+            unclassified_total = round(unclassified_total, 2)
+
+            _report = _build_e3_report(_classified_entries)
+            mydata_e3_report = {
+                "revenue":  _report.get("revenue", []),
+                "expenses": _report.get("expenses", []),
+                "info":     _report.get("info", []),
+                "tableZ":   _report.get("tableZ", []),
+            }
+            # Re-derive 585.007 / 585.014 from the same CLASSIFIED entries
+            # so the comparison numbers match what the table now shows.
+            mydata_585_007 = sum(
+                float(_r.get("amount") or 0.0)
+                for _r in _classified_entries
+                if str(_r.get("code") or "") == "585" and str(_r.get("sub_code") or "") == "007"
+            )
+            mydata_585_007 = round(mydata_585_007, 2)
+            mydata_585_014 = sum(
+                float(_r.get("amount") or 0.0)
+                for _r in _classified_entries
+                if str(_r.get("code") or "") == "585" and str(_r.get("sub_code") or "") == "014"
+            )
+            mydata_585_014 = round(mydata_585_014, 2)
         except Exception as exc:
             warnings.append(f"Αποτυχία ανάκτησης myDATA E3: {exc}")
 
@@ -2658,6 +2733,15 @@ def process_client(
             "e9_ran": e9_ran,
             "e9_error": e9_error,
             "pdfs_saved": pdfs_saved,
+            # Full myDATA E3 report (revenue / expenses / info / tableZ)
+            # so the bulk renderer + PDF export can build the analytic
+            # πίνακας per-client without an extra /api/e3/fetch round-trip.
+            "mydata_e3_report": mydata_e3_report,
+            # μη-χαρακτηρισμένα παραστατικά per client — surfaced so the
+            # bulk PDF export can include the «Λίστα μη χαρακτηρισμένων»
+            # for each company.
+            "unclassified_total": unclassified_total,
+            "unclassified_invoices": unclassified_invoices,
         },
         "credential_snapshot": credential_snapshot,
         "messages": messages,

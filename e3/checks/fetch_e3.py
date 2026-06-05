@@ -122,6 +122,19 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
     }
 
     all_entries: List[dict] = []
+    # AADE's RequestE3Info wraps each invoice in MULTIPLE container nodes —
+    # an `<expensesInvoiceClassification>` (or `<incomeInvoiceClassification>`)
+    # AND an `<E3Info>` for the same mark. The classification details are
+    # repeated in each wrapper, so naively iterating all three wrappers
+    # double-counts every entry. We dedupe at the (mark, classification_type,
+    # amount, category) granularity which is the unit AADE means to be
+    # unique per invoice — a single mark genuinely can have multiple
+    # classification details with different amounts, but the same exact
+    # 4-tuple appearing twice is always a duplicate from the wrapper-loop.
+    # (Concrete repro: ΛΟΥΓΑΡΗΣ 2025 returned 17 rows for 585.007 across
+    # 12 unique marks → 5 duplicates × €352.59/€361.84 = €1799.95 = exactly
+    # the overcount vs the official AADE PDF.)
+    seen_entries = set()
 
     while True:
         resp = requests.get(_URL_REQUEST_E3, params=params, headers=headers)
@@ -188,6 +201,19 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
                     amount = -abs(amount)
 
                 category = _find_text_by_localnames(cls_node, {"classificationCategory", "V_Class_Category"})
+                # Dedupe across wrapper nodes for the same invoice. AADE
+                # returns each classification line inside multiple parent
+                # blocks; the (mark, cls_type, amount, category) tuple is
+                # the natural unit of identity for a line item.
+                dedup_key = (
+                    _safe_strip(invoice_mark),
+                    _safe_strip(cls_type).upper(),
+                    round(amount, 2),
+                    _safe_strip(category).upper(),
+                )
+                if dedup_key in seen_entries:
+                    continue
+                seen_entries.add(dedup_key)
                 all_entries.append(
                     {
                         "invoice_mark": _safe_strip(invoice_mark),
