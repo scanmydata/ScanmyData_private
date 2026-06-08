@@ -5485,6 +5485,28 @@
           : `E3 Brain bulk εκτέλεση ολοκληρώθηκε για ${data.total_clients || 0} πελάτες.`);
       showBrainFlash(summary, data.aborted ? 'warning' : 'success');
       try { _renderBulkResultsAccordion(data); } catch (e) { console.error('bulk render failed', e); }
+      // Partial reload after bulk completion — refresh the saved
+      // credentials cache (so brand-new entries written by the brain
+      // appear in the «Αποθηκευμένα» tab), the PDF browser (so the just-
+      // saved ΕΦΚΑ/ΤΕΚΑ/Μισθωτηρίων/Ε9 files surface immediately) and the
+      // active-client dropdown. No full page reload so the user keeps any
+      // scroll/expand state in the accordion.
+      try {
+        await Promise.all([
+          (typeof fetchE3BrainCredentials === 'function')
+            ? fetchE3BrainCredentials({ verbose: false }).catch(() => {})
+            : Promise.resolve(),
+          (typeof fetchE3BrainActiveClients === 'function')
+            ? fetchE3BrainActiveClients({ verbose: false }).catch(() => {})
+            : Promise.resolve(),
+        ]);
+      } catch (_) {}
+      try {
+        if (typeof refreshBrainAllPdfs === 'function') {
+          await refreshBrainAllPdfs().catch(() => {});
+        }
+      } catch (_) {}
+      try { if (typeof renderBrainCredsList === 'function') renderBrainCredsList(); } catch (_) {}
     } catch (e) {
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');

@@ -3,9 +3,19 @@ import asyncio
 import json
 import os
 import re
+import sys
 import unicodedata
 from pathlib import Path
 from playwright.async_api import Playwright, async_playwright
+
+# Reconfigure stdio to utf-8 on Windows so Greek text inside print() calls
+# (or exception strings re-printed via the brain's _run_script_and_read_json)
+# doesn't crash with UnicodeEncodeError under the default cp1252 console.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 AADE_ENTRY_URL = "https://www1.aade.gr/sgsisapps/plcs"
 AADE_COMREG_URL = "https://www1.aade.gr/saadeapps3/comregistry/#!/arxiki"
@@ -193,19 +203,39 @@ async def detail_matches_address(detail: dict, target_address: str) -> bool:
 
 
 async def try_download_receipt_pdf(page, pdf_dir: Path, trans_id: str, label: str) -> str:
-    """Click the lease's receiptButton and save the PDF. Returns path or ''.
+    """Click the lease's receipt button and save the PDF. Returns path or ''.
 
     Best-effort: never raises. The user can also bail out of this from the
     UI (the misth check still works without the PDF).
 
-    The filename uses ``label`` (typically the matched property address)
-    as the human-readable token, so the user can find the right lease
-    from a directory listing — e.g.
-    ``misth_ΠΑΡΑΔΕΙΣΟΥ_16_ΑΘΗΝΑ_16672_94653948.pdf``. ``trans_id`` lands
-    at the end as a uniqueness suffix.
+    Tries the documented `receiptButton` first then falls back to a set of
+    anchors/buttons commonly used for the «Εκτύπωση Αποδεικτικού» action so
+    a UI rename on the AADE side doesn't silently drop every PDF.
     """
-    btn = page.locator("input[name='receiptButton']")
-    if await btn.count() == 0:
+    # Ordered selector list — first hit wins. The original AADE form used
+    # input[name='receiptButton']; recent revamps have introduced anchor +
+    # button variants. We accept all of them so the brain doesn't silently
+    # lose every PDF after a UI tweak.
+    selectors = [
+        "input[name='receiptButton']",
+        "input[type=button][value*='ποδει' i]",   # «Εκτύπωση Αποδεικτικού»
+        "input[type=submit][value*='ποδει' i]",
+        "a:has-text('Εκτύπωση Αποδεικτικού')",
+        "button:has-text('Εκτύπωση Αποδεικτικού')",
+        "a:has-text('Αποδεικτικό')",
+        "input[type=button][value*='Εκτύπωση' i]",
+    ]
+    btn = None
+    for sel in selectors:
+        loc = page.locator(sel)
+        try:
+            if await loc.count() > 0:
+                btn = loc.first
+                break
+        except Exception:
+            continue
+    if btn is None:
+        print(f"  [misth-pdf] receipt button NOT FOUND for transId={trans_id}; tried {len(selectors)} selectors")
         return ""
     pdf_dir.mkdir(parents=True, exist_ok=True)
     # Preserve Greek letters + digits + ` -._`; collapse everything else to
@@ -218,12 +248,16 @@ async def try_download_receipt_pdf(page, pdf_dir: Path, trans_id: str, label: st
     suffix = f"_{trans_id}" if (trans_id and trans_id not in safe) else ""
     out = pdf_dir / f"misth_{safe}{suffix}.pdf"
     try:
-        async with page.expect_download(timeout=20000) as dl_info:
-            await btn.first.click(timeout=15000)
+        async with page.expect_download(timeout=30000) as dl_info:
+            await btn.click(timeout=15000)
         dl = await dl_info.value
         await dl.save_as(str(out))
+        print(f"  [misth-pdf] saved {out.name} for transId={trans_id}")
         return str(out)
-    except Exception:
+    except Exception as exc:
+        # Surface the actual failure reason so we can diagnose why the PDF
+        # didn't arrive (timeout vs. nav-without-download vs. permission).
+        print(f"  [misth-pdf] download FAILED for transId={trans_id}: {type(exc).__name__}: {exc}")
         return ""
 
 

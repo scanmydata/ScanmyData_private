@@ -2,10 +2,26 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 from pathlib import Path
 
 import pdfplumber
 from playwright.async_api import Playwright, async_playwright
+
+# Windows consoles default to cp1252 which can't encode Greek characters
+# like Α (U+0391) / Κ (U+039A). Without this reconfigure the final
+# `print(f'Wrote ETΑΚ JSON to: ...')` crashes with UnicodeEncodeError
+# AFTER the JSON has already been written — the brain then sees a
+# non-zero return code and surfaces the traceback as the E9 error string
+# even though the work actually succeeded. Set both stdout AND stderr so
+# tracebacks from elsewhere also stay legible when bubbling up.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except Exception:
+    # Python < 3.7 / restricted environments — fall back to a no-op; the
+    # ASCII-safe final print below still keeps us crash-free.
+    pass
 
 AADE_ENTRY_URL = "https://www1.aade.gr/sgsisapps/plcs"
 AADE_COMREG_URL = "https://www1.aade.gr/saadeapps3/comregistry/#!/arxiki"
@@ -574,7 +590,10 @@ async def run(playwright: Playwright, username: str, password: str, year: str, a
     with output_path.open('w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f'Wrote ETΑΚ JSON to: {output_path}')
+    # Use ASCII-only message so we are crash-proof even when stdout
+    # reconfigure above fails (e.g. older Python). The brain only cares
+    # about the JSON file, not the human message.
+    print(f'Wrote ETAK JSON to: {output_path}')
 
     await context.close()
     await browser.close()
