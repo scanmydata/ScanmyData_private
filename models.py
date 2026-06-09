@@ -281,3 +281,29 @@ class VerificationToken(db.Model):
         if datetime.datetime.utcnow() > self.expires_at:
             return False
         return True
+
+
+class Setting(db.Model):
+    __tablename__ = 'setting'
+    key = db.Column(db.String(64), primary_key=True)
+    value = db.Column(db.String(1024), nullable=False, default='')
+    updated_at = db.Column(db.DateTime(), nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    @classmethod
+    def get(cls, key: str, default: str = '') -> str:
+        try:
+            row = cls.query.get(key)
+            return row.value if row else default
+        except Exception:
+            return default
+
+    @classmethod
+    def set(cls, key: str, value: str) -> None:
+        row = cls.query.get(key)
+        if row is None:
+            row = cls(key=key, value=str(value))
+            db.session.add(row)
+        else:
+            row.value = str(value)
+            row.updated_at = datetime.datetime.utcnow()
+        db.session.commit()

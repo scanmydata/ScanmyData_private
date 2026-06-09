@@ -363,16 +363,46 @@
         </div>
       </div>
 
-      <!-- Firebase Sync Settings -->
+      <!-- Storage Backend -->
+      <div id="storage-backend-card" class="bg-white border border-gray-200 rounded-lg p-6">
+        <h3 class="text-lg font-bold mb-4">🗄️ Storage Backend</h3>
+        <p class="text-xs text-gray-500 mb-3">
+          Καθορίζει πού γίνονται οι λειτουργίες <strong>push / pull / log</strong> των group δεδομένων.
+          Οι ρυθμίσεις Sync (mode / interval / smart sync) παρακάτω εφαρμόζονται στο ενεργό backend.
+        </p>
+        <div class="p-3 bg-gray-50 rounded border border-gray-200">
+          <label for="storage-backend-select" class="font-medium text-gray-700">Ενεργό backend</label>
+          <select id="storage-backend-select" class="mt-2 w-full px-3 py-2 border border-gray-300 rounded-md">
+            <option value="drive">Google Drive (Scanmydata_data folder)</option>
+            <option value="firebase">Firebase Realtime Database (legacy)</option>
+          </select>
+          <p class="text-xs text-gray-500 mt-2">
+            Η αλλαγή τίθεται σε ισχύ άμεσα — σιγουρέψου ότι το νέο backend περιέχει τα data πριν την αλλαγή.
+          </p>
+        </div>
+        <div id="storage-backend-status" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
+          <h4 class="font-medium text-blue-800 mb-1">📊 Τρέχουσα Κατάσταση</h4>
+          <div class="text-sm text-blue-700" id="storage-backend-status-text">Loading...</div>
+        </div>
+        <button onclick="saveStorageBackend()" class="mt-3 w-full px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
+          💾 Save Backend
+        </button>
+      </div>
+
+      <!-- Sync Settings (applies to whichever storage backend is active) -->
       <div class="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 class="text-lg font-bold mb-4">☁️ Firebase Sync Settings</h3>
-        
+        <h3 class="text-lg font-bold mb-4">☁️ Sync Settings</h3>
+        <p class="text-xs text-gray-500 mb-3">
+          Ρυθμίσεις για το πότε και πώς γίνεται το push-pull. Εφαρμόζονται στο
+          <strong id="sync-settings-backend-hint" class="text-sky-700">ενεργό backend</strong>.
+        </p>
+
         <div class="space-y-4">
           <!-- Sync Mode -->
           <div class="p-3 bg-gray-50 rounded border border-gray-200">
             <div>
               <label for="sync-mode" class="font-medium text-gray-700">Mode Συγχρονισμού</label>
-              <p class="text-xs text-gray-500 mt-1">Επίλεξε αν το Firebase push-pull backup θα γίνεται στο login/logout ή με χρονοπρογραμματισμένο scheduler.</p>
+              <p class="text-xs text-gray-500 mt-1">Επίλεξε αν το push-pull backup θα γίνεται στο login/logout ή με χρονοπρογραμματισμένο scheduler.</p>
             </div>
             <select id="sync-mode" class="mt-3 w-full px-3 py-2 border border-gray-300 rounded-md">
               <option value="login_logout">Login / Logout</option>
@@ -497,7 +527,7 @@ function showTab(tabName) {
   else if (tabName === 'backups') loadBackups();
   else if (tabName === 'email') loadEmailUsers();
   else if (tabName === 'firebase_usage') loadFirebaseUsage();
-  else if (tabName === 'settings') loadFirebaseSyncSettings();
+  else if (tabName === 'settings') { loadFirebaseSyncSettings(); loadStorageBackend(); }
 }
 
 // ==================== OVERVIEW TAB ====================
@@ -2333,6 +2363,74 @@ async function saveFirebaseSyncSettings() {
   }
 }
 
+// ==================== STORAGE BACKEND ====================
+function _backendLabel(b) {
+  return b === 'drive' ? 'Google Drive' : (b === 'firebase' ? 'Firebase RTDB' : b);
+}
+
+function _updateStorageBackendStatus(backend) {
+  const statusEl = document.getElementById('storage-backend-status-text');
+  const hintEl = document.getElementById('sync-settings-backend-hint');
+  const card = document.getElementById('storage-backend-card');
+  const label = _backendLabel(backend);
+  if (statusEl) {
+    const icon = backend === 'drive' ? '🟢' : '🟡';
+    statusEl.textContent = `${icon} Ενεργό: ${label}`;
+  }
+  if (hintEl) hintEl.textContent = label;
+  if (card) {
+    card.classList.remove('border-emerald-300', 'border-amber-300');
+    card.classList.add(backend === 'drive' ? 'border-emerald-300' : 'border-amber-300');
+  }
+}
+
+async function loadStorageBackend() {
+  try {
+    const res = await fetch('/admin/api/storage-backend');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'load failed');
+    const backend = (json.data && json.data.backend) || 'drive';
+    const sel = document.getElementById('storage-backend-select');
+    if (sel) sel.value = backend;
+    _updateStorageBackendStatus(backend);
+  } catch (err) {
+    console.error('Storage backend load failed', err);
+    const statusEl = document.getElementById('storage-backend-status-text');
+    if (statusEl) statusEl.textContent = '⚠️ Αδυναμία φόρτωσης κατάστασης';
+  }
+}
+
+async function saveStorageBackend() {
+  const sel = document.getElementById('storage-backend-select');
+  if (!sel) return;
+  const next = sel.value;
+  const current = (document.getElementById('storage-backend-status-text').textContent || '').toLowerCase();
+  if (current.includes(_backendLabel(next).toLowerCase())) {
+    showSuccessModal('Καμία αλλαγή', 'Το backend είναι ήδη ' + _backendLabel(next) + '.');
+    return;
+  }
+  const confirmMsg =
+    `Αλλαγή storage backend σε ${_backendLabel(next)}.\n\n` +
+    'Όλες οι λειτουργίες push/pull/log θα γίνονται αμέσως στο νέο backend.\n' +
+    'Βεβαιώσου ότι έχει γίνει migration των δεδομένων εκεί, αλλιώς οι χρήστες θα βλέπουν άδεια data.\n\n' +
+    'Να προχωρήσω;';
+  if (!confirm(confirmMsg)) return;
+  try {
+    const res = await fetch('/admin/api/storage-backend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: next })
+    });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'save failed');
+    _updateStorageBackendStatus(json.data.backend);
+    showSuccessModal('✅ Αποθήκευση', 'Backend άλλαξε σε ' + _backendLabel(json.data.backend) + '.');
+  } catch (err) {
+    console.error('Storage backend save failed', err);
+    showErrorModal('❌ Σφάλμα', 'Αποτυχία αλλαγής backend: ' + err.message);
+  }
+}
+
 // ==================== INITIALIZATION ====================
 window.addEventListener('load', function() {
   const modeEl = document.getElementById('sync-mode');
@@ -2346,6 +2444,7 @@ window.addEventListener('load', function() {
   loadEmailConfiguration();
   loadEmailProviderSettings();
   loadFirebaseSyncSettings();
+  loadStorageBackend();
   
   // Auto-refresh stats every 30 seconds
   setInterval(loadStats, 30000);

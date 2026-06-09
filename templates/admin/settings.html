@@ -5,6 +5,35 @@
     <h1>Admin Settings</h1>
     <p><a href="/admin" class="btn btn-secondary">← Back to Dashboard</a></p>
 
+    <div class="card mb-3 border-{% if storage_backend == 'drive' %}success{% else %}warning{% endif %}">
+        <div class="card-body">
+            <h5 class="card-title">Storage Backend</h5>
+            <p class="mb-2">
+                Active backend:
+                <strong class="text-{% if storage_backend == 'drive' %}success{% else %}warning{% endif %}">
+                    {{ storage_backend|upper }}
+                </strong>
+            </p>
+            <form method="POST" action="/admin/settings/save" onsubmit="return confirmBackendSwitch(this);">
+                <div class="form-group">
+                    <label for="storage_backend">Storage backend</label>
+                    <select name="storage_backend" id="storage_backend" class="form-control" data-current="{{ storage_backend }}">
+                        <option value="drive" {% if storage_backend == 'drive' %}selected{% endif %}>
+                            Google Drive (Scanmydata_data folder)
+                        </option>
+                        <option value="firebase" {% if storage_backend == 'firebase' %}selected{% endif %}>
+                            Firebase Realtime Database (legacy)
+                        </option>
+                    </select>
+                    <small class="form-text text-muted">
+                        Controls where group data is pushed/pulled. Switching takes effect immediately for all subsequent operations — make sure both backends are populated before flipping, or you may see empty data after login.
+                    </small>
+                </div>
+                <button type="submit" class="btn btn-primary">Save backend</button>
+            </form>
+        </div>
+    </div>
+
     <div class="card mb-3">
         <div class="card-body">
             <h5 class="card-title">Email Configuration</h5>
@@ -150,10 +179,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial state
     toggleRailwayProxyUrl();
     toggleFirebaseScheduleFields();
-    
+
     // On change
     emailProviderSelect.addEventListener('change', toggleRailwayProxyUrl);
     if (firebaseSyncModeSelect) firebaseSyncModeSelect.addEventListener('change', toggleFirebaseScheduleFields);
 });
+
+function confirmBackendSwitch(form) {
+    const sel = form.querySelector('#storage_backend');
+    if (!sel) return true;
+    const current = sel.getAttribute('data-current') || '';
+    const next = sel.value || '';
+    if (current === next) return true;
+    const msg = `Switching storage backend from ${current.toUpperCase()} to ${next.toUpperCase()}.\n\n` +
+                `All subsequent push/pull/log operations will use the new backend immediately.\n` +
+                `Make sure data is migrated to ${next.toUpperCase()} first, or users may see empty data.\n\n` +
+                `Continue?`;
+    return confirm(msg);
+}
 </script>
 {% endblock %}

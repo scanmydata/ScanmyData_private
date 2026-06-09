@@ -38,6 +38,39 @@ _firebase_bootstrap_pull_lock = threading.Lock()
 _LOCAL_PAYLOAD_STATE_FILENAME = '.payload_state.json'
 
 
+# ============================================================================
+# Storage backend dispatch (firebase RTDB vs Google Drive)
+# ============================================================================
+# The active backend is determined by:
+#   1. Setting.get('storage_backend')  (admin-controlled, persisted)
+#   2. env STORAGE_BACKEND fallback
+#   3. default = 'drive' (post-migration)
+# Lookup is wrapped in try/except so it works before SQLAlchemy is ready
+# (e.g. during very early imports).
+
+# NOTE: starts as 'firebase' until the one-time bulk migration runs and the
+# admin (or a manual Setting.set call) flips it to 'drive'.
+_DEFAULT_STORAGE_BACKEND = 'firebase'
+
+
+def _get_storage_backend() -> str:
+    try:
+        from models import Setting
+        val = (Setting.get('storage_backend', '') or '').strip().lower()
+        if val in ('firebase', 'drive'):
+            return val
+    except Exception:
+        pass
+    env_val = (os.getenv('STORAGE_BACKEND') or '').strip().lower()
+    if env_val in ('firebase', 'drive'):
+        return env_val
+    return _DEFAULT_STORAGE_BACKEND
+
+
+def _drive_backend_active() -> bool:
+    return _get_storage_backend() == 'drive'
+
+
 def _firebase_pull_activity_state_path() -> str:
     return os.path.join(os.getcwd(), 'data', '.firebase_pull_activity_state.json')
 
@@ -1008,7 +1041,21 @@ def firebase_delete_data(path: str) -> bool:
 
 
 def firebase_log_activity(user_id: str, group_name: str, action: str, details: Optional[Dict] = None) -> bool:
-    """Log user activity to Firebase for traffic tracking"""
+    """Log user activity (Drive or RTDB depending on active backend)."""
+    if _drive_backend_active():
+        try:
+            from firebase.drive_storage import drive_log_activity
+            ok = drive_log_activity(user_id, group_name, action, details)
+            # Activity-version counter is read by frontend auto-reload.
+            try:
+                _increment_activity_version()
+            except Exception:
+                pass
+            return ok
+        except Exception as e:
+            logger.error('[LOG] Drive backend failed for activity log: %s', e)
+            return False
+
     try:
         timestamp = datetime.now(timezone.utc).isoformat()
         log_entry = {
@@ -1224,6 +1271,21 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_
     
     Returns True if push succeeded or no files found.
     """
+    if _drive_backend_active():
+        try:
+            from firebase.drive_storage import drive_push_group_files
+            return drive_push_group_files(
+                group_name,
+                local_data_root=local_data_root,
+                dry_run=dry_run,
+                verbose=verbose,
+                force=force,
+                local_group_folder=local_group_folder,
+            )
+        except Exception as e:
+            logger.error('[PUSH] Drive backend failed, no fallback: %s', e)
+            return False
+
     try:
         if not is_firebase_enabled():
             logger.warning('[PUSH] Firebase not enabled; cannot push group files')
@@ -1533,6 +1595,19 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None, f
     
     Returns True if pull succeeded (or no data found to pull).
     """
+    if _drive_backend_active():
+        try:
+            from firebase.drive_storage import drive_pull_group_to_local
+            return drive_pull_group_to_local(
+                group_name,
+                local_data_root=local_data_root,
+                force=force,
+                local_group_folder=local_group_folder,
+            )
+        except Exception as e:
+            logger.error('[PULL] Drive backend failed, no fallback: %s', e)
+            return False
+
     try:
         if (not force) and (not firebase_auto_pull_enabled()):
             logger.info('[PULL] Auto pull skipped for group %s (server-authoritative mode)', group_name)
@@ -1860,6 +1935,14 @@ def ensure_group_data_local(group_folder: str, create_empty_dirs: bool = True) -
         True if folder now exists and is accessible (or will be created)
         False only if there's a critical error
     """
+    if _drive_backend_active():
+        try:
+            from firebase.drive_storage import drive_ensure_group_data_local
+            return drive_ensure_group_data_local(group_folder, create_empty_dirs=create_empty_dirs)
+        except Exception as e:
+            logger.error('[ENSURE] Drive backend failed: %s', e)
+            return False
+
     def _start_background_pull(folder):
         try:
             # mark running

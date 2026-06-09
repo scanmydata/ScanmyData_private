@@ -18607,7 +18607,12 @@ def admin_activity_logs():
 @_require_admin
 def admin_settings():
     settings = load_settings()
-    return render_template('admin/settings.html', settings=settings)
+    try:
+        from models import Setting
+        storage_backend = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
+    except Exception:
+        storage_backend = 'drive'
+    return render_template('admin/settings.html', settings=settings, storage_backend=storage_backend)
 
 
 @app.route('/admin/settings/save', methods=['POST'])
@@ -18644,6 +18649,19 @@ def admin_settings_save():
     settings['firebase_backup_schedule_minutes'] = schedule_minutes
     
     save_admin_settings(settings)
+
+    # Storage backend toggle (firebase RTDB vs Google Drive)
+    try:
+        from models import Setting
+        new_backend = (form.get('storage_backend') or '').strip().lower()
+        if new_backend in ('firebase', 'drive'):
+            current = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
+            if new_backend != current:
+                Setting.set('storage_backend', new_backend)
+                flash(f'Storage backend switched to {new_backend.upper()}', 'warning')
+    except Exception as e:
+        log.exception('failed to update storage_backend setting: %s', e)
+
     flash('Settings saved', 'success')
     return redirect(url_for('admin_settings'))
 
@@ -18757,6 +18775,74 @@ def api_admin_firebase_usage():
     # convert to sorted list for charting
     data = [{'ts': k, 'bytes': v} for k, v in sorted(buckets.items())]
     return jsonify({'success': True, 'data': data})
+
+
+@app.route('/admin/api/drive-backoff', methods=['GET'])
+@login_required
+def api_admin_drive_backoff():
+    """Return current adaptive backoff state for the Drive backend."""
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    try:
+        from firebase import drive_storage as _ds
+        snap = _ds.get_backoff_status()
+        remaining = _ds.time_until_next_allowed()
+        return jsonify({
+            'success': True,
+            'data': {
+                'consecutive_hits': int(snap.get('consecutive_hits') or 0),
+                'last_hit_at': float(snap.get('last_hit_at') or 0),
+                'last_success_at': float(snap.get('last_success_at') or 0),
+                'next_allowed_at': float(snap.get('next_allowed_at') or 0),
+                'seconds_until_next_allowed': remaining,
+                'is_deferred': remaining > 0,
+            },
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/admin/api/storage-backend', methods=['GET', 'POST'])
+@login_required
+def api_admin_storage_backend():
+    """Read or flip the active storage backend (firebase RTDB vs Google Drive).
+
+    The selected backend controls where firebase_push_group_files /
+    firebase_pull_group_to_local / firebase_log_activity / ensure_group_data_local
+    actually write/read. The sync mode/interval/smart-sync settings apply to
+    whichever backend is active.
+    """
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    from models import Setting
+
+    if request.method == 'GET':
+        current = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
+        if current not in ('firebase', 'drive'):
+            current = 'drive'
+        return jsonify({
+            'success': True,
+            'data': {'backend': current},
+        })
+
+    payload = request.get_json(silent=True) or {}
+    new_backend = (payload.get('backend') or '').strip().lower()
+    if new_backend not in ('firebase', 'drive'):
+        return jsonify({'success': False, 'error': "backend must be 'firebase' or 'drive'"}), 400
+    previous = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
+    if new_backend != previous:
+        Setting.set('storage_backend', new_backend)
+        try:
+            firebase_config.firebase_log_activity(
+                str(getattr(current_user, 'id', 'admin')),
+                '__admin__',
+                'storage_backend_switched',
+                {'from': previous, 'to': new_backend},
+            )
+        except Exception:
+            log.debug('Could not log storage_backend switch')
+    return jsonify({'success': True, 'data': {'backend': new_backend, 'previous': previous}})
 
 
 @app.route('/api/admin/firebase-sync-settings', methods=['GET', 'POST'])
@@ -19132,6 +19218,25 @@ def _firebase_backup_scheduler_loop():
                         prev = float(_firebase_backup_last_run.get(group_name) or 0)
                         if prev and (now_ts - prev) < interval_secs:
                             continue
+
+                        # When the Drive backend is active, also honour the
+                        # adaptive rate-limit backoff. Cold-start groups
+                        # (empty local data/) bypass the backoff so they get
+                        # their first pull immediately on server boot.
+                        if firebase_config._drive_backend_active():
+                            try:
+                                from firebase import drive_storage as _ds
+                                defer, remaining, reason = _ds.should_defer_sync(group_folder)
+                                if defer:
+                                    log.info(
+                                        'Deferring sync for group=%s (drive rate-limit backoff, %.0fs remaining)',
+                                        group_name, remaining,
+                                    )
+                                    continue
+                                if reason == 'cold_start_bypass':
+                                    log.info('Cold-start sync for group=%s — bypassing any backoff', group_name)
+                            except Exception:
+                                log.exception('Backoff check failed for group=%s; proceeding', group_name)
 
                         log.info('Scheduled Firebase backup sync start for group=%s (interval=%ss)', group_name, interval_secs)
                         # Keep local payload ready, then reconcile based on which side is newer.

@@ -1,5 +1,6 @@
 firebase-key.json
 .env
+drive_token.json
 *.pem
 __pycache__/
 *.pyc
