@@ -1,6 +1,7 @@
 import re
 from collections import defaultdict
-from typing import Dict, List
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Tuple
 
 import requests
 
@@ -97,6 +98,57 @@ def _iter_classification_nodes(invoice_node):
             yield node
 
 
+def _parse_ddmmyyyy(s: str) -> date:
+    return datetime.strptime(_safe_strip(s), "%d/%m/%Y").date()
+
+
+def _fmt_ddmmyyyy(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+def _quarter_chunks(date_from: str, date_to: str) -> List[Tuple[str, str]]:
+    """Split [date_from, date_to] into ≤92-day quarterly sub-ranges.
+
+    Why: AADE's RequestE3Info returns the same entry across multiple
+    paging windows when the range spans many months (observed for the
+    full-year 2025 range on ΑΦΜ 036209456 in 06/2026 — page 4 and page 5
+    both started with mark 400011925882593). With a yearly fetch + tuple
+    dedup we accidentally dropped legitimate line items of the same
+    invoice that happened to share an amount, mismatching the official
+    AADE PDF totals by €1.4k on κωδ. 561 and €3k on κωδ. 102.
+
+    Splitting into quarters keeps each paged result small enough that
+    cross-page overlap doesn't happen, and a mark can only appear in
+    one quarter (it has exactly one IssueDate), so quarter results are
+    naturally disjoint.
+    """
+    try:
+        start = _parse_ddmmyyyy(date_from)
+        end = _parse_ddmmyyyy(date_to)
+    except Exception:
+        return [(date_from, date_to)]
+    if end <= start:
+        return [(date_from, date_to)]
+
+    chunks: List[Tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        year = cursor.year
+        month = cursor.month
+        q_start_month = ((month - 1) // 3) * 3 + 1
+        q_start = date(year, q_start_month, 1)
+        # Last day of the quarter
+        if q_start_month + 3 > 12:
+            q_end = date(year, 12, 31)
+        else:
+            q_end = date(year, q_start_month + 3, 1) - timedelta(days=1)
+        chunk_from = max(cursor, q_start)
+        chunk_to = min(end, q_end)
+        chunks.append((_fmt_ddmmyyyy(chunk_from), _fmt_ddmmyyyy(chunk_to)))
+        cursor = q_end + timedelta(days=1)
+    return chunks
+
+
 def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> List[dict]:
     """Fetch and normalize RequestE3Info rows.
 
@@ -109,6 +161,36 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
         "classification_category": "...",
         "amount": 123.45,
       }
+
+    Splits the range into quarterly sub-fetches automatically to avoid
+    AADE's cross-page overlap on long ranges (see `_quarter_chunks`).
+    """
+    # Only chunk if a real range was given. The bulk callers pass
+    # mark="0" + dates; if a specific mark is passed we don't chunk
+    # because that lookup is for a single document.
+    if _safe_strip(mark) and _safe_strip(mark) != "0":
+        return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
+
+    chunks = _quarter_chunks(date_from, date_to)
+    if len(chunks) <= 1:
+        return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
+
+    if debug:
+        print(f"[RequestE3Info] Splitting {date_from}–{date_to} into {len(chunks)} quarters")
+    out: List[dict] = []
+    for cf, ct in chunks:
+        out.extend(_fetch_e3_entries_single_range(mark, cf, ct, aade_user, aade_key, debug=debug))
+    return out
+
+
+def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> List[dict]:
+    """Inner fetcher for a single date range with its own pagination + dedup.
+
+    Dedup tuple is (mark, classification_type, amount, category). This
+    catches legitimate cross-page duplicates (AADE returns the same
+    line in >1 paged windows on long ranges) without merging real
+    line items, because callers chunk the range into quarters first
+    via `fetch_e3_entries`.
     """
     headers = {
         "aade-user-id": aade_user,
@@ -122,18 +204,6 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
     }
 
     all_entries: List[dict] = []
-    # AADE's RequestE3Info wraps each invoice in MULTIPLE container nodes —
-    # an `<expensesInvoiceClassification>` (or `<incomeInvoiceClassification>`)
-    # AND an `<E3Info>` for the same mark. The classification details are
-    # repeated in each wrapper, so naively iterating all three wrappers
-    # double-counts every entry. We dedupe at the (mark, classification_type,
-    # amount, category) granularity which is the unit AADE means to be
-    # unique per invoice — a single mark genuinely can have multiple
-    # classification details with different amounts, but the same exact
-    # 4-tuple appearing twice is always a duplicate from the wrapper-loop.
-    # (Concrete repro: ΛΟΥΓΑΡΗΣ 2025 returned 17 rows for 585.007 across
-    # 12 unique marks → 5 duplicates × €352.59/€361.84 = €1799.95 = exactly
-    # the overcount vs the official AADE PDF.)
     seen_entries = set()
 
     while True:

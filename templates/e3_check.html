@@ -2042,6 +2042,22 @@
     // previous client's amounts until the next αντλήση/brain run repopulates.
     const e3Container = document.getElementById('e3DataContainer');
     if (e3Container) e3Container.style.display = 'none';
+    // The «μη χαρακτηρισμένα παραστατικά» card also belongs to the previous
+    // client — hide it and reset its contents so the new client doesn't
+    // inherit stale unclassified counts/totals until the next αντλήση runs.
+    const unclassifiedCard = document.getElementById('unclassifiedSummaryCard');
+    if (unclassifiedCard) {
+      unclassifiedCard.classList.add('e3-hidden');
+      unclassifiedCard.style.display = 'none';
+    }
+    const unclassifiedListWrap = document.getElementById('unclassifiedListWrap');
+    if (unclassifiedListWrap) unclassifiedListWrap.classList.add('e3-hidden');
+    const unclassifiedListEl = document.getElementById('unclassifiedList');
+    if (unclassifiedListEl) unclassifiedListEl.innerHTML = '';
+    const unclassifiedCountEl = document.getElementById('unclassifiedCount');
+    if (unclassifiedCountEl) unclassifiedCountEl.textContent = '0';
+    const unclassifiedTotalEl = document.getElementById('unclassifiedTotal');
+    if (unclassifiedTotalEl) unclassifiedTotalEl.textContent = '0,00';
     try { E3_BRAIN_CHECKS.clear(); } catch (_) {}
     try { E3_LAST_DATA = null; } catch (_) {}
     // Wipe the αποθηκευμένα PDFs list immediately — it belongs to the
@@ -2964,8 +2980,16 @@
       if (stopped) return;
       try {
         const resp = await fetch('/api/e3/brain/progress/' + encodeURIComponent(jobId), { cache: 'no-store' });
+        // CRITICAL: re-check `stopped` AFTER every await so an in-flight
+        // poll that started just before stop() was called can't sneak in
+        // and re-show the wait overlay AFTER the caller's finally block
+        // already hid it. Previously this race left the overlay visible
+        // indefinitely on top of the review popup (user complaint
+        // 06/2026).
+        if (stopped) return;
         if (!resp.ok) return;
         const data = await resp.json();
+        if (stopped) return;
         const p = data && data.progress;
         if (p && p.label && p.label !== lastLabel) {
           // First real progress event → silence the fallback cycler.
@@ -4082,6 +4106,16 @@
   }
 
   async function runE3BrainSingle() {
+    // Immediate user feedback the moment they click — even before we've
+    // resolved credentials/vat-name/Excel checks. Without this the button
+    // looks frozen for 1-3s while saveE3BrainState + brainFetchVatName
+    // resolve, giving the impression «αργει να ξεκινησει την διαδικασια».
+    // Subsequent overlay updates (myDATA / progress) just replace the
+    // title+message of this same overlay — no flicker.
+    try {
+      showGlobalWaitOverlay('E3 Brain', 'Προετοιμασία ελέγχου…', { timeout: 60 * 60 * 1000 });
+    } catch (_) {}
+
     const afmEl = document.getElementById('brainAfm');
     const nameEl = document.getElementById('brainName');
     const addrEl = document.getElementById('brainAddress');
@@ -4112,7 +4146,14 @@
     const downloadMisthPdfs = !!(downloadMisthPdfsEl && downloadMisthPdfsEl.checked);
     const downloadE9Pdfs = !!(downloadE9PdfsEl && downloadE9PdfsEl.checked);
 
+    // Helper: every early-return below needs to clean up the "instant
+    // feedback" overlay we threw up at the top of this function — otherwise
+    // the user is stuck looking at a spinner with no progress.
+    const _earlyExit = () => { try { hideGlobalWaitOverlay(); } catch (_) {} };
+
     if (!runEfkaTeka && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs) {
+      // Hide the overlay while the modal is open so it doesn't steal focus.
+      try { hideGlobalWaitOverlay(); } catch (_) {}
       let proceedNoChecks = false;
       try {
         proceedNoChecks = await showModalConfirm(
@@ -4121,14 +4162,17 @@
           'Συνέχεια', 'Άκυρο'
         );
       } catch (_) { proceedNoChecks = false; }
-      if (!proceedNoChecks) return;
+      if (!proceedNoChecks) { _earlyExit(); return; }
+      // User confirmed — restore the overlay for the rest of the prep.
+      try { showGlobalWaitOverlay('E3 Brain', 'Προετοιμασία ελέγχου…', { timeout: 60 * 60 * 1000 }); } catch (_) {}
     }
     try { saveE3BrainState(); } catch (_) {}
 
-    if (!afmEl) return;
+    if (!afmEl) { _earlyExit(); return; }
     const afm = String(afmEl.value || '').replace(/\D/g, '');
     if (!afm || afm.length !== 9) {
       brainSetResult('Δώσε έγκυρο ΑΦΜ 9 ψηφίων.');
+      _earlyExit();
       return;
     }
 
@@ -4149,6 +4193,7 @@
     const toMatch = dateRegex.exec(dateTo);
     if (!fromMatch || !toMatch) {
       brainSetResult('Συμπλήρωσε σωστά τις ημερομηνίες Από και Έως με μορφή dd/mm/yyyy.');
+      _earlyExit();
       return;
     }
 
@@ -4156,6 +4201,7 @@
     const toYear = Number(toMatch[3]);
     if (fromYear !== toYear) {
       brainSetResult('Οι ημερομηνίες Από και Έως πρέπει να ανήκουν στην ίδια χρονιά.');
+      _earlyExit();
       return;
     }
 
@@ -4167,6 +4213,7 @@
     if (Array.isArray(E3_BRAIN_MEMBERS) && E3_BRAIN_MEMBERS.length && (!userVal || !passVal)) {
       brainSetResult('Για να γίνει αντιπαραβολή/έλεγχος σε εταιρεία συμπλήρωσε τους κωδικούς TAXISnet στην φόρμα.');
       showBrainFlash('Συμπλήρωσε κωδικούς TAXISnet για την αντιπαραβολή.', 'error');
+      _earlyExit();
       return;
     }
 
@@ -4175,6 +4222,7 @@
     const isIndividualForm = amkaWrapperEl && !amkaWrapperEl.classList.contains('hidden');
     const amkaVal = String((amkaEl && amkaEl.value) || '').trim();
     if (isIndividualForm && !amkaVal) {
+      try { hideGlobalWaitOverlay(); } catch (_) {}
       let proceed = false;
       try {
         proceed = await showModalConfirm(
@@ -4183,8 +4231,69 @@
           'Συνέχεια', 'Άκυρο'
         );
       } catch (_) { proceed = false; }
-      if (!proceed) return;
+      if (!proceed) { _earlyExit(); return; }
+      try { showGlobalWaitOverlay('E3 Brain', 'Προετοιμασία ελέγχου…', { timeout: 60 * 60 * 1000 }); } catch (_) {}
     }
+
+    // === ΙΣΟΖΥΓΙΟ pre-flight (μόνο όταν θα κατέβει review PDF) ===
+    // Αν ο χρήστης έχει επιλέξει «Αποθήκευση πίνακα αντιπαραβολής σε PDF»
+    // ΚΑΙ δεν έχει ανέβει ισοζύγιο, ρωτάμε 1 ΦΟΡΑ αν θέλει να ανέβει ένα
+    // πριν τρέξει ο έλεγχος ώστε ο πίνακας αντιπαραβολής να περιλαμβάνει
+    // και τη στήλη Ισοζύγιο/Διαφορά. Δουλεύει με τον υπάρχοντα uploader
+    // (#brainExcelFile) ή τον γενικό (#excelFile) ώστε να μη φτιάχνουμε
+    // ξεχωριστή route — η ίδια ροή ενημερώνει το E3_EXCEL_TOTALS.
+    try {
+      const saveCompElPre = document.getElementById('brainSaveComparisonPdf');
+      const wantsReviewPdf = !!(saveCompElPre && saveCompElPre.checked);
+      const hasExcel = (typeof E3_EXCEL_TOTALS !== 'undefined') &&
+                       E3_EXCEL_TOTALS instanceof Map && E3_EXCEL_TOTALS.size > 0;
+      if (wantsReviewPdf && !hasExcel) {
+        try { hideGlobalWaitOverlay(); } catch (_) {}
+        let wantsUpload = false;
+        try {
+          wantsUpload = await showModalConfirm(
+            'Εισαγωγή Ισοζυγίου',
+            'Έχεις ζητήσει «Αποθήκευση πίνακα αντιπαραβολής σε PDF» αλλά δεν έχει εισαχθεί ισοζύγιο.\n' +
+            'Θέλεις να ανεβάσεις ισοζύγιο τώρα ώστε ο πίνακας να περιλαμβάνει σύγκριση με το λογιστικό σύστημα;',
+            'Ναι, ανέβασε ισοζύγιο',
+            'Όχι, συνέχισε χωρίς'
+          );
+        } catch (_) { wantsUpload = false; }
+        if (wantsUpload) {
+          // Σιωπηρά ενεργοποιούμε τον υπάρχοντα uploader (#brainExcelFile
+          // έχει ήδη change handler που καλεί uploadBrainExcelFile και γεμίζει
+          // το E3_EXCEL_TOTALS). Εδώ απλώς ανοίγουμε το file picker και
+          // περιμένουμε ΕΙΤΕ το E3_EXCEL_TOTALS να γεμίσει, ΕΙΤΕ ο χρήστης
+          // να ακυρώσει (timeout 2′).
+          await new Promise((resolve) => {
+            const fInput = document.getElementById('brainExcelFile') ||
+                           document.getElementById('excelFile');
+            if (!fInput) { resolve(); return; }
+            const startSize = (E3_EXCEL_TOTALS instanceof Map) ? E3_EXCEL_TOTALS.size : 0;
+            let done = false;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              clearInterval(poller);
+              clearTimeout(tmo);
+              try { fInput.value = ''; } catch (_) {}
+              resolve();
+            };
+            // Polling instead of attaching a second change listener — the
+            // existing one already calls uploadBrainExcelFile; attaching a
+            // second would either double-upload or race against the first.
+            // 0.3s polling is plenty: the upload is a single fetch.
+            const poller = setInterval(() => {
+              const sz = (E3_EXCEL_TOTALS instanceof Map) ? E3_EXCEL_TOTALS.size : 0;
+              if (sz > startSize) finish();
+            }, 300);
+            const tmo = setTimeout(finish, 120000);
+            try { fInput.click(); } catch (_) { finish(); }
+          });
+        }
+        try { showGlobalWaitOverlay('E3 Brain', 'Προετοιμασία ελέγχου…', { timeout: 60 * 60 * 1000 }); } catch (_) {}
+      }
+    } catch (_) {}
 
     // Build member_credentials keyed by AFM (as backend expects), not by internal credKey
     const memberCredsForPayload = {};
@@ -4259,16 +4368,16 @@
     const stopProgress = _startBrainProgressPoller('E3 Brain', singleJobId, _progressSteps);
     brainSetResult('Εκτέλεση...');
 
-    // myDATA fetch is now part of the single-button run. Kick it off
-    // BEFORE the brain so the unclassified card + comparison data are
-    // available the moment the brain returns. Best-effort: even if the
-    // myDATA fetch fails (e.g. no credential bound), we still proceed
-    // with the brain checks.
-    try {
-      showGlobalWaitOverlay('E3 Brain', 'Λήψη δεδομένων myDATA…',
-        { timeout: 60 * 60 * 1000 });
-      await loadBrainE3Data();
-    } catch (_) { /* silent — brain run continues regardless */ }
+    // myDATA fetch is part of the single-button run. Previously this was
+    // awaited BEFORE the /api/e3/brain POST, adding ~2-3s to perceived
+    // latency. Now we fire BOTH in parallel — the brain's own internal
+    // RequestE3Info call (in e3_brain.py) is independent of our UI's
+    // loadBrainE3Data, so they run concurrently. We `await` the myDATA
+    // promise only when we actually need its result (after the brain
+    // response, to surface the "μη χαρακτηρισμένα" card).
+    const _myDataFetchPromise = (async () => {
+      try { await loadBrainE3Data(); } catch (_) { /* best-effort */ }
+    })();
 
     try {
       const response = await fetch('/api/e3/brain', {
@@ -4303,9 +4412,11 @@
 
       // After the analytical (brain) run, also surface the "μη χαρακτηρισμένα
       // παραστατικά" card just like the quick check does. The brain endpoint
-      // does not return that aggregate, so we trigger the same myDATA fetch
-      // used by the quick check — but only if it hasn't already been loaded
-      // in this session (E3_LAST_DATA is empty).
+      // does not return that aggregate, so we depend on the parallel
+      // loadBrainE3Data() call we kicked off above. Just await its
+      // settlement here — usually it has ALREADY resolved by the time the
+      // brain returns (myDATA fetch is faster than full brain run).
+      try { await _myDataFetchPromise; } catch (_) {}
       try {
         if (!E3_LAST_DATA || !Array.isArray(E3_LAST_DATA.unclassified_invoices)) {
           await loadBrainE3Data();
@@ -4339,8 +4450,18 @@
             clients: Array.isArray(data.clients) ? data.clients : [],
             aborted: false,
           };
+          // Stop the progress poller + force-hide the wait overlay BEFORE
+          // we open the review popup. Without this the overlay can re-show
+          // itself for a tick if an in-flight progress poll resolves after
+          // the finally has run but before the popup opens (user complaint
+          // 06/2026: "συνεχιζει να εμφανιζεται το wait overlay επ'αοριστο").
+          try { stopProgress(); } catch (_) {}
+          try { hideGlobalWaitOverlay(); } catch (_) {}
           // Tiny defer so the toast above gets to render first.
-          setTimeout(() => { try { _brainBulkExportToPdf(wrapped); } catch (_) {} }, 200);
+          setTimeout(() => {
+            try { hideGlobalWaitOverlay(); } catch (_) {}
+            try { _brainBulkExportToPdf(wrapped); } catch (_) {}
+          }, 200);
         }
       } catch (_) {}
     } catch (e) {
@@ -5792,7 +5913,30 @@
       '</div>' + summaryTable + cards;
     const exportBtn = document.getElementById('brainBulkExportPdf');
     if (exportBtn) {
-      exportBtn.addEventListener('click', () => _brainBulkExportToPdf(brainData));
+      exportBtn.addEventListener('click', async () => {
+        // Πριν το popup ανασκόπησης: για όσους πελάτες δεν έχουμε ισοζύγιο
+        // (σύμφωνα με ό,τι γύρισε το backend), δώσε ευκαιρία στον χρήστη να
+        // ανεβάσει ένα — ή να συνεχίσει χωρίς. Δουλεύει σαν gate πριν το
+        // _brainBulkExportToPdf, χωρίς να αλλάζει τη ροή για όσους έχουν ήδη
+        // ισοζύγιο.
+        try {
+          const clients = (brainData && Array.isArray(brainData.clients)) ? brainData.clients : [];
+          const missing = clients.filter((c) => {
+            const ch = (c && c.checks) || {};
+            const hasExcel = (ch.excel_585_007 && Number(ch.excel_585_007) > 0) ||
+                             (ch.excel_585_014 && Number(ch.excel_585_014) > 0);
+            return !hasExcel;
+          });
+          if (missing.length) {
+            const action = await _showBulkIsozygioPrompt(missing);
+            if (action === 'cancel') return;
+            // 'upload' & 'skip' both proceed to the export — 'upload' has
+            // already mutated brainData.clients[i].checks to include the
+            // excel totals where the user provided files.
+          }
+        } catch (_) { /* gate is best-effort; never block export */ }
+        _brainBulkExportToPdf(brainData);
+      });
     }
     host.querySelectorAll('.brain-bulk-toggle').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -5832,6 +5976,135 @@
    * brain). Ο χρήστης πατάει Ctrl+P ή το print button μέσα στο popup για να
    * το σώσει σαν PDF — δουλεύει χωρίς εξωτερική βιβλιοθήκη.
    */
+  /**
+   * Modal πριν την εξαγωγή review PDF στο μαζικό έλεγχο: εμφανίζει τη λίστα
+   * των πελατών που ΔΕΝ έχουν εισαχθεί ισοζύγιο και επιτρέπει είτε inline
+   * upload per-AFM είτε «παράλειψη όλων». Επιστρέφει 'upload' | 'skip' |
+   * 'cancel'. Σε 'upload', γεμίζει το `client.checks.excel_585_007/014` ώστε
+   * το export popup να εμφανίσει τη στήλη Ισοζύγιο/Διαφορά για όσους
+   * πελάτες ανέβηκε excel.
+   *
+   * Λεπτομέρειες υλοποίησης:
+   *  - Δουλεύει cross-page: επικαλείται το ίδιο /api/e3/upload_excel που
+   *    χρησιμοποιεί το ατομικό. Στο μαζικό συμπεριλαμβάνουμε `afm` για
+   *    backend tagging (αν χρειαστεί στο μέλλον per-AFM cache).
+   *  - Stays in-DOM via document.body.appendChild → αν ο χρήστης πλοηγηθεί
+   *    αλλού στο μεταξύ, ο runner ολοκληρώνεται και το modal παραμένει
+   *    διαθέσιμο (sticky banner στη base.html καλύπτει αυτή τη ροή).
+   */
+  function _showBulkIsozygioPrompt(missingClients) {
+    return new Promise((resolve) => {
+      // Καθάρισε τυχόν υπολειμματικό modal από προηγούμενη κλήση.
+      const old = document.getElementById('bulkIsozygioModal');
+      if (old) try { old.remove(); } catch (_) {}
+
+      const overlay = document.createElement('div');
+      overlay.id = 'bulkIsozygioModal';
+      overlay.style.cssText =
+        'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10001;' +
+        'display:flex;align-items:center;justify-content:center;padding:1rem;';
+      const card = document.createElement('div');
+      card.style.cssText =
+        'background:#fff;color:#0f172a;max-width:760px;width:100%;max-height:88vh;' +
+        'border-radius:0.75rem;box-shadow:0 12px 36px rgba(0,0,0,0.25);' +
+        'display:flex;flex-direction:column;overflow:hidden;';
+      const isDark = (document.documentElement.dataset.theme === 'dark') ||
+                     (document.body && document.body.dataset.theme === 'dark');
+      if (isDark) {
+        card.style.background = '#1f2937';
+        card.style.color = '#f8fafc';
+      }
+      const escTxt = (s) => String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+      const rows = missingClients.map((c, i) =>
+        '<tr data-afm="' + escTxt(c.afm) + '" data-i="' + i + '">' +
+          '<td style="padding:0.4rem 0.6rem;border-bottom:1px solid #e5e7eb;font-family:monospace;">' + escTxt(c.afm || '—') + '</td>' +
+          '<td style="padding:0.4rem 0.6rem;border-bottom:1px solid #e5e7eb;">' + escTxt(c.name || '—') + '</td>' +
+          '<td style="padding:0.4rem 0.6rem;border-bottom:1px solid #e5e7eb;text-align:right;">' +
+            '<input type="file" accept=".xlsx,.xls" class="bulkIsozygioFile" data-i="' + i + '" style="font-size:0.78rem;" />' +
+            '<span class="bulkIsozygioStatus" data-i="' + i + '" style="margin-left:0.4rem;font-size:0.75rem;color:#64748b;"></span>' +
+          '</td>' +
+        '</tr>'
+      ).join('');
+
+      card.innerHTML =
+        '<div style="padding:0.9rem 1.2rem;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">' +
+          '<div>' +
+            '<div style="font-size:1.05rem;font-weight:700;">Εισαγωγή Ισοζυγίου πριν την Ανασκόπηση</div>' +
+            '<div style="font-size:0.82rem;color:#64748b;margin-top:2px;">' +
+              missingClients.length + ' πελάτες δεν έχουν ισοζύγιο. Ανέβασε ή πάτησε «Συνέχεια χωρίς ισοζύγιο».' +
+            '</div>' +
+          '</div>' +
+          '<button type="button" id="bulkIsozygioClose" style="background:none;border:0;font-size:1.4rem;cursor:pointer;color:inherit;">×</button>' +
+        '</div>' +
+        '<div style="padding:0.6rem 1.2rem;overflow:auto;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">' +
+            '<thead><tr style="background:' + (isDark ? '#111827' : '#f1f5f9') + ';">' +
+              '<th style="padding:0.4rem 0.6rem;text-align:left;">ΑΦΜ</th>' +
+              '<th style="padding:0.4rem 0.6rem;text-align:left;">Επωνυμία</th>' +
+              '<th style="padding:0.4rem 0.6rem;text-align:right;">Ισοζύγιο (.xlsx/.xls)</th>' +
+            '</tr></thead><tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div style="padding:0.8rem 1.2rem;border-top:1px solid #e5e7eb;display:flex;gap:0.5rem;justify-content:flex-end;align-items:center;">' +
+          '<span id="bulkIsozygioGlobalStatus" style="margin-right:auto;font-size:0.82rem;color:#64748b;"></span>' +
+          '<button type="button" id="bulkIsozygioSkipBtn" style="background:#94a3b8;color:#fff;border:0;border-radius:0.4rem;padding:0.5rem 1rem;font-weight:600;cursor:pointer;">Συνέχεια χωρίς ισοζύγιο</button>' +
+          '<button type="button" id="bulkIsozygioContinueBtn" style="background:#0f766e;color:#fff;border:0;border-radius:0.4rem;padding:0.5rem 1rem;font-weight:600;cursor:pointer;">Συνέχεια με ό,τι ανέβηκε</button>' +
+        '</div>';
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      const cleanup = () => { try { overlay.remove(); } catch (_) {} };
+
+      // Inline upload handler per row — POSTs to /api/e3/upload_excel (the
+      // same endpoint the single-client uploader uses) and writes the
+      // resulting 585.007/014 totals back into the brainData client checks
+      // so the export popup picks them up.
+      card.querySelectorAll('.bulkIsozygioFile').forEach((inp) => {
+        inp.addEventListener('change', async (ev) => {
+          const i = Number(inp.dataset.i);
+          const client = missingClients[i];
+          if (!client) return;
+          const file = ev.target.files && ev.target.files[0];
+          if (!file) return;
+          const statusEl = card.querySelector('.bulkIsozygioStatus[data-i="' + i + '"]');
+          if (statusEl) { statusEl.textContent = '⏳ Φόρτωση…'; statusEl.style.color = '#0ea5e9'; }
+          try {
+            const fd = new FormData();
+            fd.append('excel_file', file);
+            fd.append('afm', String(client.afm || ''));
+            const r = await fetch('/api/e3/upload_excel', { method: 'POST', body: fd });
+            const j = await r.json();
+            if (!r.ok || !j.ok) throw new Error((j && j.error) || 'Αποτυχία ανάγνωσης');
+            // Πάρε το 585.007 και 585.014 από τα ποσά Ε3 του ισοζυγίου.
+            let v007 = 0, v014 = 0;
+            const totals = Array.isArray(j.e3_totals) ? j.e3_totals : [];
+            for (const t of totals) {
+              const code = Number(t.e3_code || 0);
+              const amt = Number(t.amount || 0);
+              if (code >= 585.007 && code < 585.0075) v007 += amt;
+              if (code >= 585.014 && code < 585.0145) v014 += amt;
+            }
+            client.checks = client.checks || {};
+            client.checks.excel_585_007 = Number(v007.toFixed(2));
+            client.checks.excel_585_014 = Number(v014.toFixed(2));
+            if (statusEl) { statusEl.textContent = '✓ Έτοιμο'; statusEl.style.color = '#10b981'; }
+          } catch (e) {
+            if (statusEl) { statusEl.textContent = '✗ ' + (e.message || 'Σφάλμα'); statusEl.style.color = '#dc2626'; }
+          }
+        });
+      });
+
+      document.getElementById('bulkIsozygioClose').onclick = () => { cleanup(); resolve('cancel'); };
+      document.getElementById('bulkIsozygioSkipBtn').onclick = () => { cleanup(); resolve('skip'); };
+      document.getElementById('bulkIsozygioContinueBtn').onclick = () => { cleanup(); resolve('upload'); };
+      overlay.addEventListener('click', (ev) => {
+        if (ev.target === overlay) { cleanup(); resolve('cancel'); }
+      });
+    });
+  }
+
   async function _brainBulkExportToPdf(brainData) {
     const clients = (brainData && Array.isArray(brainData.clients)) ? brainData.clients : [];
     const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)))
