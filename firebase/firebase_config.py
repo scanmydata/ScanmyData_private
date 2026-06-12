@@ -519,6 +519,25 @@ def get_remote_group_payload_meta(group_name: str, activity_folder: str = None) 
 
 
 def compare_group_payload_freshness(group_name: str, local_group_folder: str = None, local_data_root: str = None) -> Dict[str, Any]:
+    if _drive_backend_active():
+        try:
+            from firebase.drive_storage import drive_compare_group_payload_freshness
+            return drive_compare_group_payload_freshness(
+                group_name,
+                local_group_folder=local_group_folder,
+                local_data_root=local_data_root,
+            )
+        except Exception as e:
+            logger.error('[FRESH] Drive freshness check failed: %s', e)
+            return {
+                'group_name': group_name,
+                'local_group_folder': str(local_group_folder or group_name or '').strip(),
+                'action': 'unknown',
+                'reason': 'drive_check_error',
+                'local': {'exists': False, 'latest_mtime': 0.0, 'file_count': 0},
+                'remote': {'exists': False, 'latest_mtime': 0.0, 'file_count': 0},
+            }
+
     try:
         local_folder = str(local_group_folder or group_name or '').strip()
         if local_data_root is None:
@@ -1162,25 +1181,58 @@ def get_activity_version() -> int:
 
 
 def firebase_get_group_activity_logs(group_name: str, limit: int = 100) -> list:
-    """Retrieve activity logs for a group"""
+    """Retrieve activity logs for a group.
+
+    When the Drive backend is active, read from the local activity.log NDJSON
+    file (which mirrors Drive) instead of hitting RTDB.
+    """
+    if _drive_backend_active():
+        try:
+            folder_name = group_name
+            try:
+                from models import Group
+                grp = Group.query.filter_by(name=group_name).first()
+                if grp and getattr(grp, 'data_folder', None):
+                    folder_name = grp.data_folder
+            except Exception:
+                pass
+            log_path = os.path.join(os.getcwd(), 'data', str(folder_name), 'activity.log')
+            if not os.path.exists(log_path):
+                return []
+            logs = []
+            with open(log_path, 'r', encoding='utf-8') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        logs.append(json.loads(line))
+                    except Exception:
+                        continue
+            logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            return logs[:limit]
+        except Exception as e:
+            logger.error('Drive activity log read failed for %s: %s', group_name, e)
+            return []
+
     try:
         if not is_firebase_enabled():
             return []
-        
+
         path = f'/activity_logs/{group_name}'
         data = firebase_read_data(path)
-        
+
         if not data:
             return []
-        
+
         # Convert dict to list and sort by timestamp
         logs = []
         for key, value in data.items():
             logs.append(value)
-        
+
         # Sort by timestamp descending (newest first)
         logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        
+
         return logs[:limit]
     except Exception as e:
         logger.error(f"Failed to retrieve activity logs for {group_name}: {e}")
@@ -2294,6 +2346,17 @@ def firebase_sync_group_folder(group_folder: str, data_dir: str = None) -> bool:
     `group_folder` must be the filesystem folder name under `data/` (this is the
     Group.data_folder value). Returns True if the sync ran without fatal errors.
     """
+    if _drive_backend_active():
+        try:
+            return bool(firebase_push_group_files(
+                group_folder,
+                local_data_root=data_dir,
+                local_group_folder=group_folder,
+            ))
+        except Exception as e:
+            logger.error('Drive sync_group_folder failed for %s: %s', group_folder, e)
+            return False
+
     try:
         if not is_firebase_enabled():
             logger.warning('Firebase not enabled; skipping group sync')

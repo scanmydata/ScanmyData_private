@@ -1363,10 +1363,15 @@
              the Εκτέλεση ελέγχου flow. -->
         <button type="button" id="brainLoadE3Btn" style="display:none;"></button>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input id="brainRunEfkaTeka" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           ΕΦΚΑ/ΤΕΚΑ
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+               title="ΚΕΑΟ Πιστώσεις — εφαρμόζεται μόνο σε μέλη εταιριών και ατομικές. Η κύρια εισφορά προστίθεται στο 585.007· πρόσθετα τέλη + προσαυξήσεις αντιπαραβάλλονται με τον κωδικό 588.">
+          <input id="brainRunKeao" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+          ΚΕΑΟ Πιστώσεις
         </label>
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input id="brainRunMisth" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
@@ -1398,6 +1403,11 @@
             <input id="brainDownloadE9Pdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
             Λήψη PDF εκκαθαριστικού Ε9 / ΕΝΦΙΑ
           </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                 title="Ένα PDF ανά φορέα (εκτός Ι.Κ.Α. Εργοδότη) — Ηλεκτρονική Καρτέλα Οφειλέτη, καθαρά το panel με στοιχεία οφειλέτη + grid + σύνολα.">
+            <input id="brainDownloadKeaoPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            Λήψη PDF Πιστώσεων ΚΕΑΟ (ανά φορέα)
+          </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 md:col-span-2">
             <input id="brainSaveComparisonPdf" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Αποθήκευση πίνακα αντιπαραβολής σε PDF μετά την εκτέλεση
@@ -1418,6 +1428,7 @@
             <button type="button" class="brain-pdf-chip" data-kind="teka">ΤΕΚΑ</button>
             <button type="button" class="brain-pdf-chip" data-kind="misth">Μισθωτήρια</button>
             <button type="button" class="brain-pdf-chip" data-kind="e9">Ε9/ENFIA</button>
+            <button type="button" class="brain-pdf-chip" data-kind="keao">ΚΕΑΟ</button>
           </div>
           <span id="brainPdfsStatus" class="brain-pdfs-status text-xs"></span>
         </div>
@@ -1456,6 +1467,11 @@
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input id="brainRunEfkaTekaBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
             ΕΦΚΑ/ΤΕΚΑ
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                 title="ΚΕΑΟ Πιστώσεις (μόνο μέλη εταιριών / ατομικές). Κύρια εισφορά → 585.007, πρόσθετα τέλη + προσαυξήσεις → 588.">
+            <input id="brainRunKeaoBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            ΚΕΑΟ Πιστώσεις
           </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input id="brainRunMisthBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
@@ -4125,6 +4141,7 @@
     const mdUserEl = document.getElementById('brainMydataUser');
     const mdKeyEl = document.getElementById('brainMydataKey');
     const runEfkaTekaEl = document.getElementById('brainRunEfkaTeka');
+    const runKeaoEl = document.getElementById('brainRunKeao');
     const runMisthEl = document.getElementById('brainRunMisth');
     const runE9El = document.getElementById('brainRunE9');
 
@@ -4134,31 +4151,34 @@
     // sub-tab switch in the middle of preparing does not lose the
     // selection.
     const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
+    const runKeao = !!(runKeaoEl && runKeaoEl.checked);
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
-    // Optional EFKA/TEKA/MISTH/E9 PDF download toggles (added below in UI section).
+    // Optional EFKA/TEKA/MISTH/E9/KEAO PDF download toggles.
     const downloadEfkaPdfsEl = document.getElementById('brainDownloadEfkaPdfs');
     const downloadTekaPdfsEl = document.getElementById('brainDownloadTekaPdfs');
     const downloadMisthPdfsEl = document.getElementById('brainDownloadMisthPdfs');
     const downloadE9PdfsEl = document.getElementById('brainDownloadE9Pdfs');
+    const downloadKeaoPdfsEl = document.getElementById('brainDownloadKeaoPdfs');
     const downloadEfkaPdfs = !!(downloadEfkaPdfsEl && downloadEfkaPdfsEl.checked);
     const downloadTekaPdfs = !!(downloadTekaPdfsEl && downloadTekaPdfsEl.checked);
     const downloadMisthPdfs = !!(downloadMisthPdfsEl && downloadMisthPdfsEl.checked);
     const downloadE9Pdfs = !!(downloadE9PdfsEl && downloadE9PdfsEl.checked);
+    const downloadKeaoPdfs = !!(downloadKeaoPdfsEl && downloadKeaoPdfsEl.checked);
 
     // Helper: every early-return below needs to clean up the "instant
     // feedback" overlay we threw up at the top of this function — otherwise
     // the user is stuck looking at a spinner with no progress.
     const _earlyExit = () => { try { hideGlobalWaitOverlay(); } catch (_) {} };
 
-    if (!runEfkaTeka && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs) {
+    if (!runEfkaTeka && !runKeao && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs && !downloadKeaoPdfs) {
       // Hide the overlay while the modal is open so it doesn't steal focus.
       try { hideGlobalWaitOverlay(); } catch (_) {}
       let proceedNoChecks = false;
       try {
         proceedNoChecks = await showModalConfirm(
           'Χωρίς ελέγχους',
-          'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, Μισθωτήρια, Ε9) ή λήψη PDF.\nΘέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;',
+          'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, ΚΕΑΟ, Μισθωτήρια, Ε9) ή λήψη PDF.\nΘέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;',
           'Συνέχεια', 'Άκυρο'
         );
       } catch (_) { proceedNoChecks = false; }
@@ -4320,14 +4340,16 @@
       year,
       date_from: dateFrom,
       date_to: dateTo,
-      run_extractors: runEfkaTeka || runMisth || runE9,
+      run_extractors: runEfkaTeka || runKeao || runMisth || runE9,
       run_efka_teka: runEfkaTeka,
+      run_keao: runKeao,
       run_misth: runMisth,
       run_e9: runE9,
       download_efka_pdfs: downloadEfkaPdfs,
       download_teka_pdfs: downloadTekaPdfs,
       download_misth_pdfs: downloadMisthPdfs,
       download_e9_pdfs: downloadE9Pdfs,
+      download_keao_pdfs: downloadKeaoPdfs,
       // Default to headless so the brain works when Flask runs as a
       // background service (no interactive desktop / no visible
       // chromium window stealing focus). The extractors still launch
@@ -4356,10 +4378,12 @@
     // not stream progress, so we approximate by cycling labels every 2.5s.
     const _progressSteps = ['Συλλογή στοιχείων ΑΦΜ'];
     if (runEfkaTeka) _progressSteps.push('Έλεγχος ΕΦΚΑ/ΤΕΚΑ');
+    if (runKeao) _progressSteps.push('Έλεγχος ΚΕΑΟ Πιστώσεων');
     if (runMisth) _progressSteps.push('Σύγκριση Μισθωτηρίων');
     if (runE9) _progressSteps.push('Έλεγχος Ε9');
     if (downloadEfkaPdfs) _progressSteps.push('Λήψη PDF ΕΦΚΑ');
     if (downloadTekaPdfs) _progressSteps.push('Λήψη PDF ΤΕΚΑ');
+    if (downloadKeaoPdfs) _progressSteps.push('Λήψη PDF ΚΕΑΟ');
     _progressSteps.push('Σύγκριση με myDATA');
     showGlobalWaitOverlay('E3 Brain', 'Τρέχει ο ενοποιημένος έλεγχος...', { timeout: 60 * 60 * 1000 });
     // Real-time progress: ask the backend what step it's on (every 1.5s)
@@ -5514,6 +5538,7 @@
     }
     const yearEl = document.getElementById('brainYearBulk');
     const runEfkaTekaEl = document.getElementById('brainRunEfkaTekaBulk');
+    const runKeaoEl = document.getElementById('brainRunKeaoBulk');
     const runMisthEl = document.getElementById('brainRunMisthBulk');
     const runE9El = document.getElementById('brainRunE9Bulk');
     const year = Number((yearEl && yearEl.value) || new Date().getFullYear());
@@ -5521,14 +5546,15 @@
     // Pre-flight snapshot — match runE3BrainSingle so the bulk run can't
     // diverge from the visible checkbox state.
     const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
+    const runKeao = !!(runKeaoEl && runKeaoEl.checked);
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
-    if (!runEfkaTeka && !runMisth && !runE9) {
+    if (!runEfkaTeka && !runKeao && !runMisth && !runE9) {
       let proceedNoChecks = false;
       try {
         proceedNoChecks = await showModalConfirm(
           'Χωρίς ελέγχους',
-          'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, Μισθωτήρια, Ε9). Θέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;',
+          'Δεν έχει επιλεγεί κανένας έλεγχος (ΕΦΚΑ/ΤΕΚΑ, ΚΕΑΟ, Μισθωτήρια, Ε9). Θέλεις να συνεχίσεις χωρίς εξωτερικούς ελέγχους;',
           'Συνέχεια', 'Άκυρο'
         );
       } catch (_) { proceedNoChecks = false; }
@@ -5547,14 +5573,16 @@
     const payload = {
       mode: 'bulk',
       year,
-      run_extractors: runEfkaTeka || runMisth || runE9,
+      run_extractors: runEfkaTeka || runKeao || runMisth || runE9,
       run_efka_teka: runEfkaTeka,
+      run_keao: runKeao,
       run_misth: runMisth,
       run_e9: runE9,
       download_efka_pdfs: _bulkSaveAllPdfs && runEfkaTeka,
       download_teka_pdfs: _bulkSaveAllPdfs && runEfkaTeka,
       download_misth_pdfs: _bulkSaveAllPdfs && runMisth,
       download_e9_pdfs: _bulkSaveAllPdfs && runE9,
+      download_keao_pdfs: _bulkSaveAllPdfs && runKeao,
       save_comparison_pdf: false,
       headed: false,
       auto_active_group_clients: true,
@@ -5800,10 +5828,17 @@
       }
       if (checks.pdfs_saved && typeof checks.pdfs_saved === 'object') {
         const ps = checks.pdfs_saved;
-        const total = Number(ps.efka||0) + Number(ps.teka||0) + Number(ps.misth||0) + Number(ps.e9||0);
+        const total = Number(ps.efka||0) + Number(ps.teka||0) + Number(ps.misth||0) + Number(ps.e9||0) + Number(ps.keao||0);
         diagItems.push('PDFs αποθηκευμένα: σύνολο ' + total +
           ' (ΕΦΚΑ ' + (ps.efka||0) + ' · ΤΕΚΑ ' + (ps.teka||0) +
-          ' · Μισθωτήρια ' + (ps.misth||0) + ' · Ε9/ΕΝΦΙΑ ' + (ps.e9||0) + ')');
+          ' · Μισθωτήρια ' + (ps.misth||0) + ' · Ε9/ΕΝΦΙΑ ' + (ps.e9||0) +
+          ' · ΚΕΑΟ ' + (ps.keao||0) + ')');
+      }
+      if (checks.keao_ran) {
+        const fmt588 = (v) => (typeof v === 'number') ? v.toFixed(2) : '0.00';
+        diagItems.push('ΚΕΑΟ Πιστώσεις: ✓ έτρεξε — προς 585.007: ' +
+          fmt588(checks.keao_585_007_total) + ' € · προς 588: ' +
+          fmt588(checks.keao_588_total) + ' €');
       }
       const diagHtml = diagItems.length
         ? '<div class="brain-bulk-sublabel">Διαγνωστικά εκτέλεσης</div>' +
@@ -6204,6 +6239,18 @@
           '<td style="text-align:right;">' + diff(rent, my014) + '</td>' +
           '<td style="text-align:right;">' + diff(rent, xl014) + '</td>' +
         '</tr>' +
+        // 588 row — ΚΕΑΟ πρόσθετα τέλη + προσαυξήσεις. Surface always
+        // when the brain ran ΚΕΑΟ; "—" when no KEAO check ran.
+        (checks.keao_ran ? (
+          '<tr>' +
+            '<td>588</td><td>Πρόσθετα τέλη + προσαυξήσεις (ΚΕΑΟ)</td>' +
+            '<td style="text-align:right;">' + fmt(checks.keao_588_total) + ' €</td>' +
+            '<td style="text-align:right;">' + fmt(checks.mydata_588) + ' €</td>' +
+            '<td style="text-align:right;">' + fmt(checks.excel_588) + ' €</td>' +
+            '<td style="text-align:right;">' + diff(checks.keao_588_total, checks.mydata_588) + '</td>' +
+            '<td style="text-align:right;">' + diff(checks.keao_588_total, checks.excel_588) + '</td>' +
+          '</tr>'
+        ) : '') +
         '</tbody></table>';
       const noteList = (label, items) => items.length
         ? '<div class="notes-block"><strong>' + label + ':</strong><ul>' +
@@ -6222,10 +6269,16 @@
         diagItems.push('Ε9/ΕΝΦΙΑ: ' + (checks.e9_ran ? '✓ έτρεξε' : '— δεν έτρεξε') +
           (checks.e9_error ? ' (σφάλμα: ' + esc(checks.e9_error) + ')' : ''));
       }
+      if (typeof checks.keao_ran === 'boolean') {
+        const k = '585.007 +' + fmt(checks.keao_585_007_total) +
+          ' € · 588 ' + fmt(checks.keao_588_total) + ' €';
+        diagItems.push('ΚΕΑΟ Πιστώσεις: ' + (checks.keao_ran ? '✓ έτρεξε (' + k + ')' : '— δεν έτρεξε'));
+      }
       if (checks.pdfs_saved && typeof checks.pdfs_saved === 'object') {
         const ps = checks.pdfs_saved;
         diagItems.push('PDFs αποθηκευμένα — ΕΦΚΑ: ' + (ps.efka || 0) + ', ΤΕΚΑ: ' + (ps.teka || 0) +
-          ', Μισθωτήρια: ' + (ps.misth || 0) + ', Ε9/ΕΝΦΙΑ: ' + (ps.e9 || 0));
+          ', Μισθωτήρια: ' + (ps.misth || 0) + ', Ε9/ΕΝΦΙΑ: ' + (ps.e9 || 0) +
+          ', ΚΕΑΟ: ' + (ps.keao || 0));
       }
       const diagBlock = diagItems.length
         ? '<div class="notes-block"><strong>Διαγνωστικά εκτέλεσης:</strong><ul>' +
@@ -7080,6 +7133,7 @@
     teka: 'ΤΕΚΑ',
     misth: 'Μισθωτήρια',
     e9: 'Ε9/ENFIA',
+    keao: 'ΚΕΑΟ',
   };
 
   function _setBrainPdfChipActive(kind) {
@@ -7111,7 +7165,7 @@
     // The name is everything that's not numeric / not a 9-digit ΑΦΜ.
     const nameTokens = parts.filter((p) =>
       !/^\d{4}$/.test(p) && !/^\d{9}$/.test(p) && !/^\d{11}$/.test(p)
-      && !/^\d+$/.test(p) && !/^cert$|^enfia$|^misth$|^teka$|^efka$/i.test(p)
+      && !/^\d+$/.test(p) && !/^cert$|^enfia$|^misth$|^teka$|^efka$|^keao$|^pistwseis$/i.test(p)
     );
     const niceName = nameTokens
       .filter((t) => !/^\d+[.,]?\d*$/.test(t))
@@ -7141,7 +7195,7 @@
     }
     if (statusEl) statusEl.textContent = 'Φόρτωση όλων των PDFs...';
     try {
-      const kinds = ['efka', 'teka', 'misth', 'e9'];
+      const kinds = ['efka', 'teka', 'misth', 'e9', 'keao'];
       const responses = await Promise.all(kinds.map((k) =>
         fetch(`/api/e3/brain/${k}_pdfs?afm=${encodeURIComponent(afm)}`)
           .then((r) => r.json()).catch(() => ({ ok: false, files: [] }))

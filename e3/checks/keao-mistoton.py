@@ -50,6 +50,17 @@ KEAO_ENTRY_URL = "https://www.e-efka.gov.gr/el/elektronikes-yperesies/ilektronik
 NO_AMO_TEXT = "Δεν βρέθηκε Αριθμός Μητρώου Οφειλέτη"
 EMPLOYER_TOKEN = "ΕΡΓΟΔΟΤ"  # excludes any «ΕΡΓΟΔΟΤΗΣ» variant
 
+# Ε.Φ.Κ.Α. Μη Μισθωτών credits are already reflected in the annual
+# EFKA certificate, so the e3_brain reconciliation must NOT double-count
+# them. We still process the registry (PDF + per-row table) so the user
+# can audit it — we only flag it out of the 585.007 / 588 aggregates.
+EFKA_MH_MISTHWTWN_TOKENS = ("ΜΗ ΜΙΣΘΩΤ",)  # robust to «ΜΗ ΜΙΣΘΩΤΩΝ» variants
+
+
+def _is_efka_mh_misthwton(forea: str) -> bool:
+    u = (forea or "").upper()
+    return any(tok in u for tok in EFKA_MH_MISTHWTWN_TOKENS)
+
 
 def _to_float(text: str) -> float:
     """Parse Greek-formatted amount like «1.234,56» to float."""
@@ -194,8 +205,19 @@ def _click_select_for_amo(picker: Page, amo: str) -> bool:
 
 
 def _back_to_picker(page: Page) -> bool:
-    """From a debtor view, click sidebar «Επιλογή Μητρώου» to return to the picker."""
-    link = page.locator("a").filter(has_text="Επιλογή Μητρώου").first
+    """From a debtor view, click sidebar «Επιλογή Μητρώου» to return to the picker.
+
+    Targets the explicit menu link the KEAO portal renders for the
+    registry-picker — ``<a … href="/eDebtor/secure/amo.xhtml">Επιλογή
+    Μητρώου</a>`` — and falls back to a generic «Επιλογή Μητρώου» text
+    match so a label tweak does not break the loop.
+
+    Re-using the same browser session for every registry is what keeps
+    us off the TAXISNET OAM-6 «too many sessions» rate-limit.
+    """
+    link = page.locator("a[href*='/eDebtor/secure/amo.xhtml']").first
+    if link.count() == 0:
+        link = page.locator("a").filter(has_text="Επιλογή Μητρώου").first
     try:
         link.wait_for(state="visible", timeout=NAV_TIMEOUT)
         link.click()
@@ -383,6 +405,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         "forea": reg["forea"],
         "amo": reg["amo"],
         "epwnymia": reg["epwnymia"],
+        "is_efka_mh_misthwton": _is_efka_mh_misthwton(reg["forea"]),
         "status": "unknown",
         "pages_captured": 0,
         "pdf": None,
@@ -472,8 +495,15 @@ def run(playwright, username: str, password: str, afm: str,
         "year": year,
         "date_from": date_from,
         "registries": [],
+        # Aggregates over EVERY non-employer registry processed:
         "totals_year": {"total": 0.0, "main_contrib": 0.0, "extra_fees": 0.0, "surcharges": 0.0},
         "totals_all": {"total": 0.0, "main_contrib": 0.0, "extra_fees": 0.0, "surcharges": 0.0},
+        # Aggregates for the e3_brain reconciliation — EFKA Μη Μισθωτών
+        # is excluded because the same payments are already counted in
+        # the annual EFKA certificate. The brain adds e3_585_007_year
+        # to the 585.007 total and reconciles e3_588_year against 588.
+        "e3_585_007_year": 0.0,
+        "e3_588_year": 0.0,
     }
 
     try:
@@ -510,7 +540,18 @@ def run(playwright, username: str, password: str, afm: str,
             for k in ("total", "main_contrib", "extra_fees", "surcharges"):
                 result["totals_year"][k] += rec["totals_year"][k]
                 result["totals_all"][k] += rec["totals_all"][k]
+            # Exclude Ε.Φ.Κ.Α. Μη Μισθωτών from the brain reconciliation
+            # totals — already counted by the EFKA cert step.
+            if not rec.get("is_efka_mh_misthwton"):
+                ty = rec["totals_year"]
+                result["e3_585_007_year"] += ty["main_contrib"]
+                result["e3_588_year"] += ty["extra_fees"] + ty["surcharges"]
 
+        result["e3_585_007_year"] = round(result["e3_585_007_year"], 2)
+        result["e3_588_year"] = round(result["e3_588_year"], 2)
+        for k in ("total", "main_contrib", "extra_fees", "surcharges"):
+            result["totals_year"][k] = round(result["totals_year"][k], 2)
+            result["totals_all"][k] = round(result["totals_all"][k], 2)
         result["status"] = "ok"
         return result
     finally:

@@ -71,6 +71,7 @@ _STRICT_HEADER_ALIASES = {
     "amka": {"αμκα", "amka"},
     "e3_585_007": {"e3_585_007", "585.007", "585_007"},
     "e3_585_014": {"e3_585_014", "585.014", "585_014"},
+    "e3_588": {"e3_588", "588"},
     "address": {"διευθυνση", "διεύθυνση", "address"},
     "legal_type": {"νομική μορφή", "νομικη μορφη", "legal type", "legal_type", "νομική", "νομικη"},
 }
@@ -1309,6 +1310,7 @@ def _parse_bulk_flat_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
                 "excel_values": {
                     "E3_585_007": _to_float(_at("e3_585_007")) if "e3_585_007" in header_map else 0.0,
                     "E3_585_014": _to_float(_at("e3_585_014")) if "e3_585_014" in header_map else 0.0,
+                    "E3_588": _to_float(_at("e3_588")) if "e3_588" in header_map else 0.0,
                 },
                 "address": _at("address"),
             }
@@ -1367,6 +1369,7 @@ def _parse_bulk_production_template_rows(rows: List[List[str]]) -> List[Dict[str
                 "excel_values": {
                     "E3_585_007": 0.0,
                     "E3_585_014": 0.0,
+                    "E3_588": 0.0,
                 },
                 "address": "",
             }
@@ -1408,6 +1411,7 @@ def _parse_bulk_clients(excel_path: str) -> List[Dict[str, Any]]:
     c_mydata_key = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["mydata_key"]))
     c_585_007 = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["e3_585_007"]))
     c_585_014 = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["e3_585_014"]))
+    c_588 = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["e3_588"]))
     c_address = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["address"]))
     c_legal_type = _pick_column(df, sorted(_STRICT_HEADER_ALIASES["legal_type"]))
 
@@ -1431,6 +1435,7 @@ def _parse_bulk_clients(excel_path: str) -> List[Dict[str, Any]]:
                 "excel_values": {
                     "E3_585_007": _to_float(r.get(c_585_007)) if c_585_007 else 0.0,
                     "E3_585_014": _to_float(r.get(c_585_014)) if c_585_014 else 0.0,
+                    "E3_588": _to_float(r.get(c_588)) if c_588 else 0.0,
                 },
                 "address": _norm_text(r.get(c_address)) if c_address else "",
                 "legal_type": _norm_text(r.get(c_legal_type)) if c_legal_type else "",
@@ -1499,6 +1504,8 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "misth_pdfs"
         elif kind_lower == "e9":
             root_name = "e9_pdfs"
+        elif kind_lower == "keao":
+            root_name = "keao_pdfs"
         else:
             return None
         uid = getattr(current_user, "id", None)
@@ -2095,10 +2102,99 @@ def process_client(
 
     efka_teka_total = round(efka_teka_total, 2)
 
+    # ------------------------------------------------------------------
+    # ΚΕΑΟ Πιστώσεις (only μέλη εταιριών / ατομικές — same `targets`
+    # list as ΕΦΚΑ/ΤΕΚΑ, so legal entities are skipped automatically).
+    #
+    # Per-registry main contribution adds to the 585.007 reconciliation
+    # (πέραν από ΕΦΚΑ/ΤΕΚΑ — the brain reuses `efka_teka_total` as the
+    # 585.007 figure). Πρόσθετα τέλη + προσαυξήσεις σωρεύονται για
+    # αντιπαραβολή με τον κωδικό 588.
+    #
+    # Ε.Φ.Κ.Α. Μη Μισθωτών excluded by the script itself — those credits
+    # are already inside the annual EFKA certificate, so the script
+    # only ships them as a per-registry PDF; the e3_585_007_year /
+    # e3_588_year aggregates it returns skip that registry.
+    # ------------------------------------------------------------------
+    keao_585_007_total = 0.0
+    keao_588_total = 0.0
+    keao_available = False
+    keao_per_member: List[Dict[str, Any]] = []
+    if _flag_for("keao") and not missing_member_credentials:
+        root = Path(__file__).resolve().parents[2]
+        checks_dir = root / "e3" / "checks"
+        _publish_brain_step(job_id, f"Έλεγχος ΚΕΑΟ — {input_name or afm}", percent=35)
+        for t in targets:
+            with tempfile.TemporaryDirectory(prefix=f"e3keao_{t.afm}_") as tmpdir:
+                tmp = Path(tmpdir)
+                keao_pdf_dir = None
+                if _flag_for("download_keao_pdfs"):
+                    keao_pdf_dir = _resolve_pdfs_dir("keao", afm)
+                out_dir = keao_pdf_dir if keao_pdf_dir is not None else (tmp / "keao_out")
+                keao_args = [
+                    sys.executable,
+                    str(checks_dir / "keao-mistoton.py"),
+                    "--username", t.taxisnet_username,
+                    "--password", t.taxisnet_password,
+                    "--afm", t.afm,
+                    "--date-from", f"01/01/{year}",
+                    "--year", str(year),
+                    "--output-dir", str(out_dir),
+                    "--output-json", "keao_out.json",
+                ]
+                if not headed:
+                    keao_args.append("--headless")
+                ok_k, k_json, k_err = _run_script_and_read_json(
+                    keao_args, tmp, "keao_out.json"
+                )
+                if not ok_k:
+                    warnings.append(f"ΚΕΑΟ extractor ({t.full_name or t.afm}): {k_err}")
+                    continue
+                keao_available = True
+                add_585 = float(k_json.get("e3_585_007_year") or 0.0)
+                add_588 = float(k_json.get("e3_588_year") or 0.0)
+                keao_585_007_total += add_585
+                keao_588_total += add_588
+                keao_per_member.append({
+                    "afm": t.afm,
+                    "name": t.full_name,
+                    "e3_585_007_year": round(add_585, 2),
+                    "e3_588_year": round(add_588, 2),
+                    "registries": [
+                        {
+                            "forea": r.get("forea"),
+                            "amo": r.get("amo"),
+                            "is_efka_mh_misthwton": bool(r.get("is_efka_mh_misthwton")),
+                            "status": r.get("status"),
+                            "pages_captured": r.get("pages_captured", 0),
+                            "totals_year": r.get("totals_year") or {},
+                            "pdf": r.get("pdf"),
+                        }
+                        for r in (k_json.get("registries") or [])
+                    ],
+                })
+                if keao_pdf_dir is not None:
+                    try:
+                        pdfs_saved.setdefault("keao", 0)
+                        pdfs_saved["keao"] += len(list(keao_pdf_dir.glob("*.pdf")))
+                    except Exception:
+                        pass
+
+    keao_585_007_total = round(keao_585_007_total, 2)
+    keao_588_total = round(keao_588_total, 2)
+
+    # Fold KEAO main-contribution credits (excluding Ε.Φ.Κ.Α. Μη
+    # Μισθωτών) into the 585.007 figure so the existing myDATA / Excel
+    # reconciliation paths cover them too.
+    if keao_585_007_total:
+        efka_teka_total = round(efka_teka_total + keao_585_007_total, 2)
+        efka_teka_available = True
+
     mydata_user = _norm_text(client.get("mydata_user"))
     mydata_key = _norm_text(client.get("mydata_key"))
     mydata_585_007 = None
     mydata_585_014 = None
+    mydata_588 = None
     mydata_e3_report: Optional[Dict[str, Any]] = None
     unclassified_total: float = 0.0
     unclassified_invoices: List[Dict[str, Any]] = []
@@ -2177,6 +2273,14 @@ def process_client(
                 if str(_r.get("code") or "") == "585" and str(_r.get("sub_code") or "") == "014"
             )
             mydata_585_014 = round(mydata_585_014, 2)
+            # Κωδ. 588 — «Ασυνήθη έξοδα, ζημιές και πρόστιμα». Πρόσθετα
+            # τέλη + προσαυξήσεις του ΚΕΑΟ συγκρίνονται μαζί του.
+            mydata_588 = sum(
+                float(_r.get("amount") or 0.0)
+                for _r in _classified_entries
+                if str(_r.get("code") or "") == "588"
+            )
+            mydata_588 = round(mydata_588, 2)
         except Exception as exc:
             warnings.append(f"Αποτυχία ανάκτησης myDATA E3: {exc}")
 
@@ -2189,6 +2293,17 @@ def process_client(
             _compare_amount("E3_585_007", "EFKA+TEKA", efka_teka_total, "myDATA", mydata_585_007, messages)
         if excel_585_007:
             _compare_amount("E3_585_007", "EFKA+TEKA", efka_teka_total, "Excel", excel_585_007, messages)
+
+    # 588 reconciliation — KEAO πρόσθετα τέλη + προσαυξήσεις
+    # against myDATA (and Excel, when an Ε3_588 column was imported).
+    excel_588 = round(float(excel_vals.get("E3_588") or 0.0), 2)
+    if keao_588_total:
+        if mydata_588 is not None:
+            _compare_amount("E3_588", "ΚΕΑΟ (πρόσθετα τέλη + προσαυξήσεις)",
+                            keao_588_total, "myDATA", mydata_588, messages)
+        if excel_588:
+            _compare_amount("E3_588", "ΚΕΑΟ (πρόσθετα τέλη + προσαυξήσεις)",
+                            keao_588_total, "Excel", excel_588, messages)
 
     headquarter_address = summary.get("headquarter_address") or _norm_text(client.get("address"))
     rent_annual = None
@@ -2709,6 +2824,15 @@ def process_client(
             "excel_585_007": excel_585_007,
             "mydata_585_014": mydata_585_014,
             "excel_585_014": excel_585_014,
+            # ΚΕΑΟ Πιστώσεις — main contribution adds to 585.007 (already
+            # folded into efka_teka_total above), extra fees + surcharges
+            # reconcile against 588 / myDATA / Excel.
+            "keao_ran": keao_available,
+            "keao_585_007_total": keao_585_007_total,
+            "keao_588_total": keao_588_total,
+            "mydata_588": mydata_588,
+            "excel_588": excel_588,
+            "keao_per_member": keao_per_member,
             "rent_annual": rent_annual,
             "rent_net": rent_net,
             "rent_months": rent_months,
@@ -2802,16 +2926,19 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     run_efka_teka = payload.get("run_efka_teka")
     run_misth = payload.get("run_misth")
     run_e9 = payload.get("run_e9")
+    run_keao = payload.get("run_keao")
     # If any per-extractor flag is provided treat the master as the OR
     # of the per-extractor flags (so the JS-emitted granular state wins).
-    if run_efka_teka is not None or run_misth is not None or run_e9 is not None:
-        run_extractors = bool(run_efka_teka or run_misth or run_e9)
+    if (run_efka_teka is not None or run_misth is not None
+            or run_e9 is not None or run_keao is not None):
+        run_extractors = bool(run_efka_teka or run_misth or run_e9 or run_keao)
     else:
         run_extractors = bool(payload.get("run_extractors", False))
     # Persist on the payload so process_client can pick them up.
     payload["_run_efka_teka"] = bool(run_efka_teka) if run_efka_teka is not None else run_extractors
     payload["_run_misth"] = bool(run_misth) if run_misth is not None else run_extractors
     payload["_run_e9"] = bool(run_e9) if run_e9 is not None else run_extractors
+    payload["_run_keao"] = bool(run_keao) if run_keao is not None else run_extractors
     # PDF certificate downloading is OPTIONAL and separate from the table
     # scrape that produces the amount used for myDATA / Excel comparison.
     # We only pass --pdf-dir to the extractor when the user explicitly
@@ -2821,6 +2948,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload["_download_teka_pdfs"] = bool(payload.get("download_teka_pdfs", False))
     payload["_download_misth_pdfs"] = bool(payload.get("download_misth_pdfs", False))
     payload["_download_e9_pdfs"] = bool(payload.get("download_e9_pdfs", False))
+    payload["_download_keao_pdfs"] = bool(payload.get("download_keao_pdfs", False))
     headed = bool(payload.get("headed", False))
 
     results: List[Dict[str, Any]] = []
@@ -2862,10 +2990,12 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "efka_teka": payload["_run_efka_teka"],
                     "misth": payload["_run_misth"],
                     "e9": payload["_run_e9"],
+                    "keao": payload["_run_keao"],
                     "download_efka_pdfs": payload["_download_efka_pdfs"],
                     "download_teka_pdfs": payload["_download_teka_pdfs"],
                     "download_misth_pdfs": payload["_download_misth_pdfs"],
                     "download_e9_pdfs": payload["_download_e9_pdfs"],
+                    "download_keao_pdfs": payload["_download_keao_pdfs"],
                 },
                 job_id=job_id,
             )

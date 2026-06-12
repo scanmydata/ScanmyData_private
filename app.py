@@ -18029,6 +18029,8 @@ def _e3_pdfs_root(kind):
         return "misth_pdfs"
     if k == "e9":
         return "e9_pdfs"
+    if k == "keao":
+        return "keao_pdfs"
     return "efka_pdfs"
 
 
@@ -18268,6 +18270,24 @@ def api_e3_brain_e9_pdfs_list():
 @login_required
 def api_e3_brain_e9_pdfs_file():
     return _e3_pdfs_serve_file("e9")
+
+
+@app.route("/api/e3/brain/keao_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_keao_pdfs_list():
+    return _e3_pdfs_list_kind("keao")
+
+
+@app.route("/api/e3/brain/keao_pdfs/file", methods=["GET", "DELETE"])
+@login_required
+def api_e3_brain_keao_pdfs_file():
+    return _e3_pdfs_serve_file("keao")
+
+
+@app.route("/api/e3/brain/keao_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_keao_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("keao")
 
 
 @app.route("/api/e3/brain/efka_pdfs/bulk_delete", methods=["POST"])

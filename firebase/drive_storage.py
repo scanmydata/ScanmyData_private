@@ -686,6 +686,25 @@ def drive_push_group_files(
 
         if files_failed == 0:
             record_sync_success()
+            # Update the local last-push marker so subsequent freshness checks
+            # can decide push/equal without any network call.
+            try:
+                latest_local_mtime = 0.0
+                file_count = 0
+                for r, _d, fs in os.walk(source_dir):
+                    for n in fs:
+                        if n.startswith(".") or n in ("activity.log", "error.log"):
+                            continue
+                        try:
+                            file_count += 1
+                            mt = os.path.getmtime(os.path.join(r, n))
+                            if mt > latest_local_mtime:
+                                latest_local_mtime = mt
+                        except Exception:
+                            continue
+                _write_last_push_marker(source_dir, latest_local_mtime, file_count)
+            except Exception:
+                logger.debug("Could not update last-push marker for %s", source_dir)
         return files_failed == 0
     except Exception as e:
         logger.error("[DRIVE PUSH] Unexpected error for group %s: %s", group_name, e)
@@ -793,6 +812,25 @@ def drive_pull_group_to_local(
 
         if files_failed == 0:
             record_sync_success()
+            # After a pull, local equals remote — set marker so the next
+            # freshness check is a no-op.
+            try:
+                latest_local_mtime = 0.0
+                file_count = 0
+                for r, _d, fs in os.walk(target_dir):
+                    for n in fs:
+                        if n.startswith(".") or n in ("activity.log", "error.log"):
+                            continue
+                        try:
+                            file_count += 1
+                            mt = os.path.getmtime(os.path.join(r, n))
+                            if mt > latest_local_mtime:
+                                latest_local_mtime = mt
+                        except Exception:
+                            continue
+                _write_last_push_marker(target_dir, latest_local_mtime, file_count)
+            except Exception:
+                logger.debug("Could not update last-push marker for %s", target_dir)
         return True
     except Exception as e:
         logger.error("[DRIVE PULL] Unexpected error for group %s: %s", group_name, e)
@@ -859,6 +897,123 @@ def drive_log_activity(user_id: str, group_name: str, action: str, details: Opti
     except Exception as e:
         logger.error("[DRIVE LOG] activity log failed: %s", e)
         return False
+
+
+_LAST_PUSH_MARKER = ".drive_last_push.json"
+
+
+def _last_push_marker_path(target_dir: str) -> str:
+    return os.path.join(target_dir, _LAST_PUSH_MARKER)
+
+
+def _read_last_push_marker(target_dir: str) -> float:
+    """Return the local 'latest_mtime' captured at the last successful push (0 if absent)."""
+    try:
+        p = _last_push_marker_path(target_dir)
+        if not os.path.exists(p):
+            return 0.0
+        with open(p, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return float(data.get("latest_mtime") or 0)
+    except Exception:
+        return 0.0
+
+
+def _write_last_push_marker(target_dir: str, latest_mtime: float, file_count: int) -> None:
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        p = _last_push_marker_path(target_dir)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({
+                "latest_mtime": float(latest_mtime or 0),
+                "file_count": int(file_count or 0),
+                "written_at": time.time(),
+            }, fh)
+        os.replace(tmp, p)
+    except Exception:
+        logger.debug("Could not write last-push marker to %s", target_dir)
+
+
+def drive_compare_group_payload_freshness(
+    group_name: str,
+    local_group_folder: str = None,
+    local_data_root: str = None,
+) -> Dict[str, Any]:
+    """Decide push/pull/equal without touching RTDB OR Drive (zero network).
+
+    Uses a local marker file `.drive_last_push.json` to remember the local
+    `latest_mtime` captured at the last successful push. The scheduler can
+    call this every tick cheaply:
+
+    * No local files yet  -> 'pull'  (cold start, fetch from Drive)
+    * local_mtime > marker -> 'push' (something changed locally)
+    * else                 -> 'equal' (no work to do)
+
+    Returns the same shape as firebase_config.compare_group_payload_freshness.
+    """
+    local_folder = str(local_group_folder or group_name or "").strip()
+    if local_data_root is None:
+        local_data_root = os.path.join(os.getcwd(), "data")
+    target_dir = os.path.join(local_data_root, local_folder)
+
+    local_latest_mtime = 0.0
+    local_count = 0
+    try:
+        if os.path.isdir(target_dir):
+            for root, _d, files in os.walk(target_dir):
+                for name in files:
+                    if name.startswith("."):
+                        continue
+                    if name in ("activity.log", "error.log"):
+                        continue
+                    try:
+                        local_count += 1
+                        mt = os.path.getmtime(os.path.join(root, name))
+                        if mt > local_latest_mtime:
+                            local_latest_mtime = mt
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    marker_mtime = _read_last_push_marker(target_dir)
+    local_meta = {
+        "exists": local_count > 0,
+        "latest_mtime": local_latest_mtime,
+        "file_count": local_count,
+    }
+
+    tolerance = 2.0
+    if local_count == 0:
+        # Cold start — let the scheduler pull from Drive.
+        return {
+            "group_name": group_name,
+            "local_group_folder": local_folder,
+            "action": "pull",
+            "reason": "local_empty",
+            "local": local_meta,
+            "remote": {"exists": True, "latest_mtime": 0, "file_count": 0, "source": "drive_authoritative"},
+        }
+
+    if local_latest_mtime > marker_mtime + tolerance:
+        action, reason = "push", "local_newer_than_last_push"
+    else:
+        action, reason = "equal", "no_local_changes_since_last_push"
+
+    return {
+        "group_name": group_name,
+        "local_group_folder": local_folder,
+        "action": action,
+        "reason": reason,
+        "local": local_meta,
+        "remote": {
+            "exists": True,
+            "latest_mtime": marker_mtime,
+            "file_count": 0,
+            "source": "local_push_marker",
+        },
+    }
 
 
 def drive_ensure_group_data_local(group_folder: str, create_empty_dirs: bool = True) -> bool:
