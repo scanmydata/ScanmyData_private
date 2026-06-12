@@ -1,0 +1,181 @@
+{
+  "status": "ok",
+  "year": 2025,
+  "date_from": "01/01/2025",
+  "registries": [
+    {
+      "forea": "Ε.Φ.Κ.Α. ΜΗ ΜΙΣΘΩΤΩΝ ΑΣΦΑΛΙΣΜΕΝΟΣ",
+      "amo": "3143975",
+      "epwnymia": "ΓΑΛΑΝΟΠΟΥΛΟΥ ΓΕΩΡΓΙΑ ΑΡΓΥΡΙΟΣ",
+      "status": "ok",
+      "pages_captured": 2,
+      "pdf": "e3\\checks\\keao_test_out\\keao_pistwseis_Ε.Φ.Κ.Α._ΜΗ_ΜΙΣΘΩΤΩΝ_ΑΣΦΑΛΙΣΜΕΝΟΣ.pdf",
+      "rows": [
+        {
+          "kod_yp": "444",
+          "date": "31/01/2025",
+          "doc": "ΓΚ/Τ/310297",
+          "kod_kin": "308",
+          "total": 300.06,
+          "main_contrib": 295.87,
+          "extra_fees": 4.19,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "31/01/2025",
+          "doc": "ΓΚ/Τ/310298",
+          "kod_kin": "802",
+          "total": 4500.99,
+          "main_contrib": 2710.25,
+          "extra_fees": 1463.39,
+          "surcharges": 327.35
+        },
+        {
+          "kod_yp": "444",
+          "date": "18/02/2025",
+          "doc": "ΓΚ/Τ/425289",
+          "kod_kin": "802",
+          "total": 376.45,
+          "main_contrib": 212.57,
+          "extra_fees": 114.78,
+          "surcharges": 49.1
+        },
+        {
+          "kod_yp": "444",
+          "date": "28/02/2025",
+          "doc": "ΓΚ/Τ/657810",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1552.23,
+          "extra_fees": 766.42,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "31/03/2025",
+          "doc": "ΓΚ/Τ/988974",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1590.33,
+          "extra_fees": 728.32,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "30/04/2025",
+          "doc": "ΓΚ/Τ/1302094",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1598.08,
+          "extra_fees": 720.57,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "30/05/2025",
+          "doc": "ΓΚ/Τ/1635143",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1605.95,
+          "extra_fees": 712.7,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "27/06/2025",
+          "doc": "ΓΚ/Τ/1866623",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1613.92,
+          "extra_fees": 704.73,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "31/07/2025",
+          "doc": "ΓΚ/Τ/2325001",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1711.13,
+          "extra_fees": 607.52,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "29/08/2025",
+          "doc": "ΓΚ/Τ/2616683",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1782.5,
+          "extra_fees": 536.15,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "30/09/2025",
+          "doc": "ΓΚ/Τ/2979137",
+          "kod_kin": "802",
+          "total": 2318.65,
+          "main_contrib": 1795.1,
+          "extra_fees": 523.55,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "18/02/2026",
+          "doc": "ΓΚ/Τ/403725",
+          "kod_kin": "802",
+          "total": 53.95,
+          "main_contrib": 4.79,
+          "extra_fees": 49.16,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "29/04/2026",
+          "doc": "ΓΚ/Τ/1175830",
+          "kod_kin": "802",
+          "total": 53.95,
+          "main_contrib": 4.81,
+          "extra_fees": 49.14,
+          "surcharges": 0.0
+        },
+        {
+          "kod_yp": "444",
+          "date": "29/05/2026",
+          "doc": "ΓΚ/Τ/1538466",
+          "kod_kin": "802",
+          "total": 53.95,
+          "main_contrib": 4.81,
+          "extra_fees": 49.14,
+          "surcharges": 0.0
+        }
+      ],
+      "totals_year": {
+        "total": 23726.700000000004,
+        "main_contrib": 16467.93,
+        "extra_fees": 6882.320000000001,
+        "surcharges": 376.45000000000005
+      },
+      "totals_all": {
+        "total": 23888.550000000007,
+        "main_contrib": 16482.340000000004,
+        "extra_fees": 7029.760000000001,
+        "surcharges": 376.45000000000005
+      }
+    }
+  ],
+  "totals_year": {
+    "total": 23726.700000000004,
+    "main_contrib": 16467.93,
+    "extra_fees": 6882.320000000001,
+    "surcharges": 376.45000000000005
+  },
+  "totals_all": {
+    "total": 23888.550000000007,
+    "main_contrib": 16482.340000000004,
+    "extra_fees": 7029.760000000001,
+    "surcharges": 376.45000000000005
+  }
+}
