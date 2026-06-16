@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Συντήρηση — Ενημέρωση δεδομένων</title>
+  <style>
+    :root { --sky:#0284c7; --sky-d:#0369a1; --bg:#f1f5f9; --ink:#0f172a; --muted:#64748b; }
+    * { box-sizing: border-box; }
+    html,body { margin:0; height:100%; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(160deg,#e0f2fe 0%, var(--bg) 60%);
+      color: var(--ink); display:flex; align-items:center; justify-content:center; padding:24px;
+    }
+    .card {
+      background:#fff; border:1px solid #e2e8f0; border-radius:18px;
+      box-shadow:0 20px 45px rgba(2,132,199,.12); max-width:520px; width:100%;
+      padding:40px 36px; text-align:center;
+    }
+    .spinner {
+      width:54px; height:54px; margin:0 auto 22px; border-radius:50%;
+      border:5px solid #e2e8f0; border-top-color:var(--sky); animation:spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    h1 { font-size:1.5rem; margin:0 0 10px; }
+    p { color:var(--muted); line-height:1.6; margin:0 0 8px; }
+    .pctwrap { margin:26px 0 6px; }
+    .pct { font-size:2.4rem; font-weight:700; color:var(--sky-d); line-height:1; }
+    .bar { height:12px; background:#e2e8f0; border-radius:99px; overflow:hidden; margin:14px 0 8px; }
+    .bar > span {
+      display:block; height:100%; width:0%; border-radius:99px;
+      background:linear-gradient(90deg,var(--sky),var(--sky-d)); transition:width .5s ease;
+    }
+    .meta { font-size:.85rem; color:var(--muted); }
+    .footer { margin-top:26px; font-size:.72rem; color:#94a3b8; }
+  </style>
+</head>
+<body>
+  <main class="card" role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1>Ενημέρωση δεδομένων σε εξέλιξη</h1>
+    <p>Ο διακομιστής συγχρονίζει τα δεδομένα με την απομακρυσμένη βάση δεδομένων μετά από επανεκκίνηση.</p>
+    <p>Η σύνδεση θα είναι διαθέσιμη μόλις ολοκληρωθεί — η σελίδα θα ανανεωθεί αυτόματα.</p>
+
+    <div class="pctwrap"><span class="pct" id="pct">{% if state %}{{ state.percent }}{% else %}0{% endif %}%</span></div>
+    <div class="bar" aria-hidden="true"><span id="bar"></span></div>
+    <div class="meta" id="meta">
+      {% if state and state.total %}{{ state.done }} / {{ state.total }}{% else %}Προετοιμασία…{% endif %}
+    </div>
+
+    <div class="footer">Scanmydata · Συντήρηση</div>
+  </main>
+
+  <script>
+    (function () {
+      var bar = document.getElementById('bar');
+      var meta = document.getElementById('meta');
+      var pctEl = document.getElementById('pct');
+      function pct(s){ if (s && s.total>0) return Math.round((s.done/s.total)*100); return s && s.percent ? s.percent : 5; }
+      function tick() {
+        fetch('/api/system/readiness', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (s) {
+            if (s.ready) { window.location.reload(); return; }
+            var p = pct(s);
+            bar.style.width = Math.max(5, p) + '%';
+            pctEl.textContent = p + '%';
+            meta.textContent = (s.total ? (s.done + ' / ' + s.total) : 'Προετοιμασία…');
+          })
+          .catch(function () { /* keep polling */ });
+      }
+      tick();
+      setInterval(tick, 3000);
+    })();
+  </script>
+</body>
+</html>

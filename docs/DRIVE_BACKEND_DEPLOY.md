@@ -118,6 +118,81 @@ Each file's `appProperties.local_mtime` holds the original local mtime as a
 float string — used by smart-sync to skip unchanged files on subsequent
 pushes.
 
+## Persist the data folder across redeploys (Coolify) — READ THIS
+
+**The biggest speed win.** The app stores all group data under
+`/app/data` (it uses `BASE_DIR/data` and `os.getcwd()/data`, both `/app/data`
+when `WORKDIR=/app`). If that folder is *not* on a persistent volume, every
+redeploy starts from an empty `data/` and the warmup has to pull **everything**
+from the remote — which is slow.
+
+> ⚠️ The Dockerfile sets `ENV DATA_DIR=/data` / `UPLOADS_DIR=/uploads`, but the
+> Python code does **not** read those env vars — it always uses `/app/data` and
+> `/app/uploads`. So a Coolify mount whose **Destination Path** is `/data` does
+> nothing. It must point at the real path.
+
+**Coolify → Persistent Storage → Directories**, set the **Destination Path** to
+the path the app actually uses:
+
+| Source Path (host, keep as-is) | Destination Path (container) |
+| --- | --- |
+| `/data/coolify/applications/<id>` | **`/app/data`** |
+| `/data/coolify/applications/<id>` | **`/app/uploads`** |
+
+(i.e. change the existing `/data` mount to `/app/data` and `/uploads` to
+`/app/uploads`.) After this, `data/` survives redeploys, so the warmup only
+reconciles the few files that changed while the server was down → near-instant.
+
+## Startup data warmup + maintenance gate
+
+On every server start / redeploy, `firebase/startup_warmup.py` **reconciles**
+each group's `data/<group_folder>/` with the active remote backend (Drive *or*
+Firebase) **before** the app accepts logins. While that runs:
+
+- Public visitors and the login page get a self-contained **maintenance page**
+  (`templates/maintenance.html`, HTTP 503) that auto-polls and reloads when
+  ready. It shows a percentage + `done / total` count (no group names, backend-
+  neutral wording).
+- All routes are gated except static assets and the readiness probe
+  `GET /api/system/readiness` (alias `/healthz/ready`).
+
+Behavior:
+
+- **Reconcile, not blind pull** — per group it calls
+  `compare_group_payload_freshness` and acts on the result: `push` when the
+  **server holds newer data** (it wins and is backed up to the remote), `pull`
+  when the remote is newer / local is empty, skip when equal. A server with
+  fresher data is never clobbered.
+- **Backend-agnostic** — works for both `drive` and `firebase` via the unified
+  dispatcher.
+- **Smart sync** — only changed files transfer, so with a persistent `data/`
+  folder restarts are fast.
+- **Multi-worker safe** — a JSON marker (`data/.drive_warmup_state.json`) plus a
+  leader-election lock (`data/.drive_warmup.lock`) ensure one worker reconciles
+  while the others follow the shared state. Works for `--workers 1` (Dockerfile)
+  and `--workers 4` (start.sh).
+- **Fail-open** — if the warmup stalls or errors (rate-limit, network, leader
+  crash), the gate auto-unblocks after `DRIVE_WARMUP_MAX_SECONDS` (default
+  **300s**) and logs a warning, so a remote outage can never brick the server.
+  Remaining groups then reconcile lazily on first login.
+
+Tune with `DRIVE_WARMUP_MAX_SECONDS` (env). The gate is a no-op when no remote
+backend is usable.
+
+## Admin panel — Remote Database Sync card
+
+Admin → Settings → **🔄 Συγχρονισμός Απομακρυσμένης Βάσης** card (works for both
+the Drive and Firebase backends):
+
+- **Readiness badge** — startup warmup status (Έτοιμος / Φόρτωση / Fail-open).
+- **Έλεγχος up-to-date** — `POST /admin/api/drive-sync/check` runs a per-group
+  reconcile-direction check (`compare_group_payload_freshness`) and reports how
+  many groups are pending push / pull, without transferring files.
+- **Manual Push/Pull** — `POST /admin/api/drive-sync/run` runs a background
+  push or pull for all groups or a single group (with optional `force`), routed
+  to whichever backend is active. Status polled via
+  `GET /admin/api/drive-sync/status`.
+
 ## Operational notes
 
 - Drive's `httplib2` transport is not safe to share across many calls — the

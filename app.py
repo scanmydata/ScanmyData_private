@@ -1057,6 +1057,52 @@ try:
 except Exception as e:
     logger.warning(f"Firebase initialization failed: {e}")
 # --- end firebase init ---
+# --- Drive data warmup + readiness gate -----------------------------------
+# On startup/redeploy, pull every group's data/ subfolder from Drive before
+# allowing logins. While that runs, serve a maintenance page and block login.
+try:
+    from firebase import startup_warmup as _warmup
+
+    _WARMUP_ALLOWED_ENDPOINTS = {'serve_icons', 'system_readiness'}
+    _WARMUP_ALLOWED_PATHS = {'/healthz', '/healthz/ready', '/api/system/readiness', '/favicon.ico'}
+
+    @app.before_request
+    def _drive_warmup_gate():
+        try:
+            if current_app.config.get('LOGIN_DISABLED'):
+                return None
+        except Exception:
+            pass
+        try:
+            if _warmup.is_ready():
+                return None
+        except Exception:
+            return None  # never let the gate itself brick the app
+
+        endpoint = request.endpoint or ''
+        if endpoint.startswith('static') or endpoint in _WARMUP_ALLOWED_ENDPOINTS:
+            return None
+        if request.path in _WARMUP_ALLOWED_PATHS:
+            return None
+
+        if request.path.startswith('/api/') or request.is_json:
+            return jsonify({
+                'status': 'warming_up', 'ready': False,
+                'message': 'Ο διακομιστής ενημερώνει τα δεδομένα από το Google Drive. Δοκιμάστε ξανά σε λίγο.',
+            }), 503, {'Retry-After': '5'}
+        try:
+            html = render_template('maintenance.html', state=_warmup.get_public_state())
+        except Exception:
+            html = ('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="5">'
+                    '<h1>Συντήρηση</h1><p>Ο διακομιστής ενημερώνει τα δεδομένα. '
+                    'Παρακαλώ δοκιμάστε ξανά σε λίγο.</p>')
+        return html, 503, {'Retry-After': '5'}
+
+    # Kick off the background warmup (pull all group folders from Drive).
+    _warmup.ensure_started(app)
+except Exception:
+    logger.exception('Could not initialize Drive warmup gate')
+# --- end Drive warmup gate -------------------------------------------------
 try:
     # If Flask-Login is available, enforce login for non-auth endpoints
     from flask_login import current_user
@@ -1077,7 +1123,7 @@ try:
         if endpoint in ['terms_page', 'privacy_page', '_debug_log']:
             return None
         # allow public API endpoints (if any) - keep a whitelist here if needed
-        public = {'home', 'index', 'healthcheck', 'serve_icons'}
+        public = {'home', 'index', 'healthcheck', 'serve_icons', 'system_readiness'}
         remote_public_endpoints = {
             'mobile_qr_scanner',
             'api_qr_remote_attach',
@@ -1149,6 +1195,24 @@ def get_group_base_dir():
 
 def credentials_path_for_request():
     return os.path.join(get_group_base_dir(), 'credentials.json')
+
+
+@app.route('/api/system/readiness', methods=['GET'])
+@app.route('/healthz/ready', methods=['GET'])
+def system_readiness():
+    """Public readiness probe consulted by the maintenance page (no login).
+
+    Reports whether the Drive startup warmup has finished. The maintenance page
+    polls this and reloads itself once `ready` flips to true.
+    """
+    try:
+        from firebase import startup_warmup as _wu
+        state = _wu.get_public_state()
+        return jsonify(state), (200 if state.get('ready') else 503)
+    except Exception as e:
+        # Fail open: if the readiness module is unavailable, report ready so the
+        # site is never permanently stuck behind the gate.
+        return jsonify({'ready': True, 'status': 'unknown', 'error': str(e)}), 200
 
 
 @app.route('/api/sync_progress', methods=['GET'])
@@ -18863,6 +18927,72 @@ def api_admin_storage_backend():
         except Exception:
             log.debug('Could not log storage_backend switch')
     return jsonify({'success': True, 'data': {'backend': new_backend, 'previous': previous}})
+
+
+@app.route('/admin/api/drive-sync/status', methods=['GET'])
+@login_required
+def api_admin_drive_sync_status():
+    """Startup warmup readiness + last manual push/pull job state (no network)."""
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    try:
+        from firebase import startup_warmup as _wu
+        return jsonify({
+            'success': True,
+            'data': {
+                'warmup': _wu.get_public_state(),
+                'manual_job': _wu.get_manual_state(),
+                'manual_running': _wu.manual_job_running(),
+            },
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/admin/api/drive-sync/check', methods=['POST'])
+@login_required
+def api_admin_drive_sync_check():
+    """On-demand up-to-date check against Drive (per-group push/pull diff)."""
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    try:
+        from firebase import startup_warmup as _wu
+        return jsonify({'success': True, 'data': _wu.compute_sync_diff(app)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/admin/api/drive-sync/run', methods=['POST'])
+@login_required
+def api_admin_drive_sync_run():
+    """Start a manual push or pull job (all groups, or a single group).
+
+    Body: {action: 'push'|'pull', group?: '<data_folder>', force?: bool}
+    """
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    payload = request.get_json(silent=True) or {}
+    action = (payload.get('action') or '').strip().lower()
+    if action not in ('push', 'pull'):
+        return jsonify({'success': False, 'error': "action must be 'push' or 'pull'"}), 400
+    group = (payload.get('group') or '').strip()
+    force = bool(payload.get('force'))
+    groups = [group] if group else None
+    try:
+        from firebase import startup_warmup as _wu
+        result = _wu.start_manual_job(app, action, groups=groups, force=force)
+        if result.get('error'):
+            return jsonify({'success': False, 'error': result['error'], 'state': result.get('state')}), 409
+        try:
+            firebase_config.firebase_log_activity(
+                str(getattr(current_user, 'id', 'admin')), '__admin__',
+                'drive_manual_sync', {'action': action, 'group': group or 'all', 'force': force},
+            )
+        except Exception:
+            pass
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/admin/firebase-sync-settings', methods=['GET', 'POST'])

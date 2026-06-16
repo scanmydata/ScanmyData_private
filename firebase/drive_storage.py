@@ -1016,6 +1016,74 @@ def drive_compare_group_payload_freshness(
     }
 
 
+def drive_group_sync_diff(group_name: str, local_group_folder: str = None) -> Dict[str, Any]:
+    """Compare local data/<group>/ against Drive without transferring files.
+
+    Returns {in_sync, pending_push, pending_pull, push[:50], pull[:50]} where
+    pending_push = local files newer/absent on Drive, pending_pull = Drive
+    files newer/absent locally. Used by the admin 'up-to-date' check.
+    """
+    if not is_drive_enabled() and not init_drive():
+        return {"error": "drive_disabled"}
+
+    identity = _resolve_group_identity(group_name, local_group_folder)
+    local_folder = identity["local_folder"]
+    source_dir = os.path.join(os.getcwd(), "data", local_folder)
+
+    index = _build_group_index(local_folder, force=True)
+
+    local: Dict[str, float] = {}
+    if os.path.isdir(source_dir):
+        for root, _dirs, files in os.walk(source_dir):
+            for fname in files:
+                fp = os.path.join(root, fname)
+                rel = _compute_drive_rel_path(fp, source_dir)
+                if rel is None:
+                    continue
+                try:
+                    local[rel] = os.path.getmtime(fp)
+                except Exception:
+                    local[rel] = 0.0
+
+    skip = {"activity.log", "error.log", ".sync_meta.json"}
+    push: List[str] = []
+    pull: List[str] = []
+    tolerance = 2.0
+
+    for rel, lmt in local.items():
+        existing = index.get(rel)
+        if not existing:
+            push.append(rel)
+            continue
+        try:
+            rmt = float((existing.get("appProperties") or {}).get("local_mtime") or 0)
+        except Exception:
+            rmt = 0.0
+        if rmt and lmt > rmt + tolerance:
+            push.append(rel)
+
+    for rel, meta in index.items():
+        if rel in skip:
+            continue
+        if rel not in local:
+            pull.append(rel)
+            continue
+        try:
+            rmt = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
+        except Exception:
+            rmt = 0.0
+        if rmt and rmt > local.get(rel, 0.0) + tolerance:
+            pull.append(rel)
+
+    return {
+        "in_sync": not push and not pull,
+        "pending_push": len(push),
+        "pending_pull": len(pull),
+        "push": push[:50],
+        "pull": pull[:50],
+    }
+
+
 def drive_ensure_group_data_local(group_folder: str, create_empty_dirs: bool = True) -> bool:
     """Mirror of firebase ensure_group_data_local: lazy-pull if missing locally."""
     try:

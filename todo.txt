@@ -7,4 +7,3 @@ curl -v \
 
   
 page tour
-μεταβαση σε google drive με τους κωδικους της firebase

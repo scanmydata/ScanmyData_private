@@ -389,6 +389,54 @@
         </button>
       </div>
 
+      <!-- Google Drive Sync — readiness + up-to-date check + manual push/pull -->
+      <div id="drive-sync-card" class="bg-white border border-gray-200 rounded-lg p-6">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-bold">🔄 Συγχρονισμός Απομακρυσμένης Βάσης</h3>
+          <span id="drive-sync-badge" class="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">—</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">
+          Κατάσταση συγχρονισμού του server με την απομακρυσμένη βάση δεδομένων (ενεργό backend).
+          Έλεγχος αν είναι up-to-date (αντιπαραβολή) και χειροκίνητο push / pull.
+        </p>
+
+        <!-- Warmup / readiness -->
+        <div id="drive-warmup-status" class="p-3 bg-gray-50 rounded border border-gray-200 mb-3 text-sm text-gray-700">
+          Φόρτωση κατάστασης…
+        </div>
+
+        <!-- Up-to-date check -->
+        <div class="flex gap-2 mb-3">
+          <button onclick="checkDriveSync()" id="drive-check-btn"
+                  class="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm">
+            🔍 Έλεγχος up-to-date
+          </button>
+        </div>
+        <div id="drive-sync-check" class="hidden p-3 bg-blue-50 border border-blue-200 rounded text-sm mb-3"></div>
+
+        <!-- Manual all-groups push/pull -->
+        <div class="flex gap-2 mb-2">
+          <button onclick="runDriveSync('pull', null)" id="drive-pull-all-btn"
+                  class="flex-1 px-3 py-2 bg-sky-600 text-white rounded-md hover:bg-sky-700 text-sm">
+            ⬇️ Pull όλων
+          </button>
+          <button onclick="runDriveSync('push', null)" id="drive-push-all-btn"
+                  class="flex-1 px-3 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-sm">
+            ⬆️ Push όλων
+          </button>
+        </div>
+        <label class="flex items-center gap-2 text-xs text-gray-500 mb-3">
+          <input type="checkbox" id="drive-force-sync" class="w-4 h-4">
+          Force (αγνόησε smart-sync — μεταφορά όλων)
+        </label>
+
+        <!-- Manual job progress -->
+        <div id="drive-job-status" class="hidden p-3 bg-amber-50 border border-amber-200 rounded text-sm mb-3"></div>
+
+        <!-- Per-group breakdown (filled by the up-to-date check) -->
+        <div id="drive-groups" class="space-y-2"></div>
+      </div>
+
       <!-- Sync Settings (applies to whichever storage backend is active) -->
       <div class="bg-white border border-gray-200 rounded-lg p-6">
         <h3 class="text-lg font-bold mb-4">☁️ Sync Settings</h3>
@@ -527,7 +575,7 @@ function showTab(tabName) {
   else if (tabName === 'backups') loadBackups();
   else if (tabName === 'email') loadEmailUsers();
   else if (tabName === 'firebase_usage') loadFirebaseUsage();
-  else if (tabName === 'settings') { loadFirebaseSyncSettings(); loadStorageBackend(); }
+  else if (tabName === 'settings') { loadFirebaseSyncSettings(); loadStorageBackend(); loadDriveSyncStatus(); }
 }
 
 // ==================== OVERVIEW TAB ====================
@@ -2431,6 +2479,131 @@ async function saveStorageBackend() {
   }
 }
 
+// ==================== GOOGLE DRIVE SYNC ====================
+let _driveJobPoll = null;
+
+async function loadDriveSyncStatus() {
+  try {
+    const res = await fetch('/admin/api/drive-sync/status');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'load failed');
+    _renderWarmup(json.data.warmup);
+    _renderJob(json.data.manual_job, json.data.manual_running);
+  } catch (err) {
+    const el = document.getElementById('drive-warmup-status');
+    if (el) el.textContent = '⚠️ Αδυναμία φόρτωσης κατάστασης: ' + err.message;
+  }
+}
+
+function _renderWarmup(w) {
+  const el = document.getElementById('drive-warmup-status');
+  const badge = document.getElementById('drive-sync-badge');
+  if (!w || !el) return;
+  let label, cls;
+  if (w.status === 'disabled') { label = 'Drive ανενεργό'; cls = 'bg-gray-100 text-gray-600'; }
+  else if (w.ready && !w.fail_open) { label = '✅ Έτοιμος'; cls = 'bg-emerald-100 text-emerald-700'; }
+  else if (w.fail_open) { label = '⚠️ Fail-open'; cls = 'bg-amber-100 text-amber-700'; }
+  else { label = '⏳ Φόρτωση δεδομένων'; cls = 'bg-sky-100 text-sky-700'; }
+  if (badge) { badge.textContent = label; badge.className = 'text-xs px-2 py-1 rounded-full ' + cls; }
+
+  let txt = '<strong>Startup warmup:</strong> ' + (w.status || '—');
+  if (w.total) txt += ' — ' + w.done + '/' + w.total + ' ομάδες (' + (w.percent || 0) + '%)';
+  if (w.current_group) txt += '<br>Τρέχουσα: <span class="font-semibold text-sky-700">' + w.current_group + '</span>';
+  if (w.fail_open) txt += '<br><span class="text-amber-700">Η πύλη ξεκλείδωσε με timeout/σφάλμα — οι υπόλοιπες ομάδες τραβιούνται κατά το login.</span>';
+  if (w.error) txt += '<br><span class="text-red-600">Σφάλμα: ' + w.error + '</span>';
+  el.innerHTML = txt;
+}
+
+function _renderJob(job, running) {
+  const el = document.getElementById('drive-job-status');
+  if (!el) return;
+  if (!job || job.status === 'idle' || (!running && job.status !== 'done')) {
+    if (job && job.status === 'done') { /* show summary below */ } else { el.classList.add('hidden'); return; }
+  }
+  el.classList.remove('hidden');
+  let txt = '<strong>' + (job.action === 'push' ? '⬆️ Push' : '⬇️ Pull') + (job.force ? ' (force)' : '') + ':</strong> ';
+  txt += (job.status === 'running' ? 'σε εξέλιξη ' : 'ολοκληρώθηκε ') + (job.done || 0) + '/' + (job.total || 0);
+  if (job.current_group) txt += ' — ' + job.current_group;
+  if (job.status === 'done' && Array.isArray(job.results)) {
+    const fails = job.results.filter(r => !r.ok);
+    txt += fails.length ? '<br><span class="text-red-600">Αποτυχίες: ' + fails.map(f => f.folder).join(', ') + '</span>'
+                        : '<br><span class="text-emerald-700">Όλες οι ομάδες ΟΚ.</span>';
+  }
+  el.innerHTML = txt;
+}
+
+async function checkDriveSync() {
+  const btn = document.getElementById('drive-check-btn');
+  const out = document.getElementById('drive-sync-check');
+  const groupsEl = document.getElementById('drive-groups');
+  if (btn) { btn.disabled = true; btn.textContent = '🔍 Έλεγχος…'; }
+  out.classList.remove('hidden');
+  out.textContent = 'Έλεγχος σε εξέλιξη… (επικοινωνία με Drive)';
+  try {
+    const res = await fetch('/admin/api/drive-sync/check', { method: 'POST' });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'check failed');
+    const d = json.data;
+    if (!d.remote_ok) { out.textContent = '⚠️ ' + (d.message || 'Απομακρυσμένη βάση μη διαθέσιμη.'); groupsEl.innerHTML = ''; return; }
+    out.className = 'p-3 rounded text-sm mb-3 ' + (d.up_to_date ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200');
+    out.innerHTML = d.up_to_date
+      ? '✅ <strong>Up-to-date</strong> — ο server ταυτίζεται με την απομακρυσμένη βάση.'
+      : '⚠️ <strong>Εκκρεμότητες:</strong> ' + d.groups_pending_push + ' ομάδες προς push, ' + d.groups_pending_pull + ' προς pull.';
+    groupsEl.innerHTML = (d.groups || []).map(g => {
+      const ok = g.in_sync && !g.error;
+      const tag = g.error ? '<span class="text-red-600">σφάλμα</span>'
+        : ok ? '<span class="text-emerald-700">✓ in-sync</span>'
+        : g.action === 'push' ? '<span class="text-amber-700">⬆️ προς push</span>'
+        : '<span class="text-amber-700">⬇️ προς pull</span>';
+      return '<div class="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200 text-sm">' +
+        '<span class="font-medium">' + g.folder + '</span>' +
+        '<span class="flex items-center gap-2">' + tag +
+        '<button onclick="runDriveSync(\'pull\',\'' + g.folder + '\')" class="px-2 py-1 bg-sky-100 text-sky-700 rounded text-xs hover:bg-sky-200">Pull</button>' +
+        '<button onclick="runDriveSync(\'push\',\'' + g.folder + '\')" class="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-xs hover:bg-emerald-200">Push</button>' +
+        '</span></div>';
+    }).join('');
+  } catch (err) {
+    out.textContent = '❌ ' + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Έλεγχος up-to-date'; }
+  }
+}
+
+async function runDriveSync(action, group) {
+  const force = !!document.getElementById('drive-force-sync')?.checked;
+  const scope = group ? ('την ομάδα «' + group + '»') : 'ΟΛΕΣ τις ομάδες';
+  const verb = action === 'push' ? 'Push (server → Drive)' : 'Pull (Drive → server)';
+  if (!confirm(verb + ' για ' + scope + (force ? ' με FORCE' : '') + '.\nΝα προχωρήσω;')) return;
+  try {
+    const res = await fetch('/admin/api/drive-sync/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, group: group || null, force })
+    });
+    const json = await res.json();
+    if (!json.success) {
+      if (res.status === 409) { showErrorModal('⏳ Σε εξέλιξη', 'Τρέχει ήδη εργασία sync. Περίμενε να ολοκληρωθεί.'); return; }
+      throw new Error(json.error || 'run failed');
+    }
+    _renderJob(json.data, true);
+    _startJobPolling();
+  } catch (err) {
+    showErrorModal('❌ Σφάλμα', 'Αποτυχία εκκίνησης sync: ' + err.message);
+  }
+}
+
+function _startJobPolling() {
+  if (_driveJobPoll) clearInterval(_driveJobPoll);
+  _driveJobPoll = setInterval(async () => {
+    try {
+      const res = await fetch('/admin/api/drive-sync/status');
+      const json = await res.json();
+      if (!json.success) return;
+      _renderJob(json.data.manual_job, json.data.manual_running);
+      if (!json.data.manual_running) { clearInterval(_driveJobPoll); _driveJobPoll = null; }
+    } catch (e) { /* keep polling */ }
+  }, 2000);
+}
+
 // ==================== INITIALIZATION ====================
 window.addEventListener('load', function() {
   const modeEl = document.getElementById('sync-mode');
@@ -2445,7 +2618,8 @@ window.addEventListener('load', function() {
   loadEmailProviderSettings();
   loadFirebaseSyncSettings();
   loadStorageBackend();
-  
+  loadDriveSyncStatus();
+
   // Auto-refresh stats every 30 seconds
   setInterval(loadStats, 30000);
 });
