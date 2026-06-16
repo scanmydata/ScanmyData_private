@@ -25,6 +25,13 @@ Flask-Login==0.6.3
 Flask-SQLAlchemy>=3.0
 firebase-admin>=6.0
 google-cloud-firestore>=2.14.0
+# Google Drive storage backend (firebase/drive_storage.py + scripts/bootstrap_drive_oauth.py).
+# Without these, `import googleapiclient` fails and the Drive dispatcher silently
+# disables sync ("[PUSH] Drive backend failed, no fallback").
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
 cryptography>=41.0
 pycryptodome>=3.18
 pyzipper>=0.3.6
