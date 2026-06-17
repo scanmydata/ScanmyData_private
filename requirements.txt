@@ -21,6 +21,7 @@ numpy>=1.25
 pytesseract>=0.3.10
 opencv-python-headless>=4.8
 qrcode>=7.4
+pyotp>=2.9.0
 Flask-Login==0.6.3
 Flask-SQLAlchemy>=3.0
 firebase-admin>=6.0

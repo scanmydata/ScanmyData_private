@@ -338,81 +338,16 @@ def login():
             flash('Μη έγκυρο όνομα χρήστη/email ή κωδικός πρόσβασης', 'error')
             return redirect(url_for('auth.login'))
 
-        # Successful login: clear any previous active credential selection
+        # Password OK. Clear any previous active credential selection.
         session.pop('active_credential', None)
         session.pop('_remote_qr_owner', None)
 
-        # Prevent concurrent login: if a session lock exists for this user, deny login
-        try:
-            # If the user already has a live session (recent heartbeat), block login.
-            # Allow takeover if the existing session appears stale (> timeout).
-            from models import db as _db
-            SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
-            existing_sid = getattr(user, 'current_session_id', None)
-            last_active = getattr(user, 'last_active_at', None)
-            if existing_sid and last_active:
-                try:
-                    now = datetime.datetime.utcnow()
-                    delta = now - last_active
-                    if delta.total_seconds() <= SESSION_TIMEOUT:
-                        current_app.logger.info(f"Blocked local auth login; live session exists for user id={user.id}")
-                        flash('Ο λογαριασμός είναι ήδη ενεργός σε άλλη συσκευή/σύνδεση.', 'warning')
-                        return redirect(url_for('auth.login'))
-                    else:
-                        # stale session -> allow takeover (fall through)
-                        current_app.logger.info(f"Stale session for user id={user.id}, allowing takeover")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # If 2FA is enabled, defer the actual login until the second factor is
+        # verified. No authentication is granted yet — we only stash the user id.
+        if getattr(user, 'twofa_enabled', False) and getattr(user, 'twofa_method', None):
+            return _begin_2fa_challenge(user, next_url=request.form.get('next') or request.args.get('next'))
 
-        login_user(user)
-        # create and store session id to prevent concurrent logins (DB-backed)
-        try:
-            session_id = secrets.token_urlsafe(32)
-            user.start_session(session_id)
-            db.session.commit()
-            session['session_id'] = session_id
-        except Exception:
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
-        # record last login
-        try:
-            user.last_login = datetime.datetime.utcnow()
-            db.session.commit()
-        except Exception:
-            pass
-
-        if not session.get('active_group'):
-            user_groups = list(getattr(user, 'groups', []) or [])
-            if len(user_groups) == 1:
-                session['active_group'] = user_groups[0].name
-                flash('Συνδεθήκατε επιτυχώς', 'success')
-                # Optional pull sync on login (admin-toggleable policy)
-                if utils.firebase_sync_login_logout_enabled():
-                    try:
-                        return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
-                    except Exception:
-                        return redirect(url_for('home'))
-                return redirect(url_for('home'))
-            else:
-                if user_groups:
-                    flash('Επίλεξε ενεργή ομάδα για να συνεχίσεις.', 'info')
-                else:
-                    flash('Δεν έχεις ακόμη αντιστοιχιστεί σε ομάδα. Επίλεξε ή δημιούργησε μία.', 'warning')
-                return redirect(url_for('auth.list_groups'))
-
-        flash('Συνδεθήκατε επιτυχώς', 'success')
-        # If there's an active group, optionally start pull sync page
-        if session.get('active_group'):
-            if utils.firebase_sync_login_logout_enabled():
-                try:
-                    return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
-                except Exception:
-                    pass
-        return redirect(request.args.get('next') or url_for('home'))
+        return _complete_login(user, next_url=request.form.get('next') or request.args.get('next'))
 
     # GET -> if already authenticated, redirect away from login page
     try:
@@ -530,7 +465,360 @@ def account_settings():
         flash('Ο κωδικός ενημερώθηκε με επιτυχία.', 'success')
         return redirect(url_for('auth.account_settings'))
 
-    return render_template('auth/account.html')
+    return render_template('auth/account.html', twofa=_twofa_view_context())
+
+
+# ============================================================================
+# Two-factor authentication (2FA)
+# ============================================================================
+# Two methods are supported, chosen per-user:
+#   * 'totp'  — authenticator app (Google Authenticator, Authy, ...) via a QR code
+#   * 'email' — one-time code emailed to the account's verified address
+# Login enforces the second factor before granting a session.
+
+_OTP_TTL_SECONDS = 600          # email OTP validity window
+_OTP_MAX_ATTEMPTS = 5           # per challenge before it is invalidated
+_OTP_RESEND_COOLDOWN = 30       # seconds between email OTP sends
+
+
+def _totp_issuer() -> str:
+    return (current_app.config.get('TOTP_ISSUER') or 'Scanmydata').strip() or 'Scanmydata'
+
+
+def _mask_email(email: str) -> str:
+    email = (email or '').strip()
+    if '@' not in email:
+        return email
+    name, domain = email.split('@', 1)
+    if len(name) <= 2:
+        masked = name[0] + '*'
+    else:
+        masked = name[0] + ('*' * (len(name) - 2)) + name[-1]
+    return f'{masked}@{domain}'
+
+
+def _twofa_view_context() -> dict:
+    """Status block for the account page."""
+    return {
+        'enabled': bool(getattr(current_user, 'twofa_enabled', False)),
+        'method': getattr(current_user, 'twofa_method', None),
+        'email': getattr(current_user, 'email', None),
+        'masked_email': _mask_email(getattr(current_user, 'email', '') or ''),
+        'has_email': bool((getattr(current_user, 'email', '') or '').strip()),
+    }
+
+
+def _hash_otp(code: str) -> str:
+    # HMAC with the app secret so the stored hash can't be reversed without it.
+    import hmac, hashlib
+    key = (current_app.config.get('SECRET_KEY') or 'scanmydata').encode('utf-8')
+    return hmac.new(key, f'2fa:{code}'.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _gen_email_otp() -> str:
+    # 6-digit numeric code.
+    return f'{secrets.randbelow(1000000):06d}'
+
+
+def _send_email_otp(user, purpose: str = 'login') -> bool:
+    """Generate + email a 6-digit OTP, stored server-side. Returns send success."""
+    email = (getattr(user, 'email', '') or '').strip()
+    if not email:
+        return False
+    code = _gen_email_otp()
+    # Persist hash + expiry on the user row (NOT the client cookie) so a 6-digit
+    # code can't be brute-forced offline by whoever holds the session.
+    try:
+        user.email_otp_hash = _hash_otp(code)
+        user.email_otp_expires = datetime.datetime.utcnow() + datetime.timedelta(seconds=_OTP_TTL_SECONDS)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed to persist 2FA email OTP')
+        return False
+    session['otp_sent_at'] = time.time()
+    subject = 'Κωδικός επαλήθευσης (2FA) — Scanmydata'
+    html = (
+        f'<p>Ο κωδικός επαλήθευσης δύο παραγόντων είναι:</p>'
+        f'<p style="font-size:26px;font-weight:700;letter-spacing:4px">{code}</p>'
+        f'<p>Ισχύει για {_OTP_TTL_SECONDS // 60} λεπτά. Αν δεν τον ζήτησες, αγνόησε το μήνυμα.</p>'
+    )
+    text = f'Κωδικός 2FA: {code} (ισχύει {_OTP_TTL_SECONDS // 60} λεπτά)'
+    try:
+        return bool(email_utils.send_email(email, subject, html, text))
+    except Exception:
+        current_app.logger.exception('Failed to send 2FA email OTP')
+        return False
+
+
+def _verify_email_otp(user, code: str) -> bool:
+    code = (code or '').strip()
+    if not code or not user:
+        return False
+    expires = getattr(user, 'email_otp_expires', None)
+    if not expires or datetime.datetime.utcnow() > expires:
+        return False
+    stored = getattr(user, 'email_otp_hash', None) or ''
+    return bool(stored) and secrets.compare_digest(stored, _hash_otp(code))
+
+
+def _clear_email_otp(user) -> None:
+    try:
+        user.email_otp_hash = None
+        user.email_otp_expires = None
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _verify_totp(secret: str, code: str) -> bool:
+    code = (code or '').strip().replace(' ', '')
+    if not secret or not code:
+        return False
+    try:
+        import pyotp
+        return bool(pyotp.TOTP(secret).verify(code, valid_window=1))
+    except Exception:
+        current_app.logger.exception('TOTP verification error')
+        return False
+
+
+def _clear_otp_session() -> None:
+    for k in ('otp_hash', 'otp_expires', 'otp_sent_at'):
+        session.pop(k, None)
+
+
+def _complete_login(user, next_url: str = None):
+    """Finish a login once credentials (and any 2FA) are verified.
+
+    Runs the single-session lock check, logs the user in, sets up the DB-backed
+    session id, and routes to the right landing page. Returns a redirect.
+    """
+    # Prevent concurrent login: if a live session lock exists, deny login.
+    try:
+        SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
+        existing_sid = getattr(user, 'current_session_id', None)
+        last_active = getattr(user, 'last_active_at', None)
+        if existing_sid and last_active:
+            try:
+                delta = datetime.datetime.utcnow() - last_active
+                if delta.total_seconds() <= SESSION_TIMEOUT:
+                    current_app.logger.info(f"Blocked local auth login; live session exists for user id={user.id}")
+                    flash('Ο λογαριασμός είναι ήδη ενεργός σε άλλη συσκευή/σύνδεση.', 'warning')
+                    return redirect(url_for('auth.login'))
+                else:
+                    current_app.logger.info(f"Stale session for user id={user.id}, allowing takeover")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    login_user(user)
+    # create and store session id to prevent concurrent logins (DB-backed)
+    try:
+        session_id = secrets.token_urlsafe(32)
+        user.start_session(session_id)
+        db.session.commit()
+        session['session_id'] = session_id
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+    # record last login
+    try:
+        user.last_login = datetime.datetime.utcnow()
+        db.session.commit()
+    except Exception:
+        pass
+
+    if not session.get('active_group'):
+        user_groups = list(getattr(user, 'groups', []) or [])
+        if len(user_groups) == 1:
+            session['active_group'] = user_groups[0].name
+            flash('Συνδεθήκατε επιτυχώς', 'success')
+            if utils.firebase_sync_login_logout_enabled():
+                try:
+                    return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
+                except Exception:
+                    return redirect(url_for('home'))
+            return redirect(url_for('home'))
+        else:
+            if user_groups:
+                flash('Επίλεξε ενεργή ομάδα για να συνεχίσεις.', 'info')
+            else:
+                flash('Δεν έχεις ακόμη αντιστοιχιστεί σε ομάδα. Επίλεξε ή δημιούργησε μία.', 'warning')
+            return redirect(url_for('auth.list_groups'))
+
+    flash('Συνδεθήκατε επιτυχώς', 'success')
+    if session.get('active_group'):
+        if utils.firebase_sync_login_logout_enabled():
+            try:
+                return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
+            except Exception:
+                pass
+    return redirect(next_url or url_for('home'))
+
+
+def _begin_2fa_challenge(user, next_url: str = None):
+    """Stash a pending-2FA marker and route to the challenge page."""
+    method = getattr(user, 'twofa_method', None)
+    session['pending_2fa'] = {
+        'user_id': user.id,
+        'method': method,
+        'attempts': 0,
+        'next': next_url or '',
+    }
+    _clear_otp_session()
+    if method == 'email':
+        if not _send_email_otp(user, purpose='login'):
+            session.pop('pending_2fa', None)
+            flash('Αποτυχία αποστολής κωδικού στο email. Δοκίμασε ξανά.', 'danger')
+            return redirect(url_for('auth.login'))
+    return redirect(url_for('auth.twofa_login'))
+
+
+@auth_bp.route('/login/2fa', methods=['GET', 'POST'])
+def twofa_login():
+    pending = session.get('pending_2fa')
+    if not pending:
+        return redirect(url_for('auth.login'))
+    user = User.query.get(pending.get('user_id'))
+    if not user or not getattr(user, 'twofa_enabled', False):
+        session.pop('pending_2fa', None)
+        return redirect(url_for('auth.login'))
+
+    method = pending.get('method') or getattr(user, 'twofa_method', None)
+
+    if request.method == 'POST':
+        # Resend (email method only)
+        if request.form.get('resend') and method == 'email':
+            last = float(session.get('otp_sent_at') or 0)
+            if time.time() - last < _OTP_RESEND_COOLDOWN:
+                flash('Περίμενε λίγο πριν ζητήσεις νέο κωδικό.', 'info')
+            elif _send_email_otp(user, purpose='login'):
+                flash('Στάλθηκε νέος κωδικός στο email σου.', 'success')
+            else:
+                flash('Αποτυχία αποστολής κωδικού.', 'danger')
+            return redirect(url_for('auth.twofa_login'))
+
+        code = (request.form.get('code') or '').strip()
+        ok = _verify_totp(getattr(user, 'totp_secret', None), code) if method == 'totp' else _verify_email_otp(user, code)
+        if ok:
+            next_url = pending.get('next') or ''
+            session.pop('pending_2fa', None)
+            _clear_otp_session()
+            _clear_email_otp(user)
+            return _complete_login(user, next_url=next_url)
+
+        pending['attempts'] = int(pending.get('attempts') or 0) + 1
+        session['pending_2fa'] = pending
+        if pending['attempts'] >= _OTP_MAX_ATTEMPTS:
+            session.pop('pending_2fa', None)
+            _clear_otp_session()
+            _clear_email_otp(user)
+            flash('Πολλές αποτυχημένες προσπάθειες. Συνδέσου ξανά.', 'danger')
+            return redirect(url_for('auth.login'))
+        flash('Λανθασμένος κωδικός. Προσπάθησε ξανά.', 'danger')
+        return redirect(url_for('auth.twofa_login'))
+
+    return render_template('auth/twofa_challenge.html',
+                           method=method,
+                           masked_email=_mask_email(getattr(user, 'email', '') or ''),
+                           attempts_left=_OTP_MAX_ATTEMPTS - int(pending.get('attempts') or 0))
+
+
+@auth_bp.route('/account/2fa/setup', methods=['GET'])
+@login_required
+def twofa_setup():
+    """Begin enabling 2FA. ?method=totp shows a QR; ?method=email sends a code."""
+    method = (request.args.get('method') or '').strip().lower()
+    if method not in ('totp', 'email'):
+        flash('Μη έγκυρη μέθοδος 2FA.', 'danger')
+        return redirect(url_for('auth.account_settings'))
+
+    ctx = _twofa_view_context()
+
+    if method == 'email':
+        if not ctx['has_email']:
+            flash('Δεν υπάρχει καταχωρημένο email στον λογαριασμό.', 'danger')
+            return redirect(url_for('auth.account_settings'))
+        session['twofa_setup'] = {'method': 'email'}
+        if not _send_email_otp(current_user, purpose='setup'):
+            session.pop('twofa_setup', None)
+            flash('Αποτυχία αποστολής κωδικού στο email.', 'danger')
+            return redirect(url_for('auth.account_settings'))
+        return render_template('auth/account.html', twofa=ctx,
+                               twofa_setup={'method': 'email', 'masked_email': ctx['masked_email']})
+
+    # TOTP: generate a fresh secret, stash it until confirmed, render the QR.
+    import pyotp
+    secret = pyotp.random_base32()
+    session['twofa_setup'] = {'method': 'totp', 'secret': secret}
+    account = (getattr(current_user, 'email', None) or getattr(current_user, 'username', '') or 'user')
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(name=account, issuer_name=_totp_issuer())
+    qr_data_uri = _qr_data_uri(uri)
+    return render_template('auth/account.html', twofa=ctx,
+                           twofa_setup={'method': 'totp', 'secret': secret, 'qr': qr_data_uri})
+
+
+@auth_bp.route('/account/2fa/confirm', methods=['POST'])
+@login_required
+def twofa_confirm():
+    setup = session.get('twofa_setup') or {}
+    method = setup.get('method')
+    code = (request.form.get('code') or '').strip()
+    if method not in ('totp', 'email'):
+        flash('Η διαδικασία ενεργοποίησης έληξε. Ξεκίνα ξανά.', 'warning')
+        return redirect(url_for('auth.account_settings'))
+
+    if method == 'totp':
+        ok = _verify_totp(setup.get('secret'), code)
+    else:
+        ok = _verify_email_otp(current_user, code)
+
+    if not ok:
+        flash('Λανθασμένος κωδικός. Η 2FA δεν ενεργοποιήθηκε.', 'danger')
+        return redirect(url_for('auth.account_settings'))
+
+    current_user.twofa_enabled = True
+    current_user.twofa_method = method
+    current_user.totp_secret = setup.get('secret') if method == 'totp' else None
+    db.session.commit()
+    session.pop('twofa_setup', None)
+    _clear_otp_session()
+    _clear_email_otp(current_user)
+    flash('Η επαλήθευση δύο παραγόντων ενεργοποιήθηκε.', 'success')
+    return redirect(url_for('auth.account_settings'))
+
+
+@auth_bp.route('/account/2fa/disable', methods=['POST'])
+@login_required
+def twofa_disable():
+    password = request.form.get('current_password') or ''
+    if not current_user.check_password(password):
+        flash('Ο κωδικός δεν είναι σωστός. Η 2FA παραμένει ενεργή.', 'danger')
+        return redirect(url_for('auth.account_settings'))
+    current_user.twofa_enabled = False
+    current_user.twofa_method = None
+    current_user.totp_secret = None
+    current_user.email_otp_hash = None
+    current_user.email_otp_expires = None
+    db.session.commit()
+    session.pop('twofa_setup', None)
+    _clear_otp_session()
+    flash('Η επαλήθευση δύο παραγόντων απενεργοποιήθηκε.', 'success')
+    return redirect(url_for('auth.account_settings'))
+
+
+def _qr_data_uri(text_value: str) -> str:
+    """Render an otpauth URI as a base64 PNG data URI for an <img> tag."""
+    import io, base64
+    import qrcode
+    img = qrcode.make(text_value)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
 
 
 @auth_bp.route('/groups', methods=['GET'])

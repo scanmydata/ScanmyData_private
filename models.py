@@ -35,6 +35,17 @@ class User(UserMixin, db.Model):
     email_verified = db.Column(db.Boolean, default=False, nullable=False)
     email_verified_at = db.Column(db.DateTime(), nullable=True)
 
+    # Two-factor authentication (2FA)
+    #   twofa_method: 'totp' (authenticator app) or 'email' (OTP to the account email)
+    #   totp_secret:  base32 shared secret, only used when method == 'totp'
+    twofa_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    twofa_method = db.Column(db.String(16), nullable=True)
+    totp_secret = db.Column(db.String(64), nullable=True)
+    # Email-OTP challenge state (stored server-side so a short numeric code can
+    # never be brute-forced from a client-readable cookie).
+    email_otp_hash = db.Column(db.String(128), nullable=True)
+    email_otp_expires = db.Column(db.DateTime(), nullable=True)
+
     # Session / presence tracking (for single-session lock and admin stats)
     current_session_id = db.Column(db.String(128), nullable=True)
     session_started_at = db.Column(db.DateTime(), nullable=True)

@@ -987,6 +987,30 @@ try:
         except Exception:
             # ignore DB creation errors during import; app can still run
             pass
+        # Idempotent column migration: db.create_all() does NOT add new columns
+        # to existing SQLite tables, so add the 2FA columns if they are missing.
+        try:
+            from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+            _insp = _sa_inspect(db.engine)
+            _user_cols = {c['name'] for c in _insp.get_columns('user')}
+            _missing = []
+            if 'twofa_enabled' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN twofa_enabled BOOLEAN DEFAULT 0")
+            if 'twofa_method' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN twofa_method VARCHAR(16)")
+            if 'totp_secret' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN totp_secret VARCHAR(64)")
+            if 'email_otp_hash' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN email_otp_hash VARCHAR(128)")
+            if 'email_otp_expires' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN email_otp_expires TIMESTAMP")
+            if _missing:
+                with db.engine.begin() as _conn:
+                    for _stmt in _missing:
+                        _conn.execute(_sa_text(_stmt))
+                logger.info("Added 2FA columns to user table: %d", len(_missing))
+        except Exception:
+            logger.exception("Could not run 2FA column migration")
     # Register a SQLAlchemy after_commit hook to record DB activity per-user.
     try:
         from sqlalchemy import event
