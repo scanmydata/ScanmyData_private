@@ -2544,22 +2544,35 @@ def process_client(
                     for r in matched_rows:
                         atak = (r.get("matchedAtak") or "").strip()
                         row_cells = r.get("row") or []
-                        # Find the largest "X.XXX,XX" looking number in the
-                        # row — historically the ENFIA "αξία ακινήτου" lives
-                        # in the last few columns and is the largest figure.
-                        txt = _norm_text(r.get("text") or " ".join(str(x) for x in row_cells))
-                        nums = [
-                            _to_float(m.group(0))
-                            for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt)
-                            if _to_float(m.group(0)) > 0
-                        ]
-                        if nums:
+                        # Prefer the structured fields the extractor now
+                        # emits per ATAK (κατηγορία / όροφος / τμ / αξία
+                        # mapped via POL.1237). Fall back to the regex-on-
+                        # row-text heuristic when the structured parse
+                        # didn't populate `value` (e.g. the row landed in
+                        # the page-text fallback branch).
+                        value = r.get("value")
+                        if value is None:
+                            txt = _norm_text(r.get("text") or " ".join(str(x) for x in row_cells))
+                            nums = [
+                                _to_float(m.group(0))
+                                for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt)
+                                if _to_float(m.group(0)) > 0
+                            ]
+                            value = max(nums) if nums else None
+                        if value:
                             e9_props.append({
                                 "atak": atak,
-                                "value": max(nums),
+                                "value": float(value),
                                 "address_text": " ".join(
                                     str(c) for c in row_cells[:3] if c
                                 )[:200],
+                                "category_code": r.get("category_code"),
+                                "category_label": r.get("category_label"),
+                                "floor_code": r.get("floor_code"),
+                                "floor_label": r.get("floor_label"),
+                                "sqm": r.get("sqm"),
+                                "year": r.get("year"),
+                                "ownership_pct": r.get("ownership_pct"),
                             })
 
                     if e9_props:
@@ -2731,17 +2744,27 @@ def process_client(
                                     b_rows = e9_b_json.get("pdfMatchedRows") or []
                                     b_props = []
                                     for r in b_rows:
-                                        txt_r = _norm_text(r.get("text") or " ".join(str(x) for x in r.get("row", [])))
-                                        b_nums = [
-                                            _to_float(m.group(0))
-                                            for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt_r)
-                                            if _to_float(m.group(0)) > 0
-                                        ]
-                                        if b_nums:
+                                        value = r.get("value")
+                                        if value is None:
+                                            txt_r = _norm_text(r.get("text") or " ".join(str(x) for x in r.get("row", [])))
+                                            b_nums = [
+                                                _to_float(m.group(0))
+                                                for m in re.finditer(r"(?<!\d)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)", txt_r)
+                                                if _to_float(m.group(0)) > 0
+                                            ]
+                                            value = max(b_nums) if b_nums else None
+                                        if value:
                                             b_props.append({
                                                 "atak": (r.get("matchedAtak") or "").strip(),
-                                                "value": max(b_nums),
+                                                "value": float(value),
                                                 "address_text": branch_addr,
+                                                "category_code": r.get("category_code"),
+                                                "category_label": r.get("category_label"),
+                                                "floor_code": r.get("floor_code"),
+                                                "floor_label": r.get("floor_label"),
+                                                "sqm": r.get("sqm"),
+                                                "year": r.get("year"),
+                                                "ownership_pct": r.get("ownership_pct"),
                                             })
                                     if b_props:
                                         b_total_value = round(sum(p["value"] for p in b_props), 2)

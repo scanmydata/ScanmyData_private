@@ -393,6 +393,16 @@ def extract_pdf_rows_for_ataks(pdf_path: Path, ataks: list[str]) -> list[dict]:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found at {pdf_path}")
 
+    # Local import keeps e9.py runnable as a standalone subprocess from
+    # within e3/checks/ without forcing the parent package on sys.path.
+    try:
+        from e3.pol_1237_mapping import parse_property_row  # type: ignore
+    except Exception:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+        from e3.pol_1237_mapping import parse_property_row  # type: ignore
+
     found_rows = []
     atak_digits = [re.sub(r'\D', '', atak) for atak in ataks]
 
@@ -408,11 +418,20 @@ def extract_pdf_rows_for_ataks(pdf_path: Path, ataks: list[str]) -> list[dict]:
                     digit_text = re.sub(r'\D', '', row_text)
                     for atak, atak_digits_value in zip(ataks, atak_digits):
                         if atak_digits_value and atak_digits_value in digit_text:
+                            parsed = parse_property_row(row) or {}
                             found_rows.append({
                                 'page': page_num,
                                 'row': row,
                                 'text': row_text,
                                 'matchedAtak': atak,
+                                'category_code': parsed.get('category_code'),
+                                'category_label': parsed.get('category_label'),
+                                'floor_code': parsed.get('floor_code'),
+                                'floor_label': parsed.get('floor_label'),
+                                'sqm': parsed.get('sqm'),
+                                'value': parsed.get('value'),
+                                'year': parsed.get('year'),
+                                'ownership_pct': parsed.get('ownership_pct'),
                             })
                             break
             if not found_rows:

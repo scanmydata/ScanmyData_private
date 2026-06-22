@@ -17354,6 +17354,95 @@ def api_e3_brain_company_members():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _etak_choices_path(afm: str) -> Optional[Path]:
+    """Per-active-group JSON file with the user's ATAK self-use overrides.
+
+    Stored under ``data/<group>/e9_choices/<afm>.json`` (shared across the
+    group so the same client's prior choices are reused next fiscal year).
+    Returns ``None`` when no Flask group context is available.
+    """
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return None
+        folder = str(getattr(grp, "data_folder", "") or "").strip()
+        if not folder:
+            return None
+        safe_afm = re.sub(r"\D", "", str(afm or "")) or "unknown"
+        base = Path(__file__).resolve().parent / "data" / folder / "e9_choices"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / f"{safe_afm}.json"
+    except Exception:
+        log.exception("_etak_choices_path failed")
+        return None
+
+
+@app.route("/api/e3/etak_choices/get", methods=["POST"])
+@login_required
+def api_e3_etak_choices_get():
+    """Return the user's saved sqm-self-use overrides for a client's ATAKs."""
+    payload = request.get_json(silent=True) or {}
+    afm = str(payload.get("afm") or "").strip()
+    if not afm:
+        return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ."}), 400
+    path = _etak_choices_path(afm)
+    if path is None or not path.exists():
+        return jsonify({"ok": True, "choices": {}})
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    return jsonify({"ok": True, "choices": data})
+
+
+@app.route("/api/e3/etak_choices/save", methods=["POST"])
+@login_required
+def api_e3_etak_choices_save():
+    """Persist sqm-self-use overrides per ATAK for the active group/client.
+
+    Payload: {"afm": "036209456", "choices": {"<atak>": {"sqm_used": 100,
+              "has_rental": false, "rental_sqm": 0}}}
+    """
+    payload = request.get_json(silent=True) or {}
+    afm = str(payload.get("afm") or "").strip()
+    choices = payload.get("choices") or {}
+    if not afm:
+        return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ."}), 400
+    if not isinstance(choices, dict):
+        return jsonify({"ok": False, "error": "Λάθος δομή choices."}), 400
+    path = _etak_choices_path(afm)
+    if path is None:
+        return jsonify({"ok": False, "error": "Δεν έχει επιλεγεί ενεργή ομάδα."}), 400
+    sanitized: Dict[str, Any] = {}
+    for atak, val in choices.items():
+        atak_s = str(atak or "").strip()
+        if not atak_s or not isinstance(val, dict):
+            continue
+        try:
+            sqm_used = float(val.get("sqm_used")) if val.get("sqm_used") is not None else None
+        except Exception:
+            sqm_used = None
+        try:
+            rental_sqm = float(val.get("rental_sqm")) if val.get("rental_sqm") is not None else None
+        except Exception:
+            rental_sqm = None
+        sanitized[atak_s] = {
+            "sqm_used": sqm_used,
+            "has_rental": bool(val.get("has_rental")),
+            "rental_sqm": rental_sqm,
+            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+    try:
+        path.write_text(json.dumps(sanitized, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        log.exception("api_e3_etak_choices_save: failed writing %s", path)
+        return jsonify({"ok": False, "error": f"Αποτυχία αποθήκευσης: {exc}"}), 500
+    return jsonify({"ok": True, "saved": len(sanitized)})
+
+
 @app.route("/api/e3/brain/sub_home", methods=["POST"])
 @login_required
 def api_e3_brain_sub_home():

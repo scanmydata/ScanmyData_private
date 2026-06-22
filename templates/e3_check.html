@@ -4548,13 +4548,15 @@
       });
       updated = true;
 
-      // If E9 returned multiple ATAKs at the same address, ask the user
-      // which one(s) to include in the ιδιόχρηση calculation. The brain
-      // already defaulted to the SUM of all matched ATAKs × 3%, so we
-      // only prompt when there are 2 or more candidates.
+      // Show the ATAK picker whenever Ε9 produced at least one property —
+      // even with a single ATAK the user may need to declare partial
+      // ιδιόχρηση (e.g. εμπορική χρήση μόνο 10τμ από διαμέρισμα 100τμ).
+      // Per-ATAK choices are loaded from the persisted store so the user
+      // doesn't have to re-enter them each year.
       try {
-        if (isE9 && Array.isArray(checks.e9_properties) && checks.e9_properties.length > 1) {
-          _showE9AtakPicker(checks.e9_properties, rentAnnual);
+        if (isE9 && Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0) {
+          const currentAfm = (data && Array.isArray(data.clients) && data.clients[0] && data.clients[0].afm) || '';
+          _showE9AtakPicker(checks.e9_properties, rentAnnual, currentAfm);
         }
       } catch (_) {}
     }
@@ -4590,63 +4592,261 @@
   }
 
   // === Multi-ATAK picker (E9 ιδιόχρηση) ===
-  // The brain may return several ATAKs for the same address (κτίριο +
-  // αποθήκη + parking → 3 ATAKs). Default is SUM × 3%; this picker lets
-  // the user uncheck ATAKs they don't want included, then recomputes the
-  // 585.014 indicator client-side.
-  function _showE9AtakPicker(props, defaultRent) {
+  // For each ATAK found at the company's έδρα, show κατηγορία/όροφος/τμ
+  // (mapped from POL.1237) and the αξία ακινήτου. The user can:
+  //  • Include or exclude the ATAK in the ιδιόχρηση calculation
+  //  • Declare partial self-use (sqm_used < total_sqm) with a "10τμ"
+  //    quick chip — the rent contribution is pro-rated
+  //    (sqm_used / total_sqm) × αξία × 3%
+  //  • Flag that the property is partly rented out (only meaningful when
+  //    ποσοστό συνιδιοκτησίας < 100, otherwise it's pure self-use).
+  // Choices are persisted per (group, AFM, ATAK) so next year's audit
+  // pre-fills the same values — the user can override anytime.
+  function _showE9AtakPicker(props, defaultRent, afm) {
     let modal = document.getElementById('e9AtakPickerModal');
     if (!modal) {
       modal = document.createElement('div');
       modal.id = 'e9AtakPickerModal';
       modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem;';
       modal.innerHTML = `
-        <div style="background:#fff;color:#0f172a;border-radius:.5rem;max-width:640px;width:100%;max-height:80vh;overflow:auto;padding:1.25rem;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
-          <div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;">Επιλογή ακινήτων για ιδιόχρηση (Ε9 × 3%)</div>
-          <div style="font-size:.8rem;color:#475569;margin-bottom:.75rem;">
-            Βρέθηκαν πολλαπλά ΑΤΑΚ στην έδρα. Διάλεξε ποια θέλεις να συμπεριλάβεις στον υπολογισμό
-            του ποσού στη γραμμή <strong>585.014 — Ιδιόχρηση</strong>.
+        <div style="background:#fff;color:#0f172a;border-radius:.5rem;max-width:820px;width:100%;max-height:88vh;overflow:auto;padding:1.25rem;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+          <div style="font-size:1rem;font-weight:600;margin-bottom:.35rem;">Επιλογή ακινήτων για ιδιόχρηση (Ε9 × 3%)</div>
+          <div style="font-size:.78rem;color:#475569;margin-bottom:.75rem;">
+            Για κάθε ΑΤΑΚ φαίνεται η κατηγορία, ο όροφος και τα τετραγωνικά (βάσει ΠΟΛ.1237/2014).
+            Δήλωσε αν ιδιοχρησιμοποιούνται όλα τα τμ — αν όχι, βάλε τα τμ που χρησιμοποιεί η επιχείρηση
+            (κουμπί <em>10τμ</em> για γρήγορη συμπλήρωση). Όταν το ποσοστό συνιδιοκτησίας &lt; 100%,
+            μπορεί παράλληλα να υπάρχει και ενοίκιο για το ίδιο ακίνητο.
           </div>
           <div id="e9AtakPickerList" style="margin-bottom:.75rem;"></div>
-          <div style="display:flex;justify-content:flex-end;gap:.5rem;">
-            <button id="e9AtakPickerCancel" type="button" style="background:#64748b;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Άκυρο</button>
-            <button id="e9AtakPickerApply" type="button" style="background:#0ea5e9;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Εφαρμογή επιλογής</button>
+          <div id="e9AtakPickerTotal" style="text-align:right;font-size:.9rem;font-weight:600;margin-bottom:.5rem;color:#0f172a;"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;">
+            <label style="font-size:.78rem;color:#475569;display:flex;align-items:center;gap:.35rem;">
+              <input id="e9AtakPickerPersist" type="checkbox" checked />
+              Αποθήκευση επιλογών για επόμενα έτη
+            </label>
+            <div style="display:flex;gap:.5rem;">
+              <button id="e9AtakPickerCancel" type="button" style="background:#64748b;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Άκυρο</button>
+              <button id="e9AtakPickerApply" type="button" style="background:#0ea5e9;color:#fff;border:none;border-radius:.375rem;padding:.4rem .9rem;font-weight:600;">Εφαρμογή επιλογής</button>
+            </div>
           </div>
         </div>`;
       document.body.appendChild(modal);
     }
     const list = modal.querySelector('#e9AtakPickerList');
-    list.innerHTML = props.map((p, i) => `
-      <label style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid #e2e8f0;font-size:.85rem;">
-        <input type="checkbox" data-i="${i}" checked />
-        <div style="flex:1;">
-          <div><strong>ΑΤΑΚ:</strong> <code>${String(p.atak||'').replace(/</g,'&lt;')}</code></div>
-          <div style="color:#475569;font-size:.78rem;">${String(p.address_text||'').replace(/</g,'&lt;')}</div>
+    const totalEl = modal.querySelector('#e9AtakPickerTotal');
+    const persistEl = modal.querySelector('#e9AtakPickerPersist');
+    const fmt = (n) => Number(n || 0).toLocaleString('el-GR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    // Local state per ATAK: { sqm_used, has_rental, rental_sqm, included }
+    const state = props.map((p) => {
+      const sqm = Number(p.sqm || 0);
+      return {
+        sqm_used: sqm > 0 ? sqm : null,  // default: όλα τα τμ ιδιόχρηση
+        has_rental: false,
+        rental_sqm: 0,
+        included: true,
+      };
+    });
+
+    function rowHtml(p, i) {
+      const sqm = Number(p.sqm || 0);
+      const partOwn = Number(p.ownership_pct || 0);
+      const allowMixed = partOwn > 0 && partOwn < 100;
+      const cat = p.category_label ? `${escapeHtml(p.category_label)} <span style="color:#94a3b8;">[κωδ. ${escapeHtml(p.category_code || '')}]</span>` : (p.category_code ? `κατηγ. ${escapeHtml(p.category_code)}` : '—');
+      const flr = p.floor_label ? `${escapeHtml(p.floor_label)} <span style="color:#94a3b8;">[κωδ. ${escapeHtml(p.floor_code || '')}]</span>` : (p.floor_code ? `όρ. ${escapeHtml(p.floor_code)}` : '—');
+      return `
+        <div data-i="${i}" class="e9-atak-row" style="border:1px solid #e2e8f0;border-radius:.4rem;padding:.6rem .75rem;margin-bottom:.55rem;background:#f8fafc;">
+          <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start;">
+            <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;flex:1;">
+              <input type="checkbox" class="e9-included" ${state[i].included ? 'checked' : ''} />
+              <strong>ΑΤΑΚ <code>${escapeHtml(p.atak||'')}</code></strong>
+            </label>
+            <div style="text-align:right;font-size:.78rem;color:#475569;">
+              Αξία ακινήτου: <strong style="color:#0f172a;">${fmt(p.value)} €</strong>
+            </div>
+          </div>
+          <div style="font-size:.74rem;color:#64748b;margin:.2rem 0 .35rem 1.4rem;">${escapeHtml(p.address_text||'')}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.35rem .9rem;font-size:.75rem;color:#334155;margin-left:1.4rem;">
+            <div><strong>Κατηγορία:</strong> ${cat}</div>
+            <div><strong>Όροφος:</strong> ${flr}</div>
+            <div><strong>Επιφάνεια κύριων χώρων:</strong> ${sqm ? fmt(sqm) + ' τ.μ.' : '—'}</div>
+            ${p.year ? `<div><strong>Έτος κατασκευής:</strong> ${escapeHtml(p.year)}</div>` : ''}
+            ${partOwn ? `<div><strong>Ποσοστό συνιδιοκτησίας:</strong> ${fmt(partOwn)}%</div>` : ''}
+          </div>
+          <div style="margin:.5rem 0 .25rem 1.4rem;font-size:.78rem;">
+            <label style="display:inline-flex;align-items:center;gap:.3rem;margin-right:1rem;">
+              <input type="radio" name="usage-${i}" class="e9-usage-all" value="all" checked />
+              Ιδιόχρηση σε όλα τα τμ
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:.3rem;">
+              <input type="radio" name="usage-${i}" class="e9-usage-partial" value="partial" />
+              Μερική ιδιόχρηση (συγκεκριμένα τμ)
+            </label>
+          </div>
+          <div class="e9-partial-block" style="display:none;margin-left:1.4rem;margin-bottom:.25rem;">
+            <label style="font-size:.78rem;color:#475569;display:inline-flex;align-items:center;gap:.35rem;">
+              Ιδιόχρηση τμ:
+              <input type="number" min="0" step="0.01" class="e9-sqm-used" value="${sqm || 0}" style="width:5.5rem;padding:.15rem .35rem;border:1px solid #cbd5e1;border-radius:.25rem;" />
+              / ${sqm ? fmt(sqm) : '—'} συνολικά
+            </label>
+            <button type="button" class="e9-quick-10" style="margin-left:.5rem;background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;border-radius:.25rem;padding:.15rem .55rem;font-size:.73rem;font-weight:600;cursor:pointer;">10 τ.μ.</button>
+            ${allowMixed ? `
+            <label style="display:inline-flex;align-items:center;gap:.3rem;margin-left:1rem;font-size:.78rem;color:#475569;">
+              <input type="checkbox" class="e9-has-rental" />
+              Υπάρχει και ενοίκιο για το ίδιο ακίνητο
+            </label>` : ''}
+          </div>
+          <div class="e9-contrib" style="font-size:.78rem;color:#0369a1;text-align:right;margin-top:.2rem;"></div>
         </div>
-        <div style="text-align:right;">
-          <div><strong>${Number(p.value||0).toLocaleString('el-GR', {minimumFractionDigits:2})} €</strong></div>
-          <div style="color:#64748b;font-size:.7rem;">× 3% = ${Number((p.value||0)*0.03).toLocaleString('el-GR', {minimumFractionDigits:2})} €</div>
-        </div>
-      </label>`).join('');
+      `;
+    }
+
+    function recompute() {
+      let total = 0;
+      let parts = 0;
+      state.forEach((s, i) => {
+        const p = props[i];
+        const row = list.querySelector(`.e9-atak-row[data-i="${i}"]`);
+        const contribEl = row.querySelector('.e9-contrib');
+        if (!s.included) {
+          contribEl.textContent = 'Δεν συμπεριλαμβάνεται';
+          contribEl.style.color = '#94a3b8';
+          return;
+        }
+        const sqmTotal = Number(p.sqm || 0);
+        const value = Number(p.value || 0);
+        let used = s.sqm_used;
+        if (used == null || isNaN(used)) used = sqmTotal;
+        if (used < 0) used = 0;
+        if (sqmTotal > 0 && used > sqmTotal) used = sqmTotal;
+        const ratio = sqmTotal > 0 ? (used / sqmTotal) : 1;
+        const contrib = Math.round(value * ratio * 0.03 * 100) / 100;
+        total += contrib;
+        parts++;
+        contribEl.style.color = '#0369a1';
+        if (sqmTotal > 0 && used < sqmTotal) {
+          contribEl.textContent = `${fmt(used)}/${fmt(sqmTotal)} τμ × ${fmt(value)} € × 3% = ${fmt(contrib)} €`;
+        } else {
+          contribEl.textContent = `${fmt(value)} € × 3% = ${fmt(contrib)} €`;
+        }
+      });
+      total = Math.round(total * 100) / 100;
+      totalEl.textContent = `Σύνολο ιδιόχρησης (585.014): ${fmt(total)} € — ${parts}/${props.length} ΑΤΑΚ`;
+      totalEl.dataset.total = String(total);
+    }
+
+    list.innerHTML = props.map((p, i) => rowHtml(p, i)).join('');
+
+    // Wire up handlers per row.
+    props.forEach((p, i) => {
+      const row = list.querySelector(`.e9-atak-row[data-i="${i}"]`);
+      const incl = row.querySelector('.e9-included');
+      const radioAll = row.querySelector('.e9-usage-all');
+      const radioPart = row.querySelector('.e9-usage-partial');
+      const partialBlock = row.querySelector('.e9-partial-block');
+      const sqmInput = row.querySelector('.e9-sqm-used');
+      const quickBtn = row.querySelector('.e9-quick-10');
+      const hasRentEl = row.querySelector('.e9-has-rental');
+
+      incl.addEventListener('change', () => { state[i].included = incl.checked; recompute(); });
+      radioAll.addEventListener('change', () => {
+        if (radioAll.checked) {
+          partialBlock.style.display = 'none';
+          state[i].sqm_used = Number(p.sqm || 0);
+          recompute();
+        }
+      });
+      radioPart.addEventListener('change', () => {
+        if (radioPart.checked) {
+          partialBlock.style.display = 'block';
+          state[i].sqm_used = Number(sqmInput.value || 0);
+          recompute();
+        }
+      });
+      sqmInput.addEventListener('input', () => {
+        state[i].sqm_used = Number(sqmInput.value || 0);
+        recompute();
+      });
+      quickBtn.addEventListener('click', () => {
+        sqmInput.value = 10;
+        radioPart.checked = true;
+        partialBlock.style.display = 'block';
+        state[i].sqm_used = 10;
+        recompute();
+      });
+      if (hasRentEl) {
+        hasRentEl.addEventListener('change', () => {
+          state[i].has_rental = hasRentEl.checked;
+        });
+      }
+    });
+
+    // Prefill from saved choices (per AFM, shared across the group).
+    if (afm) {
+      fetch('/api/e3/etak_choices/get', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({afm})
+      }).then(r => r.json()).then((res) => {
+        if (!res || !res.ok || !res.choices) { recompute(); return; }
+        props.forEach((p, i) => {
+          const saved = res.choices[String(p.atak||'')];
+          if (!saved) return;
+          const sqmTotal = Number(p.sqm || 0);
+          if (saved.sqm_used != null && Number(saved.sqm_used) >= 0 && sqmTotal > 0 && Number(saved.sqm_used) < sqmTotal) {
+            state[i].sqm_used = Number(saved.sqm_used);
+            const row = list.querySelector(`.e9-atak-row[data-i="${i}"]`);
+            row.querySelector('.e9-usage-partial').checked = true;
+            row.querySelector('.e9-partial-block').style.display = 'block';
+            row.querySelector('.e9-sqm-used').value = saved.sqm_used;
+          }
+          if (saved.has_rental) {
+            state[i].has_rental = true;
+            const row = list.querySelector(`.e9-atak-row[data-i="${i}"]`);
+            const hrEl = row.querySelector('.e9-has-rental');
+            if (hrEl) hrEl.checked = true;
+          }
+        });
+        recompute();
+      }).catch(() => recompute());
+    } else {
+      recompute();
+    }
+
     modal.style.display = 'flex';
     const cancelBtn = modal.querySelector('#e9AtakPickerCancel');
     const applyBtn = modal.querySelector('#e9AtakPickerApply');
     cancelBtn.onclick = () => { modal.style.display = 'none'; };
     applyBtn.onclick = () => {
-      const chosen = Array.from(list.querySelectorAll('input[type=checkbox]:checked'))
-        .map(cb => props[Number(cb.dataset.i)]);
-      const totalValue = chosen.reduce((s, p) => s + Number(p.value || 0), 0);
-      const newRent = Math.round(totalValue * 0.03 * 100) / 100;
+      const total = Number(totalEl.dataset.total || 0);
       const current = E3_BRAIN_CHECKS.get('585.014');
+      const includedCount = state.filter(s => s.included).length;
       if (current) {
-        current.value = newRent;
-        current.label = `Ιδιόχρηση (Ε9 × 3%, ${chosen.length}/${props.length} ακίνητα)`;
+        current.value = total;
+        current.label = `Ιδιόχρηση (Ε9 × 3%, ${includedCount}/${props.length} ΑΤΑΚ)`;
         E3_BRAIN_CHECKS.set('585.014', current);
         try {
           const dataToRender = E3_LAST_DATA || {};
           populateE3Tables(dataToRender);
         } catch (_) {}
-        showBrainFlash(`Νέα ιδιόχρηση 585.014: ${newRent.toLocaleString('el-GR',{minimumFractionDigits:2})} € (${chosen.length}/${props.length} ΑΤΑΚ)`, 'info', 6000);
+        showBrainFlash(`Νέα ιδιόχρηση 585.014: ${total.toLocaleString('el-GR',{minimumFractionDigits:2})} € (${includedCount}/${props.length} ΑΤΑΚ)`, 'info', 6000);
+      }
+      // Persist (best-effort — failure does not block the local update).
+      if (afm && persistEl.checked) {
+        const choices = {};
+        props.forEach((p, i) => {
+          choices[String(p.atak||'')] = {
+            sqm_used: state[i].sqm_used,
+            has_rental: state[i].has_rental,
+            rental_sqm: state[i].rental_sqm,
+          };
+        });
+        fetch('/api/e3/etak_choices/save', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({afm, choices})
+        }).catch(() => {});
       }
       modal.style.display = 'none';
     };
@@ -7009,6 +7209,21 @@
       const aBtn = document.getElementById('analyticTabBtn');
       if (qBtn && qBtn.dataset.e3TabBound !== '1') { qBtn.dataset.e3TabBound = '1'; qBtn.addEventListener('click', () => showE3PageTab('quickCheckTab')); }
       if (aBtn && aBtn.dataset.e3TabBound !== '1') { aBtn.dataset.e3TabBound = '1'; aBtn.addEventListener('click', () => showE3PageTab('analyticTab')); }
+    } catch (_) {}
+    // «Προσθήκη υποκαταστήματος» button — the original binding sits in a
+    // top-level IIFE that does not re-run on partial nav (the inline
+    // script halts before reaching it). Mirror it here so the button
+    // works whether we arrived via full load OR partial nav.
+    try {
+      const addBranchBtn = document.getElementById('brainAddBranchBtn');
+      if (addBranchBtn && addBranchBtn.dataset.bound !== '1') {
+        addBranchBtn.dataset.bound = '1';
+        addBranchBtn.addEventListener('click', () => {
+          const list = (typeof getBrainBranchAddresses === 'function') ? getBrainBranchAddresses() : [];
+          list.push('');
+          if (typeof _renderBrainBranchList === 'function') _renderBrainBranchList(list);
+        });
+      }
     } catch (_) {}
   }
 
