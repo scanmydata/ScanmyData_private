@@ -2776,6 +2776,11 @@ def process_client(
                                             "months": months_in_period,
                                             "monthly": None,
                                             "status": "active",
+                                            # Per-ATAK breakdown for the UI picker — the brain
+                                            # surfaces the same shape used by HQ `e9_properties`
+                                            # so the client-side picker can recompute the branch
+                                            # ιδιόχρηση when the user trims sqm or ATAKs.
+                                            "e9_properties": b_props,
                                         })
                                         rent_annual = round((rent_annual or 0.0) + b_amount, 2)
                                         rent_net = round((rent_net or 0.0) + b_amount, 2)

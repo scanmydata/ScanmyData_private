@@ -3895,7 +3895,12 @@
       });
       moBtns.observe(document.body, { childList:true, subtree:true });
     })();
-
+    // Close the OUTER IIFE that started at the top of this block. Missing
+    // this `})();` raised "Uncaught SyntaxError: Unexpected end of input"
+    // and aborted parsing — so `window.fetch` / XHR / submit patches and
+    // every later script (including search.html's partial reload pipeline)
+    // never ran.
+  })();
   </script>
 
   <!-- Dismissable μόνο για flash/alerts (hook για δυναμικά) -->

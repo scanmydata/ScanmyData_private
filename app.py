@@ -18131,6 +18131,211 @@ def api_e3_brain_credentials_store_delete():
         log.exception("api_e3_brain_credentials_store_delete failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+_EXCEL_COL_ALIASES = {
+    "afm":              ("Α.Φ.Μ.", "ΑΦΜ", "Α.Φ.Μ", "AFM"),
+    "name":             ("Επωνυμία/Επώνυμο", "Επωνυμία", "Επώνυμο"),
+    "first_name":       ("Όνομα",),
+    "kind":             ("Είδος",),
+    "amka":             ("Α.Μ.Κ.Α.", "ΑΜΚΑ"),
+    "active":           ("Ενεργός/Ανενεργός",),
+    "taxis_username":   ("Όνομα χρήστη TAXISNET", "Όνομα χρήστη Taxisnet", "Όνομα χρήστη Taxis"),
+    "taxis_password":   ("Συνθηματικό TAXISNET", "Συνθηματικό Taxisnet", "Συνθηματικό Taxis"),
+    "mydata_user":      ("Όνομα χρήστη myData", "Όνομα χρήστη MyData", "Όνομα χρήστη Mydata"),
+    "mydata_key":       ("Api myData", "API myData", "Api MyData"),
+    "doy":              ("Δ.Ο.Υ.", "ΔΟΥ"),
+}
+
+
+def _pick_excel_col(headers_lower, aliases):
+    """Return the original header name that matches any alias (case-insensitive)."""
+    for a in aliases:
+        a_low = a.strip().lower().replace(" ", "")
+        for orig, low in headers_lower.items():
+            if low.replace(" ", "") == a_low:
+                return orig
+    return None
+
+
+def _legal_type_from_kind(kind: str) -> str:
+    s = str(kind or "").strip().lower()
+    if not s:
+        return ""
+    if "ατομ" in s or "individual" in s or "sole" in s:
+        return "Ατομική"
+    if "προσωπ" in s or "ε.ε." in s or "ο.ε." in s or "οε" in s:
+        return "Προσωπική Εταιρεία"
+    if "νομικ" in s or "ι.κ.ε." in s or "ικε" in s or "α.ε." in s or "ε.π.ε." in s or "επε" in s:
+        return "Νομικό Πρόσωπο"
+    return ""
+
+
+@app.route("/api/e3/brain/credentials_store/import_excel", methods=["POST"])
+@login_required
+def api_e3_brain_credentials_store_import_excel():
+    """Bulk-import credentials from a Κωδικοί_Υπόχρεων.xlsx-style workbook.
+
+    The expected sheet has one row per ΑΦΜ with the 83-column layout used by
+    Greek accounting software (Sheet name doesn't matter — we pick the first
+    sheet that has an Α.Φ.Μ. column). Each row becomes a snapshot under
+    ``e3_company_credentials_store.json`` for the active group; if the AFM
+    already exists, the existing record is updated only when the imported
+    row has a non-empty value for the field (so a partial sheet doesn't
+    wipe a previously-filled secret).
+
+    Optional ``replace=true`` form flag wipes existing entries before
+    importing.
+    """
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα ενημέρωσης για την ενεργή ομάδα."}), 403
+
+        upload = request.files.get("file") or request.files.get("excel")
+        if upload is None or not getattr(upload, "filename", ""):
+            return jsonify({"ok": False, "error": "Δεν δόθηκε αρχείο Excel."}), 400
+        replace_existing = str(request.form.get("replace") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+        import pandas as pd
+        try:
+            xl = pd.ExcelFile(upload)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Αδυναμία ανοίγματος Excel: {exc}"}), 400
+
+        chosen_sheet = None
+        for sh in xl.sheet_names:
+            try:
+                df_head = pd.read_excel(xl, sheet_name=sh, dtype=str, nrows=0)
+            except Exception:
+                continue
+            headers = {str(c): str(c).strip().lower() for c in df_head.columns}
+            if _pick_excel_col(headers, _EXCEL_COL_ALIASES["afm"]):
+                chosen_sheet = sh
+                break
+        if not chosen_sheet:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ σε κανένα φύλλο."}), 400
+
+        df = pd.read_excel(xl, sheet_name=chosen_sheet, dtype=str)
+        df = df.fillna("")
+        headers = {str(c): str(c).strip().lower() for c in df.columns}
+
+        col_map: Dict[str, Optional[str]] = {}
+        for key, aliases in _EXCEL_COL_ALIASES.items():
+            col_map[key] = _pick_excel_col(headers, aliases)
+        if not col_map.get("afm"):
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ."}), 400
+
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        os.makedirs(group_data_dir, exist_ok=True)
+        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        existing: Dict[str, Any] = {"companies": []}
+        if not replace_existing and os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    existing.update(loaded)
+                    if not isinstance(existing.get("companies"), list):
+                        existing["companies"] = []
+            except Exception:
+                pass
+        by_afm: Dict[str, Dict[str, Any]] = {}
+        for item in existing.get("companies", []):
+            if isinstance(item, dict):
+                a = str((item.get("company") or {}).get("afm") or "").strip()
+                if a:
+                    by_afm[a] = item
+
+        def _cell(row, key: str) -> str:
+            col = col_map.get(key)
+            if not col:
+                return ""
+            return str(row.get(col, "") or "").strip()
+
+        imported = 0
+        updated = 0
+        skipped = 0
+        for _, row in df.iterrows():
+            raw_afm = re.sub(r"\D+", "", _cell(row, "afm"))
+            if not raw_afm or len(raw_afm) < 9:
+                skipped += 1
+                continue
+            # Pad 8-digit ΑΦΜs (Excel-stripped leading zero) to 9 digits.
+            afm = raw_afm.zfill(9)[-9:]
+            name = _cell(row, "name")
+            first = _cell(row, "first_name")
+            display_name = (f"{name} {first}".strip() if first else name) or afm
+            kind = _cell(row, "kind")
+            amka = _cell(row, "amka")
+            tu = _cell(row, "taxis_username")
+            tp = _cell(row, "taxis_password")
+            mu = _cell(row, "mydata_user")
+            mk = _cell(row, "mydata_key")
+            legal_type = _legal_type_from_kind(kind)
+
+            prev = by_afm.get(afm) or {}
+            prev_company = (prev.get("company") if isinstance(prev, dict) else {}) or {}
+            new_company = {
+                "afm": afm,
+                "name": display_name or prev_company.get("name") or "",
+                "legal_type": legal_type or prev_company.get("legal_type") or "",
+                "amka": amka or prev_company.get("amka") or "",
+                "taxisnet_username": tu or prev_company.get("taxisnet_username") or "",
+                "taxisnet_password": tp or prev_company.get("taxisnet_password") or "",
+                "mydata_user": mu or prev_company.get("mydata_user") or "",
+                "mydata_key": mk or prev_company.get("mydata_key") or "",
+                "address": prev_company.get("address") or "",
+                "branch_addresses": prev_company.get("branch_addresses") or [],
+            }
+            snapshot = dict(prev) if isinstance(prev, dict) else {}
+            snapshot["company"] = new_company
+            snapshot["saved_at"] = datetime.datetime.utcnow().isoformat()
+            snapshot.setdefault("members", prev.get("members") if isinstance(prev, dict) else [])
+            snapshot["import_source"] = {
+                "kind": "excel",
+                "filename": str(getattr(upload, "filename", "") or ""),
+                "sheet": chosen_sheet,
+                "imported_at": datetime.datetime.utcnow().isoformat(),
+            }
+            if afm in by_afm:
+                updated += 1
+            else:
+                imported += 1
+            by_afm[afm] = snapshot
+
+        existing["companies"] = sorted(by_afm.values(), key=lambda x: str((x.get("company") or {}).get("afm") or ""))
+        existing["updated_at"] = datetime.datetime.utcnow().isoformat()
+        existing["updated_by"] = {
+            "user_id": getattr(current_user, "id", None),
+            "username": getattr(current_user, "username", None),
+            "email": getattr(current_user, "email", None),
+            "role": role,
+            "via": "excel_import",
+        }
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        return jsonify({
+            "ok": True,
+            "sheet": chosen_sheet,
+            "imported": imported,
+            "updated": updated,
+            "skipped": skipped,
+            "total": imported + updated,
+            "columns_matched": {k: v for k, v in col_map.items() if v},
+        })
+    except Exception as e:
+        log.exception("api_e3_brain_credentials_store_import_excel failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
     from werkzeug.exceptions import HTTPException

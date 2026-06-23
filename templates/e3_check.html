@@ -1529,7 +1529,16 @@
     <div id="brainTabSaved" class="brain-tab-panel hidden">
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <button id="brainFetchCredsBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded-lg text-sm font-medium transition">Ανανέωση/Προβολή</button>
+        <label class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded-lg text-sm font-medium transition cursor-pointer" title="Εισαγωγή κωδικών από αρχείο Excel τύπου Κωδικοί_Υπόχρεων.xlsx">
+          📤 Εισαγωγή από Excel
+          <input id="brainImportExcelInput" type="file" accept=".xls,.xlsx" class="hidden" />
+        </label>
+        <label class="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+          <input id="brainImportExcelReplace" type="checkbox" class="rounded" />
+          Αντικατάσταση υπαρχόντων
+        </label>
         <span class="text-sm text-gray-500 dark:text-gray-400">Προβολή αποθηκευμένων credentials ομάδας</span>
+        <span id="brainImportExcelStatus" class="text-sm"></span>
       </div>
       <div id="brainCredsList" class="overflow-x-auto w-full max-w-full"></div>
     </div>
@@ -3523,6 +3532,42 @@
         console.warn('[E3] delegated click handler error', e);
       }
     });
+    // Delegated handler for the «Εισαγωγή από Excel» file input — uploads
+    // the workbook to /api/e3/brain/credentials_store/import_excel and
+    // refreshes the listing on success.
+    document.addEventListener('change', async (event) => {
+      const inp = event.target && event.target.id === 'brainImportExcelInput' ? event.target : null;
+      if (!inp || !inp.files || !inp.files.length) return;
+      const file = inp.files[0];
+      const statusEl = document.getElementById('brainImportExcelStatus');
+      const replaceEl = document.getElementById('brainImportExcelReplace');
+      if (statusEl) { statusEl.textContent = '⌛ Ανάγνωση...'; statusEl.style.color = '#6b7280'; }
+      try {
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        if (replaceEl && replaceEl.checked) fd.append('replace', '1');
+        const resp = await fetch('/api/e3/brain/credentials_store/import_excel', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        if (statusEl) {
+          statusEl.textContent = `✓ ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι, ${data.skipped || 0} χωρίς ΑΦΜ (sheet: ${data.sheet || '—'})`;
+          statusEl.style.color = '#16a34a';
+        }
+        if (typeof fetchE3BrainCredentials === 'function') {
+          fetchE3BrainCredentials({ verbose: false }).catch(() => {});
+        }
+        if (typeof showBrainFlash === 'function') {
+          showBrainFlash(`Εισαγωγή Excel: ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι.`, 'success', 6500);
+        }
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = `✗ ${err.message || err}`; statusEl.style.color = '#dc2626'; }
+        if (typeof showBrainFlash === 'function') showBrainFlash(`Αποτυχία Excel import: ${err.message || err}`, 'error', 7000);
+      } finally {
+        // Reset the input so re-selecting the same file fires change again.
+        try { inp.value = ''; } catch (_) {}
+      }
+    });
+
     // Also delegate brainActiveClientSelect change events so the
     // datepicker / partner field flow always fires.
     document.addEventListener('change', (event) => {
@@ -4549,14 +4594,37 @@
       updated = true;
 
       // Show the ATAK picker whenever Ε9 produced at least one property —
-      // even with a single ATAK the user may need to declare partial
+      // for HQ AND any υποκατάστημα ATAKs the brain matched in ENFIA.
+      // Even with a single ATAK the user may need to declare partial
       // ιδιόχρηση (e.g. εμπορική χρήση μόνο 10τμ από διαμέρισμα 100τμ).
       // Per-ATAK choices are loaded from the persisted store so the user
       // doesn't have to re-enter them each year.
       try {
-        if (isE9 && Array.isArray(checks.e9_properties) && checks.e9_properties.length > 0) {
+        // Collect all E9 properties across HQ and υποκαταστήματα. The
+        // brain attaches `e9_properties` per branch entry inside
+        // `rent_breakdown` when that branch resolved via Ε9 × 3%.
+        const allProps = [];
+        if (Array.isArray(checks.e9_properties)) {
+          for (const p of checks.e9_properties) {
+            allProps.push(Object.assign({ _scope: 'headquarter' }, p));
+          }
+        }
+        if (Array.isArray(checks.rent_breakdown)) {
+          for (const b of checks.rent_breakdown) {
+            if (!b || b.kind !== 'branch') continue;
+            if (b.source !== 'e9_3_percent') continue;
+            const baddr = String(b.address || '').trim();
+            const bprops = Array.isArray(b.e9_properties) ? b.e9_properties : [];
+            for (const p of bprops) {
+              const wrapped = Object.assign({ _scope: 'branch', _scope_address: baddr }, p);
+              if (!wrapped.address_text) wrapped.address_text = baddr;
+              allProps.push(wrapped);
+            }
+          }
+        }
+        if (allProps.length > 0) {
           const currentAfm = (data && Array.isArray(data.clients) && data.clients[0] && data.clients[0].afm) || '';
-          _showE9AtakPicker(checks.e9_properties, rentAnnual, currentAfm);
+          _showE9AtakPicker(allProps, rentAnnual, currentAfm);
         }
       } catch (_) {}
     }
@@ -4736,7 +4804,34 @@
       totalEl.dataset.total = String(total);
     }
 
-    list.innerHTML = props.map((p, i) => rowHtml(p, i)).join('');
+    // Group rows by scope (HQ vs each υποκατάστημα). The brain's combined
+    // props array carries `_scope` and `_scope_address` flags that we
+    // emit from `_applyBrainChecksToE3Table`; this lets the user see at a
+    // glance whether an ATAK belongs to the έδρα or to a branch.
+    {
+      const groups = [];
+      const seen = new Map();
+      props.forEach((p, i) => {
+        const scope = p._scope || 'headquarter';
+        const addr = scope === 'branch' ? (p._scope_address || p.address_text || 'Υποκατάστημα') : 'Έδρα';
+        const key = scope + '|' + addr;
+        if (!seen.has(key)) {
+          const g = { key, scope, addr, indices: [] };
+          seen.set(key, g);
+          groups.push(g);
+        }
+        seen.get(key).indices.push(i);
+      });
+      const parts = [];
+      for (const g of groups) {
+        const heading = g.scope === 'branch'
+          ? `🏬 Υποκατάστημα — ${escapeHtml(g.addr)}`
+          : '🏢 Έδρα';
+        parts.push(`<div style="font-size:.82rem;font-weight:700;color:#0f172a;margin:.6rem 0 .3rem;">${heading}</div>`);
+        for (const idx of g.indices) parts.push(rowHtml(props[idx], idx));
+      }
+      list.innerHTML = parts.join('');
+    }
 
     // Wire up handlers per row.
     props.forEach((p, i) => {
@@ -4817,7 +4912,10 @@
     modal.style.display = 'flex';
     const cancelBtn = modal.querySelector('#e9AtakPickerCancel');
     const applyBtn = modal.querySelector('#e9AtakPickerApply');
-    cancelBtn.onclick = () => { modal.style.display = 'none'; };
+    cancelBtn.onclick = () => {
+      try { window.__bulkPickerOnApply = null; } catch (_) {}
+      modal.style.display = 'none';
+    };
     applyBtn.onclick = () => {
       const total = Number(totalEl.dataset.total || 0);
       const current = E3_BRAIN_CHECKS.get('585.014');
@@ -4832,6 +4930,15 @@
         } catch (_) {}
         showBrainFlash(`Νέα ιδιόχρηση 585.014: ${total.toLocaleString('el-GR',{minimumFractionDigits:2})} € (${includedCount}/${props.length} ΑΤΑΚ)`, 'info', 6000);
       }
+      // Notify the bulk-card caller (if any) so it can refresh its
+      // summary row. The bulk handler sets this callback right before
+      // opening the picker.
+      try {
+        if (typeof window.__bulkPickerOnApply === 'function') {
+          window.__bulkPickerOnApply(total, includedCount, props.length);
+          window.__bulkPickerOnApply = null;
+        }
+      } catch (_) {}
       // Persist (best-effort — failure does not block the local update).
       if (afm && persistEl.checked) {
         const choices = {};
@@ -6046,6 +6153,27 @@
           diagItems.map((d) => '<li>' + d + '</li>').join('') +
           '</ul>'
         : '';
+      // Collect HQ + branch e9_properties for this bulk client so the
+      // user can open the picker per-AFM and recompute ιδιόχρηση with
+      // sqm choices. Only show the «Ρύθμιση ιδιόχρησης» button if Ε9
+      // returned at least one property anywhere.
+      let bulkE9PropsCount = 0;
+      if (Array.isArray(checks.e9_properties)) bulkE9PropsCount += checks.e9_properties.length;
+      if (Array.isArray(checks.rent_breakdown)) {
+        for (const b of checks.rent_breakdown) {
+          if (b && b.kind === 'branch' && b.source === 'e9_3_percent' && Array.isArray(b.e9_properties)) {
+            bulkE9PropsCount += b.e9_properties.length;
+          }
+        }
+      }
+      const pickerBtnHtml = bulkE9PropsCount > 0
+        ? '<div style="margin-top:.4rem;text-align:right;">' +
+            '<button type="button" data-bulk-picker-i="' + i + '" ' +
+              'style="background:#0ea5e9;color:#fff;border:none;border-radius:.3rem;padding:.25rem .7rem;font-size:.75rem;font-weight:600;cursor:pointer;">' +
+              '🏠 Ρύθμιση ιδιόχρησης (' + bulkE9PropsCount + ' ΑΤΑΚ)' +
+            '</button>' +
+          '</div>'
+        : '';
       return (
         '<div class="brain-bulk-card" data-bulk-i="' + i + '">' +
           '<button type="button" class="brain-bulk-toggle" aria-expanded="false">' +
@@ -6053,7 +6181,7 @@
             '<span class="brain-bulk-name">' + String(c.name || c.afm || '—').replace(/</g,'&lt;') + '</span>' +
             '<span class="brain-bulk-afm">ΑΦΜ ' + String(c.afm || '—') + '</span>' +
             statusBadge +
-            '<span class="brain-bulk-amounts">' + headerSummary + '</span>' +
+            '<span class="brain-bulk-amounts" data-bulk-amounts-i="' + i + '">' + headerSummary + '</span>' +
           '</button>' +
           '<div class="brain-bulk-body" hidden>' +
             (brk.length ? (
@@ -6063,6 +6191,7 @@
                 '<tbody>' + breakdownRows + '</tbody>' +
               '</table>'
             ) : '') +
+            pickerBtnHtml +
             warningsHtml + errorsHtml + messagesHtml + diagHtml +
           '</div>' +
         '</div>'
@@ -6183,6 +6312,59 @@
         body.hidden = open;
         btn.setAttribute('aria-expanded', String(!open));
         if (chev) chev.textContent = open ? '▸' : '▾';
+      });
+    });
+    // Per-bulk-client «Ρύθμιση ιδιόχρησης» button — opens the same picker
+    // the Ατομικός flow uses, scoped to this client's ATAKs (HQ + branches).
+    host.querySelectorAll('[data-bulk-picker-i]').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const i = Number(btn.getAttribute('data-bulk-picker-i'));
+        const c = clients[i];
+        if (!c) return;
+        const checks = c.checks || {};
+        const allProps = [];
+        if (Array.isArray(checks.e9_properties)) {
+          for (const p of checks.e9_properties) {
+            allProps.push(Object.assign({ _scope: 'headquarter' }, p));
+          }
+        }
+        if (Array.isArray(checks.rent_breakdown)) {
+          for (const b of checks.rent_breakdown) {
+            if (!b || b.kind !== 'branch' || b.source !== 'e9_3_percent') continue;
+            const baddr = String(b.address || '').trim();
+            const bprops = Array.isArray(b.e9_properties) ? b.e9_properties : [];
+            for (const p of bprops) {
+              const wrapped = Object.assign({ _scope: 'branch', _scope_address: baddr }, p);
+              if (!wrapped.address_text) wrapped.address_text = baddr;
+              allProps.push(wrapped);
+            }
+          }
+        }
+        if (!allProps.length) {
+          if (typeof showBrainFlash === 'function') {
+            showBrainFlash('Δεν βρέθηκαν ΑΤΑΚ από Ε9 για αυτόν τον πελάτη.', 'warning', 4500);
+          }
+          return;
+        }
+        // Use the same picker. We wrap a callback in
+        // window.__bulkPickerOnApply so the picker can update this card's
+        // amount summary after apply. (The picker only knows the AFM —
+        // we keep the wire-up here to avoid a deeper refactor.)
+        window.__bulkPickerOnApply = (newRent, includedCount, totalCount) => {
+          try {
+            checks.rent_annual = newRent;
+            // Update the header summary line
+            const amountsEl = host.querySelector('[data-bulk-amounts-i="' + i + '"]');
+            const efka = checks.efka_teka_total;
+            const headerSummary = [
+              efka !== null && efka !== undefined ? `585.007: ${fmt(efka)} €` : null,
+              `585.014: ${fmt(newRent)} €`,
+            ].filter(Boolean).join(' · ');
+            if (amountsEl) amountsEl.textContent = headerSummary;
+          } catch (_) {}
+        };
+        _showE9AtakPicker(allProps, checks.rent_annual, c.afm || '');
       });
     });
     const expandAll = document.getElementById('brainBulkExpandAll');
@@ -6348,6 +6530,109 @@
     const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const now = new Date();
     const stamp = now.toLocaleString('el-GR');
+
+    // Fetch per-AFM ATAK choices (sqm_used / has_rental) in parallel so
+    // the PDF can show what the user picked alongside the raw E9 data.
+    const atakChoicesByAfm = {};
+    try {
+      await Promise.all(clients.map(async (c) => {
+        const afm = String(c && c.afm || '').trim();
+        if (!afm) return;
+        try {
+          const r = await fetch('/api/e3/etak_choices/get', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({afm}),
+          });
+          const j = await r.json();
+          if (j && j.ok && j.choices) atakChoicesByAfm[afm] = j.choices;
+        } catch (_) {}
+      }));
+    } catch (_) {}
+
+    function collectAllProps(checks) {
+      // Combine HQ e9_properties with each υποκατάστημα's e9_properties
+      // (attached by the brain in rent_breakdown[].e9_properties when
+      // source === 'e9_3_percent'). Returns a flat list with `_scope` /
+      // `_scope_address` so the PDF can group them.
+      const out = [];
+      if (Array.isArray(checks.e9_properties)) {
+        for (const p of checks.e9_properties) {
+          out.push(Object.assign({ _scope: 'headquarter', _scope_address: 'Έδρα' }, p));
+        }
+      }
+      if (Array.isArray(checks.rent_breakdown)) {
+        for (const b of checks.rent_breakdown) {
+          if (!b || b.kind !== 'branch' || b.source !== 'e9_3_percent') continue;
+          const baddr = String(b.address || '').trim();
+          const bp = Array.isArray(b.e9_properties) ? b.e9_properties : [];
+          for (const p of bp) {
+            out.push(Object.assign({ _scope: 'branch', _scope_address: baddr }, p));
+          }
+        }
+      }
+      return out;
+    }
+
+    function buildAtakDetailsBlock(afm, allProps) {
+      if (!allProps.length) return '';
+      const saved = atakChoicesByAfm[String(afm || '').trim()] || {};
+      // Group by scope/address
+      const groups = new Map();
+      for (const p of allProps) {
+        const key = (p._scope === 'branch') ? ('Υποκατάστημα · ' + (p._scope_address || '—'))
+                                            : 'Έδρα';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+      }
+      const blocks = [];
+      let grandTotal = 0;
+      for (const [groupLabel, items] of groups.entries()) {
+        const rows = items.map((p) => {
+          const sqmTotal = Number(p.sqm || 0);
+          const value = Number(p.value || 0);
+          const choice = saved[String(p.atak || '')] || null;
+          let sqmUsed = sqmTotal;
+          let userChoice = 'Όλα τα τμ';
+          if (choice && choice.sqm_used != null) {
+            const used = Number(choice.sqm_used);
+            if (sqmTotal > 0 && used >= 0 && used < sqmTotal) {
+              sqmUsed = used;
+              userChoice = `Μερική (${fmt(used)} / ${fmt(sqmTotal)} τμ)`;
+            } else if (sqmTotal > 0 && used >= sqmTotal) {
+              userChoice = 'Όλα τα τμ';
+            }
+            if (choice.has_rental) userChoice += ' + Ενοίκιο για το ίδιο ακίνητο';
+          }
+          const ratio = sqmTotal > 0 ? (sqmUsed / sqmTotal) : 1;
+          const contrib = Math.round(value * ratio * 0.03 * 100) / 100;
+          grandTotal += contrib;
+          return '<tr>' +
+            '<td>' + esc(p.atak || '') + '</td>' +
+            '<td>' + esc(p.category_label || p.category_code || '—') + '</td>' +
+            '<td>' + esc(p.floor_label || p.floor_code || '—') + '</td>' +
+            '<td style="text-align:right;">' + (sqmTotal ? fmt(sqmTotal) + ' τ.μ.' : '—') + '</td>' +
+            '<td style="text-align:right;">' + fmt(value) + ' €</td>' +
+            '<td>' + esc(userChoice) + '</td>' +
+            '<td style="text-align:right;">' + fmt(contrib) + ' €</td>' +
+          '</tr>';
+        }).join('');
+        blocks.push(
+          '<h5 style="margin:6px 0 2px 0;font-size:9.5pt;color:#1e293b;">' + esc(groupLabel) + '</h5>' +
+          '<table><thead><tr>' +
+            '<th>ΑΤΑΚ</th><th>Κατηγορία</th><th>Όροφος</th><th>Επιφάνεια</th>' +
+            '<th>Αξία ακινήτου</th><th>Επιλογή χρήστη</th><th>Συμβολή 585.014</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table>'
+        );
+      }
+      blocks.push(
+        '<div style="font-size:9pt;font-weight:700;text-align:right;margin-top:4px;">' +
+          'Σύνολο ιδιόχρησης από ATAK: ' + fmt(grandTotal) + ' €' +
+        '</div>'
+      );
+      return '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">' +
+        'Λεπτομέρειες ΑΤΑΚ από Ε9/ΕΝΦΙΑ (βάσει ΠΟΛ.1237/2014)' +
+        '</h4>' + blocks.join('');
+    }
 
     const summaryRows = clients.map((c) => {
       const checks = c.checks || {};
@@ -6551,12 +6836,14 @@
           ).join('') +
           '</tbody></table>'
         : '';
+      const atakDetailsHtml = buildAtakDetailsBlock(c.afm, collectAllProps(checks));
       return (
         '<section class="client-block">' +
           '<h3>' + esc(c.name || c.afm || '—') + ' — ΑΦΜ ' + esc(c.afm || '—') + '</h3>' +
           '<h4 style="margin:6px 0 2px 0;font-size:10pt;color:#0f766e;">Πίνακας E3 (βασικοί κωδικοί)</h4>' +
           e3Table +
           (brk.length ? '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">Ανάλυση 585.014 ανά ακίνητο</h4>' + breakdown : '') +
+          atakDetailsHtml +
           analyticTable +
           unclassifiedBlock +
           diagBlock +
