@@ -1506,6 +1506,8 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "e9_pdfs"
         elif kind_lower == "keao":
             root_name = "keao_pdfs"
+        elif kind_lower in ("kartela_ergodoti", "ergodoti", "kartela"):
+            root_name = "kartela_ergodoti_pdfs"
         else:
             return None
         uid = getattr(current_user, "id", None)
@@ -1995,6 +1997,13 @@ def process_client(
 
     efka_teka_total = 0.0
     efka_teka_available = False
+    # Counters of how many PDFs the various extractors persisted on disk.
+    # Initialised early (it was previously initialised only just before the
+    # misth block, so EFKA/TEKA/KEAO increments silently NameError'd out
+    # inside their try/except). Keep ALL keys here so dashboards do not
+    # need to defend against missing entries.
+    pdfs_saved = {"efka": 0, "teka": 0, "misth": 0, "e9": 0,
+                  "keao": 0, "kartela_ergodoti": 0}
 
     if _flag_for("efka_teka") and not missing_member_credentials:
         root = Path(__file__).resolve().parents[2]
@@ -2101,6 +2110,94 @@ def process_client(
                     warnings.append(f"TEKA extractor: {teka_err}")
 
     efka_teka_total = round(efka_teka_total, 2)
+
+    # ------------------------------------------------------------------
+    # «Οικονομική Καρτέλα Εργοδότη» (EFKA + TEKA employer-side).
+    #
+    # Different login: not TAXISnet — this uses the company's IKA-Εργοδότη
+    # username/password (Κωδικός Χρήστη / Συνθηματικό issued by IKA at
+    # employer registration). Runs once per company when the user has
+    # ``has_payroll=True`` and supplied both creds. Produces two PDFs
+    # (EFKA card + TEKA card) saved under ``kartela_ergodoti_pdfs/`` so
+    # they show up in the unified "Όλα τα διαθέσιμα PDFs" panel.
+    # ------------------------------------------------------------------
+    kartela_ergodoti_result: Optional[Dict[str, Any]] = None
+    ika_emp_user = _norm_text(client.get("ika_employer_username"))
+    ika_emp_pass = _norm_text(client.get("ika_employer_password"))
+    has_payroll_flag = bool(client.get("has_payroll")) or bool(ika_emp_user and ika_emp_pass)
+    if has_payroll_flag and ika_emp_user and ika_emp_pass and afm:
+        root = Path(__file__).resolve().parents[2]
+        checks_dir = root / "e3" / "checks"
+        kart_pdf_dir = _resolve_pdfs_dir("kartela_ergodoti", afm)
+        _publish_brain_step(
+            job_id,
+            f"Οικονομική Καρτέλα Εργοδότη — {input_name or afm}",
+            percent=33,
+        )
+        with tempfile.TemporaryDirectory(prefix=f"e3kart_{afm}_") as tmpdir:
+            tmp = Path(tmpdir)
+            target_dir = kart_pdf_dir if kart_pdf_dir is not None else (tmp / "out")
+            target_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = tmp / "kartela_ergodoti_summary.json"
+            kart_args = [
+                sys.executable,
+                str(checks_dir / "kartela_ergodoti.py"),
+                "--username", ika_emp_user,
+                "--password", ika_emp_pass,
+                "--afm", afm,
+                "--date-from", f"01/01/{year}",
+                "--pdf-dir", str(target_dir),
+                "--summary-out", str(summary_path),
+            ]
+            if not headed:
+                kart_args.append("--headless")
+            try:
+                proc = subprocess.run(
+                    kart_args, capture_output=True, text=True, timeout=300
+                )
+                kartela_ergodoti_result = {
+                    "ok": proc.returncode == 0,
+                    "stdout_tail": (proc.stdout or "")[-1000:],
+                    "stderr_tail": (proc.stderr or "")[-500:],
+                }
+                if summary_path.exists():
+                    try:
+                        kartela_ergodoti_result["summary"] = json.loads(
+                            summary_path.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        pass
+                if proc.returncode != 0:
+                    warnings.append(
+                        "Οικονομική Καρτέλα Εργοδότη: αποτυχία (δες kartela_ergodoti στο response)."
+                    )
+                elif kart_pdf_dir is not None:
+                    try:
+                        saved = [
+                            p for p in kart_pdf_dir.iterdir()
+                            if p.suffix.lower() == ".pdf"
+                            and p.name.startswith("kartela_ergodoti_")
+                        ]
+                        pdfs_saved["kartela_ergodoti"] = (
+                            pdfs_saved.get("kartela_ergodoti", 0) + len(saved)
+                        )
+                        if not saved:
+                            warnings.append(
+                                "Οικονομική Καρτέλα Εργοδότη: το script έτρεξε αλλά δεν εντοπίστηκαν PDFs στον per-AFM φάκελο."
+                            )
+                    except Exception:
+                        pass
+            except subprocess.TimeoutExpired:
+                warnings.append("Οικονομική Καρτέλα Εργοδότη: timeout κατά τη λήψη.")
+                kartela_ergodoti_result = {"ok": False, "error": "timeout"}
+            except Exception as exc:
+                warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
+                kartela_ergodoti_result = {"ok": False, "error": str(exc)}
+    elif has_payroll_flag and not (ika_emp_user and ika_emp_pass):
+        warnings.append(
+            "Έχει επισημανθεί μισθοδοσία αλλά λείπουν τα IKA Εργοδότη credentials — "
+            "η Οικονομική Καρτέλα Εργοδότη παραλείπεται."
+        )
 
     # ------------------------------------------------------------------
     # ΚΕΑΟ Πιστώσεις (only μέλη εταιριών / ατομικές — same `targets`
@@ -2336,7 +2433,6 @@ def process_client(
     misth_match_count: int = 0
     e9_ran: bool = False
     e9_error: Optional[str] = None
-    pdfs_saved = {"efka": 0, "teka": 0, "misth": 0, "e9": 0}
 
     # Compute the period (in months, inclusive) the user asked about. If no
     # date range was supplied (single mode without dates) default to the
@@ -2885,6 +2981,12 @@ def process_client(
             "e9_ran": e9_ran,
             "e9_error": e9_error,
             "pdfs_saved": pdfs_saved,
+            # «Οικονομική Καρτέλα Εργοδότη» result (None when the client
+            # has no payroll / no IKA-Εργοδότη creds). Shape: {ok, summary?,
+            # stdout_tail, stderr_tail} — the summary mirrors the JSON written
+            # by kartela_ergodoti.py (efka/teka per-PDF status).
+            "kartela_ergodoti": kartela_ergodoti_result,
+            "has_payroll": has_payroll_flag,
             # Full myDATA E3 report (revenue / expenses / info / tableZ)
             # so the bulk renderer + PDF export can build the analytic
             # πίνακας per-client without an extra /api/e3/fetch round-trip.

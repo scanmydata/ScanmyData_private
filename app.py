@@ -17860,6 +17860,15 @@ def api_e3_brain_save_credentials():
                 merged.update(mby_norm)
                 mby_norm = merged
 
+            # IKA Εργοδότη credentials + payroll flag — used by the
+            # «Οικονομική Καρτέλα Εργοδότη» extractor in atomic + bulk runs.
+            _iku = str(company.get("ika_employer_username") or "").strip()
+            _ikp = str(company.get("ika_employer_password") or "").strip()
+            _has_payroll = company.get("has_payroll")
+            if _has_payroll is None:
+                _has_payroll = bool(_iku or _ikp)
+            else:
+                _has_payroll = bool(_has_payroll)
             normalized = {
                 "company": {
                     "afm": cafm,
@@ -17869,6 +17878,9 @@ def api_e3_brain_save_credentials():
                     "amka": str(company.get("amka") or "").strip(),
                     "mydata_user": str(company.get("mydata_user") or "").strip(),
                     "mydata_key": str(company.get("mydata_key") or "").strip(),
+                    "ika_employer_username": _iku,
+                    "ika_employer_password": _ikp,
+                    "has_payroll": _has_payroll,
                     "address": str(company.get("address") or "").strip(),
                     "legal_type": str(company.get("legal_type") or "").strip(),
                 },
@@ -18000,6 +18012,13 @@ def api_e3_brain_active_group_clients():
                 continue
             mydata_user = str(c.get("mydata_user") or c.get("user") or "").strip()
             mydata_key = str(c.get("mydata_key") or c.get("key") or "").strip()
+            iku = str(c.get("ika_employer_username") or "").strip()
+            ikp = str(c.get("ika_employer_password") or "").strip()
+            has_payroll = c.get("has_payroll")
+            if has_payroll is None:
+                has_payroll = bool(iku or ikp)
+            else:
+                has_payroll = bool(has_payroll)
             clients.append({
                 "afm": afm,
                 "name": str(c.get("name") or "").strip(),
@@ -18010,6 +18029,9 @@ def api_e3_brain_active_group_clients():
                 "mydata_key": mydata_key,
                 "user": mydata_user,
                 "key": mydata_key,
+                "ika_employer_username": iku,
+                "ika_employer_password": ikp,
+                "has_payroll": has_payroll,
                 "address": str(c.get("address") or "").strip(),
                 "legal_type": str(c.get("legal_type") or "").strip(),
             })
@@ -18142,6 +18164,14 @@ _EXCEL_COL_ALIASES = {
     "taxis_password":   ("Συνθηματικό TAXISNET", "Συνθηματικό Taxisnet", "Συνθηματικό Taxis"),
     "mydata_user":      ("Όνομα χρήστη myData", "Όνομα χρήστη MyData", "Όνομα χρήστη Mydata"),
     "mydata_key":       ("Api myData", "API myData", "Api MyData"),
+    # Employer-side IKA credentials. When these columns are present in
+    # the import sheet, the company is automatically flagged
+    # ``has_payroll=True`` so the «Οικονομική Καρτέλα Εργοδότη» extractor
+    # is included in atomic + bulk brain runs.
+    "ika_employer_user": ("Όνομα χρήστη (Εργοδότη) Ι.Κ.Α.", "Όνομα χρήστη Εργοδότη Ι.Κ.Α.",
+                          "Όνομα χρήστη Εργοδότη ΙΚΑ", "Όνομα Χρήστη Εργοδότη ΙΚΑ"),
+    "ika_employer_pass": ("Συνθηματικό (Εργοδότη) Ι.Κ.Α.", "Συνθηματικό Εργοδότη Ι.Κ.Α.",
+                          "Συνθηματικό Εργοδότη ΙΚΑ"),
     "doy":              ("Δ.Ο.Υ.", "ΔΟΥ"),
 }
 
@@ -18279,10 +18309,19 @@ def api_e3_brain_credentials_store_import_excel():
             tp = _cell(row, "taxis_password")
             mu = _cell(row, "mydata_user")
             mk = _cell(row, "mydata_key")
+            iku = _cell(row, "ika_employer_user")
+            ikp = _cell(row, "ika_employer_pass")
             legal_type = _legal_type_from_kind(kind)
 
             prev = by_afm.get(afm) or {}
             prev_company = (prev.get("company") if isinstance(prev, dict) else {}) or {}
+            # Auto-flag payroll when either of the IKA-Εργοδότη columns
+            # carried data (this row or a previous import).
+            has_payroll = bool(
+                iku or ikp or prev_company.get("ika_employer_username")
+                or prev_company.get("ika_employer_password")
+                or prev_company.get("has_payroll")
+            )
             new_company = {
                 "afm": afm,
                 "name": display_name or prev_company.get("name") or "",
@@ -18292,6 +18331,9 @@ def api_e3_brain_credentials_store_import_excel():
                 "taxisnet_password": tp or prev_company.get("taxisnet_password") or "",
                 "mydata_user": mu or prev_company.get("mydata_user") or "",
                 "mydata_key": mk or prev_company.get("mydata_key") or "",
+                "ika_employer_username": iku or prev_company.get("ika_employer_username") or "",
+                "ika_employer_password": ikp or prev_company.get("ika_employer_password") or "",
+                "has_payroll": has_payroll,
                 "address": prev_company.get("address") or "",
                 "branch_addresses": prev_company.get("branch_addresses") or [],
             }
@@ -18413,6 +18455,8 @@ def _e3_pdfs_root(kind):
         return "e9_pdfs"
     if k == "keao":
         return "keao_pdfs"
+    if k in ("kartela_ergodoti", "ergodoti", "kartela"):
+        return "kartela_ergodoti_pdfs"
     return "efka_pdfs"
 
 
@@ -18718,6 +18762,32 @@ def api_e3_brain_misth_pdfs_zip():
 @login_required
 def api_e3_brain_e9_pdfs_zip():
     return _e3_pdfs_zip("e9")
+
+
+# --- «Οικονομική Καρτέλα Εργοδότη» endpoints (mirror the per-kind shape) ---
+@app.route("/api/e3/brain/kartela_ergodoti_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_kartela_ergodoti_pdfs_list():
+    return _e3_pdfs_list_kind("kartela_ergodoti")
+
+
+@app.route("/api/e3/brain/kartela_ergodoti_pdfs/file", methods=["GET", "DELETE"])
+@login_required
+def api_e3_brain_kartela_ergodoti_pdfs_file():
+    return _e3_pdfs_serve_file("kartela_ergodoti")
+
+
+@app.route("/api/e3/brain/kartela_ergodoti_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_kartela_ergodoti_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("kartela_ergodoti")
+
+
+@app.route("/api/e3/brain/kartela_ergodoti_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_kartela_ergodoti_pdfs_zip():
+    return _e3_pdfs_zip("kartela_ergodoti")
+
 
 @app.route("/credentials", methods=["GET", "POST"])
 def credentials_page():

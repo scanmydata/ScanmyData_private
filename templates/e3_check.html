@@ -1350,6 +1350,39 @@
             class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
         </div>
       </div>
+      <!-- IKA-Εργοδότη credentials block. Activated either by the user
+           ticking "Έχει μισθοδοσία" or implicitly when the saved store
+           already has IKA-Εργοδότη credentials (Excel import or previous
+           manual save). When credentials are present the brain run
+           triggers kartela_ergodoti.py and persists the PDFs in the
+           per-AFM folder shown by the "Όλα τα διαθέσιμα PDFs" panel. -->
+      <div class="mb-4 border rounded-lg p-3 border-gray-300 dark:border-gray-600">
+        <label class="inline-flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
+          <input id="brainHasPayroll" type="checkbox"
+                 class="rounded border-gray-300 dark:border-gray-600"
+                 onchange="onBrainHasPayrollToggle()" />
+          Έχει μισθοδοσία (Οικονομική Καρτέλα Εργοδότη)
+        </label>
+        <div id="brainPayrollFields" class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 hidden">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Όνομα χρήστη (Εργοδότη) Ι.Κ.Α.</label>
+            <input id="brainIkaEmpUser" type="text" placeholder="π.χ. ika000XXXXX"
+              autocomplete="off"
+              class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Συνθηματικό (Εργοδότη) Ι.Κ.Α.</label>
+            <input id="brainIkaEmpPass" type="password" placeholder="Συνθηματικό Εργοδότη ΙΚΑ"
+              autocomplete="new-password"
+              class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+          </div>
+          <div class="md:col-span-2 text-xs text-gray-500 dark:text-gray-400">
+            ℹ️ Τα στοιχεία αυτά αποθηκεύονται στο per-client store με «Αποθήκευση Credentials Ομάδας».
+            Όταν συμπληρωθούν, ο έλεγχος τραβάει αυτόματα την Οικονομική Καρτέλα Εργοδότη
+            (ΕΦΚΑ + ΤΕΚΑ) και κρατάει τα PDFs στον per-AFM φάκελο.
+          </div>
+        </div>
+      </div>
       <div class="flex flex-wrap gap-3 items-center mb-4">
         <!-- Δεδομένα E3 → μόνο μεταφόρτωση ισοζυγίου τώρα. Η λήψη
              myDATA έχει ενσωματωθεί στο «Εκτέλεση ελέγχου/ελέγχων»
@@ -1429,6 +1462,7 @@
             <button type="button" class="brain-pdf-chip" data-kind="misth">Μισθωτήρια</button>
             <button type="button" class="brain-pdf-chip" data-kind="e9">Ε9/ENFIA</button>
             <button type="button" class="brain-pdf-chip" data-kind="keao">ΚΕΑΟ</button>
+            <button type="button" class="brain-pdf-chip" data-kind="kartela_ergodoti">Καρτέλα Εργοδότη</button>
           </div>
           <span id="brainPdfsStatus" class="brain-pdfs-status text-xs"></span>
         </div>
@@ -1951,6 +1985,22 @@
     updateBrainAmkaVisibility(isIndividual);
   }
 
+  // Toggle for the IKA-Εργοδότη credential block. Wired to the
+  // brainHasPayroll checkbox via inline onchange. Exposed on `window`
+  // because some callers (legacy onload-init code paths) invoke it via
+  // optional-chaining and we want to be tolerant of "not defined yet".
+  function onBrainHasPayrollToggle() {
+    const chk = document.getElementById('brainHasPayroll');
+    const block = document.getElementById('brainPayrollFields');
+    if (!chk || !block) return;
+    if (chk.checked) {
+      block.classList.remove('hidden');
+    } else {
+      block.classList.add('hidden');
+    }
+  }
+  try { window.onBrainHasPayrollToggle = onBrainHasPayrollToggle; } catch (_) {}
+
   function updateBrainAmkaVisibility(isIndividual) {
     const amkaWrapper = document.getElementById('brainAmkaWrapper');
     const amkaEl = document.getElementById('brainAmka');
@@ -2005,6 +2055,21 @@
     if (mdUserEl) mdUserEl.value = client.mydata_user || client.user || '';
     if (mdKeyEl) mdKeyEl.value = client.mydata_key || client.key || '';
 
+    // Hydrate the IKA-Εργοδότη fields + the "has_payroll" toggle from the
+    // active client record. The toggle is also auto-activated when the
+    // creds are non-empty so the user does not have to tick it again
+    // after an Excel import that already carried the columns.
+    const ikaUserEl = document.getElementById('brainIkaEmpUser');
+    const ikaPassEl = document.getElementById('brainIkaEmpPass');
+    const payrollChk = document.getElementById('brainHasPayroll');
+    if (ikaUserEl) ikaUserEl.value = client.ika_employer_username || '';
+    if (ikaPassEl) ikaPassEl.value = client.ika_employer_password || '';
+    if (payrollChk) {
+      payrollChk.checked = Boolean(client.has_payroll
+        || client.ika_employer_username || client.ika_employer_password);
+      try { onBrainHasPayrollToggle(); } catch (_) {}
+    }
+
     // Also restore saved members/credentials from the credentials store
     const clientAfm = String(client.afm || '').trim();
     if (clientAfm && Array.isArray(E3_BRAIN_CREDS_CACHE)) {
@@ -2017,6 +2082,14 @@
         if (amkaEl && co.amka && !amkaEl.value) amkaEl.value = co.amka;
         if (mdUserEl && co.mydata_user && !mdUserEl.value) mdUserEl.value = co.mydata_user;
         if (mdKeyEl && co.mydata_key && !mdKeyEl.value) mdKeyEl.value = co.mydata_key;
+        if (ikaUserEl && co.ika_employer_username && !ikaUserEl.value) ikaUserEl.value = co.ika_employer_username;
+        if (ikaPassEl && co.ika_employer_password && !ikaPassEl.value) ikaPassEl.value = co.ika_employer_password;
+        if (payrollChk) {
+          payrollChk.checked = Boolean(co.has_payroll
+            || co.ika_employer_username || co.ika_employer_password
+            || payrollChk.checked);
+          try { onBrainHasPayrollToggle(); } catch (_) {}
+        }
         // Load member credentials into E3_BRAIN_MEMBER_CREDS
         if (Array.isArray(stored.members) && stored.members.length) {
           E3_BRAIN_MEMBERS = stored.members.map((m, idx) => {
@@ -2630,6 +2703,16 @@
     if (amkaEl) amkaEl.value = co.amka || '';
     if (mdUserEl) mdUserEl.value = co.mydata_user || '';
     if (mdKeyEl) mdKeyEl.value = co.mydata_key || '';
+    const ikaUserEl2 = document.getElementById('brainIkaEmpUser');
+    const ikaPassEl2 = document.getElementById('brainIkaEmpPass');
+    const payrollChk2 = document.getElementById('brainHasPayroll');
+    if (ikaUserEl2) ikaUserEl2.value = co.ika_employer_username || '';
+    if (ikaPassEl2) ikaPassEl2.value = co.ika_employer_password || '';
+    if (payrollChk2) {
+      payrollChk2.checked = Boolean(co.has_payroll
+        || co.ika_employer_username || co.ika_employer_password);
+      try { onBrainHasPayrollToggle(); } catch (_) {}
+    }
     // Load members
     if (Array.isArray(stored.members) && stored.members.length) {
       E3_BRAIN_MEMBERS = stored.members.map((m, idx) => {
@@ -4059,6 +4142,9 @@
     const get = (id) => String((document.getElementById(id) || {}).value || '').trim();
     const afm = get('brainAfm').replace(/\D/g, '');
     if (!afm || afm.length !== 9) return null;
+    const _payrollChk = document.getElementById('brainHasPayroll');
+    const _ikaU = get('brainIkaEmpUser');
+    const _ikaP = get('brainIkaEmpPass');
     const company = {
       afm: afm,
       name: get('brainName'),
@@ -4068,6 +4154,9 @@
       amka: get('brainAmka'),
       mydata_user: get('brainMydataUser'),
       mydata_key: get('brainMydataKey'),
+      ika_employer_username: _ikaU,
+      ika_employer_password: _ikaP,
+      has_payroll: Boolean((_payrollChk && _payrollChk.checked) || _ikaU || _ikaP),
     };
     // Build members from E3_BRAIN_MEMBERS + E3_BRAIN_MEMBER_CREDS.
     const members = [];
@@ -4414,6 +4503,12 @@
         amka: String((amkaEl && amkaEl.value) || '').trim(),
         mydata_user: String((mdUserEl && mdUserEl.value) || '').trim(),
         mydata_key: String((mdKeyEl && mdKeyEl.value) || '').trim(),
+        // IKA-Εργοδότη credentials — when supplied, the brain runs
+        // kartela_ergodoti.py and saves EFKA/TEKA Καρτέλα PDFs under
+        // kartela_ergodoti_pdfs/.
+        ika_employer_username: String(((document.getElementById('brainIkaEmpUser') || {}).value) || '').trim(),
+        ika_employer_password: String(((document.getElementById('brainIkaEmpPass') || {}).value) || '').trim(),
+        has_payroll: Boolean((document.getElementById('brainHasPayroll') || {}).checked),
         member_credentials: memberCredsForPayload,
       }
     };
@@ -7636,6 +7731,7 @@
     misth: 'Μισθωτήρια',
     e9: 'Ε9/ENFIA',
     keao: 'ΚΕΑΟ',
+    kartela_ergodoti: 'Καρτέλα Εργοδότη',
   };
 
   function _setBrainPdfChipActive(kind) {
@@ -7697,7 +7793,7 @@
     }
     if (statusEl) statusEl.textContent = 'Φόρτωση όλων των PDFs...';
     try {
-      const kinds = ['efka', 'teka', 'misth', 'e9', 'keao'];
+      const kinds = ['efka', 'teka', 'misth', 'e9', 'keao', 'kartela_ergodoti'];
       const responses = await Promise.all(kinds.map((k) =>
         fetch(`/api/e3/brain/${k}_pdfs?afm=${encodeURIComponent(afm)}`)
           .then((r) => r.json()).catch(() => ({ ok: false, files: [] }))
