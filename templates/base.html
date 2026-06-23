@@ -2707,7 +2707,10 @@
 
       async function pollGlobalNotifs(){
         try{
-          const res = await fetch('/api/global_notifications', {credentials:'same-origin'});
+          const res = await fetch('/api/global_notifications', {
+            credentials:'same-origin',
+            headers: {'X-Wait-Overlay': 'skip'}
+          });
           if(res.ok){
             const data = await res.json();
             if(data.msgs && data.msgs.length){
@@ -2731,7 +2734,10 @@
         if (target.credential) qp.set('credential', target.credential);
         if (target.vat) qp.set('vat', target.vat);
         try {
-          const res = await fetch('/api/last_fetch_date?' + qp.toString(), { credentials:'same-origin' });
+          const res = await fetch('/api/last_fetch_date?' + qp.toString(), {
+            credentials:'same-origin',
+            headers: {'X-Wait-Overlay': 'skip'}
+          });
           if (!res.ok) return;
           const data = await res.json().catch(() => null);
           if (!data) return;
@@ -2776,7 +2782,10 @@
         }
 
         try {
-          const res = await fetch('/api/fetch_progress?' + query.toString(), { credentials:'same-origin' });
+          const res = await fetch('/api/fetch_progress?' + query.toString(), {
+            credentials:'same-origin',
+            headers: {'X-Wait-Overlay': 'skip'}
+          });
           if (!res.ok) return;
           const data = await res.json().catch(() => ({}));
           const state = {
@@ -2821,7 +2830,10 @@
         }
 
         try {
-          const res = await fetch('/api/fetch_bulk/progress?job_id=' + encodeURIComponent(target.job_id), { credentials:'same-origin' });
+          const res = await fetch('/api/fetch_bulk/progress?job_id=' + encodeURIComponent(target.job_id), {
+            credentials:'same-origin',
+            headers: {'X-Wait-Overlay': 'skip'}
+          });
           if (!res.ok) return;
           const data = await res.json().catch(() => ({}));
           const state = {
@@ -3717,11 +3729,53 @@
       const waitEl = document.getElementById('globalWait');
       let waitCount = 0;
       let suspendWait = 0; // όταν >0, δεν θα εμφανίζεται το overlay
+      let waitShowTimer = null;
+      const WAIT_OVERLAY_DELAY = 180;
 
-      function showWait(){ if(!waitEl || suspendWait>0) return; waitCount++; waitEl.style.display='flex'; }
-      function hideWait(){ if(!waitEl) return; waitCount = Math.max(0, waitCount-1); if(!waitCount) waitEl.style.display='none'; }
-      function forceHide(){ if(!waitEl) return; waitCount = 0; waitEl.style.display='none'; }
-      function suspend(on){ suspendWait = Math.max(0, suspendWait + (on?1:-1)); if (suspendWait>0) forceHide(); }
+      function showWait(){
+        if (!waitEl || suspendWait > 0) return;
+        waitCount++;
+        if (waitEl.style.display === 'flex') return;
+        if (waitShowTimer) return;
+        waitShowTimer = setTimeout(() => {
+          waitShowTimer = null;
+          if (waitCount > 0 && suspendWait === 0) {
+            waitEl.style.display = 'flex';
+            waitEl.setAttribute('aria-hidden', 'false');
+          }
+        }, WAIT_OVERLAY_DELAY);
+      }
+
+      function hideWait(){
+        if (!waitEl) return;
+        waitCount = Math.max(0, waitCount - 1);
+        if (!waitCount) {
+          if (waitShowTimer) {
+            clearTimeout(waitShowTimer);
+            waitShowTimer = null;
+          }
+          if (waitEl.style.display === 'flex') {
+            waitEl.style.display = 'none';
+            waitEl.setAttribute('aria-hidden', 'true');
+          }
+        }
+      }
+
+      function forceHide(){
+        if (!waitEl) return;
+        waitCount = 0;
+        if (waitShowTimer) {
+          clearTimeout(waitShowTimer);
+          waitShowTimer = null;
+        }
+        waitEl.style.display = 'none';
+        waitEl.setAttribute('aria-hidden', 'true');
+      }
+
+      function suspend(on){
+        suspendWait = Math.max(0, suspendWait + (on ? 1 : -1));
+        if (suspendWait > 0) forceHide();
+      }
       window.WaitOverlay = { show: showWait, hide: hideWait, suspend, forceHide };
 
       // Patch fetch (AJAX)
@@ -4719,7 +4773,7 @@
       function initE3CheckDateInputsFallback(pathname) {
         if (normalizePath(pathname) !== '/e3_check') return;
 
-        const e3DateInputs = ['e3DateFrom', 'e3DateTo']
+        const e3DateInputs = ['e3DateFrom', 'e3DateTo', 'brainDateFrom', 'brainDateTo']
           .map(function(id) { return document.getElementById(id); })
           .filter(Boolean);
         if (!e3DateInputs.length) return;
@@ -4749,13 +4803,21 @@
           return new Promise((resolve, reject) => {
             const existing = document.querySelector('script[src="' + src + '"]');
             if (existing) {
-              resolve();
+              if (existing.dataset.loaded === '1') {
+                resolve();
+                return;
+              }
+              existing.addEventListener('load', () => resolve(), { once: true });
+              existing.addEventListener('error', () => reject(new Error('Failed loading ' + src)), { once: true });
               return;
             }
             const s = document.createElement('script');
             s.src = src;
             s.async = false;
-            s.onload = () => resolve();
+            s.onload = () => {
+              s.dataset.loaded = '1';
+              resolve();
+            };
             s.onerror = () => reject(new Error('Failed loading ' + src));
             document.head.appendChild(s);
           });
@@ -5468,6 +5530,10 @@
             if (typeof renderBrainActiveClientSelect === 'function') renderBrainActiveClientSelect();
             if (typeof syncTopCredentialToBrain === 'function') syncTopCredentialToBrain();
             if (typeof rebindE3Controls === 'function') rebindE3Controls();
+            if (typeof ensureE3DatePickerReady === 'function') ensureE3DatePickerReady();
+            setTimeout(function() {
+              try { if (typeof ensureE3DatePickerReady === 'function') ensureE3DatePickerReady(); } catch (_) {}
+            }, 120);
             // Restore the saved outer tab (Αναλυτικός / Γρήγορος Έλεγχος).
             // Done here (after script execution + rebinds) to survive any earlier resets.
             try {

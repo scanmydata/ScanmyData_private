@@ -718,7 +718,10 @@
       return { status: 'not_started', percent: 0, message: '' };
     }
 
-    const res = await fetch('/api/fetch_progress?' + q.toString(), { credentials: 'same-origin' });
+    const res = await fetch('/api/fetch_progress?' + q.toString(), {
+      credentials: 'same-origin',
+      headers: {'X-Wait-Overlay': 'skip'}
+    });
     const data = await res.json().catch(() => ({}));
     const status = String(data.status || 'not_started');
     const percent = Number(data.percent || 0);
@@ -845,7 +848,8 @@
   async function pollBulkFetchProgressOnce() {
     if (!bulkFetchJobId) return { status: 'not_started' };
     const res = await fetch('/api/fetch_bulk/progress?job_id=' + encodeURIComponent(bulkFetchJobId), {
-      credentials: 'same-origin'
+      credentials: 'same-origin',
+      headers: {'X-Wait-Overlay': 'skip'}
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data || data.ok !== true) {
@@ -1035,7 +1039,10 @@
       const query = new URLSearchParams();
       if (credentialName) query.set('credential', credentialName);
       if (vat) query.set('vat', vat);
-      const res = await fetch('/api/last_fetch_date?' + query.toString());
+      const res = await fetch('/api/last_fetch_date?' + query.toString(), {
+        credentials: 'same-origin',
+        headers: {'X-Wait-Overlay': 'skip'}
+      });
       if (res.ok) {
         const data = await res.json();
         setLastFetchInfoText(data.last_fetch_date || null);
