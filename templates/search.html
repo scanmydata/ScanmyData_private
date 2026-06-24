@@ -8405,7 +8405,7 @@ function rcScheduleDirectSearchFocus(reason, delays, stickyMs){
 try { window.rcDirectFocusSearchBox = rcDirectFocusSearchBox; } catch(_) {}
 try { window.rcScheduleDirectSearchFocus = rcScheduleDirectSearchFocus; } catch(_) {}
 
-async function partiallyReloadInvoiceTable(options = {}) {
+async function _partiallyReloadInvoiceTableImpl(options = {}) {
   const opts = (options && typeof options === 'object') ? options : {};
   try {
     rcLiveDebug('partial-reload-start', {
@@ -8694,6 +8694,44 @@ async function partiallyReloadInvoiceTable(options = {}) {
   }
 
   return false;
+}
+
+// Debounced wrapper: multiple handlers may request a post-save reload at almost
+// the same time (e.g. the native save handler + the global /save_summary fetch
+// hook). Without this, save would reload the whole table twice (two
+// /list/fragment fetches + two Tabulator rebuilds), making save feel much
+// slower than delete/undo (which reload once). Collapse concurrent/very-recent
+// requests into a single reload.
+async function partiallyReloadInvoiceTable(options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const mark = String(opts.highlightMark || '').trim();
+  try {
+    // If a reload is already running, reuse it instead of starting a second one.
+    if (window.__RC_PARTIAL_RELOAD_INFLIGHT) {
+      return window.__RC_PARTIAL_RELOAD_INFLIGHT;
+    }
+    // If we just finished a reload for the same mark, skip the redundant one.
+    const last = Number(window.__RC_LAST_PARTIAL_RELOAD_TS || 0);
+    const lastMark = String(window.__RC_LAST_PARTIAL_RELOAD_MARK || '');
+    if (last && (Date.now() - last) < 1200 && lastMark === mark) {
+      return true;
+    }
+  } catch(_) {}
+
+  const p = (async () => {
+    try {
+      return await _partiallyReloadInvoiceTableImpl(opts);
+    } finally {
+      try {
+        window.__RC_LAST_PARTIAL_RELOAD_TS = Date.now();
+        window.__RC_LAST_PARTIAL_RELOAD_MARK = mark;
+        window.__RC_PARTIAL_RELOAD_INFLIGHT = null;
+      } catch(_) {}
+    }
+  })();
+
+  try { window.__RC_PARTIAL_RELOAD_INFLIGHT = p; } catch(_) {}
+  return p;
 }
 window.partiallyReloadInvoiceTable = partiallyReloadInvoiceTable;
 
@@ -9112,21 +9150,13 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     vatCategory: (l && (l.vatCategory || l.vat_category)) || '',
     category: (l && l.category) || ''
   }));
-        try { rcLiveDebug('partial-reload-fullpage-done', { highlightMark: highlightMark }); } catch(_) {}
   if (!receiptAnalysisEnabled) {
     summary.lines = summary.lines.map((line) => {
       const next = Object.assign({}, line || {});
       if (!String(next.category || '').trim()) next.category = 'αποδειξακια';
-        try {
-          if (typeof window.rcScheduleDirectSearchFocus === 'function') {
-            window.rcScheduleDirectSearchFocus('partial-reload-fallback-done', [0, 80, 220, 520, 1000, 2000, 4000, 7000, 11000, 16000], 22000);
-          }
-        } catch(_) {}
-    try { rcLiveDebug('partial-reload-fullpage-error', { message: String((err && err.message) || err || '') }); } catch(_) {}
       return next;
     });
   }
-  try { rcLiveDebug('partial-reload-failed', { highlightMark: highlightMark }); } catch(_) {}
 
   function parseMoneyForValidation(raw){
     const txt = String(raw || '').trim();
@@ -15826,5 +15856,91 @@ document.addEventListener('click', function(e){
   } else {
     hydrateRepeatState('initial').finally(ensureBindings);
   }
+})();
+</script>
+
+<script>
+// Last-resort post-save hook. Wraps window.fetch so that ANY successful POST to
+// /save_summary triggers clearSearchInputs + partiallyReloadInvoiceTable +
+// green-highlight, regardless of which submit handler dispatched it. The
+// existing handlers also try to do this, but multiple historical bugs have
+// caused them to fall through silently. This guarantees the post-save effects.
+(function(){
+  if (window.__RC_POSTSAVE_FETCH_HOOK_BOUND) return;
+  window.__RC_POSTSAVE_FETCH_HOOK_BOUND = true;
+
+  const _origFetch = window.fetch.bind(window);
+
+  function isSaveSummaryRequest(input, init){
+    try {
+      let url = '';
+      let method = (init && init.method) || 'GET';
+      if (typeof input === 'string') {
+        url = input;
+      } else if (input && typeof input === 'object') {
+        url = String(input.url || '');
+        if (!init || !init.method) method = String(input.method || method);
+      }
+      if (!/\/save_summary(\?|$)/.test(url)) return false;
+      return String(method).toUpperCase() === 'POST';
+    } catch(_) { return false; }
+  }
+
+  function extractMarkFromBody(init){
+    try {
+      const body = init && init.body;
+      if (!body) return '';
+      if (body instanceof FormData) {
+        return String(body.get('mark') || body.get('MARK') || '').trim();
+      }
+      if (typeof body === 'string'){
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed && typeof parsed === 'object'){
+            return String(parsed.mark || parsed.MARK || parsed.number || '').trim();
+          }
+        } catch(_) {
+          const m = body.match(/(?:^|&)mark=([^&]+)/);
+          if (m) return decodeURIComponent(m[1]).trim();
+        }
+      }
+    } catch(_) {}
+    return '';
+  }
+
+  window.fetch = async function(input, init){
+    const isSave = isSaveSummaryRequest(input, init);
+    const markFromBody = isSave ? extractMarkFromBody(init) : '';
+    const res = await _origFetch(input, init);
+    if (isSave && res && res.ok) {
+      let markFromResp = '';
+      try {
+        const cloned = res.clone();
+        const data = await cloned.json().catch(() => null);
+        if (data && typeof data === 'object') {
+          markFromResp = String(data.saved_mark || data.mark || data.MARK || '').trim();
+        }
+      } catch(_) {}
+      const finalMark = markFromResp || markFromBody || String(window.__RC_PENDING_LIST_HIGHLIGHT_MARK || '').trim();
+      // Run effects on the next tick so the original caller can finish reading
+      // the response body before we touch the DOM.
+      setTimeout(() => {
+        try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+        if (finalMark) {
+          try { window.__RC_PENDING_LIST_HIGHLIGHT_MARK = finalMark; } catch(_) {}
+        }
+        try { if (typeof window.clearSearchInputs === 'function') window.clearSearchInputs(); } catch(_) {}
+        try { if (typeof window.clearReceiptSearchCacheOnClose === 'function') window.clearReceiptSearchCacheOnClose(); } catch(_) {}
+        try {
+          if (typeof window.partiallyReloadInvoiceTable === 'function') {
+            window.partiallyReloadInvoiceTable({ highlightMark: finalMark });
+          } else if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') {
+            window.FBP_REFRESH_LIST_FRAGMENT();
+          }
+        } catch(_) {}
+      }, 0);
+    }
+    return res;
+  };
 })();
 </script>

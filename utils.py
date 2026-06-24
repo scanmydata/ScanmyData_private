@@ -1044,17 +1044,47 @@ def log_user_activity(user_id, group_name, action, details=None, user_email=None
             'save_invoice': 'Αποθήκευση παραστατικού',
         }
         log_entry['description'] = descriptions.get(action, action)
-        
-        # Log to Firebase
-        firebase_config.firebase_log_activity(
-            user_id=str(user_id) if user_id else 'unknown',
-            group_name=str(group_name) if group_name else 'system',
-            action=action,
-            details=log_entry
-        )
-        
+
+        # Log to Firebase/Drive in the BACKGROUND.
+        # With the Google Drive storage backend, firebase_log_activity performs a
+        # slow network write. Doing it synchronously was adding several seconds to
+        # every delete/save/login (delete/undo skips this call, which is exactly
+        # why undo felt instant). Audit logging is a pure side-effect and must
+        # never block the request, so we fire-and-forget in a daemon thread with
+        # an app context (needed for the DB lookups inside firebase_log_activity).
+        import threading as _threading
+        try:
+            from flask import current_app as _current_app
+            _app_obj = _current_app._get_current_object()
+        except Exception:
+            _app_obj = None
+
+        _uid = str(user_id) if user_id else 'unknown'
+        _grp = str(group_name) if group_name else 'system'
+
+        def _bg_activity_log(app_obj, uid_v, grp_v, action_v, entry_v):
+            try:
+                if app_obj is not None:
+                    with app_obj.app_context():
+                        firebase_config.firebase_log_activity(
+                            user_id=uid_v, group_name=grp_v, action=action_v, details=entry_v
+                        )
+                else:
+                    firebase_config.firebase_log_activity(
+                        user_id=uid_v, group_name=grp_v, action=action_v, details=entry_v
+                    )
+            except Exception as _e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(f"async activity log failed: {_e}")
+
+        _threading.Thread(
+            target=_bg_activity_log,
+            args=(_app_obj, _uid, _grp, action, log_entry),
+            daemon=True,
+        ).start()
+
         return True
-        
+
     except Exception as e:
         # Fail silently - logging should not break application flow
         import logging

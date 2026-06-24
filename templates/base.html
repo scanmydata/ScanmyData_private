@@ -3725,133 +3725,18 @@
 
   <script>
     (function(){
-      // ====== WAIT OVERLAY ======
+      // ====== WAIT OVERLAY (disabled) ======
+      // Global wait overlay was making the app feel slow (every fetch/XHR/submit
+      // would either show a modal spinner or pay setTimeout cost). The element
+      // and API stubs are kept so existing callers don't crash, but show/hide
+      // are no-ops. No fetch/XHR/submit patches.
       const waitEl = document.getElementById('globalWait');
-      let waitCount = 0;
-      let suspendWait = 0; // όταν >0, δεν θα εμφανίζεται το overlay
-      let waitShowTimer = null;
-      const WAIT_OVERLAY_DELAY = 180;
-
-      function showWait(){
-        if (!waitEl || suspendWait > 0) return;
-        waitCount++;
-        if (waitEl.style.display === 'flex') return;
-        if (waitShowTimer) return;
-        waitShowTimer = setTimeout(() => {
-          waitShowTimer = null;
-          if (waitCount > 0 && suspendWait === 0) {
-            waitEl.style.display = 'flex';
-            waitEl.setAttribute('aria-hidden', 'false');
-          }
-        }, WAIT_OVERLAY_DELAY);
-      }
-
-      function hideWait(){
-        if (!waitEl) return;
-        waitCount = Math.max(0, waitCount - 1);
-        if (!waitCount) {
-          if (waitShowTimer) {
-            clearTimeout(waitShowTimer);
-            waitShowTimer = null;
-          }
-          if (waitEl.style.display === 'flex') {
-            waitEl.style.display = 'none';
-            waitEl.setAttribute('aria-hidden', 'true');
-          }
-        }
-      }
-
-      function forceHide(){
-        if (!waitEl) return;
-        waitCount = 0;
-        if (waitShowTimer) {
-          clearTimeout(waitShowTimer);
-          waitShowTimer = null;
-        }
+      if (waitEl) {
         waitEl.style.display = 'none';
         waitEl.setAttribute('aria-hidden', 'true');
       }
-
-      function suspend(on){
-        suspendWait = Math.max(0, suspendWait + (on ? 1 : -1));
-        if (suspendWait > 0) forceHide();
-      }
-      window.WaitOverlay = { show: showWait, hide: hideWait, suspend, forceHide };
-
-      // Patch fetch (AJAX)
-      const _fetch = window.fetch;
-
-      function shouldSkipWait(args){
-        try {
-          const [input, init] = args || [];
-
-          function readUrl(target){
-            if (!target) return '';
-            if (typeof target === 'string') return target;
-            if (typeof Request !== 'undefined' && target instanceof Request) return target.url || '';
-            if (typeof target.url === 'string') return target.url;
-            return '';
-          }
-
-          function hasSkipHeader(options){
-            if (!options || !options.headers) return false;
-            const headers = options.headers;
-
-            try {
-              if (typeof headers.get === 'function'){
-                const direct = headers.get('X-Wait-Overlay') || headers.get('x-wait-overlay');
-                if (typeof direct === 'string' && direct.toLowerCase() === 'skip') return true;
-              }
-            } catch (_) {}
-
-            if (headers && typeof headers === 'object'){
-              const entries = Array.isArray(headers) ? headers : Object.entries(headers);
-              for (const entry of entries){
-                if (!entry) continue;
-                let key, value;
-                if (Array.isArray(entry)){
-                  [key, value] = entry;
-                } else {
-                  key = entry[0];
-                  value = entry[1];
-                }
-                if (typeof key === 'string' && key.toLowerCase() === 'x-wait-overlay'){
-                  if (String(value).toLowerCase() === 'skip') return true;
-                }
-              }
-            }
-            return false;
-          }
-
-          const url = readUrl(input);
-          if (url && /\/api\/qr\/remote\//.test(url)) return true;
-          if (hasSkipHeader(init)) return true;
-          if (input && typeof input === 'object'){
-            const maybeRequestHeaders = input.headers;
-            if (hasSkipHeader({ headers: maybeRequestHeaders })) return true;
-          }
-        } catch (_) {}
-        return false;
-      }
-
-      window.fetch = async function(...args){
-        const skip = shouldSkipWait(args);
-        if (!skip) showWait();
-        try { return await _fetch(...args); }
-        finally { if (!skip) hideWait(); }
-      };
-
-      // Patch XHR (πιάνει jQuery/DataTables)
-      const XHROpen = XMLHttpRequest.prototype.open;
-      const XHRSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(...a){ this.__withWait = true; return XHROpen.apply(this,a); };
-      XMLHttpRequest.prototype.send = function(...a){
-        if (this.__withWait){ showWait(); this.addEventListener('loadend', hideWait, { once:true }); }
-        return XHRSend.apply(this,a);
-      };
-
-      // Form submits (πλοήγηση)
-      document.addEventListener('submit', function(){ showWait(); setTimeout(hideWait, 15000); }, true);
+      function noop(){}
+      window.WaitOverlay = { show: noop, hide: noop, suspend: noop, forceHide: noop };
 
           
     // ====== WARNING MODALS INTEGRATION (Reload after ANY warning modal ack) ======

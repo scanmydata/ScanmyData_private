@@ -59,6 +59,50 @@ def _schedule_user_group_sync(user_id: int, uid: str, reason: str = '') -> bool:
     th.start()
     return True
 
+
+def _log_login_activity_async(app, uid, email, username, is_admin, groups_count):
+    """Write login audit logs in the background.
+
+    With the Google Drive storage backend each activity log is a slow network
+    round-trip; doing the (3) login log writes synchronously was adding many
+    seconds to every login. These are pure side-effects, so we run them in a
+    daemon thread with an app context and let the user proceed immediately.
+    """
+    def _worker():
+        try:
+            with app.app_context():
+                try:
+                    from utils import log_user_activity
+                    log_user_activity(
+                        user_id=uid,
+                        group_name='system',
+                        action='login',
+                        details={
+                            'email': email,
+                            'username': username,
+                            'is_admin': is_admin,
+                            'groups_count': groups_count,
+                        },
+                        user_email=email,
+                        user_username=username,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log login activity (async): {e}")
+                try:
+                    firebase_config.firebase_log_activity(
+                        uid, 'system', 'user_logged_in', {'email': email}
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed firebase_log_activity on login (async): {e}")
+        except Exception as e:
+            logger.warning(f"Login activity async worker failed: {e}")
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception as e:
+        logger.warning(f"Could not start login activity thread: {e}")
+
+
 firebase_auth_bp = Blueprint('firebase_auth', __name__, url_prefix='/firebase-auth')
 
 
@@ -512,32 +556,24 @@ def firebase_login():
         except Exception as e:
             logger.warning('Could not schedule async group sync for user %s: %s', uid, e)
         
-        # Log the login with enhanced details
+        # Log the login (enhanced + fallback) in the background. With the Drive
+        # storage backend these are slow network writes; running them async keeps
+        # login responsive.
         try:
-            from utils import log_user_activity
-            log_user_activity(
-                user_id=uid,
-                group_name='system',
-                action='login',
-                details={
-                    'email': firebase_email,
-                    'username': user.username,
-                    'is_admin': getattr(user, 'is_admin', False),
-                    'groups_count': len(list(getattr(user, 'groups', []) or []))
-                },
-                user_email=firebase_email,
-                user_username=user.username
+            _groups_count = len(list(getattr(user, 'groups', []) or []))
+        except Exception:
+            _groups_count = 0
+        try:
+            _log_login_activity_async(
+                current_app._get_current_object(),
+                uid,
+                firebase_email,
+                user.username,
+                getattr(user, 'is_admin', False),
+                _groups_count,
             )
         except Exception as e:
-            logger.error(f"Failed to log login activity: {e}")
-        
-        # Fallback to original logging
-        firebase_config.firebase_log_activity(
-            uid,
-            'system',
-            'user_logged_in',
-            {'email': firebase_email}
-        )
+            logger.error(f"Failed to schedule login activity logging: {e}")
         
         # Handle active group selection after login.
         # Query memberships directly to avoid stale relationship cache right after sync.

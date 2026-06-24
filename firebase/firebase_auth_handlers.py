@@ -127,13 +127,40 @@ class FirebaseAuthHandler:
                 uid = data.get('localId')
                 
                 if uid:
-                    # Log successful login
-                    firebase_config.firebase_log_activity(
-                        uid,
-                        'system',
-                        'user_logged_in_successfully',
-                        {'email': email}
-                    )
+                    # Log successful login in the background. With the Drive
+                    # storage backend this is a slow network write; doing it
+                    # synchronously delayed every login by several seconds.
+                    try:
+                        import threading as _threading
+                        try:
+                            from flask import current_app as _ca
+                            _app = _ca._get_current_object()
+                        except Exception:
+                            _app = None
+
+                        def _log_worker(target_app, target_uid, target_email):
+                            try:
+                                if target_app is not None:
+                                    with target_app.app_context():
+                                        firebase_config.firebase_log_activity(
+                                            target_uid, 'system',
+                                            'user_logged_in_successfully',
+                                            {'email': target_email}
+                                        )
+                                else:
+                                    firebase_config.firebase_log_activity(
+                                        target_uid, 'system',
+                                        'user_logged_in_successfully',
+                                        {'email': target_email}
+                                    )
+                            except Exception as _e:
+                                logger.warning(f"Async login activity log failed: {_e}")
+
+                        _threading.Thread(
+                            target=_log_worker, args=(_app, uid, email), daemon=True
+                        ).start()
+                    except Exception as _e:
+                        logger.warning(f"Could not schedule login activity log: {_e}")
                     logger.info(f"User logged in successfully: {email}")
                     return True, uid, None
             

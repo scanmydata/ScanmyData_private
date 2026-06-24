@@ -775,7 +775,23 @@
 
       window.FBP_SYNC_LIST_DOWNLOAD_CONTROLS = syncDownloadControls;
       window.FBP_SYNC_EPSILON_PREVIEW_LINK = syncEpsilonPreviewLink;
-      window.FBP_REFRESH_LIST_FRAGMENT = refreshListFragment;
+      // In-flight dedup: a single save can trigger several refresh requests at
+      // once (native save handler, the global /save_summary fetch hook, and the
+      // receipts fast-flow all ask to refresh). Each refresh fetches
+      // /list/fragment and rebuilds Tabulator, so running them in parallel made
+      // save feel slow. If a refresh is already running, reuse its promise.
+      // Note: in-flight only (no time window) so sequential delete/undo refreshes
+      // still run normally.
+      let __fbpRefreshInflight = null;
+      function refreshListFragmentDeduped(){
+        if (__fbpRefreshInflight) return __fbpRefreshInflight;
+        const p = Promise.resolve()
+          .then(() => refreshListFragment())
+          .finally(() => { __fbpRefreshInflight = null; });
+        __fbpRefreshInflight = p;
+        return p;
+      }
+      window.FBP_REFRESH_LIST_FRAGMENT = refreshListFragmentDeduped;
       window.FBP_DELETE_UNDO = {
         push: pushUndo,
         render: renderUndoMenu,
