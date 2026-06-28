@@ -8347,14 +8347,18 @@ def api_last_fetch_date():
         fetch_key = _get_fetch_tracking_key(credential_name, credential_vat)
         last_date = get_last_fetch_date(fetch_key, only_meta=True) if fetch_key else None
         if not last_date and fetch_key:
-            # Fallback to activity log when metadata is missing.
+            # Fallback to activity log when metadata is missing. This is safe
+            # only when fetch_key is a VAT — get_last_fetch_date then requires a
+            # matching vat in each log entry.
             last_date = get_last_fetch_date(fetch_key, only_meta=False)
         if not last_date and credential_name and fetch_key != credential_name:
-            # Backward compatibility: older installs may have written by credential name.
+            # Backward compatibility: older installs may have written meta keyed
+            # by credential *name* (exact dict lookup, no cross-attribution risk).
             last_date = get_last_fetch_date(credential_name, only_meta=True)
-        if not last_date and credential_name:
-            last_date = get_last_fetch_date(credential_name, only_meta=False)
-        
+        # NOTE: deliberately NO activity.log scan by credential *name* here — the
+        # log is keyed by VAT, so a name scan can't filter and would return the
+        # most recent fetch of ANY company (the per-company "wrong date" bug).
+
         formatted = _format_last_fetch_date_for_display(last_date)
         
         return jsonify({"last_fetch_date": formatted, "last_fetch_raw": last_date})
