@@ -1248,18 +1248,37 @@ def api_sync_progress():
         grp = get_active_group()
         if not grp or not getattr(grp, 'data_folder', None):
             return jsonify({'status': 'no_group', 'percent': 0, 'message': 'No active group'})
-        # If Firebase is not enabled, report explicitly so frontend won't show overlay
+        # Only report 'disabled' when NEITHER remote backend is active. With the
+        # Drive backend, firebase is intentionally not enabled, so the old
+        # is_firebase_enabled() check wrongly short-circuited progress polling.
         try:
-            if not firebase_config.is_firebase_enabled():
-                return jsonify({'status': 'disabled', 'percent': 0, 'message': 'Firebase disabled'})
+            drive_active = firebase_config._drive_backend_active()
+            if (not drive_active) and (not firebase_config.is_firebase_enabled()):
+                return jsonify({'status': 'disabled', 'percent': 0, 'message': 'Sync disabled'})
         except Exception:
             pass
 
-        prog = None
-        try:
-            prog = firebase_config.get_group_sync_progress(grp.data_folder)
-        except Exception:
-            prog = {'status': 'not_started', 'percent': 0, 'message': ''}
+        # Progress is keyed by the local folder the pull wrote to. The login flow
+        # passes the group *name*; the warmup uses data_folder. Gather both and
+        # prefer an in-progress/error state over a (possibly stale) 'done'.
+        prog = {'status': 'not_started', 'percent': 0, 'message': ''}
+        seen = set()
+        candidates = []
+        for key in (grp.data_folder, getattr(grp, 'name', None), session.get('active_group')):
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            try:
+                c = firebase_config.get_group_sync_progress(key)
+            except Exception:
+                continue
+            if c and c.get('status') not in (None, 'not_started'):
+                candidates.append(c)
+        active = next((c for c in candidates if c.get('status') in ('syncing', 'error')), None)
+        if active:
+            prog = active
+        elif candidates:
+            prog = candidates[0]
         return jsonify(prog)
     except Exception as e:
         app.logger.error(f"Failed to get sync progress: {e}")
@@ -1463,7 +1482,7 @@ def _profiles_set_for_active(profiles):
 def log_request_path():
     label = f"{request.method} {request.path}"
     start_request_monitoring(label)
-    log.info("Incoming request: method=%s path=%s remote=%s ref=%s", request.method, request.path, request.remote_addr, request.referrer)
+    log.debug("Incoming request: method=%s path=%s remote=%s", request.method, request.path, request.remote_addr)
 
 
 @app.after_request
@@ -3981,11 +4000,19 @@ def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Option
                         ts = obj.get('timestamp') or obj.get('ts') or (obj.get('details') or {}).get('timestamp')
                         if not ts:
                             continue
-                        # if credential looks like VAT, filter by details.vat / πελατης
+                        # If the tracking key is a VAT, the entry MUST carry a
+                        # *matching* vat. Activity entries are written with a
+                        # nested-details shape, so the vat may live at either
+                        # details.vat or details.details.vat — check both.
+                        # Entries without a confirmable vat are skipped; otherwise
+                        # one company's fetch would be attributed to every company
+                        # (the per-company "wrong date" bug this fixes).
                         if re.fullmatch(r"\d{8,9}", str(credential_name)):
-                            details = obj.get('details') or {}
-                            v = details.get('vat') or details.get('πελατης') or details.get('client')
-                            if v and str(v) != str(credential_name):
+                            d1 = obj.get('details') or {}
+                            d2 = d1.get('details') or {} if isinstance(d1, dict) else {}
+                            v = (d1.get('vat') or d1.get('πελατης') or d1.get('client')
+                                 or d2.get('vat') or d2.get('πελατης') or d2.get('client'))
+                            if not v or str(v) != str(credential_name):
                                 continue
                         try:
                             dt = datetime.fromisoformat(ts)
@@ -7442,7 +7469,7 @@ def credentials_delete_post(name):
     suffix = ''
     if cleanup.get('count'):
         suffix = f" Αφαιρέθηκαν {cleanup['count']} αρχεία δεδομένων πελάτη."
-    flash(f"Credential {name} διαγράφηκε.{suffix}", "success")
+    flash(f"Το credential «{name}» διαγράφηκε.{suffix}", "success")
     if was_active:
         flash("Το credential αφαιρέθηκε επίσης από τα ενεργά.", "info")
     if cleanup.get('failed'):
@@ -18826,7 +18853,7 @@ def _require_admin(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not (current_user.is_authenticated and admin_panel.is_admin(current_user)):
-            flash('Admin access required', 'danger')
+            flash('Απαιτούνται δικαιώματα διαχειριστή', 'danger')
             return redirect(url_for('auth.login'))
         return f(*args, **kwargs)
     return decorated_function
@@ -18848,7 +18875,7 @@ def admin_dashboard():
         return render_template('admin/dashboard_unified.html', recent_activity=recent_activity)
     except Exception as e:
         logger.exception(f"Admin dashboard error: {e}")
-        flash(f'Error: {str(e)}', 'danger')
+        flash(f'Σφάλμα: {str(e)}', 'danger')
         return redirect(url_for('home'))
 
 
@@ -18868,7 +18895,7 @@ def admin_user_detail(user_id):
     """View user details"""
     user_detail = admin_panel.admin_get_user_details(user_id)
     if not user_detail:
-        flash('User not found', 'danger')
+        flash('Ο χρήστης δεν βρέθηκε', 'danger')
         return redirect(url_for('admin_users'))
     # Return JSON for AJAX requests (modals)
     accept_json = request.is_json or request.headers.get('Accept') == 'application/json' or 'application/json' in request.headers.get('Accept', '')
@@ -18911,7 +18938,7 @@ def admin_group_detail(group_id):
     """View group details"""
     group_detail = admin_panel.admin_get_group_details(group_id)
     if not group_detail:
-        flash('Group not found', 'danger')
+        flash('Η ομάδα δεν βρέθηκε', 'danger')
         return redirect(url_for('admin_groups'))
     # If this is an AJAX/JSON request, return JSON data for client-side modals
     accept_json = request.is_json or request.headers.get('Accept') == 'application/json' or 'application/json' in request.headers.get('Accept', '')
@@ -18928,9 +18955,9 @@ def admin_group_backup(group_id):
     """Create backup of group"""
     backup_path = admin_panel.admin_backup_group(group_id)
     if backup_path:
-        flash(f'Backup created: {backup_path}', 'success')
+        flash(f'Δημιουργήθηκε αντίγραφο ασφαλείας: {backup_path}', 'success')
     else:
-        flash('Failed to create backup', 'danger')
+        flash('Αποτυχία δημιουργίας αντιγράφου ασφαλείας', 'danger')
     
     return redirect(url_for('admin_group_detail', group_id=group_id))
 
@@ -18943,7 +18970,7 @@ def admin_group_files(group_id):
     from models import Group
     group = Group.query.get(group_id)
     if not group:
-        flash('Group not found', 'danger')
+        flash('Η ομάδα δεν βρέθηκε', 'danger')
         return redirect(url_for('admin_groups'))
     
     return render_template('admin/group_files.html', group=group)
@@ -18983,12 +19010,12 @@ def admin_backup_download(backup_name):
     """Download a backup as a zip archive"""
     # Prevent path traversal by only allowing simple names (no slashes)
     if '/' in backup_name or '..' in backup_name:
-        flash('Invalid backup name', 'danger')
+        flash('Μη έγκυρο όνομα αντιγράφου ασφαλείας', 'danger')
         return redirect(url_for('admin_backups'))
 
     zip_path = admin_panel.admin_get_backup_zip(backup_name)
     if not zip_path or not os.path.exists(zip_path):
-        flash('Backup not found or failed to create zip', 'danger')
+        flash('Το αντίγραφο ασφαλείας δεν βρέθηκε ή αποτυχία δημιουργίας zip', 'danger')
         return redirect(url_for('admin_backups'))
 
     # send_file with as_attachment
@@ -18996,7 +19023,7 @@ def admin_backup_download(backup_name):
         return send_file(zip_path, as_attachment=True)
     except Exception as e:
         logger.exception(f"Failed to send backup file: {e}")
-        flash('Failed to download backup', 'danger')
+        flash('Αποτυχία λήψης αντιγράφου ασφαλείας', 'danger')
         return redirect(url_for('admin_backups'))
 
 
@@ -19051,7 +19078,7 @@ def admin_backup_restore(backup_name):
         result = {'ok': False, 'error': 'Group ID required'}
         if request.is_json or request.headers.get('Accept') == 'application/json':
             return jsonify(result)
-        flash('Group ID required', 'danger')
+        flash('Απαιτείται αναγνωριστικό ομάδας', 'danger')
         return redirect(url_for('admin_backups'))
 
     result = admin_panel.admin_restore_backup(backup_name, group_id, current_user)
@@ -19130,11 +19157,11 @@ def admin_settings_save():
             current = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
             if new_backend != current:
                 Setting.set('storage_backend', new_backend)
-                flash(f'Storage backend switched to {new_backend.upper()}', 'warning')
+                flash(f'Αποθηκευτικό σύστημα άλλαξε σε {new_backend.upper()}', 'warning')
     except Exception as e:
         log.exception('failed to update storage_backend setting: %s', e)
 
-    flash('Settings saved', 'success')
+    flash('Οι ρυθμίσεις αποθηκεύτηκαν', 'success')
     return redirect(url_for('admin_settings'))
 
 
@@ -19679,7 +19706,7 @@ def admin_send_email():
         message = request.form.get('message', '').strip()
         
         if not user_ids or not subject or not message:
-            flash('Please select users and provide subject and message', 'danger')
+            flash('Επιλέξτε παραλήπτες και συμπληρώστε θέμα και μήνυμα', 'danger')
             return redirect(url_for('admin_send_email'))
         
         user_ids = [int(uid) for uid in user_ids]
@@ -19701,7 +19728,7 @@ def admin_send_email():
         
         result = send_bulk_email_to_users(user_ids, subject, html_body)
         
-        flash(f'Email sent to {result["sent"]} users; {result["failed"]} failed', 'success' if result['failed'] == 0 else 'warning')
+        flash(f'Email στάλθηκε σε {result["sent"]} χρήστες· {result["failed"]} αποτυχίες', 'success' if result['failed'] == 0 else 'warning')
         if result['errors']:
             current_app.logger.warning(f"Email send errors: {result['errors']}")
         
@@ -19709,7 +19736,7 @@ def admin_send_email():
     
     except Exception as e:
         logger.exception('Failed to send bulk email')
-        flash(f'Error sending emails: {str(e)}', 'danger')
+        flash(f'Σφάλμα αποστολής email: {str(e)}', 'danger')
         return redirect(url_for('admin_send_email'))
 
 

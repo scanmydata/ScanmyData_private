@@ -614,10 +614,11 @@ def _complete_login(user, next_url: str = None):
         pass
 
     login_user(user)
-    # create and store session id to prevent concurrent logins (DB-backed)
+    # create session id + record last login in a single DB commit
     try:
         session_id = secrets.token_urlsafe(32)
         user.start_session(session_id)
+        user.last_login = datetime.datetime.utcnow()
         db.session.commit()
         session['session_id'] = session_id
     except Exception:
@@ -625,12 +626,6 @@ def _complete_login(user, next_url: str = None):
             db.session.rollback()
         except Exception:
             pass
-    # record last login
-    try:
-        user.last_login = datetime.datetime.utcnow()
-        db.session.commit()
-    except Exception:
-        pass
 
     if not session.get('active_group'):
         user_groups = list(getattr(user, 'groups', []) or [])

@@ -51,13 +51,14 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_FILE = os.path.join(os.getcwd(), "drive_token.json")
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
-# Cache only the credentials — Drive service objects wrap a single httplib2.Http
-# instance which is NOT safe to reuse across many calls (sockets get into bad
-# states, surfacing as SSL DECRYPTION_FAILED / WRONG_VERSION_NUMBER). We build
-# a fresh service per call; build() is cheap once cache_discovery=False.
+# Credentials are shared across threads; service objects are per-thread.
+# httplib2.Http sockets can enter bad SSL states under concurrent use, so we
+# keep one service per thread via threading.local(). On SSL/network errors the
+# slot is cleared and rebuilt on the next call (see _invalidate_thread_service).
 _drive_creds: Optional[Credentials] = None
 _drive_lock = threading.Lock()
 _root_folder_id: Optional[str] = None
+_thread_local = threading.local()
 # Per-group folder id cache: {group_folder: folder_id}
 _group_folder_cache: Dict[str, str] = {}
 # Per-group file index cache: {group_folder: {rel_path: {'id': str, 'modifiedTime': str, 'size': int}}}
@@ -135,13 +136,22 @@ def is_drive_enabled() -> bool:
     return _drive_creds is not None and _root_folder_id is not None
 
 
+def _invalidate_thread_service() -> None:
+    """Clear the thread-local cached service so the next call rebuilds it."""
+    _thread_local.drive_service = None
+
+
 def _service():
     if _drive_creds is None:
         init_drive()
     if _drive_creds is None:
         raise RuntimeError("Drive backend is not initialized")
-    # Fresh service per call — see comment on _drive_creds above.
-    return build("drive", "v3", credentials=_drive_creds, cache_discovery=False)
+    # Reuse the per-thread service object; rebuild on demand after SSL errors.
+    svc = getattr(_thread_local, "drive_service", None)
+    if svc is None:
+        svc = build("drive", "v3", credentials=_drive_creds, cache_discovery=False)
+        _thread_local.drive_service = svc
+    return svc
 
 
 # ============================================================================
@@ -204,6 +214,9 @@ def _call_with_retry(fn: Callable, *args, max_attempts: int = 5, base_delay: flo
             is_rate = isinstance(e, HttpError) and _http_error_is_rate_limited(e)
             if is_rate:
                 saw_rate_limit = True
+            # SSL/network errors mean the cached service's socket is bad — drop it.
+            if isinstance(e, _TRANSIENT_NETWORK_EXC):
+                _invalidate_thread_service()
             if not retriable or attempt == max_attempts - 1:
                 if is_rate:
                     _record_rate_limit_event(severity="hard")
@@ -738,15 +751,35 @@ def drive_pull_group_to_local(
         target_dir = os.path.join(local_data_root, local_folder)
         os.makedirs(target_dir, exist_ok=True)
 
+        # Progress reporting so the login/maintenance page can show a live bar.
+        # Lazily imported to avoid a circular import at module load time.
+        def _set_progress(status: str, percent: int, message: str = "") -> None:
+            try:
+                from firebase import firebase_config as _fc
+                _fc.set_group_sync_progress(local_folder, status, percent, message)
+            except Exception:
+                pass
+
         cipher = _cipher()
         smart_sync = os.getenv("FIREBASE_SMART_SYNC", "1") == "1"
+        _set_progress("syncing", 5, "Σύγκριση αρχείων με το cloud…")
         index = _build_group_index(local_folder, force=True)
 
         files_created = 0
         files_failed = 0
         bytes_downloaded = 0
 
+        total_items = max(1, len(index))
+        processed = 0
+        last_reported_pct = 5
+
         for rel_path, meta in index.items():
+            processed += 1
+            # Map work to the 5–95% band; the final 95–100% covers marker writes.
+            pct = 5 + int((processed / total_items) * 90)
+            if pct - last_reported_pct >= 2:
+                _set_progress("syncing", pct, f"Λήψη αρχείων… ({processed}/{total_items})")
+                last_reported_pct = pct
             try:
                 if rel_path == ".sync_meta.json":
                     continue
@@ -831,9 +864,14 @@ def drive_pull_group_to_local(
                 _write_last_push_marker(target_dir, latest_local_mtime, file_count)
             except Exception:
                 logger.debug("Could not update last-push marker for %s", target_dir)
+        _set_progress("done", 100, "Ο συγχρονισμός ολοκληρώθηκε.")
         return True
     except Exception as e:
         logger.error("[DRIVE PULL] Unexpected error for group %s: %s", group_name, e)
+        try:
+            _set_progress("error", 0, "Σφάλμα κατά τον συγχρονισμό.")
+        except Exception:
+            pass
         return False
 
 

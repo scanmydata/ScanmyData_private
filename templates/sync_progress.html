@@ -34,22 +34,50 @@ $(function(){
 
   $('#syncCancel').on('click', function(){
     aborted = true;
+    if(typeof stopPolling === 'function'){ stopPolling(); }
     $('#syncStatus').text('Ακύρωση...');
     setProgress(0,'Ακύρωση από χρήστη');
     setTimeout(function(){ window.location = '/'; }, 800);
   });
 
+  let pollTimer = null;
+  function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+
   function finish(success){
+    stopPolling();
     if(success){
       setProgress(100, 'Ο συγχρονισμός ολοκληρώθηκε. Ανακατεύθυνση...');
-      setTimeout(function(){ window.location = '/'; }, 900);
+      setTimeout(function(){ window.location = '/'; }, 700);
     } else {
       setProgress(0, 'Σφάλμα κατά το συγχρονισμό. Δοκιμάστε ξανά.');
     }
   }
 
+  // Poll the server for *real* progress written by the Drive pull, so the bar
+  // reflects actual download status instead of a fixed fake value.
+  function startPolling(){
+    stopPolling();
+    pollTimer = setInterval(function(){
+      $.ajax({
+        url: '/api/sync_progress',
+        method: 'GET',
+        cache: false,
+        success: function(s){
+          if(aborted || !s) return;
+          if(typeof s.percent === 'number' && s.percent > 0){
+            // Keep the bar in the 5–99% band until the POST confirms completion.
+            setProgress(Math.min(99, Math.max(5, s.percent)), s.message || undefined);
+          }
+          if(s.status === 'done'){ finish(true); }
+          else if(s.status === 'error'){ finish(false); }
+        }
+      });
+    }, 1000);
+  }
+
   if(action === 'pull'){
     setProgress(5, 'Επικοινωνία με cloud...');
+    startPolling();
     $.ajax({
       url: '{{ url_for("firebase_auth.api_sync_pull") }}',
       method: 'POST',
@@ -57,9 +85,7 @@ $(function(){
       data: JSON.stringify({group: group}),
       success: function(resp){
         if(resp && resp.success){
-          setProgress(90, 'Αποθήκευση αρχείων τοπικά...');
-          // small delay for UX
-          setTimeout(function(){ finish(true); }, 600);
+          finish(true);
         } else {
           finish(false);
         }

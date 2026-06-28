@@ -281,15 +281,15 @@ def firebase_signup():
         
         # Validate inputs
         if not email or not password:
-            flash('Email and password are required', 'danger')
+            flash('Απαιτούνται email και κωδικός', 'danger')
             return redirect(url_for('firebase_auth.firebase_signup'))
-        
+
         if password != password_confirm:
-            flash('Passwords do not match', 'danger')
+            flash('Οι κωδικοί δεν ταιριάζουν', 'danger')
             return redirect(url_for('firebase_auth.firebase_signup'))
-        
+
         if len(password) < 6:
-            flash('Password must be at least 6 characters', 'danger')
+            flash('Ο κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες', 'danger')
             return redirect(url_for('firebase_auth.firebase_signup'))
         
         # Register with Firebase
@@ -309,7 +309,7 @@ def firebase_signup():
             pass
         
         if not success:
-            flash(f'Registration failed: {error}', 'danger')
+            flash(f'Αποτυχία εγγραφής: {error}', 'danger')
             return redirect(url_for('firebase_auth.firebase_signup'))
         
         # Check if admin email - skip verification
@@ -440,7 +440,7 @@ def firebase_login():
         success, uid, error = FirebaseAuthHandler.login_user(firebase_email, password)
         
         if not success:
-            flash(f'Login failed: {error}', 'danger')
+            flash(f'Αποτυχία σύνδεσης: {error}', 'danger')
             return redirect(url_for('firebase_auth.firebase_login'))
         
         # Check email verification status (skip for admin emails)
@@ -877,7 +877,16 @@ def api_sync_pull():
     if not group:
         return jsonify({'success': False, 'error': 'no_group_provided'}), 400
     try:
-        ok = firebase_config.firebase_pull_group_to_local(group, force=True)
+        # Reset any stale progress (e.g. a 'done' left from a previous login) so
+        # the polling page does not redirect before this pull actually starts.
+        try:
+            firebase_config.set_group_sync_progress(group, 'syncing', 1, 'Έναρξη συγχρονισμού…')
+        except Exception:
+            pass
+        # Smart, mtime-based pull: only files whose remote copy is newer than the
+        # local one get downloaded. Passing force=True here re-downloaded the
+        # entire group on every login, which was the cause of slow logins.
+        ok = firebase_config.firebase_pull_group_to_local(group, force=False)
         return jsonify({'success': bool(ok)})
     except Exception as e:
         logger.exception('api_sync_pull failed')
