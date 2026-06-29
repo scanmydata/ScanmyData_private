@@ -310,6 +310,54 @@ def _warmup_entry(app) -> None:
         _release_leader()
 
 
+def _reset_all_presence(app) -> None:
+    """Clear stale presence/session claims left over from the previous process.
+
+    A freshly started process has zero live client connections, yet the DB still
+    holds ``last_active_at`` / ``current_session_id`` from just before the
+    restart. Without this reset every user whose ``last_active_at`` is within
+    ``SESSION_TIMEOUT`` (5 min) wrongly shows as *online* in the admin panel and
+    is blocked from logging back in ("already active on another device") until
+    the timestamp ages out. This is the automatic equivalent of the manual
+    ``scripts/clear_all_sessions.py``.
+
+    The final session's elapsed time is folded into ``total_active_seconds`` so
+    the usage stats stay accurate instead of silently dropping the last session.
+    """
+    try:
+        with app.app_context():
+            from models import db, User
+            cleared = 0
+            stale = User.query.filter(
+                (User.current_session_id.isnot(None))
+                | (User.session_started_at.isnot(None))
+                | (User.last_active_at.isnot(None))
+            ).all()
+            for user in stale:
+                try:
+                    if user.session_started_at and user.last_active_at:
+                        dur = int((user.last_active_at - user.session_started_at).total_seconds())
+                        if dur > 0:
+                            user.total_active_seconds = int(user.total_active_seconds or 0) + dur
+                except Exception:
+                    pass
+                user.current_session_id = None
+                user.session_started_at = None
+                user.last_active_at = None
+                cleared += 1
+            if cleared:
+                db.session.commit()
+            logger.info("warmup: reset presence for %d stale session(s) on startup", cleared)
+    except Exception as e:
+        logger.warning("warmup: presence reset failed: %s", e)
+        try:
+            with app.app_context():
+                from models import db
+                db.session.rollback()
+        except Exception:
+            pass
+
+
 def _run_warmup_as_leader(app, backend: str) -> None:
     """Reconcile every group's local data/ folder with the remote backend.
 
@@ -322,6 +370,11 @@ def _run_warmup_as_leader(app, backend: str) -> None:
     — it wins and is pushed up instead.
     """
     from firebase import firebase_config as fc
+
+    # Clear presence/session claims left over from the previous process before
+    # we open the gate. Runs exactly once per deploy (leader only) while logins
+    # are still blocked, so it can never race a fresh login.
+    _reset_all_presence(app)
 
     started = time.time()
     _write_state({"status": "syncing", "phase": "warmup", "started_at": started,
