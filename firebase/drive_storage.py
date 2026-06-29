@@ -33,6 +33,7 @@ import socket
 import ssl
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -64,6 +65,20 @@ _group_folder_cache: Dict[str, str] = {}
 # Per-group file index cache: {group_folder: {rel_path: {'id': str, 'modifiedTime': str, 'size': int}}}
 _group_file_index: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _index_lock = threading.Lock()
+
+
+def _pull_workers() -> int:
+    """Concurrency for the per-file download fan-out in drive_pull_group_to_local.
+
+    Each worker uses its own thread-local Drive service (see module docstring),
+    so concurrent downloads are safe. Kept modest so we parallelize the slow
+    per-file round-trips without tripping Drive's per-user rate limit. Override
+    with DRIVE_PULL_WORKERS.
+    """
+    try:
+        return max(1, min(int(os.getenv("DRIVE_PULL_WORKERS", "8")), 32))
+    except Exception:
+        return 8
 
 
 # ============================================================================
@@ -769,62 +784,92 @@ def drive_pull_group_to_local(
         files_failed = 0
         bytes_downloaded = 0
 
-        total_items = max(1, len(index))
+        # ---- Plan pass (no network): decide which files actually need a
+        # download, honouring smart-sync, and create the local directories up
+        # front. Doing the makedirs single-threaded here avoids races during the
+        # parallel download pass below.
+        download_plan: List[Dict[str, Any]] = []
+        for rel_path, meta in index.items():
+            if rel_path == ".sync_meta.json":
+                continue
+            local_path = os.path.join(target_dir, rel_path.replace("/", os.sep))
+            try:
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            except Exception:
+                pass
+            remote_mtime = 0.0
+            try:
+                remote_mtime = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
+            except Exception:
+                remote_mtime = 0.0
+
+            # Activity logs: append-only behavior to mirror firebase backend.
+            is_log = rel_path.endswith(".log")
+
+            if smart_sync and (not force) and (not is_log) and os.path.exists(local_path):
+                # See push-side comment: no excel/epsilon exemption on Drive.
+                try:
+                    local_mtime = os.path.getmtime(local_path)
+                except Exception:
+                    local_mtime = 0
+                if remote_mtime and local_mtime >= remote_mtime:
+                    continue  # already up to date — skip without any Drive call
+
+            download_plan.append({
+                "rel_path": rel_path,
+                "file_id": meta["id"],
+                "local_path": local_path,
+                "remote_mtime": remote_mtime,
+                "is_log": is_log,
+            })
+
+        total_items = max(1, len(download_plan))
+        _set_progress("syncing", 5, f"Λήψη αρχείων… (0/{total_items})")
+
+        def _materialize(task: Dict[str, Any]) -> int:
+            """Download + decrypt + write one file. Returns bytes downloaded.
+
+            Runs in a worker thread: uses a thread-local Drive service, the
+            shared Fernet cipher (thread-safe), and writes a unique local path,
+            so no cross-task locking is needed.
+            """
+            blob = _download_bytes(task["file_id"])
+            try:
+                plain = cipher.decrypt(blob)
+            except Exception:
+                plain = blob  # historically-plaintext file (activity.log / error.log)
+            mode = "ab" if task["is_log"] else "wb"
+            with open(task["local_path"], mode) as fh:
+                fh.write(plain)
+            if task["remote_mtime"]:
+                try:
+                    os.utime(task["local_path"], (task["remote_mtime"], task["remote_mtime"]))
+                except Exception:
+                    pass
+            return len(blob)
+
+        # ---- Download pass (parallel): one Drive round-trip per file is the
+        # dominant cost, so fan out across a small thread pool. Counters are
+        # mutated only here in the main thread as futures complete.
         processed = 0
         last_reported_pct = 5
-
-        for rel_path, meta in index.items():
-            processed += 1
-            # Map work to the 5–95% band; the final 95–100% covers marker writes.
-            pct = 5 + int((processed / total_items) * 90)
-            if pct - last_reported_pct >= 2:
-                _set_progress("syncing", pct, f"Λήψη αρχείων… ({processed}/{total_items})")
-                last_reported_pct = pct
-            try:
-                if rel_path == ".sync_meta.json":
-                    continue
-                local_path = os.path.join(target_dir, rel_path.replace("/", os.sep))
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                remote_mtime = 0.0
-                try:
-                    remote_mtime = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
-                except Exception:
-                    remote_mtime = 0.0
-
-                # Activity logs: append-only behavior to mirror firebase backend.
-                is_log = rel_path.endswith(".log")
-
-                if smart_sync and (not force) and (not is_log) and os.path.exists(local_path):
-                    # See push-side comment: no excel/epsilon exemption on Drive.
+        if download_plan:
+            with ThreadPoolExecutor(max_workers=_pull_workers()) as pool:
+                futures = {pool.submit(_materialize, t): t for t in download_plan}
+                for fut in as_completed(futures):
+                    task = futures[fut]
                     try:
-                        local_mtime = os.path.getmtime(local_path)
-                    except Exception:
-                        local_mtime = 0
-                    if remote_mtime and local_mtime >= remote_mtime:
-                        continue
-
-                blob = _download_bytes(meta["id"])
-                bytes_downloaded += len(blob)
-                try:
-                    plain = cipher.decrypt(blob)
-                except Exception:
-                    plain = blob  # plaintext file (activity.log / error.log historically)
-
-                if is_log:
-                    with open(local_path, "ab") as fh:
-                        fh.write(plain)
-                else:
-                    with open(local_path, "wb") as fh:
-                        fh.write(plain)
-                if remote_mtime:
-                    try:
-                        os.utime(local_path, (remote_mtime, remote_mtime))
-                    except Exception:
-                        pass
-                files_created += 1
-            except Exception as e:
-                files_failed += 1
-                logger.error("[DRIVE PULL] Failed to materialize %s: %s", rel_path, e)
+                        bytes_downloaded += fut.result()
+                        files_created += 1
+                    except Exception as e:
+                        files_failed += 1
+                        logger.error("[DRIVE PULL] Failed to materialize %s: %s", task["rel_path"], e)
+                    processed += 1
+                    # Map work to the 5–95% band; the final 95–100% covers marker writes.
+                    pct = 5 + int((processed / total_items) * 90)
+                    if pct - last_reported_pct >= 2:
+                        _set_progress("syncing", pct, f"Λήψη αρχείων… ({processed}/{total_items})")
+                        last_reported_pct = pct
 
         logger.info(
             "[DRIVE PULL] group=%s created=%d failed=%d bytes=%d -> %s",

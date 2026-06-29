@@ -2151,7 +2151,12 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_vsgr(url, timeout=timeout, debug=debug)
         elif "megasoft" in domain or "invoicelink" in domain:
             try:
-                from scraper_receipt_analysis import scrape_megasoft as _scrape_megasoft
+                try:
+                    # Package context (app endpoint loads us as scraper.scraper_receipt).
+                    from .scraper_receipt_analysis import scrape_megasoft as _scrape_megasoft
+                except ImportError:
+                    # Standalone-script context (scraper/ dir on sys.path).
+                    from scraper_receipt_analysis import scrape_megasoft as _scrape_megasoft
                 result = _scrape_megasoft(url, timeout=timeout, debug=debug)
             except Exception as exc:
                 error_hint = f"megasoft scraper failed: {exc}"
