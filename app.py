@@ -2340,35 +2340,66 @@ def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str =
     # Αν υπάρχει ήδη όνομα, δεν κάνουμε τίποτα
     if existing_name and str(existing_name).strip():
         return existing_name
-    
+
     if not issuer_afm or not str(issuer_afm).strip():
         return None
-    
+
+    # Κανονικοποίηση ΑΦΜ εκδότη (ίδια λογική με _load_client_map)
+    try:
+        from epsilon_bridges import _norm_afm as bridge_norm_afm
+        issuer_afm_clean = bridge_norm_afm(issuer_afm)
+    except Exception:
+        issuer_afm_clean = re.sub(r"\D", "", str(issuer_afm)).zfill(9)[-9:] or None
+
+    if not issuer_afm_clean:
+        log.debug(f"Invalid issuer AFM format: {issuer_afm}")
+        return None
+
+    # 0) Κοινή (global) βάση ΑΦΜ→επωνυμία: γρήγορο μονοπάτι, χωρίς εξωτερικές κλήσεις.
+    #    Είναι κοινή για όλους τους χρήστες/ομάδες, οπότε επαναλαμβανόμενα ΑΦΜ
+    #    (ιδίως σε αποδείξεις) εξυπηρετούνται άμεσα.
+    try:
+        import vat_name_cache
+        cached = vat_name_cache.lookup_name(issuer_afm_clean)
+        if cached:
+            log.info(f"Issuer name for AFM {issuer_afm_clean} served from shared cache: {cached}")
+            return cached
+    except Exception:
+        log.exception("vat_name_cache lookup failed during issuer enrichment")
+
     # 1) Ψάχνουμε στο client_db του group
     try:
-        from epsilon_bridges import _load_client_map, _norm_afm as bridge_norm_afm
-        
-        # Χρησιμοποιούμε την ίδια κανονικοποίηση που χρησιμοποιεί το _load_client_map
-        issuer_afm_clean = bridge_norm_afm(issuer_afm)
-        
-        if not issuer_afm_clean:
-            log.debug(f"Invalid issuer AFM format: {issuer_afm}")
-            return None
-        
+        from epsilon_bridges import _load_client_map
+
         # Βρες το client_db path (ψάχνει πρώτα στο group)
         client_db_path = _resolve_client_db_path(vat)
-        
+
         if client_db_path and os.path.exists(client_db_path):
             try:
                 log.info(f"Loading client_db from: {client_db_path}")
                 client_map = _load_client_map(client_db_path)
-                
+
+                # Διασταύρωση/ενημέρωση της κοινής βάσης από το client_db της ομάδας.
+                try:
+                    import vat_name_cache
+                    seeded = vat_name_cache.store_from_client_map(client_map)
+                    if seeded:
+                        log.info(f"Seeded {seeded} AFM→name pairs into shared cache from client_db")
+                except Exception:
+                    log.exception("vat_name_cache seeding from client_db failed")
+
                 # Αναζήτηση στο names dictionary
                 if issuer_afm_clean in client_map.get("names", {}):
                     found_name = client_map["names"][issuer_afm_clean]
                     if found_name and str(found_name).strip():
+                        found_name = str(found_name).strip()
                         log.info(f"Found issuer name in client_db for AFM {issuer_afm_clean}: {found_name}")
-                        return str(found_name).strip()
+                        try:
+                            import vat_name_cache
+                            vat_name_cache.store_name(issuer_afm_clean, found_name, source="client_db")
+                        except Exception:
+                            pass
+                        return found_name
                 else:
                     log.info(f"AFM {issuer_afm_clean} not found in client_db names. Available AFMs: {len(client_map.get('names', {}))}")
             except Exception as e:
@@ -2379,31 +2410,30 @@ def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str =
         log.warning(f"Failed to import epsilon_bridge_multiclient_strict: {e}")
     except Exception as e:
         log.exception(f"Failed to resolve client_db path for issuer enrichment: {e}")
-    
-    # 2) Fallback: Ψάχνουμε με VAT validator
+
+    # 2) Fallback: Ψάχνουμε με VAT validator (και γράφουμε το αποτέλεσμα στην κοινή βάση)
     try:
         from vat_validator import validate_greek_vat
-        
-        # Χρησιμοποιούμε το normalized AFM από το βήμα 1
-        try:
-            from epsilon_bridges import _norm_afm as bridge_norm_afm
-            issuer_afm_clean = bridge_norm_afm(issuer_afm)
-        except:
-            issuer_afm_clean = str(issuer_afm).strip()
-        
+
         log.info(f"Attempting VAT validation for issuer AFM {issuer_afm_clean}")
         result = validate_greek_vat(issuer_afm_clean)
-        
+
         if result.get("valid") and result.get("name"):
-            log.info(f"Found issuer name via VAT validator for AFM {issuer_afm_clean}: {result['name']}")
-            return result["name"]
+            resolved_name = str(result["name"]).strip()
+            log.info(f"Found issuer name via VAT validator for AFM {issuer_afm_clean}: {resolved_name}")
+            try:
+                import vat_name_cache
+                vat_name_cache.store_name(issuer_afm_clean, resolved_name, source="vat_validator")
+            except Exception:
+                pass
+            return resolved_name
         elif result.get("error"):
             log.warning(f"VAT validator error for AFM {issuer_afm_clean}: {result['error']}")
     except ImportError:
         log.warning("vat_validator module not available for issuer enrichment")
     except Exception as e:
         log.exception(f"VAT validation failed for issuer AFM {issuer_afm}: {e}")
-    
+
     return None
 
 
@@ -3493,17 +3523,68 @@ def _repeat_state_save(d: dict):
         json.dump(d or {}, f, ensure_ascii=False, indent=2)
     os.replace(tmp, p)
 
-def _repeat_state_get_enabled_for_vat(vat: str):
-    # σειρά προτεραιότητας: session -> repeat_state.json -> credentials.repeat_entry.enabled -> False
+def _set_user_repeat_enabled(vat: str, enabled: bool) -> None:
+    """Persist the repeat-entry toggle PER USER (Flask session), keyed by VAT.
+
+    The toggle is a per-user UI choice: two users on the same group/customer must
+    be able to keep it independently on/off without affecting each other.
+    """
+    v = str(vat or "").strip()
+    if not v:
+        return
+    try:
+        m = session.get("repeat_enabled_by_vat")
+        if not isinstance(m, dict):
+            m = {}
+        m[v] = bool(enabled)
+        session["repeat_enabled_by_vat"] = m
+        # Keep the legacy single-key in sync for any old readers.
+        session["repeat_enabled"] = bool(enabled)
+        try:
+            session.modified = True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _user_repeat_enabled(vat: str, default=None) -> bool:
+    """Return the per-user repeat toggle for a VAT.
+
+    Priority: per-user session (per-vat) -> explicit default (customer default) ->
+    legacy single-key session -> False.
+    """
+    v = str(vat or "").strip()
+    try:
+        m = session.get("repeat_enabled_by_vat")
+        if isinstance(m, dict) and v in m:
+            return bool(m[v])
+    except Exception:
+        pass
+    if default is not None:
+        return bool(default)
     try:
         if "repeat_enabled" in session:
             return bool(session.get("repeat_enabled"))
     except Exception:
         pass
+    return False
+
+
+def _repeat_state_get_enabled_for_vat(vat: str):
+    # Per-user (session) value is authoritative so concurrent users in the same
+    # group/customer stay independent. The shared credential setting is only the
+    # customer-level default before this user has toggled it.
+    v = str(vat or "").strip()
     try:
-        data = _repeat_state_load()
-        if vat and vat in data:
-            return bool(data[vat].get("enabled", False))
+        m = session.get("repeat_enabled_by_vat")
+        if isinstance(m, dict) and v in m:
+            return bool(m[v])
+    except Exception:
+        pass
+    try:
+        if "repeat_enabled" in session:
+            return bool(session.get("repeat_enabled"))
     except Exception:
         pass
     try:
@@ -3537,9 +3618,8 @@ def _sync_repeat_entry_backend(vat: str, *, enabled=None, invoice_mtype=None, re
             client = creds[idx]
             repeat = (client.get("repeat_entry") if isinstance(client, dict) else {}) or {}
 
-            if enabled is not None and bool(repeat.get("enabled")) != bool(enabled):
-                repeat["enabled"] = bool(enabled)
-                changed = True
+            # NOTE: the `enabled` toggle is per-user (handled below via session),
+            # NOT shared credential state — so it never leaks between users.
             if invoice_mtype is not None:
                 inv = str(invoice_mtype or "").strip()
                 if str(repeat.get("invoice_mtype") or "").strip() != inv:
@@ -3560,18 +3640,11 @@ def _sync_repeat_entry_backend(vat: str, *, enabled=None, invoice_mtype=None, re
         log.exception("_sync_repeat_entry_backend: failed credentials sync for VAT=%s", v)
 
     if enabled is not None:
+        # Per-user only: never write the shared repeat_state.json / credentials.
         try:
-            session["repeat_enabled"] = bool(enabled)
+            _set_user_repeat_enabled(v, bool(enabled))
         except Exception:
-            pass
-        try:
-            data = _repeat_state_load()
-            if v not in data:
-                data[v] = {}
-            data[v]["enabled"] = bool(enabled)
-            _repeat_state_save(data)
-        except Exception:
-            log.exception("_sync_repeat_entry_backend: failed repeat_state sync for VAT=%s", v)
+            log.exception("_sync_repeat_entry_backend: failed per-user repeat toggle for VAT=%s", v)
 
     return True
 def get_existing_client_ids() -> set:
@@ -3889,9 +3962,24 @@ def _safe_save_epsilon_cache(vat_code, epsilon_list):
 
 def get_active_fiscal_year():
     """
-    Read persisted fiscal year (int) from DATA_DIR/fiscal_meta.json.
-    Returns integer fiscal year or None if not found / on error.
+    Return the active fiscal year (int) or None.
+
+    Prefers the PER-USER selection stored in the Flask session so that two users
+    in the same group/customer can work on different fiscal years independently.
+    Falls back to the group-level fiscal_meta.json (used by background/scheduled
+    tasks that have no session, and as the initial default).
     """
+    try:
+        from flask import has_request_context
+        if has_request_context():
+            sy = session.get("fiscal_year")
+            if sy is not None:
+                try:
+                    return int(sy)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     try:
         p = _fiscal_meta_path()
         if not os.path.exists(p):
@@ -5750,9 +5838,20 @@ def route_set_fiscal_year():
         except Exception:
             return jsonify(success=False, message='Invalid fiscal_year'), 400
 
+        # Per-user selection (authoritative for this user's requests).
+        try:
+            session["fiscal_year"] = fy_int
+            session.modified = True
+        except Exception:
+            pass
+
+        # Also persist the group-level default so background/scheduled tasks and
+        # first-time loads have a sensible fiscal year to start from.
         ok = set_active_fiscal_year(fy_int)
         if not ok:
-            return jsonify(success=False, message='Could not persist fiscal year'), 500
+            # The per-user session value still applies even if the shared default
+            # could not be written.
+            log.warning("set_fiscal_year: per-user session set but shared default write failed")
         return jsonify(success=True, fiscal_year=fy_int, message='Fiscal year updated'), 200
     except Exception:
         try:
@@ -6290,7 +6389,11 @@ def api_repeat_entry_get():
     client_rec = creds[idx] if idx is not None and idx < len(creds) else None
     repeat_raw = (client_rec.get('repeat_entry') if isinstance(client_rec, dict) else {}) or {"enabled": False, "mapping": {}}
     repeat = _build_repeat_entry_payload(repeat_raw)
-    repeat["enabled"] = bool((repeat_raw or {}).get("enabled"))
+    # Per-user toggle: reflect this user's session choice (default = shared setting).
+    _rec_vat = str(
+        (client_rec or {}).get('vat') or (client_rec or {}).get('AFM') or (client_rec or {}).get('tax_number') or ''
+    ).strip() if isinstance(client_rec, dict) else ''
+    repeat["enabled"] = _user_repeat_enabled(_rec_vat, default=(repeat_raw or {}).get("enabled"))
 
     # normalize expense_tags
     expense_tags = _list_invoice_categories(client_rec)
@@ -6428,7 +6531,9 @@ def api_repeat_entry_save():
                 normalized_general = dict(mapping)
 
         repeat.update({
-            "enabled": enabled,
+            # NOTE: 'enabled' is per-user (stored in the session via
+            # _sync_repeat_entry_backend below), NOT in the shared credential,
+            # so one user's toggle never affects another on the same customer.
             "mapping": mapping,
             # Χρησιμοποιούμε το module datetime:
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -6622,18 +6727,38 @@ def api_get_vat_name():
         
         if not vat:
             return jsonify({"ok": False, "error": "Missing VAT number"}), 400
-        
+
+        # 0) Κοινή βάση ΑΦΜ→επωνυμία (γρήγορο μονοπάτι, χωρίς κλήση VIES/Business Portal).
+        try:
+            import vat_name_cache
+            cached = vat_name_cache.lookup_name(vat)
+            if cached:
+                return jsonify({
+                    "ok": True,
+                    "name": cached,
+                    "vat": vat_name_cache._norm_afm(vat) or vat,
+                    "address": None,
+                    "cached": True
+                })
+        except Exception:
+            log.exception("vat_name_cache lookup failed in api_get_vat_name")
+
         # Import validator
         try:
             from vat_validator import validate_greek_vat
         except ImportError as e:
             log.error("vat_validator not available: %s", e)
             return jsonify({"ok": False, "error": "VAT validator not available"}), 500
-        
+
         # Call validator
         result = validate_greek_vat(vat)
-        
+
         if result.get("valid") and result.get("name"):
+            try:
+                import vat_name_cache
+                vat_name_cache.store_name(result["vat_number"], result["name"], source="vat_validator")
+            except Exception:
+                pass
             return jsonify({
                 "ok": True,
                 "name": result["name"],
@@ -7528,11 +7653,36 @@ def api_validate_vat():
     try:
         data = request.get_json(silent=True) or {}
         vat_number = data.get('vat', '').strip()
-        
+
         if not vat_number:
             return jsonify(valid=False, error="VAT number is required"), 400
-        
+
+        # Consult the shared AFM→name cache first to avoid a redundant VIES call.
+        try:
+            import vat_name_cache
+            cached = vat_name_cache.lookup_name(vat_number)
+            if cached:
+                return jsonify({
+                    "valid": True,
+                    "vat_number": vat_name_cache._norm_afm(vat_number) or vat_number,
+                    "name": cached,
+                    "address": None,
+                    "error": None,
+                    "cached": True,
+                }), 200
+        except Exception:
+            log.exception("vat_name_cache lookup failed in api_validate_vat")
+
         result = validate_greek_vat(vat_number)
+
+        # Populate the shared cache on a successful validation.
+        try:
+            if result.get("valid") and result.get("name"):
+                import vat_name_cache
+                vat_name_cache.store_name(result.get("vat_number") or vat_number, result["name"], source="vat_validator")
+        except Exception:
+            pass
+
         return jsonify(result), 200
         
     except Exception as e:
@@ -7761,6 +7911,18 @@ def upload_client_db():
         except Exception:
             log.exception('Failed to save merged client_db to %s', dest_path)
             return jsonify(success=False, message='Σφάλμα κατά την αποθήκευση του ενημερωμένου αρχείου.'), 500
+
+        # Seed/cross-reference the shared (all-teams) AFM→name cache from the
+        # freshly-saved client_db so repeated lookups skip the VAT validator.
+        try:
+            import vat_name_cache
+            from epsilon_bridges import _load_client_map as _seed_load_client_map
+            seed_map = _seed_load_client_map(dest_path)
+            seeded = vat_name_cache.store_from_client_map(seed_map)
+            if seeded:
+                log.info('[Client DB Upload] Seeded %d AFM→name pairs into shared cache', seeded)
+        except Exception:
+            log.exception('[Client DB Upload] Shared cache seeding failed (continuing)')
 
         uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
         meta_extra = {
@@ -10495,10 +10657,19 @@ def search():
             if idx is None:
                 return jsonify({"ok": False, "error": "No credentials found to save."}), 400
             try:
-                creds[idx]["repeat_entry"] = {"enabled": enabled, "mapping": mapping}
+                # Preserve existing shared config (profile/mtype); only update the
+                # shared mapping. The 'enabled' toggle is per-user (session).
+                existing_repeat = creds[idx].get("repeat_entry") if isinstance(creds[idx], dict) else {}
+                existing_repeat = existing_repeat if isinstance(existing_repeat, dict) else {}
+                existing_repeat["mapping"] = mapping
+                creds[idx]["repeat_entry"] = existing_repeat
                 ok = write_credentials_list_local(creds)
                 if not ok:
                     return jsonify({"ok": False, "error": "Failed to write credentials file."}), 500
+                try:
+                    _set_user_repeat_enabled(vat, enabled)
+                except Exception:
+                    pass
                 return jsonify({"ok": True})
             except Exception as e:
                 log.exception("Failed saving repeat entry mapping")
@@ -11303,6 +11474,13 @@ def search():
         idx = find_active_client_index_local(creds_list, vat_to_match=vat)
         if idx is not None and idx < len(creds_list):
             repeat_entry_conf = creds_list[idx].get("repeat_entry", {}) or {}
+        # The enabled toggle is per-user: reflect this user's session choice
+        # (falling back to the shared credential default) in the initial render.
+        try:
+            repeat_entry_conf = dict(repeat_entry_conf)
+            repeat_entry_conf["enabled"] = _user_repeat_enabled(vat, default=repeat_entry_conf.get("enabled"))
+        except Exception:
+            pass
     except Exception:
         log.exception("Could not read repeat_entry config from credentials")
 
@@ -12504,6 +12682,21 @@ def api_scrape_receipt():
 
             mark = generated_mark
 
+        # Shared AFM→name cache: enrich a missing issuer name, and feed back any
+        # name we do have so future lookups (any user/team) skip the VAT validator.
+        try:
+            if str(issuer_vat or "").strip():
+                import vat_name_cache
+                if str(issuer_name or "").strip():
+                    # Scraped names are lower trust: fill gaps, never clobber curated data.
+                    vat_name_cache.store_name(issuer_vat, issuer_name, source="scrape")
+                else:
+                    cached_name = vat_name_cache.lookup_name(issuer_vat)
+                    if cached_name:
+                        issuer_name = cached_name
+        except Exception:
+            log.exception("api_scrape_receipt: vat_name_cache enrichment failed")
+
         log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s", url, mode, is_invoice, mark)
 
         return jsonify({
@@ -13198,6 +13391,13 @@ def save_summary():
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
 
     conf = _load_repeat_entry_for_vat(vat)
+    # The repeat toggle is per-user: gate auto-characterization on THIS user's
+    # choice (session), not the shared credential default, so one user disabling
+    # it never leaves another user's documents uncharacterized.
+    try:
+        conf["enabled"] = _user_repeat_enabled(vat, default=conf.get("enabled"))
+    except Exception:
+        pass
     payment_method_type = str(
         _first(
             summary.get("paymentMethodType"),
@@ -13303,7 +13503,8 @@ def save_summary():
             or ""
         ).strip()
         if is_receipt and conf.get("enabled") and selected_receipt_mtype:
-            _sync_repeat_entry_backend(vat, enabled=True, receipt_mtype=selected_receipt_mtype)
+            # receipt_mtype is shared customer config; the enabled toggle stays per-user.
+            _sync_repeat_entry_backend(vat, receipt_mtype=selected_receipt_mtype)
             conf["receipt_mtype"] = selected_receipt_mtype
     except Exception:
         log.exception("save_summary: failed to persist receipt repeat prefs for VAT=%s", vat)
@@ -13876,24 +14077,10 @@ def api_repeat_state_set():
         active = get_active_credential_from_session() or {}
         vat = str(payload.get("vat") or active.get("vat") or "").strip()
 
-        # ενημέρωσε session
-        try:
-            session["repeat_enabled"] = enabled
-        except Exception:
-            pass
-
-        # ενημέρωσε repeat_state.json (per VAT)
-        data = _repeat_state_load()
-        if vat not in data:
-            data[vat] = {}
-        data[vat]["enabled"] = enabled
-        _repeat_state_save(data)
-
-        # Sync και στο credentials repeat_entry.enabled για σταθερό reload state
-        try:
-            _sync_repeat_entry_backend(vat, enabled=enabled)
-        except Exception:
-            log.exception("repeat_state/set: credentials sync failed for VAT=%s", vat)
+        # Store the toggle PER USER (session), keyed by VAT. It is intentionally
+        # NOT written to the shared repeat_state.json / credentials so that a
+        # second user on the same customer is not affected.
+        _set_user_repeat_enabled(vat, enabled)
 
         return jsonify({"ok": True, "enabled": enabled, "vat": vat})
     except Exception as e:
@@ -15868,6 +16055,101 @@ def list_fragment():
     except Exception as exc:
         current_app.logger.exception('list_fragment failed')
         return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/characterize_categories', methods=['GET'])
+def api_characterize_categories():
+    """
+    Return the classification categories usable for the selected customer:
+    the active invoice categories PLUS any enabled custom categories (invoice and
+    receipt), each with its display label. Used to populate the bulk-characterize
+    dropdown for the "μη χαρακτηρισμένα" (uncharacterized) filter.
+    """
+    try:
+        requested_vat = str(request.args.get('vat') or '').strip()
+        active = get_active_credential_from_session() or {}
+        vat = requested_vat or str(active.get('vat') or '').strip()
+        cred = get_cred_by_vat(vat) or {}
+        labels = _category_labels_for_client(cred)
+
+        keys: List[str] = []
+        for k in _list_invoice_categories(cred, include_receipts=False):
+            if k and k not in keys:
+                keys.append(k)
+        for k in _list_receipt_categories(cred):
+            if k and k not in keys:
+                keys.append(k)
+
+        categories = [
+            {"key": k, "label": labels.get(k) or labels.get(str(k).lower()) or k}
+            for k in keys
+        ]
+        return jsonify({"ok": True, "vat": vat, "categories": categories})
+    except Exception as exc:
+        log.exception("api_characterize_categories failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route('/api/bulk_characterize', methods=['POST'])
+def api_bulk_characterize():
+    """
+    Assign a classification category to one or more documents (by MARK).
+
+    Body JSON: { "marks": ["...", ...], "category": "<category key>", "vat": "<optional>" }
+
+    Used by the "μη χαρακτηρισμένα" (uncharacterized) filter UI so the user can
+    characterize documents in bulk (or individually) straight from the list.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        category = str(payload.get("category") or "").strip()
+        raw_marks = payload.get("marks") or []
+        if not isinstance(raw_marks, list):
+            raw_marks = [raw_marks]
+        marks = {re.sub(r"\D", "", str(m or "")).strip() for m in raw_marks}
+        marks = {m for m in marks if m}
+
+        if not category:
+            return jsonify({"ok": False, "error": "Δεν επιλέχθηκε κατηγορία χαρακτηρισμού."}), 400
+        if not marks:
+            return jsonify({"ok": False, "error": "Δεν επιλέχθηκαν παραστατικά."}), 400
+
+        active = get_active_credential_from_session() or {}
+        vat = str(payload.get("vat") or active.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε ενεργός πελάτης."}), 400
+
+        # Validate the category against the client's allowed categories.
+        cred = get_cred_by_vat(vat) or {}
+        allowed = set(_list_invoice_categories(cred, include_receipts=True))
+        if allowed and category not in allowed:
+            return jsonify({"ok": False, "error": "Μη έγκυρη κατηγορία χαρακτηρισμού."}), 400
+
+        eps = load_epsilon_cache_for_vat(vat) or []
+        updated = 0
+        for rec in eps:
+            if not isinstance(rec, dict):
+                continue
+            mk = re.sub(r"\D", "", str(rec.get("mark") or rec.get("MARK") or "")).strip()
+            if mk not in marks:
+                continue
+            # Record-level classification (primary source for the list column).
+            rec["χαρακτηρισμός"] = category
+            # Also stamp each line so exports/analysis stay consistent.
+            lines = rec.get("lines")
+            if isinstance(lines, list):
+                for ln in lines:
+                    if isinstance(ln, dict):
+                        ln["category"] = category
+            updated += 1
+
+        if updated:
+            save_epsilon_cache_for_vat(vat, eps)
+
+        return jsonify({"ok": True, "updated": updated, "category": category, "vat": vat})
+    except Exception as exc:
+        log.exception("api_bulk_characterize failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route('/activity/check_updates', methods=['GET'])
@@ -19771,9 +20053,14 @@ def _firebase_backup_scheduler_loop():
                 interval_secs = int(sync_cfg.get('schedule_seconds') or 60)
                 if interval_secs < 10:
                     interval_secs = 10
+                # Automatic push/pull must NOT depend on a user (or admin) being
+                # logged in. In 'scheduled' mode we honour the configured interval;
+                # in any other mode we still run a slower safety-net reconcile in
+                # the background so data is pushed even when nobody is connected.
+                # (Drive API quota is already protected by should_defer_sync below.)
                 if mode != 'scheduled':
-                    time.sleep(30)
-                    continue
+                    safety_net_secs = int(os.getenv('BACKUP_SAFETY_NET_SECONDS', '900') or 900)
+                    interval_secs = max(interval_secs, safety_net_secs)
 
                 groups = Group.query.all() or []
                 now_ts = time.time()

@@ -919,8 +919,11 @@ def _analysis_ai_schema():
 def _analysis_result_has_min_payload(result):
     if not isinstance(result, dict):
         return False
-    base_keys = ("MARK", "issuer_vat", "total_amount", "issue_date", "issuer_name")
-    for key in base_keys:
+    # A lone issuer_vat is NOT enough: some viewers (e.g. iview.gr) expose the VAT
+    # in the URL itself, so a result with only that field means the real scrape
+    # failed and the AI/heuristic fallback should still run to fill the document.
+    strong_keys = ("MARK", "total_amount", "issue_date", "issuer_name")
+    for key in strong_keys:
         val = result.get(key)
         if val is not None and str(val).strip() not in ("", "N/A", "None"):
             return True
@@ -3260,9 +3263,42 @@ def scrape_iview(url, timeout=20, debug=False):
     except Exception as e:
         if debug:
             print("iview fetch error:", e)
-        return out
+        html = ""
 
-    mydatapi_url = _extract_mydatapi_link_from_page(html, base_url=url)
+    mydatapi_url = _extract_mydatapi_link_from_page(html, base_url=url) if html else None
+
+    # iview.gr is a JS-driven viewer: the static HTML often has no myDATA link.
+    # Follow the dynamic candidate URLs (print / raw-xml / mydata selection
+    # endpoints) to try to resolve the myDATA link or an inline XML document.
+    if not mydatapi_url and html:
+        try:
+            sess = requests.Session()
+            sess.headers.update(HEADERS)
+            for cu in _extract_dynamic_candidate_urls(html, base_url=url):
+                try:
+                    rr = sess.get(cu, timeout=timeout, allow_redirects=True)
+                    rr.raise_for_status()
+                    rr.encoding = rr.apparent_encoding or "utf-8"
+                    payload = rr.text or ""
+                except Exception:
+                    continue
+                mydatapi_url = _extract_mydatapi_link_from_page(payload, base_url=rr.url) or \
+                              _extract_mydatapi_url_from_text(payload, base_url=rr.url)
+                if mydatapi_url:
+                    break
+        except Exception:
+            pass
+
+    # Floor: the issuer VAT is embedded in the iview URL (e.g. .../EL082863963-...).
+    # Keep it even when nothing else resolves so downstream name-enrichment and
+    # the AI/heuristic fallback have something to build on.
+    try:
+        m_url_vat = re.search(r"EL?(\d{9})", url, re.I)
+        if m_url_vat:
+            out["issuer_vat"] = m_url_vat.group(1)
+    except Exception:
+        pass
+
     if mydatapi_url:
         if debug:
             print("iview resolved myDATA URL:", mydatapi_url)
@@ -3270,7 +3306,8 @@ def scrape_iview(url, timeout=20, debug=False):
         if isinstance(mydata_out, dict):
             out["MARK"] = _normalize_mark_value(mydata_out.get("MARK"))
             afm = (mydata_out.get("issuer_vat") or mydata_out.get("ΑΦΜ Πελάτη") or mydata_out.get("ΑΦΜ") or "").strip()
-            out["issuer_vat"] = re.sub(r"\D", "", afm) if afm and afm != "N/A" else None
+            # Preserve the URL-derived merchant VAT when myDATA resolves without one.
+            out["issuer_vat"] = re.sub(r"\D", "", afm) if afm and afm != "N/A" else out.get("issuer_vat")
             out["doc_type"] = (mydata_out.get("doc_type") or mydata_out.get("Είδος Παραστατικού") or "").strip() or None
             out["issue_date"] = _norm_date_to_ddmmyyyy(mydata_out.get("issue_date") or mydata_out.get("Ημερομηνία") or mydata_out.get("Ημερομηνία Έκδοσης") or "") if (mydata_out.get("issue_date") or mydata_out.get("Ημερομηνία") or mydata_out.get("Ημερομηνία Έκδοσης")) else None
             out["total_amount"] = _clean_amount_to_comma(mydata_out.get("total_amount") or mydata_out.get("Συνολική αξία") or mydata_out.get("Συνολικό ποσό") or "") if (mydata_out.get("total_amount") or mydata_out.get("Συνολική αξία") or mydata_out.get("Συνολικό ποσό")) else None
@@ -3284,6 +3321,200 @@ def scrape_iview(url, timeout=20, debug=False):
             if out["doc_type"] and re.search(r"τιμολό?γιο|invoice", out["doc_type"], re.I):
                 out["is_invoice"] = True
             out["source"] = "IView->MyData"
+    _ensure_vat_analysis(out)
+    return out
+
+
+def _onesys_vat_from_lineitems(isoup):
+    """Aggregate onesys line-item rows into a per-rate VAT analysis map.
+
+    The onesys document exposes a single line-items table with columns
+    ``Net Value (EUR)``, ``VAT (%)``, ``VAT (EUR)`` and ``Total Value (EUR)``.
+    Summing each column grouped by VAT rate reproduces the document's VAT
+    breakdown exactly.
+    """
+    for table in isoup.find_all("table"):
+        head_cells = None
+        for tr in table.find_all("tr"):
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td", "th"])]
+            if any("VAT (%)" in c for c in cells):
+                head_cells = cells
+                break
+        if not head_cells:
+            continue
+
+        def _col(name):
+            for i, c in enumerate(head_cells):
+                if c.strip() == name:
+                    return i
+            return None
+
+        i_net = _col("Net Value (EUR)")
+        i_rate = _col("VAT (%)")
+        i_vat = _col("VAT (EUR)")
+        i_total = _col("Total Value (EUR)")
+        if i_rate is None:
+            continue
+
+        agg = {}
+        for tr in table.find_all("tr"):
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all("td")]
+            if not cells or len(cells) <= i_rate:
+                continue
+            rate_key = _normalize_vat_rate_key(cells[i_rate])
+            if rate_key is None:
+                continue
+            net = _amount_to_float(cells[i_net]) if i_net is not None and len(cells) > i_net else None
+            vat = _amount_to_float(cells[i_vat]) if i_vat is not None and len(cells) > i_vat else None
+            gross = _amount_to_float(cells[i_total]) if i_total is not None and len(cells) > i_total else None
+            slot = agg.setdefault(rate_key, {"net": 0.0, "vat": 0.0, "gross": 0.0, "has": False})
+            if net is not None:
+                slot["net"] += net; slot["has"] = True
+            if vat is not None:
+                slot["vat"] += vat; slot["has"] = True
+            if gross is not None:
+                slot["gross"] += gross; slot["has"] = True
+
+        result = {}
+        for rate_key, s in agg.items():
+            if not s["has"]:
+                continue
+            result[rate_key] = {
+                "net_amount": _float_to_comma(s["net"]),
+                "vat_amount": _float_to_comma(s["vat"]),
+                "gross_amount": _float_to_comma(s["gross"]),
+            }
+        if result:
+            return result
+    return None
+
+
+def scrape_onesys(url, timeout=20, debug=False):
+    """
+    onesys / onesign viewer (Next.js).  The document is embedded as HTML inside
+    the page's ``__NEXT_DATA__`` JSON at ``props.pageProps.invoiceData``.  Fields
+    follow a ``<div><span>Label</span><span>Value</span></div>`` pattern, grouped
+    under section headings (Issuer Details / Customer Details / ...), and line
+    items live in a single table used to build the per-rate VAT analysis.
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "OneSys", "vat_analysis": None,
+        "vat_analysis_inferred": False, "series": None,
+    }
+    try:
+        html = _fetch_url_text(url, timeout=timeout, debug=debug)
+    except Exception as e:
+        if debug:
+            print("onesys fetch error:", e)
+        return out
+
+    inner_html = None
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        nxt = soup.find("script", id="__NEXT_DATA__")
+        if nxt and nxt.string:
+            data = json.loads(nxt.string)
+            inv = (((data or {}).get("props") or {}).get("pageProps") or {}).get("invoiceData")
+            if isinstance(inv, str):
+                try:
+                    inv = json.loads(inv)
+                except Exception:
+                    pass
+            if isinstance(inv, list):
+                inner_html = "".join(str(x) for x in inv)
+            elif isinstance(inv, str):
+                inner_html = inv
+    except Exception as e:
+        if debug:
+            print("onesys __NEXT_DATA__ parse error:", e)
+
+    # Fallback: some variants inline the document HTML directly in the page.
+    if not inner_html:
+        inner_html = html
+
+    isoup = BeautifulSoup(inner_html, "html.parser")
+
+    # Build section-scoped label→value map from the two-span field divs.
+    SECTION_NAMES = {
+        "Issuer Details", "Customer Details", "Delivery Information",
+        "Correlated Documents", "Payment Method",
+    }
+    sections = {}
+    current_section = "top"
+    for el in isoup.descendants:
+        name = getattr(el, "name", None)
+        if not name:
+            continue
+        if name in ("div", "span", "h1", "h2", "h3", "h4", "p"):
+            t = el.get_text(" ", strip=True)
+            if t in SECTION_NAMES:
+                current_section = t
+                continue
+        if name == "div":
+            spans = el.find_all("span", recursive=False)
+            if len(spans) == 2:
+                label = spans[0].get_text(" ", strip=True)
+                value = spans[1].get_text(" ", strip=True)
+                if label:
+                    sections.setdefault(current_section, {})[label] = value
+
+    def _field(label, *section_keys):
+        for sk in section_keys:
+            v = sections.get(sk, {}).get(label)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return None
+
+    def _field_any(label):
+        for sec in sections.values():
+            v = sec.get(label)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return None
+
+    out["doc_type"] = _field("Document Type", "top") or _field_any("Document Type")
+    out["series"] = _field("Series", "top") or _field_any("Series")
+    out["progressive_aa"] = _field("Document Number", "top") or _field_any("Document Number")
+    date_raw = _field("Date", "top") or _field_any("Date")
+    if date_raw:
+        out["issue_date"] = _norm_date_to_ddmmyyyy(date_raw)
+
+    # Issuer identity, scoped to the Issuer Details section so a customer VAT on
+    # invoices is never mistaken for the issuer's.
+    out["issuer_name"] = _clean_issuer_name(_field("Name", "Issuer Details"))
+    issuer_vat = _field("Tax ID", "Issuer Details")
+    if issuer_vat:
+        digits = re.sub(r"\D", "", issuer_vat)
+        out["issuer_vat"] = digits or None
+
+    # The document's own MARK (label "MARK"), not the correlated "Related Marks".
+    out["MARK"] = _normalize_mark_value(_field_any("MARK"))
+
+    total_raw = None
+    for lbl in ("Payable Amount (EUR)", "Total (EUR)", "Payable Amount", "Total"):
+        total_raw = _field_any(lbl)
+        if total_raw:
+            break
+    if total_raw:
+        out["total_amount"] = _clean_amount_to_comma(total_raw)
+
+    try:
+        vat_map = _onesys_vat_from_lineitems(isoup)
+        if vat_map:
+            out["vat_analysis"] = vat_map
+            out["vat_analysis_inferred"] = False
+    except Exception as e:
+        if debug:
+            print("onesys vat aggregation error:", e)
+
+    doc_blob = " ".join(str(x or "") for x in (out.get("doc_type"), out.get("series")))
+    if re.search(r"τιμολό?γιο|invoice", doc_blob, re.I):
+        out["is_invoice"] = True
+
+    if not (isinstance(out.get("vat_analysis"), dict) and out.get("vat_analysis")):
+        _infer_vat_analysis_from_total(out)
     _ensure_vat_analysis(out)
     return out
 
@@ -4496,6 +4727,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_primer(url, timeout=timeout, debug=debug)
         elif "iview.gr" in domain:
             result = scrape_iview(url, timeout=timeout, debug=debug)
+        elif "onesys.gr" in domain or "onesign" in domain:
+            result = scrape_onesys(url, timeout=timeout, debug=debug)
         elif "vs.gr" in domain:
             result = scrape_vsgr(url, timeout=timeout, debug=debug)
         elif "pegcloud.io" in domain or "pegcloud" in domain:

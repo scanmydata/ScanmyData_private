@@ -33,6 +33,11 @@ except ImportError:
     _analysis_iview = None
 
 try:
+    from .scraper_receipt_analysis import scrape_onesys as _analysis_onesys
+except ImportError:
+    _analysis_onesys = None
+
+try:
     from .scraper_receipt_analysis import scrape_vsgr as _analysis_vsgr
 except ImportError:
     _analysis_vsgr = None
@@ -148,6 +153,16 @@ def scrape_iview(url, timeout=15, debug=False):
         raise RuntimeError("scrape_iview implementation not available")
     if _analysis_iview:
         res = _analysis_iview(url, timeout=timeout, debug=debug)
+    else:
+        res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
+    return _strip_analysis_fields(res)
+
+
+def scrape_onesys(url, timeout=15, debug=False):
+    if not _analysis_onesys and not _analysis_detect_and_scrape:
+        raise RuntimeError("scrape_onesys implementation not available")
+    if _analysis_onesys:
+        res = _analysis_onesys(url, timeout=timeout, debug=debug)
     else:
         res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
     return _strip_analysis_fields(res)
@@ -2147,6 +2162,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_primer(url, timeout=timeout, debug=debug)
         elif "iview.gr" in domain:
             result = scrape_iview(url, timeout=timeout, debug=debug)
+        elif "onesys.gr" in domain or "onesign" in domain:
+            result = scrape_onesys(url, timeout=timeout, debug=debug)
         elif "vs.gr" in domain:
             result = scrape_vsgr(url, timeout=timeout, debug=debug)
         elif "megasoft" in domain or "invoicelink" in domain:

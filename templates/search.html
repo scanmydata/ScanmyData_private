@@ -3422,6 +3422,8 @@ function rcClearWarningSearchFields(options){
 }
 
 function rcReloadAfterWarning(){
+  // Partial acknowledgment: strip warning flags from the URL WITHOUT navigating,
+  // then refresh the document list in place.
   try {
     const current = new URL(window.location.href);
     const keys = new Set(['mark','scrape_url','force_edit']);
@@ -3431,10 +3433,15 @@ function rcReloadAfterWarning(){
       }
     });
     const target = current.pathname + (current.search ? `?${current.searchParams.toString()}` : '') + current.hash;
-    window.location.replace(target);
-  } catch (_){
-    window.location.reload();
-  }
+    try { history.replaceState(null, '', target); } catch(_) {}
+  } catch (_){ /* ignore URL cleanup errors */ }
+  try {
+    if (typeof window.rcPartialWarningAck === 'function') {
+      window.rcPartialWarningAck();
+    } else if (typeof window.partiallyReloadInvoiceTable === 'function') {
+      window.partiallyReloadInvoiceTable({});
+    }
+  } catch(_) {}
 }
 
 function rcHandleWarningAcknowledge(){
@@ -13532,17 +13539,39 @@ document.addEventListener('DOMContentLoaded', () => {
         (typeof window.__rcReceiptAnalysisAvailable === 'function' && window.__rcReceiptAnalysisAvailable())
         || window.__RC_HAS_RECEIPT_CUSTOM_CATEGORIES
       );
-      const scope = (receiptsOn && analysisOn && hasReceiptAnalysis) ? 'receipt-class' : 'repeat';
+      // Decide which modal (if any) should auto-open:
+      //  - invoices flow            -> repeat (VAT-category) mapping modal
+      //  - receipts + analysis      -> receipt-class modal
+      //  - receipts + mixed         -> Γ: receipt MTYPE modal, Β: no modal
+      let scope;
+      if (receiptsOn) {
+        scope = (analysisOn && hasReceiptAnalysis) ? 'receipt-class' : 'receipt-mixed';
+      } else {
+        scope = 'repeat';
+      }
       const key = String(newVat || '').trim() + ':' + scope;
       if (window.__RC_LAST_AUTO_OPEN_PROFILE_MODAL_KEY === key) return;
       window.__RC_LAST_AUTO_OPEN_PROFILE_MODAL_KEY = key;
 
-      if (scope === 'receipt-class' && typeof openReceiptClassModal === 'function') {
-        try { openReceiptClassModal(getCurrentReceiptSummaryObj()); } catch(_) { try { openReceiptClassModal({}); } catch(__) {} }
+      if (scope === 'receipt-class') {
+        if (typeof openReceiptClassModal === 'function') {
+          try { openReceiptClassModal(getCurrentReceiptSummaryObj()); } catch(_) { try { openReceiptClassModal({}); } catch(__) {} }
+        }
         return;
       }
+      if (scope === 'receipt-mixed') {
+        // Mixed-mode receipts must NOT open the invoice repeat mapping modal.
+        // Γ (Gamma) books get the receipt MTYPE modal; Β (Beta) books get no modal.
+        const isGamma = String(window.__RC_BOOK_CATEGORY || '').trim().toUpperCase() === 'Γ';
+        const hasReceiptMtype = !!(window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length);
+        if (isGamma && hasReceiptMtype && typeof window.openReceiptMtypeModal === 'function') {
+          try { window.openReceiptMtypeModal(); } catch(_) {}
+        }
+        return;
+      }
+      // Invoices flow: open the invoice repeat (VAT-category) mapping modal.
       if (typeof window.openRepeatModal === 'function') {
-        try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = receiptsOn; } catch(_) {}
+        try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = false; } catch(_) {}
         try { window.openRepeatModal(); } catch(_) {}
       }
     } catch(_) {}
@@ -14784,11 +14813,17 @@ document.addEventListener('click', function(e){
   if (afmOk) {
     afmOk.addEventListener('click', function(){
       try { document.getElementById('afmWarningModal').style.display = 'none'; } catch(_){}
-      const target = resetSearchAndReload();
-      setTimeout(() => {
-        if (target){ window.location.replace(target); }
-        else { window.location.reload(); }
-      }, 40);
+      // Partial refresh: clear inputs and refresh the list in place, no navigation.
+      try { clearSearchInputs(); } catch(_) {}
+      try {
+        const url = buildCleanUrl();
+        if (url) history.replaceState(null, '', url);
+      } catch(_) {}
+      if (typeof window.rcPartialWarningAck === 'function') {
+        setTimeout(() => { try { window.rcPartialWarningAck(); } catch(_) {} }, 0);
+      } else if (typeof window.partiallyReloadInvoiceTable === 'function') {
+        setTimeout(() => { try { window.partiallyReloadInvoiceTable({}); } catch(_) {} }, 0);
+      }
     });
   }
 })();
@@ -14871,10 +14906,29 @@ document.addEventListener('click', function(e){
     } catch (_) {}
   }
 
+  // Partial acknowledgment of a warning: keep the user on the page (no full
+  // navigation). Clear URL flags + inputs, close any warning modals, and refresh
+  // the document list in place.
+  function rcPartialWarningAck() {
+    try { clearUrlFlags(); } catch(_) {}
+    try { wipeSearchInputs(); } catch(_) {}
+    try { if (typeof window.clearSearchInputs === 'function') window.clearSearchInputs(); } catch(_) {}
+    try {
+      document.querySelectorAll('[data-modal-type="warning"], [id$="WarningModal"], .warning-modal').forEach(function(node){
+        try { node.style.display = 'none'; node.classList.add('hidden'); } catch(_) {}
+      });
+    } catch(_) {}
+    try {
+      if (typeof window.partiallyReloadInvoiceTable === 'function') {
+        window.partiallyReloadInvoiceTable({});
+      }
+    } catch(_) {}
+  }
+  window.rcPartialWarningAck = rcPartialWarningAck;
+
   function doReload() {
-    // καθάρισε flags ώστε να μην ξανανοίξει modal
-    clearUrlFlags();
-    window.location.reload();
+    // Partial refresh instead of a full page reload (keeps the user in context).
+    rcPartialWarningAck();
   }
 
   // ---- 3) Bootstrap-aware reload: αφού κλείσει το modal ----

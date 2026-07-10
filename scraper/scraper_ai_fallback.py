@@ -1126,9 +1126,18 @@ def run_schema_ai_fallback(
 
     html, final_url, capture_error = _capture_rendered_html(url, timeout_sec=timeout_sec)
     if not html:
+        # Playwright/Chromium is frequently unavailable on the server (Render free
+        # tier, CI containers), which previously aborted the whole fallback. Fall
+        # back to a plain requests fetch so the AI providers AND the built-in
+        # heuristic extractor still get page text to work with.
         if debug:
-            print("ai fallback capture failed:", capture_error)
-        return None
+            print("ai fallback browser capture failed, trying requests fetch:", capture_error)
+        html = _fetch_html_via_requests(url, timeout_sec=min(20, max(10, timeout_sec)))
+        final_url = url
+        if not html:
+            if debug:
+                print("ai fallback requests fetch also failed")
+            return None
 
     max_html_chars = _safe_int("SCRAPER_AI_MAX_TEXT_CHARS", 24000)
     page_text = _html_to_clean_text(html, max_chars=max_html_chars)

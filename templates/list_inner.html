@@ -23,6 +23,13 @@
     <div class="flex items-center gap-3">
       <input id="globalSearch" type="search" placeholder="🔎 Αναζήτηση..." class="p-2 border border-gray-300 rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-blue-400">
       <button id="deleteBtn" type="button" class="px-4 py-2 bg-red-600 text-white rounded-lg shadow hover:bg-red-700 transition">🗑️ Διαγραφή Επιλεγμένων</button>
+      <button id="uncharFilterBtn" type="button" aria-pressed="false" title="Εμφάνιση μόνο των μη χαρακτηρισμένων παραστατικών" class="px-4 py-2 bg-amber-500 text-white rounded-lg shadow hover:bg-amber-600 transition" style="background-color:#d97706;color:#fff;display:none;">🏷️ Μη χαρακτηρισμένα</button>
+      <div id="bulkCharWrap" class="hidden items-center gap-2" style="display:none;">
+        <select id="bulkCharCategory" class="p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400" style="min-width:180px;">
+          <option value="">— κατηγορία χαρακτηρισμού —</option>
+        </select>
+        <button id="bulkCharApplyBtn" type="button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg shadow hover:bg-emerald-700 transition" style="background-color:#059669;color:#fff;">✓ Χαρακτηρισμός Επιλεγμένων</button>
+      </div>
       <div id="deleteUndoWrap" class="relative hidden">
         <button id="deleteUndoBtn" type="button" class="w-10 h-10 bg-amber-500 text-white rounded-lg shadow hover:bg-amber-600 transition flex items-center justify-center text-lg" style="background-color:#d97706;color:#ffffff;" aria-haspopup="true" aria-expanded="false" aria-label="Αναίρεση διαγραφής" title="Αναίρεση διαγραφής">
           ↩️
@@ -2947,3 +2954,267 @@ input[type="checkbox"].rc-switch {
   }
 }
 </style>
+
+<!-- ===== Uncharacterized (μη χαρακτηρισμένα) filter + bulk characterization ===== -->
+<script>
+(function(){
+  var uncharOn = false;
+  var lastCatVat = null;   // vat the category dropdown was populated for
+  var downloadLocked = false;
+
+  function activeVat(){
+    try {
+      return String(window.__RC_ACTIVE_VAT
+        || (document.querySelector('input[name="active_vat"]') || {}).value
+        || (document.querySelector('#vatSelector') || {}).value
+        || '').trim();
+    } catch(_) { return ''; }
+  }
+
+  // Find the Tabulator field whose column header is the classification category.
+  function charField(tab){
+    try {
+      var cols = tab.getColumns ? tab.getColumns() : [];
+      for (var i=0;i<cols.length;i++){
+        var def = cols[i].getDefinition ? cols[i].getDefinition() : {};
+        var title = String((def && def.title) || '').toLowerCase();
+        if (title.indexOf('χαρακτηρ') !== -1) return def.field;
+      }
+    } catch(_){}
+    return null;
+  }
+
+  function isUncharRow(data, field){
+    try {
+      if (!field) return false;
+      return String(data[field] == null ? '' : data[field]).trim() === '';
+    } catch(_){ return false; }
+  }
+
+  function countUncharacterized(){
+    var tab = window.FBP_TABULATOR;
+    if (!tab || typeof tab.getData !== 'function') return { total: 0, unchar: 0 };
+    var field = charField(tab);
+    if (!field) return { total: 0, unchar: 0 };
+    var data = [];
+    try { data = tab.getData() || []; } catch(_){ data = []; }
+    var unchar = 0;
+    data.forEach(function(row){ if (isUncharRow(row, field)) unchar++; });
+    return { total: data.length, unchar: unchar };
+  }
+
+  function applyUncharFilter(){
+    var tab = window.FBP_TABULATOR;
+    if (!tab) return;
+    var field = charField(tab);
+    if (uncharOn && field){
+      try {
+        tab.setFilter(function(data){ return isUncharRow(data, field); });
+      } catch(_){}
+    } else {
+      try { tab.clearFilter(true); } catch(_){}
+    }
+  }
+
+  function setButtonState(){
+    var btn = document.getElementById('uncharFilterBtn');
+    var wrap = document.getElementById('bulkCharWrap');
+    if (btn){
+      btn.setAttribute('aria-pressed', uncharOn ? 'true' : 'false');
+      btn.style.boxShadow = uncharOn ? '0 0 0 3px rgba(217,119,6,0.45)' : '';
+      btn.style.filter = uncharOn ? 'brightness(0.92)' : '';
+    }
+    if (wrap){
+      wrap.style.display = uncharOn ? 'flex' : 'none';
+      wrap.classList.toggle('hidden', !uncharOn);
+    }
+  }
+
+  // Lock the ".xlsx" download while any document is still uncharacterized.
+  function setDownloadLocked(locked){
+    downloadLocked = !!locked;
+    var toggle = document.getElementById('downloadToggle');
+    var menu = document.getElementById('downloadMenu');
+    if (toggle){
+      toggle.disabled = downloadLocked;
+      toggle.style.opacity = downloadLocked ? '0.5' : '';
+      toggle.style.cursor = downloadLocked ? 'not-allowed' : '';
+      toggle.title = downloadLocked
+        ? 'Η λήψη είναι κλειδωμένη: υπάρχουν μη χαρακτηρισμένα παραστατικά.'
+        : '';
+    }
+    if (downloadLocked && menu){
+      menu.classList.add('hidden');
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  // Show the filter button only when uncharacterized docs exist; lock download too.
+  function updateUncharUI(){
+    var btn = document.getElementById('uncharFilterBtn');
+    var stats = countUncharacterized();
+    var has = stats.unchar > 0;
+    if (btn) btn.style.display = has ? '' : 'none';
+    setDownloadLocked(has);
+    if (!has && uncharOn){
+      // Everything got characterized while the filter was active.
+      uncharOn = false;
+      setButtonState();
+      applyUncharFilter();
+    }
+  }
+
+  function populateCategories(force){
+    var sel = document.getElementById('bulkCharCategory');
+    if (!sel) return;
+    var vat = activeVat();
+    if (!force && sel.dataset.populated === '1' && lastCatVat === vat) return;
+
+    function fill(list){
+      // Reset options (keep the placeholder).
+      sel.innerHTML = '<option value="">— κατηγορία χαρακτηρισμού —</option>';
+      (list || []).forEach(function(item){
+        var key = String((item && (item.key != null ? item.key : item)) || '').trim();
+        if (!key) return;
+        var label = String((item && item.label) || key);
+        var opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      });
+      sel.dataset.populated = '1';
+      lastCatVat = vat;
+    }
+
+    // Authoritative source: the selected customer's active + custom categories.
+    fetch('/api/characterize_categories' + (vat ? ('?vat=' + encodeURIComponent(vat)) : ''), { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok && Array.isArray(j.categories) && j.categories.length){
+          fill(j.categories);
+        } else {
+          // Fallback to any client-side label map.
+          var map = (window.CATEGORY_LABELS && typeof window.CATEGORY_LABELS === 'object') ? window.CATEGORY_LABELS : {};
+          fill(Object.keys(map).map(function(k){ return { key: k, label: map[k] }; }));
+        }
+      })
+      .catch(function(){
+        var map = (window.CATEGORY_LABELS && typeof window.CATEGORY_LABELS === 'object') ? window.CATEGORY_LABELS : {};
+        fill(Object.keys(map).map(function(k){ return { key: k, label: map[k] }; }));
+      });
+  }
+
+  function collectSelectedMarks(){
+    try {
+      if (typeof window._fbp_collect_marks_from_tabulator === 'function'){
+        var m = window._fbp_collect_marks_from_tabulator();
+        if (Array.isArray(m) && m.length) return m;
+      }
+    } catch(_){}
+    try {
+      if (window.FBP_DELETE && typeof window.FBP_DELETE.collectMarks === 'function'){
+        return window.FBP_DELETE.collectMarks();
+      }
+    } catch(_){}
+    return [];
+  }
+
+  // Block navigation to the .xlsx download while it is locked.
+  document.addEventListener('click', function(e){
+    if (!downloadLocked) return;
+    var t = e.target && e.target.closest ? e.target.closest('#downloadToggle, #downloadMenu a, .download-menu-item') : null;
+    if (t){
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof showFlash === 'function') showFlash('Η λήψη είναι κλειδωμένη: χαρακτήρισε πρώτα όλα τα παραστατικά.', 'warning', 3500);
+    }
+  }, true);
+
+  document.addEventListener('click', function(e){
+    var btn = e.target && e.target.closest ? e.target.closest('#uncharFilterBtn') : null;
+    if (btn){
+      e.preventDefault();
+      uncharOn = !uncharOn;
+      if (uncharOn){
+        var gs = document.getElementById('globalSearch');
+        if (gs && gs.value){ gs.value = ''; try { gs.dispatchEvent(new Event('input', { bubbles:true })); } catch(_){} }
+        populateCategories(true);
+      }
+      setButtonState();
+      applyUncharFilter();
+      return;
+    }
+
+    var apply = e.target && e.target.closest ? e.target.closest('#bulkCharApplyBtn') : null;
+    if (apply){
+      e.preventDefault();
+      var sel = document.getElementById('bulkCharCategory');
+      var category = sel ? String(sel.value || '').trim() : '';
+      if (!category){
+        if (typeof showFlash === 'function') showFlash('Επίλεξε πρώτα κατηγορία χαρακτηρισμού.', 'warning', 3000);
+        return;
+      }
+      var marks = collectSelectedMarks();
+      if (!marks || !marks.length){
+        if (typeof showFlash === 'function') showFlash('Επίλεξε πρώτα ένα ή περισσότερα παραστατικά.', 'warning', 3000);
+        return;
+      }
+      apply.disabled = true;
+      fetch('/api/bulk_characterize', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marks: marks, category: category, vat: activeVat() })
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok){
+          if (typeof showFlash === 'function') showFlash('Χαρακτηρίστηκαν ' + (j.updated||0) + ' παραστατικά.', 'success', 3000);
+          if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function'){
+            window.FBP_REFRESH_LIST_FRAGMENT().then(function(){
+              setTimeout(function(){ if (uncharOn) applyUncharFilter(); updateUncharUI(); }, 140);
+            });
+          } else {
+            setTimeout(updateUncharUI, 140);
+          }
+        } else {
+          if (typeof showFlash === 'function') showFlash((j && j.error) || 'Αποτυχία χαρακτηρισμού.', 'error', 4000);
+        }
+      })
+      .catch(function(){ if (typeof showFlash === 'function') showFlash('Σφάλμα δικτύου κατά τον χαρακτηρισμό.', 'error', 4000); })
+      .finally(function(){ apply.disabled = false; });
+      return;
+    }
+  }, false);
+
+  // A user typing in the global search cancels the uncharacterized mode.
+  document.addEventListener('input', function(e){
+    if (e.target && e.target.id === 'globalSearch' && uncharOn && String(e.target.value||'').trim()){
+      uncharOn = false;
+      setButtonState();
+    }
+  }, false);
+
+  // Re-apply the filter + recompute button/download state after each (re)build.
+  if (typeof window.FBP_INIT_TABULATOR === 'function' && !window.__uncharWrapInit){
+    window.__uncharWrapInit = true;
+    var _orig = window.FBP_INIT_TABULATOR;
+    window.FBP_INIT_TABULATOR = function(){
+      var r = _orig.apply(this, arguments);
+      try {
+        setTimeout(function(){
+          if (uncharOn) applyUncharFilter();
+          updateUncharUI();
+        }, 60);
+      } catch(_){}
+      return r;
+    };
+  }
+
+  // Initial pass once the table is ready on first load.
+  document.addEventListener('DOMContentLoaded', function(){
+    setTimeout(updateUncharUI, 200);
+    setTimeout(updateUncharUI, 800);
+  });
+})();
+</script>

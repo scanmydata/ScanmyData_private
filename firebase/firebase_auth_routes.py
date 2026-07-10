@@ -393,8 +393,11 @@ def firebase_login():
         password = request.form.get('password', '').strip()
         
         if not email or not password:
-            flash('Απαιτούνται email και κωδικός', 'danger')
-            return redirect(url_for('firebase_auth.firebase_login'))
+            return render_template(
+                'auth/login.html',
+                login_error='Συμπληρώστε το email και τον κωδικό σας.',
+                login_email=email,
+            ), 400
         
         # Support login by either email or username. If user provided a username (no @),
         # try to look up the local user and resolve the Firebase email.
@@ -440,8 +443,18 @@ def firebase_login():
         success, uid, error = FirebaseAuthHandler.login_user(firebase_email, password)
         
         if not success:
-            flash(f'Αποτυχία σύνδεσης: {error}', 'danger')
-            return redirect(url_for('firebase_auth.firebase_login'))
+            low = str(error or '').lower()
+            if any(tok in low for tok in ('not found', 'no user', 'user-not-found', 'no such')):
+                friendly = 'Δεν βρέθηκε λογαριασμός με αυτό το email. Ελέγξτε το email ή δημιουργήστε νέο λογαριασμό.'
+            elif 'too many' in low or 'temporarily' in low or 'blocked' in low:
+                friendly = 'Πάρα πολλές αποτυχημένες προσπάθειες. Δοκιμάστε ξανά σε λίγο ή επαναφέρετε τον κωδικό σας.'
+            else:
+                friendly = 'Λάθος email ή κωδικός πρόσβασης. Ελέγξτε τα στοιχεία σας και δοκιμάστε ξανά.'
+            return render_template(
+                'auth/login.html',
+                login_error=friendly,
+                login_email=email,
+            ), 401
         
         # Check email verification status (skip for admin emails)
         is_admin = FirebedEmailVerification.is_admin_email(firebase_email)

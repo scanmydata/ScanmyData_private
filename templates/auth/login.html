@@ -1,14 +1,24 @@
 {% extends 'base.html' %}
 
-{% block title %}Σύνδεση - Firebed Private{% endblock %}
+{% block title %}Σύνδεση - scanmydata!{% endblock %}
 
 {% block content %}
   <div class="content-wrap">
     <div class="max-w-md">
       <h1 class="text-2xl font-bold mb-2">🔐 Σύνδεση</h1>
-      <p class="mb-6">Συνδεθείτε με το Firebase λογαριασμό σας</p>
+      <p class="mb-6">Συνδεθείτε στον λογαριασμό σας <span class="font-semibold text-sky-600">scanmydata!</span></p>
 
       {# Flash messages are rendered globally in base.html -> #flashContainer; avoid duplicate rendering here #}
+
+      {% if login_error %}
+      <div class="mb-4 px-4 py-3 rounded-lg border border-red-400 bg-red-50 text-red-800 text-sm flex items-start gap-3 shadow-sm" role="alert" aria-live="assertive">
+        <span class="text-xl leading-none">⛔</span>
+        <div>
+          <div class="font-semibold mb-0.5">Αποτυχία σύνδεσης</div>
+          <div>{{ login_error }}</div>
+        </div>
+      </div>
+      {% endif %}
 
       {% if session_expired %}
       <div class="mb-4 px-4 py-3 rounded border border-yellow-400 bg-yellow-50 text-yellow-800 text-sm">
@@ -23,7 +33,7 @@
       <form method="post" action="/firebase-auth/login" class="grid gap-4">
         <label class="block">
           <span class="text-sm font-medium mb-1 block">Email</span>
-          <input type="email" name="email" required class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" placeholder="your@email.com" />
+          <input type="email" name="email" value="{{ login_email or '' }}" required class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" placeholder="your@email.com" />
         </label>
         
         <label class="block">
