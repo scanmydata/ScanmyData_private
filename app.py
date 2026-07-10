@@ -3059,6 +3059,12 @@ def _validate_summary_against_afm_rules(
     result["present_rates"] = present_rates
 
     labels = _category_labels_for_client(client)
+
+    def _cat_norm(value: Any) -> str:
+        # Compare categories tolerantly (whitespace / case / accents-agnostic)
+        # so a match is recognised whether stored as a key or a display label.
+        return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
     category_mismatches: List[Dict[str, Any]] = []
     for vat_key in present_rates:
         mapping = rule.get("mapping") if isinstance(rule.get("mapping"), dict) else {}
@@ -3069,14 +3075,20 @@ def _validate_summary_against_afm_rules(
         ).strip()
         if not expected:
             continue
-        actual_set = {str(v).strip() for v in actual_categories.get(vat_key) or set()}
-        actual_set = {v for v in actual_set if v is not None}
-        if actual_set == {expected}:
+        expected_label = labels.get(expected, expected)
+        # A line agrees with the rule when its category equals the expected one in
+        # any form (key or label).
+        expected_variants = {v for v in (_cat_norm(expected), _cat_norm(expected_label)) if v}
+        actual_set = {str(v).strip() for v in (actual_categories.get(vat_key) or set()) if v is not None}
+        actual_norm = {_cat_norm(v) for v in actual_set if _cat_norm(v)}
+        # Agreement: every line at this rate carries the expected category and
+        # none is left blank -> no mismatch, nothing to warn about.
+        if actual_norm and actual_norm.issubset(expected_variants):
             continue
         category_mismatches.append({
             "vat_key": vat_key,
             "expected": expected,
-            "expected_label": labels.get(expected, expected),
+            "expected_label": expected_label,
             "actual": sorted(actual_set),
             "actual_labels": [labels.get(v, v) if v else "(κενό)" for v in sorted(actual_set)],
         })
@@ -3092,7 +3104,11 @@ def _validate_summary_against_afm_rules(
 
     result["category_mismatches"] = category_mismatches
     result["mtype_mismatch"] = mtype_mismatch
-    result["mismatch"] = bool(category_mismatches or mtype_mismatch)
+    # Only a real category disagreement should surface the warning/modal. When the
+    # characterization for every present VAT rate matches the rule, stay silent
+    # even if an MTYPE differs (the user only wants to be nagged about the ΦΠΑ
+    # category characterization).
+    result["mismatch"] = bool(category_mismatches)
     return result
 
 

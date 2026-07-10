@@ -1968,6 +1968,12 @@
           const info = mark ? `MARK ${mark}` : text;
           updateResultBox(`<strong>Εστάλη:</strong> ${escapeHtml(info)}`, 'success');
           setStatus('Ο κωδικός στάλθηκε στον υπολογιστή. Μπορείς να συνεχίσεις τη σάρωση.', 'success');
+          // Pull the desktop's freshly-primed summary state promptly so the
+          // characterization panel appears without needing a full page reload
+          // (the periodic heartbeat alone can feel too slow after a scan).
+          [700, 1500, 2600, 4000, 6000].forEach(function(ms){
+            setTimeout(function(){ try { sendHeartbeat(); } catch(_){} }, ms);
+          });
           // On OCR mode use the scanner overlay to draw a green confirmation rectangle
           if (CFG.scanMode === 'ocr' && ocrScanner && ocrScanner.overlayCanvas && lastOcrHighlight && (Date.now() - lastOcrHighlight.ts) < 2500) {
             try {
