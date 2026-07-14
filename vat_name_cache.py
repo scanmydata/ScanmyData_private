@@ -294,6 +294,133 @@ def store_from_client_map(client_map: Dict) -> int:
         return 0
 
 
+def db_path() -> str:
+    """Absolute path of the backing SQLite file (for cloud backup)."""
+    return _DB_PATH
+
+
+def snapshot_to(dest_path: str) -> bool:
+    """
+    Write a consistent copy of the cache DB to ``dest_path`` using SQLite's
+    online backup API. Safe to call while the cache is in use (WAL mode) — the
+    snapshot is a coherent point-in-time image, unlike copying the raw file.
+    Used to produce a clean artifact for cloud upload.
+    """
+    if not _ensure():
+        return False
+    try:
+        with _lock:
+            src = _connect()
+            try:
+                dst = sqlite3.connect(dest_path)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+        return True
+    except Exception:
+        log.exception("vat_name_cache: snapshot_to failed (%s)", dest_path)
+        return False
+
+
+def merge_rows(rows: Iterable[Tuple]) -> int:
+    """
+    Merge externally-sourced rows (e.g. pulled from the cloud copy) into the
+    local cache WITHOUT losing local data. Conflict resolution mirrors the
+    write path: higher ``priority`` wins; on equal priority a validated row
+    beats an unvalidated one, then the newer ``updated_at`` wins. Returns the
+    number of rows written.
+
+    Each row is (afm, name, source, priority, validated, validation_ts, updated_at);
+    missing trailing fields are tolerated.
+    """
+    if not _ensure():
+        return 0
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    written = 0
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                existing = {}
+                for afm, prio, val, upd in conn.execute(
+                    "SELECT afm, priority, validated, updated_at FROM vat_company_name"
+                ).fetchall():
+                    existing[afm] = (int(prio or 1), int(val or 0), str(upd or ""))
+
+                to_write = []
+                for row in rows:
+                    try:
+                        seq = list(row) + [None] * 7
+                        afm, name, source, prio, val, vts, upd = seq[:7]
+                    except Exception:
+                        continue
+                    key = _norm_afm(afm)
+                    clean = (name or "").strip()
+                    if not key or not clean:
+                        continue
+                    try:
+                        prio = int(prio) if prio is not None else _source_priority(source)
+                    except Exception:
+                        prio = _source_priority(source)
+                    val = 1 if val else 0
+                    upd = str(upd or "") or now
+                    cur = existing.get(key)
+                    if cur is not None:
+                        cprio, cval, cupd = cur
+                        if prio < cprio:
+                            continue
+                        if prio == cprio:
+                            newer = (val and not cval) or (upd > cupd)
+                            if not newer:
+                                continue
+                    to_write.append((key, clean, str(source or "unknown"), prio, val, vts, upd))
+
+                if to_write:
+                    conn.executemany(
+                        """
+                        INSERT INTO vat_company_name(afm, name, source, priority, validated, validation_ts, updated_at)
+                        VALUES(?,?,?,?,?,?,?)
+                        ON CONFLICT(afm) DO UPDATE SET
+                            name=excluded.name,
+                            source=excluded.source,
+                            priority=excluded.priority,
+                            validated=excluded.validated,
+                            validation_ts=excluded.validation_ts,
+                            updated_at=excluded.updated_at
+                        """,
+                        to_write,
+                    )
+                    conn.commit()
+                    written = len(to_write)
+            finally:
+                conn.close()
+    except Exception:
+        log.exception("vat_name_cache: merge_rows failed")
+    return written
+
+
+def merge_from_sqlite_file(path: str) -> int:
+    """Merge all rows from another cache DB file (e.g. the cloud copy) into local."""
+    if not path or not os.path.isfile(path):
+        return 0
+    try:
+        src = sqlite3.connect(path, timeout=10)
+        try:
+            rows = src.execute(
+                "SELECT afm, name, source, priority, validated, validation_ts, updated_at "
+                "FROM vat_company_name"
+            ).fetchall()
+        finally:
+            src.close()
+    except Exception:
+        log.exception("vat_name_cache: could not read remote DB %s", path)
+        return 0
+    return merge_rows(rows)
+
+
 def stats() -> Dict[str, int]:
     """Basic counts, handy for diagnostics / admin views."""
     out = {"total": 0}

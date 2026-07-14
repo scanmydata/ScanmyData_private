@@ -3445,6 +3445,12 @@ function rcReloadAfterWarning(){
 }
 
 function rcHandleWarningAcknowledge(){
+  // Guard: clearing the MARK box below dispatches an `input` event. The debounced
+  // markInput watcher reacts to an empty box by doing `window.location = SEARCH_BASE_URL`
+  // (a FULL reload) whenever the URL still carries ?mark=/force_edit. Suppress that
+  // side-effect so acknowledging a warning stays a partial refresh, not a navigation.
+  try { window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 3000; } catch(_) {}
+  try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
   rcRememberSearchClear();
   rcClearWarningSearchFields();
   try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
@@ -14814,6 +14820,9 @@ document.addEventListener('click', function(e){
     afmOk.addEventListener('click', function(){
       try { document.getElementById('afmWarningModal').style.display = 'none'; } catch(_){}
       // Partial refresh: clear inputs and refresh the list in place, no navigation.
+      // Suppress the empty-box side-effect so clearing does not trigger a full reload.
+      try { window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 3000; } catch(_) {}
+      try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
       try { clearSearchInputs(); } catch(_) {}
       try {
         const url = buildCleanUrl();

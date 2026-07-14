@@ -12710,6 +12710,25 @@ def api_scrape_receipt():
                     cached_name = vat_name_cache.lookup_name(issuer_vat)
                     if cached_name:
                         issuer_name = cached_name
+                    else:
+                        # The page carried an AFM but no name and nothing is cached
+                        # yet: resolve it now via client_db / VAT validator. This
+                        # writes the resolved name back into the shared cache, so
+                        # BOTH the modal and the cache get populated. Previously an
+                        # AFM-only scrape never triggered the validator here, so the
+                        # name was missing and the cache stayed empty for it.
+                        try:
+                            active_vat = ""
+                            try:
+                                _ac = get_active_credential_from_session() or {}
+                                active_vat = str(_ac.get("vat") or "").strip()
+                            except Exception:
+                                active_vat = ""
+                            resolved = _enrich_issuer_name_from_afm(active_vat, issuer_vat, None)
+                            if resolved and str(resolved).strip():
+                                issuer_name = str(resolved).strip()
+                        except Exception:
+                            log.exception("api_scrape_receipt: issuer name enrichment failed")
         except Exception:
             log.exception("api_scrape_receipt: vat_name_cache enrichment failed")
 
@@ -20060,6 +20079,73 @@ def _read_group_sync_settings_by_folder(group_folder: str) -> Dict[str, Any]:
     return {}
 
 
+_shared_vat_cache_last_run = 0.0
+_shared_vat_cache_initial_pull_done = False
+
+
+def _sync_shared_vat_cache(force: bool = False):
+    """
+    Back up / restore the global AFM→name cache (vat_name_cache.db) to the cloud.
+
+    Unlike per-group data this DB is a single shared artifact, so it lives under
+    a fixed Drive `_shared/` folder. Each pass PULLs the cloud copy and MERGES it
+    into the local DB (never overwrites — trust/priority/timestamp decide), then
+    PUSHes a consistent snapshot back. This keeps the cache warm across restarts
+    and on hosts with an ephemeral filesystem, and shares learned AFM↔name pairs
+    across every server instance.
+    """
+    global _shared_vat_cache_last_run, _shared_vat_cache_initial_pull_done
+    try:
+        interval = int(os.getenv('SHARED_VAT_CACHE_SYNC_SECONDS', '900') or 900)
+    except Exception:
+        interval = 900
+    now_ts = time.time()
+    if (not force) and _shared_vat_cache_last_run and (now_ts - _shared_vat_cache_last_run) < interval:
+        return
+    _shared_vat_cache_last_run = now_ts
+    try:
+        if not firebase_config._drive_backend_active():
+            return  # Only the Drive backend has a shared-file channel today.
+        import vat_name_cache
+        from firebase import drive_storage as _ds
+        remote_name = 'vat_name_cache.db'
+
+        # 1) PULL + MERGE (restore anything the cloud has that we don't).
+        try:
+            data = _ds.drive_pull_shared_file(remote_name)
+            if data:
+                tmp_in = os.path.join(tempfile.gettempdir(), 'remote_vat_name_cache.db')
+                with open(tmp_in, 'wb') as fh:
+                    fh.write(data)
+                merged = vat_name_cache.merge_from_sqlite_file(tmp_in)
+                try:
+                    os.remove(tmp_in)
+                except Exception:
+                    pass
+                if merged:
+                    log.info('Shared VAT cache: merged %d rows from cloud', merged)
+        except Exception:
+            log.exception('Shared VAT cache: pull/merge failed')
+        finally:
+            # Mark the boot-time pull as done even if the cloud copy did not exist
+            # yet, so subsequent passes fall back to the normal throttle.
+            _shared_vat_cache_initial_pull_done = True
+
+        # 2) PUSH a consistent snapshot back to the cloud.
+        try:
+            tmp_out = os.path.join(tempfile.gettempdir(), 'vat_name_cache_snapshot.db')
+            if vat_name_cache.snapshot_to(tmp_out):
+                _ds.drive_push_shared_file(tmp_out, remote_name)
+                try:
+                    os.remove(tmp_out)
+                except Exception:
+                    pass
+        except Exception:
+            log.exception('Shared VAT cache: snapshot/push failed')
+    except Exception:
+        log.exception('Shared VAT cache sync failed')
+
+
 def _firebase_backup_scheduler_loop():
     while True:
         try:
@@ -20163,6 +20249,15 @@ def _firebase_backup_scheduler_loop():
                         log.info('Scheduled Firebase backup sync done for group=%s sync_ok=%s', group_name, sync_result)
                     except Exception:
                         log.exception('Scheduled Firebase backup sync failed for group=%s', getattr(grp, 'name', None))
+
+                # Back up / restore the global AFM→name cache to the cloud.
+                # First iteration forces a pull so the cache is warm on boot
+                # (important on hosts with an ephemeral filesystem); afterwards it
+                # runs on its own throttle (SHARED_VAT_CACHE_SYNC_SECONDS).
+                try:
+                    _sync_shared_vat_cache(force=not _shared_vat_cache_initial_pull_done)
+                except Exception:
+                    log.exception('Shared VAT cache scheduler step failed')
         except Exception:
             log.exception('Firebase backup scheduler loop error')
         time.sleep(30)

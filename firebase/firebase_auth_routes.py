@@ -103,6 +103,54 @@ def _log_login_activity_async(app, uid, email, username, is_admin, groups_count)
         logger.warning(f"Could not start login activity thread: {e}")
 
 
+def _start_background_login_pull(app, group: str) -> bool:
+    """
+    Run the login-time Drive pull in the BACKGROUND so the user lands in the app
+    immediately instead of waiting on a blocking sync page. The page's progress
+    overlay polls /api/sync_progress and keeps the user informed; the pull itself
+    reports incremental progress by group folder.
+    """
+    group = str(group or '').strip()
+    if not group:
+        return False
+    # Show progress right away so the overlay appears on the first poll.
+    try:
+        firebase_config.set_group_sync_progress(group, 'syncing', 1, 'Έναρξη συγχρονισμού…')
+    except Exception:
+        pass
+
+    def _worker():
+        try:
+            with app.app_context():
+                try:
+                    # Smart, mtime-based pull (only newer remote files) — same as
+                    # the AJAX path; force=True would re-download the whole group.
+                    ok = firebase_config.firebase_pull_group_to_local(group, force=False)
+                    firebase_config.set_group_sync_progress(
+                        group, 'done', 100,
+                        'Ο συγχρονισμός ολοκληρώθηκε.' if ok else 'Ο συγχρονισμός ολοκληρώθηκε με προειδοποιήσεις.'
+                    )
+                    logger.info('Background login pull completed for group=%s ok=%s', group, ok)
+                except Exception:
+                    logger.exception('Background login pull failed for group=%s', group)
+                    try:
+                        firebase_config.set_group_sync_progress(
+                            group, 'done', 100,
+                            'Ο συγχρονισμός απέτυχε — θα επαναληφθεί αυτόματα στο παρασκήνιο.'
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            logger.warning('Background login pull worker crashed for group=%s', group)
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+        return True
+    except Exception as e:
+        logger.warning('Could not start background login pull thread for group=%s: %s', group, e)
+        return False
+
+
 firebase_auth_bp = Blueprint('firebase_auth', __name__, url_prefix='/firebase-auth')
 
 
@@ -615,9 +663,13 @@ def firebase_login():
             # Exactly one group: auto-set as active and continue
             session['active_group'] = user_groups[0].name
             flash(f'Καλώς ήρθατε!', 'success')
-            # Optional lazy-pull via sync page (admin-toggleable policy)
+            # Login/logout sync policy: instead of blocking on the sync page,
+            # start the pull in the background and land the user in the app
+            # immediately. A non-blocking progress overlay (triggered by the
+            # _sync=1 flag) keeps them informed of any sync in progress.
             if utils.firebase_sync_login_logout_enabled():
-                return redirect(url_for('firebase_auth.sync_start_pull', group=session['active_group']))
+                _start_background_login_pull(current_app._get_current_object(), session['active_group'])
+                return redirect(url_for('home', _sync='1'))
             return redirect(url_for('home'))
         else:
             # Multiple groups: redirect to list to select one

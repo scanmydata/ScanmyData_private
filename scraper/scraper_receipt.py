@@ -38,6 +38,11 @@ except ImportError:
     _analysis_onesys = None
 
 try:
+    from .scraper_receipt_analysis import scrape_simplycloud as _analysis_simplycloud
+except ImportError:
+    _analysis_simplycloud = None
+
+try:
     from .scraper_receipt_analysis import scrape_vsgr as _analysis_vsgr
 except ImportError:
     _analysis_vsgr = None
@@ -163,6 +168,16 @@ def scrape_onesys(url, timeout=15, debug=False):
         raise RuntimeError("scrape_onesys implementation not available")
     if _analysis_onesys:
         res = _analysis_onesys(url, timeout=timeout, debug=debug)
+    else:
+        res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
+    return _strip_analysis_fields(res)
+
+
+def scrape_simplycloud(url, timeout=15, debug=False):
+    if not _analysis_simplycloud and not _analysis_detect_and_scrape:
+        raise RuntimeError("scrape_simplycloud implementation not available")
+    if _analysis_simplycloud:
+        res = _analysis_simplycloud(url, timeout=timeout, debug=debug)
     else:
         res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
     return _strip_analysis_fields(res)
@@ -2085,7 +2100,11 @@ def _receipt_ai_schema():
 def _result_has_min_payload(result):
     if not isinstance(result, dict):
         return False
-    for key in ("MARK", "issuer_vat", "total_amount", "issue_date", "issuer_name"):
+    # A lone issuer_vat is NOT enough: some viewers (e.g. iview.gr) expose only
+    # the merchant VAT from the URL while MARK/total/date stay hidden. Counting
+    # it here wrongly suppressed the AI fallback, so the document arrived with an
+    # AFM but nothing to register. Require a "strong" field instead.
+    for key in ("MARK", "total_amount", "issue_date", "issuer_name"):
         val = result.get(key)
         if val is not None and str(val).strip() not in ("", "N/A", "None"):
             return True
@@ -2136,8 +2155,15 @@ def detect_and_scrape(url, timeout=20, debug=False):
     try:
         if "www1.aade.gr" in domain or "www1.gsis.gr" in domain:
             result = scrape_www1_aade(url, timeout=timeout, debug=debug)
-        elif "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain:
+        elif (
+            "mydatapi.aade.gr" in domain
+            or "mydata.aade.gr" in domain
+            or ("aade.gr" in domain and "timologioqr" in path_l)
+        ):
+            # Production (mydatapi/mydata) + dev QR endpoint (mydataapidev.aade.gr).
             result = scrape_mydatapi(url, timeout=timeout, debug=debug)
+        elif "simplycloud.gr" in domain:
+            result = scrape_simplycloud(url, timeout=timeout, debug=debug)
         elif "wedoconnect" in domain:
             result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
         elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:

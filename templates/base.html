@@ -5505,6 +5505,36 @@
         } catch (_) {}
       }, true);
 
+      // Global fallback: ensure the "Ρυθμίσεις Γενικών Λογαριασμών" settings-modal
+      // tabs (Γενικοί Λογαριασμοί / Συναλλασσόμενοι / Backup) keep working after a
+      // partial navigation. Those buttons are wired only inside a DOMContentLoaded
+      // handler in credentials_list.html, which does not reliably re-bind to the
+      // freshly-swapped buttons after a partial page swap. A delegated handler on
+      // document survives every swap. It defers to the page's own switchToTab()
+      // (which also re-runs initializeSettingsUi + expand/collapse logic); if that
+      // is unavailable it falls back to a minimal panel/button toggle.
+      document.addEventListener('click', function(ev) {
+        try {
+          const btn = ev.target && ev.target.closest ? ev.target.closest('#settingsModal [data-tab]') : null;
+          if (!btn) return;
+          const tabName = btn.getAttribute('data-tab');
+          if (!tabName) return;
+          if (typeof window.switchToTab === 'function') {
+            window.switchToTab(tabName);
+            return;
+          }
+          // Minimal fallback toggle (mirrors credentials_list.html switchToTab).
+          document.querySelectorAll('.settings-tab-panel').forEach(function(p){ p.classList.add('hidden'); });
+          const panel = document.getElementById('settings-tab-' + tabName);
+          if (panel) panel.classList.remove('hidden');
+          document.querySelectorAll('#settingsModal [data-tab]').forEach(function(b){
+            const on = b.getAttribute('data-tab') === tabName;
+            b.classList.toggle('tab-active', on);
+            b.classList.toggle('tab-inactive', !on);
+          });
+        } catch (_) {}
+      }, true);
+
       window.addEventListener('popstate', function(event) {
         if (!event.state || !event.state.partialNav) return;
         const url = new URL(window.location.href);
@@ -6181,10 +6211,31 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
 <script>
   (function(){
     const overlay = document.getElementById('syncProgressOverlay');
+    const panel = document.getElementById('syncProgressPanel');
     const bar = document.getElementById('syncProgressBar');
     const pctText = document.getElementById('syncProgressPercentText');
     const msg = document.getElementById('syncProgressMessage');
     let pollTimer = null;
+    // Non-blocking mode: after login we land the user in the app and only show a
+    // small progress card in the corner (no full-screen backdrop) so they can
+    // keep working while the sync runs.
+    let nonBlocking = false;
+
+    function applyNonBlockingStyles(){
+      if(!overlay) return;
+      // Overlay becomes a transparent, click-through container; the panel is a
+      // fixed bottom-right card that still receives interaction.
+      overlay.style.background = 'transparent';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.alignItems = 'flex-end';
+      overlay.style.justifyContent = 'flex-end';
+      if(panel){
+        panel.style.pointerEvents = 'auto';
+        panel.style.width = '320px';
+        panel.style.maxWidth = '90vw';
+        panel.style.margin = '0 18px 18px 0';
+      }
+    }
 
     function showOverlay(){ if(overlay) overlay.style.display='flex'; }
     function hideOverlay(){ if(overlay) overlay.style.display='none'; }
@@ -6216,8 +6267,8 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
         if(!r.ok) return false;
         const j = await r.json().catch(()=> null);
         if(!j) return false;
-        // Treat only explicit 'running' status as active. 'not_started' is harmless and should not show overlay.
-        const running = (j.status && j.status === 'running') || (j.percent && j.percent < 100 && j.status !== 'disabled');
+        // Treat 'running'/'syncing' as active. 'not_started' is harmless and should not show overlay.
+        const running = (j.status && (j.status === 'running' || j.status === 'syncing')) || (j.percent && j.percent < 100 && j.status !== 'disabled' && j.status !== 'done');
         if(running){
           showOverlay();
           const finished = updateProgress(j);
@@ -6233,7 +6284,20 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       const loginFormPresent = !!document.querySelector('form[action="/firebase-auth/login"], form[action="/auth/login"], form[action="/login"]');
       const onSyncPage = window.location.pathname && window.location.pathname.indexOf('/firebase-auth/sync') === 0;
       const explicitFlag = document.body && document.body.dataset && document.body.dataset.sync === '1';
-      if (!loginFormPresent && !onSyncPage && !explicitFlag) {
+      // Post-login: the server appends ?_sync=1 when it kicked off a background
+      // pull. Show progress non-blocking (corner card) and drop the flag from the
+      // URL so a refresh doesn't keep re-triggering it.
+      const syncQuery = /[?&]_sync=1(?:&|$)/.test(window.location.search || '');
+      if (syncQuery) {
+        nonBlocking = true;
+        applyNonBlockingStyles();
+        try {
+          const u = new URL(window.location.href);
+          u.searchParams.delete('_sync');
+          history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+        } catch(_){}
+      }
+      if (!loginFormPresent && !onSyncPage && !explicitFlag && !syncQuery) {
         // Do not start polling globally
         return;
       }

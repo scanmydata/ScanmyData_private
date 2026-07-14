@@ -1778,6 +1778,40 @@ def scrape_iview(url):
     return [], None
 
 
+def scrape_simplycloud(url):
+    """
+    Επιστρέφει (marks, counterpart_vat) για URLs τύπου app.simplycloud.gr.
+    Η σελίδα είναι server-rendered HTML: το MARK και το ΑΦΜ εκδότη διαβάζονται
+    απευθείας από το κείμενο (το ΑΦΜ υπάρχει και στο URL ως GR<9ψήφια>).
+    """
+    counterpart_vat = None
+    try:
+        m_url = re.search(r"GR(\d{9})", url, re.I)
+        if m_url:
+            counterpart_vat = m_url.group(1)
+    except Exception:
+        pass
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        r.encoding = r.apparent_encoding or "utf-8"
+        html = r.text
+    except Exception as e:
+        print(f"[RequestError] {e}")
+        return ([], counterpart_vat)
+
+    text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    marks = []
+    m = re.search(r"MARK[:\s]*(\d{15})", text)
+    if m:
+        marks = [m.group(1)]
+    if not counterpart_vat:
+        mv = re.search(r"Α\.?Φ\.?Μ\.?\s*[:\s]\s*(\d{9})", text)
+        if mv:
+            counterpart_vat = mv.group(1)
+    return (marks, counterpart_vat)
+
+
 def _invoice_like_ai_schema():
     return {
         "MARK": {"type": "string", "required": False, "default": None, "description": "Document mark"},
@@ -1820,10 +1854,17 @@ def main():
         source = "Wedoconnect"
         marks, counterpart_vat = scrape_wedoconnect(url)
 
-    elif "mydatapi.aade.gr" in domain:
+    elif "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain or (
+        "aade.gr" in domain and "timologioqr" in urlparse(url).path.lower()
+    ):
+        # Production (mydatapi/mydata) + dev QR endpoint (mydataapidev.aade.gr).
         source = "MyData"
         data = scrape_mydatapi(url)
         marks = [data.get("MARK", "N/A")]
+
+    elif "simplycloud.gr" in domain:
+        source = "SimplyCloud"
+        marks, counterpart_vat = scrape_simplycloud(url)
 
     elif "einvoice.s1ecos.gr" in domain:
         source = "ECOS E-Invoicing"

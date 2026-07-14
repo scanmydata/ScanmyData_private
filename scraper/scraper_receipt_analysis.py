@@ -3251,6 +3251,85 @@ def _extract_primer_mark_from_url(url):
     return m.group(1) if m else None
 
 
+def _iview_fill_from_page_text(html, out, debug=False):
+    """
+    iview.gr renders the ENTIRE receipt in its page text (ΜΑΡΚ / ΑΦΜ / ΗΜ.ΝΙΑ /
+    ΣΥΝΟΛΟ / ΑΝΑΛΥΣΗ ΦΠΑ), even though the myDATA link itself is injected by JS
+    and is absent from the static HTML. When the link cannot be resolved
+    server-side, read the values straight off the page so no browser / AI
+    fallback is needed. Only fills gaps already missing in ``out``.
+    """
+    try:
+        text = BeautifulSoup(html or "", "html.parser").get_text(" ", strip=True)
+    except Exception:
+        return out
+    if not text:
+        return out
+
+    if not out.get("MARK"):
+        m = re.search(r"ΜΑΡΚ\s*[:\s]\s*(\d{15})", text) or MARK_RE.search(text)
+        if m:
+            out["MARK"] = _normalize_mark_value(m.group(1) if m.lastindex else m.group(0))
+
+    if not out.get("issuer_vat"):
+        mv = re.search(r"(?:ΑΦΜ|AΦΜ)\s*[:\s]\s*EL?(\d{9})", text, re.I) or re.search(r"EL(\d{9})", text)
+        if mv:
+            out["issuer_vat"] = mv.group(1)
+
+    if not out.get("issue_date"):
+        md = (re.search(r"ΗΜ/?ΝΙΑ\s*[:\s]?\s*(\d{1,2}/\d{1,2}/\d{4})", text)
+              or re.search(r"Ημερομηνία\s*[:\s]\s*(\d{1,2}/\d{1,2}/\d{4})", text))
+        if md:
+            out["issue_date"] = _norm_date_to_ddmmyyyy(md.group(1))
+
+    if not out.get("progressive_aa"):
+        mn = re.search(r"ΑΡΙΘΜΟΣ\s*([A-Za-z0-9\-]+)", text)
+        if mn:
+            out["progressive_aa"] = mn.group(1).strip()
+
+    if not out.get("doc_type"):
+        mdoc = re.search(r"\b(ΑΛΠ|ΑΠΥ|ΑΠΟΔΕΙΞΗ[ Α-Ωα-ωΆ-Ώά-ώ]{0,30}|ΤΙΜΟΛΟΓΙΟ[ Α-Ωα-ωΆ-Ώά-ώ]{0,30})", text)
+        if mdoc:
+            out["doc_type"] = re.sub(r"\s+", " ", mdoc.group(1)).strip()
+
+    if not out.get("total_amount"):
+        mt = (re.search(r"ΠΛΗΡΩΤΕΟ\s*([\d.,]+)", text)
+              or re.search(r"ΣΥΝΟΛΙΚΗ ΑΞΙΑ\s*([\d.,]+)\s*€", text))
+        if mt:
+            out["total_amount"] = _clean_amount_to_comma(mt.group(1))
+
+    # VAT breakdown, scoped to the 'ΑΝΑΛΥΣΗ ΦΠΑ' section. Columns there are
+    # rate, VAT amount, net value (note: VAT before net, unlike other viewers).
+    if not (isinstance(out.get("vat_analysis"), dict) and out.get("vat_analysis")):
+        try:
+            seg = ""
+            if "ΑΝΑΛΥΣΗ ΦΠΑ" in text:
+                seg = text.split("ΑΝΑΛΥΣΗ ΦΠΑ")[-1]
+                seg = re.split(r"ΠΑΡΟΧΟΣ|ΑΡΙΘΜΟΣ ΑΔΕΙΑΣ", seg)[0]
+            vat_map = {}
+            for rate, vat, net in re.findall(r"(\d+(?:[.,]\d+)?)\s*%\s+([\d.,]+)\s+([\d.,]+)", seg):
+                key = _normalize_vat_rate_key(rate)
+                if key is None:
+                    continue
+                net_f = _amount_to_float(net)
+                vat_f = _amount_to_float(vat)
+                vat_map[str(key)] = {
+                    "net_amount": _float_to_comma(net_f),
+                    "vat_amount": _float_to_comma(vat_f),
+                    "gross_amount": _float_to_comma((net_f or 0.0) + (vat_f or 0.0)),
+                }
+            if vat_map:
+                out["vat_analysis"] = vat_map
+                out["vat_analysis_inferred"] = False
+        except Exception as e:
+            if debug:
+                print("iview vat aggregation error:", e)
+
+    if out.get("doc_type") and re.search(r"τιμολό?γιο|invoice", out["doc_type"], re.I):
+        out["is_invoice"] = True
+    return out
+
+
 def scrape_iview(url, timeout=20, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
@@ -3321,6 +3400,12 @@ def scrape_iview(url, timeout=20, debug=False):
             if out["doc_type"] and re.search(r"τιμολό?γιο|invoice", out["doc_type"], re.I):
                 out["is_invoice"] = True
             out["source"] = "IView->MyData"
+
+    # Fallback: the myDATA link did not resolve (JS-only page) but iview still
+    # renders the whole receipt in its HTML — read MARK/date/total/VAT directly.
+    if html and not out.get("MARK"):
+        _iview_fill_from_page_text(html, out, debug=debug)
+
     _ensure_vat_analysis(out)
     return out
 
@@ -3511,6 +3596,113 @@ def scrape_onesys(url, timeout=20, debug=False):
 
     doc_blob = " ".join(str(x or "") for x in (out.get("doc_type"), out.get("series")))
     if re.search(r"τιμολό?γιο|invoice", doc_blob, re.I):
+        out["is_invoice"] = True
+
+    if not (isinstance(out.get("vat_analysis"), dict) and out.get("vat_analysis")):
+        _infer_vat_analysis_from_total(out)
+    _ensure_vat_analysis(out)
+    return out
+
+
+def scrape_simplycloud(url, timeout=20, debug=False):
+    """
+    app.simplycloud.gr invoice/receipt viewer.
+
+    The document is a plain server-rendered HTML page; every field lives in the
+    page text:
+        MARK: <15 digits>, Authentication code: <hex>, ΑΦΜ: <9>, Ημερ. dd/mm/yyyy,
+        the document type (e.g. ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ / ΤΙΜΟΛΟΓΙΟ …),
+        the grand total ("Σύνολο : <amount>") and an 'Ανάλυση ΦΠΑ' table with rows
+        like "VAT13.0% <net> <vat>".
+    The issuer VAT is also embedded in the URL as GR<9digits>, so it is recovered
+    even if the page fetch is partial. The issuer *name* is intentionally left to
+    the caller's AFM→name enrichment (shared cache / VAT validator).
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "SimplyCloud", "vat_analysis": None,
+        "vat_analysis_inferred": False,
+    }
+
+    # URL-embedded issuer VAT floor (GR<9digits>) — kept even if fetch fails.
+    try:
+        mv_url = re.search(r"GR(\d{9})", url, re.I)
+        if mv_url:
+            out["issuer_vat"] = mv_url.group(1)
+    except Exception:
+        pass
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=timeout)
+        r.raise_for_status()
+        r.encoding = r.apparent_encoding or "utf-8"
+        html = r.text
+    except Exception as e:
+        if debug:
+            print("simplycloud fetch error:", e)
+        return out
+
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(" ", strip=True)
+
+    # MARK
+    m = re.search(r"MARK[:\s]*(\d{15})", text)
+    if m:
+        out["MARK"] = m.group(1)
+
+    # Issuer VAT from page text if not already recovered from the URL.
+    if not out["issuer_vat"]:
+        mv = re.search(r"Α\.?Φ\.?Μ\.?\s*[:\s]\s*(\d{9})", text)
+        if mv:
+            out["issuer_vat"] = mv.group(1)
+
+    # Issue date ("Ημερ. dd/mm/yyyy")
+    md = re.search(r"Ημερ\.?\s*[:\s]\s*(\d{1,2}/\d{1,2}/\d{4})", text)
+    if md:
+        out["issue_date"] = _norm_date_to_ddmmyyyy(md.group(1))
+
+    # Document number ("Αριθμός <n>")
+    man = re.search(r"Αριθμός\s*[:\s]?\s*([A-Za-z0-9\-_/]+)", text)
+    if man:
+        out["progressive_aa"] = man.group(1).strip()
+
+    # Document type (receipt vs invoice)
+    mt = re.search(r"(ΑΠΟΔΕΙΞΗ[ Α-Ωα-ωΆ-Ώά-ώ]{0,40}|ΤΙΜΟΛΟΓΙΟ[ Α-Ωα-ωΆ-Ώά-ώ]{0,40}|ΔΕΛΤΙΟ[ Α-Ωα-ωΆ-Ώά-ώ]{0,40})", text)
+    if mt:
+        out["doc_type"] = re.sub(r"\s+", " ", mt.group(1)).strip()
+
+    # Grand total: "Σύνολο : <amount>" (the VAT-inclusive final line). Take the
+    # last such match so the "Σύνολο" column header / subtotals do not win.
+    tots = re.findall(r"Σύνολο\s*:\s*([0-9][0-9\.,]*)", text)
+    if tots:
+        out["total_amount"] = _clean_amount_to_comma(tots[-1])
+
+    # VAT breakdown: rows like "VAT13.0% <net> <vat>" under 'Ανάλυση ΦΠΑ'.
+    vat_map = {}
+    try:
+        for rate, net, vat in re.findall(
+            r"VAT\s*([0-9]+(?:[.,][0-9]+)?)\s*%\s*([0-9][0-9\.,]*)\s+([0-9][0-9\.,]*)", text
+        ):
+            key = _normalize_vat_rate_key(rate)
+            if key is None:
+                continue
+            net_f = _amount_to_float(net)
+            vat_f = _amount_to_float(vat)
+            gross_f = (net_f or 0.0) + (vat_f or 0.0)
+            vat_map[str(key)] = {
+                "net_amount": _float_to_comma(net_f),
+                "vat_amount": _float_to_comma(vat_f),
+                "gross_amount": _float_to_comma(gross_f),
+            }
+    except Exception as e:
+        if debug:
+            print("simplycloud vat aggregation error:", e)
+    if vat_map:
+        out["vat_analysis"] = vat_map
+        out["vat_analysis_inferred"] = False
+
+    if out.get("doc_type") and re.search(r"τιμολό?γιο|invoice", out["doc_type"], re.I):
         out["is_invoice"] = True
 
     if not (isinstance(out.get("vat_analysis"), dict) and out.get("vat_analysis")):
@@ -4709,8 +4901,16 @@ def detect_and_scrape(url, timeout=20, debug=False):
     try:
         if "www1.aade.gr" in domain or "www1.gsis.gr" in domain:
             result = scrape_www1_aade(url, timeout=timeout, debug=debug)
-        elif "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain:
+        elif (
+            "mydatapi.aade.gr" in domain
+            or "mydata.aade.gr" in domain
+            or ("aade.gr" in domain and "timologioqr" in path_l)
+        ):
+            # Covers production (mydatapi/mydata) and the dev QR endpoint
+            # (mydataapidev.aade.gr/TimologioQR/QRInfo) — identical HTML schema.
             result = scrape_mydatapi(url, timeout=timeout, debug=debug)
+        elif "simplycloud.gr" in domain:
+            result = scrape_simplycloud(url, timeout=timeout, debug=debug)
         elif "wedoconnect" in domain:
             result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
         elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:

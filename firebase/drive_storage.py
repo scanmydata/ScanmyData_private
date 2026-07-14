@@ -35,7 +35,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -746,6 +746,91 @@ def drive_push_group_files(
         except Exception:
             logger.debug("Could not write firebase_push_error activity entry")
         return False
+
+
+# ============================================================================
+# Shared (cross-group) single-file backup — e.g. the global AFM→name cache.
+# These live under a fixed "_shared" folder at the Drive root, outside any
+# group subtree, so a single global artifact is backed up/restored regardless
+# of which group is active.
+# ============================================================================
+
+_SHARED_FOLDER_NAME = os.getenv("DRIVE_SHARED_FOLDER", "_shared")
+
+
+def _ensure_shared_folder() -> Optional[str]:
+    if not is_drive_enabled() and not init_drive():
+        return None
+    try:
+        return _ensure_subfolder(_root_folder_id, _SHARED_FOLDER_NAME)
+    except Exception:
+        logger.exception("[DRIVE SHARED] could not ensure shared folder")
+        return None
+
+
+def _find_shared_child(folder_id: str, name: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    try:
+        svc = _service()
+        q = f"'{folder_id}' in parents and name = '{_escape_q(name)}' and trashed = false"
+        resp = _call_with_retry(svc.files().list(
+            q=q,
+            fields="files(id, name, appProperties, modifiedTime, size)",
+            spaces="drive",
+            pageSize=5,
+        ).execute)
+        files = resp.get("files", [])
+        if files:
+            return files[0]["id"], files[0]
+    except Exception:
+        logger.exception("[DRIVE SHARED] lookup failed for %s", name)
+    return None, None
+
+
+def drive_push_shared_file(local_path: str, remote_name: str = None) -> bool:
+    """Encrypt and upload a single file to the Drive `_shared/` folder."""
+    try:
+        if not local_path or not os.path.isfile(local_path):
+            logger.warning("[DRIVE SHARED] source file missing: %s", local_path)
+            return False
+        folder_id = _ensure_shared_folder()
+        if not folder_id:
+            logger.warning("[DRIVE SHARED] backend not available; skip push of %s", local_path)
+            return False
+        remote_name = remote_name or os.path.basename(local_path)
+        with open(local_path, "rb") as fh:
+            raw = fh.read()
+        encrypted = _cipher().encrypt(raw)
+        try:
+            mtime = os.path.getmtime(local_path)
+        except Exception:
+            mtime = time.time()
+        existing_id, _meta = _find_shared_child(folder_id, remote_name)
+        _upload_bytes(folder_id, remote_name, encrypted, mtime, existing_id=existing_id)
+        logger.info("[DRIVE SHARED] pushed %s (%d bytes)", remote_name, len(raw))
+        return True
+    except Exception:
+        logger.exception("[DRIVE SHARED] push failed for %s", local_path)
+        return False
+
+
+def drive_pull_shared_file(remote_name: str) -> Optional[bytes]:
+    """Download and decrypt a single file from the Drive `_shared/` folder."""
+    try:
+        folder_id = _ensure_shared_folder()
+        if not folder_id:
+            return None
+        existing_id, _meta = _find_shared_child(folder_id, remote_name)
+        if not existing_id:
+            return None
+        raw = _download_bytes(existing_id)
+        try:
+            return _cipher().decrypt(raw)
+        except Exception:
+            logger.exception("[DRIVE SHARED] decrypt failed for %s", remote_name)
+            return None
+    except Exception:
+        logger.exception("[DRIVE SHARED] pull failed for %s", remote_name)
+        return None
 
 
 def drive_pull_group_to_local(
