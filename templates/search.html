@@ -7275,13 +7275,13 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
           showFlash(String(j.modal_warning), 'warning', 7000);
         }
 
-        // Keep MARK for yellow-box reclassification flow; clear only for receipt warnings.
-        const warningText = String(j.modal_warning || '').toLowerCase();
-        const receiptWarning = !!(
-          (j.modal_summary && (j.modal_summary.is_receipt === true || /αποδει/i.test(String(j.modal_summary.type_name || ''))))
-          || /αποδει/i.test(warningText)
-        );
-        if (receiptWarning && !j.allow_edit_existing) {
+        // After the warning modal is dismissed, clear the search box. The only
+        // exception is the yellow-box reclassification flow (allow_edit_existing),
+        // where the MARK must be kept so the user can re-characterise it.
+        if (!j.allow_edit_existing) {
+          // Suppress the empty-box side-effect so clearing stays a partial op.
+          try { window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 3000; } catch(_) {}
+          try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
           try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
           try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
         }
@@ -8331,6 +8331,12 @@ try {
           setTimeout(() => { window.__RC_ALLOW_MODAL_OPEN = false; }, 200);
         }
         if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { showFlash('Λήφθηκε απόδειξη — ελέγξτε τα στοιχεία και πατήστε "Αποθήκευση στο Cache".', 'success', 5000); }
+        // Incomplete scrape: tell the user which fields to fill in before saving.
+        try {
+          if (j && j.review && j.review.incomplete && Array.isArray(j.review.missing_labels) && j.review.missing_labels.length) {
+            showFlash('Ελλιπή στοιχεία απόδειξης — συμπλήρωσε: ' + j.review.missing_labels.join(', ') + '. Το URL αποθηκεύτηκε για έλεγχο πριν την εξαγωγή.', 'warning', 8000);
+          }
+        } catch(_) {}
       }
 
     } catch (err) {

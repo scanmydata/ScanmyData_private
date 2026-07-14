@@ -43,6 +43,11 @@ except ImportError:
     _analysis_simplycloud = None
 
 try:
+    from .scraper_receipt_analysis import scrape_etimologiera as _analysis_etimologiera
+except ImportError:
+    _analysis_etimologiera = None
+
+try:
     from .scraper_receipt_analysis import scrape_vsgr as _analysis_vsgr
 except ImportError:
     _analysis_vsgr = None
@@ -178,6 +183,16 @@ def scrape_simplycloud(url, timeout=15, debug=False):
         raise RuntimeError("scrape_simplycloud implementation not available")
     if _analysis_simplycloud:
         res = _analysis_simplycloud(url, timeout=timeout, debug=debug)
+    else:
+        res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
+    return _strip_analysis_fields(res)
+
+
+def scrape_etimologiera(url, timeout=15, debug=False):
+    if not _analysis_etimologiera and not _analysis_detect_and_scrape:
+        raise RuntimeError("scrape_etimologiera implementation not available")
+    if _analysis_etimologiera:
+        res = _analysis_etimologiera(url, timeout=timeout, debug=debug)
     else:
         res = _analysis_detect_and_scrape(url, timeout=timeout, debug=debug)
     return _strip_analysis_fields(res)
@@ -2164,6 +2179,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_mydatapi(url, timeout=timeout, debug=debug)
         elif "simplycloud.gr" in domain:
             result = scrape_simplycloud(url, timeout=timeout, debug=debug)
+        elif "etimologiera.gr" in domain:
+            result = scrape_etimologiera(url, timeout=timeout, debug=debug)
         elif "wedoconnect" in domain:
             result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
         elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:

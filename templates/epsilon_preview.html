@@ -657,8 +657,8 @@ async function initEpsilonPreviewPage(){
     $('#emptyState').removeClass('hidden');
   }
 
-  const dt = $('#epsilonTable').DataTable({
-    data: (TABLE_DATA||[]).map(r => {
+  function mapAllRows(){
+   return (TABLE_DATA||[]).map(r => {
       const lines = r.LINES || [];
       const missChar = hasMissingCategory(lines);
       const missVat  = hasMissingVat(lines);
@@ -688,7 +688,11 @@ async function initEpsilonPreviewPage(){
         _isReceipt: isRec,
         _markKey: String(r.MARK || '').trim()
       };
-    }),
+    });
+  }
+
+  const dt = $('#epsilonTable').DataTable({
+    data: mapAllRows(),
     columns: [
       { data: '_expand', className:'toggle-cell', orderable:false, searchable:false,
         render: (d,t,row)=> row._lines && row._lines.length>1 ? '<span class="text-sky-700 font-bold">+</span>' : ''
@@ -779,14 +783,41 @@ async function initEpsilonPreviewPage(){
   // initial compute
   updateTotalsAndExportState(dt);
 
+  // Popup: warn about rows missing the document number (Αριθμός παραστατικού),
+  // like the uncharacterized check. Informational only — it never reloads.
+  try {
+    const rowsArr = dt.rows().data().toArray() || [];
+    const missingAA = rowsArr.filter(r => !String(r.AA || '').trim());
+    if (missingAA.length && typeof showModalAlert === 'function'){
+      const list = missingAA.slice(0, 15).map(r => {
+        const id = String(r.MARK || r._markKey || '—');
+        const nm = String(r.NAME || r.AFM || '');
+        const dd = String(r.DATE || '');
+        return '• ' + id + (nm ? ' — ' + nm : '') + (dd ? ' (' + dd + ')' : '');
+      }).join('\n');
+      const more = missingAA.length > 15 ? ('\n…και ' + (missingAA.length - 15) + ' ακόμη') : '';
+      showModalAlert(
+        'Λείπουν αριθμοί παραστατικού',
+        missingAA.length + ' εγγραφές δεν έχουν «Αριθμό παραστατικού». Συμπλήρωσέ τους πριν την εξαγωγή του εξοδολογίου:\n\n' + list + more
+      );
+    }
+  } catch(_){}
+
   const searchInput = document.getElementById('epsilonSearch');
   if(searchInput){
     searchInput.addEventListener('input', function(){ dt.search(this.value).draw(); });
   }
 
   document.getElementById('resetRemovedRowsBtn')?.addEventListener('click', function(){
-    const baseUrl = '/epsilon/preview?vat=' + encodeURIComponent(ACTIVE_VAT);
-    window.location.href = baseUrl;
+    // Partial: rebuild the table in place instead of a full page reload.
+    try {
+      EXCLUDED_MARKS.clear();
+      dt.clear().rows.add(mapAllRows()).draw(false);
+      updateTotalsAndExportState(dt);
+      if (typeof showFlash === 'function') showFlash('Επαναφορά προεπισκόπησης.', 'info', 2000);
+    } catch(_){
+      window.location.href = '/epsilon/preview?vat=' + encodeURIComponent(ACTIVE_VAT);
+    }
   });
 
   // Export

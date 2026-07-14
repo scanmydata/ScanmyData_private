@@ -53,7 +53,7 @@ from flask import (
 import tempfile
 import zipfile
 import shutil
-from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
+from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft, scrape_etimologiera
 import requests
 import pandas as pd
 from shutil import move
@@ -10710,7 +10710,7 @@ def search():
         import re
         from urllib.parse import urlparse
         # existing invoice scrapers
-        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
+        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft, scrape_etimologiera
         # safe import of receipt scraper
         try:
             from scraper.scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
@@ -10776,6 +10776,15 @@ def search():
                         # Cleanup: ensure marks are valid 15-digit strings
                         if scraped_marks:
                             scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                    elif "etimologiera.gr" in domain:
+                        # React SPA → read the AADE summary from /api/invoice/preview/<uuid>
+                        # («Σύνοψη ΑΑΔΕ»). Returns the customer (counterpart) AFM so the
+                        # "ΑΦΜ vs ενεργός πελάτης" check matches when the client is the recipient.
+                        scraped_marks, scraped_afm_et = scrape_etimologiera(mark)
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_et
                     elif "mydatapi.aade.gr" in domain:
                         data = scrape_mydatapi(mark)
                         mark_val = data.get("MARK", "N/A")
@@ -12662,12 +12671,27 @@ def api_scrape_receipt():
             for x in (mark, issue_date, total_amount, issuer_vat, issuer_name, progressive_aa)
         )
         if (not has_core_data) and (not receipt_analysis):
+            # The URL yielded nothing — log it to the admin-only failed-URL list
+            # so unsupported viewers automatically come to our attention.
+            try:
+                import scrape_review
+                scrape_review.record_failed_url(
+                    url, reason="no_data",
+                    group=str(session.get("active_group") or "") or None,
+                    scraper_source=str(scraped.get("source") or "") or None,
+                )
+            except Exception:
+                log.exception("api_scrape_receipt: failed to record no_data URL")
             return jsonify({
                 "ok": False,
                 "error": "Δεν βρέθηκαν δεδομένα για το URL. Έλεγξε ότι είναι πλήρες και σωστό.",
                 "mode": mode,
                 "raw": scraped,
             }), 422
+
+        # Did the scraper itself return a valid 15-digit MARK (before we fall
+        # back to a generated pseudo-MARK below)? Used for review detection.
+        _scraper_real_mark = bool(re.fullmatch(r"\d{15}", str(scraped.get("MARK") or scraped.get("mark") or "").strip()))
 
         # If scraper MARK is missing/invalid, assign unique pseudo-MARK for receipts.
         if not re.fullmatch(r"\d{15}", mark or ""):
@@ -12732,7 +12756,51 @@ def api_scrape_receipt():
         except Exception:
             log.exception("api_scrape_receipt: vat_name_cache enrichment failed")
 
-        log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s", url, mode, is_invoice, mark)
+        # ---- Incomplete-receipt detection + review queue -------------------
+        # Some viewers scrape partially (e.g. no αριθμός/ημερομηνία/σύνολο). The
+        # receipt still opens so the user can fill the gaps manually, but we (a)
+        # log the URL for the admin and (b) queue it in the active group's review
+        # list so it is not forgotten before the bridge/εξοδολόγιο is exported.
+        review_info = {"incomplete": False, "missing_fields": [], "missing_labels": []}
+        try:
+            if not is_invoice:
+                import scrape_review
+                check_fields = {
+                    "mark": mark if _scraper_real_mark else "",
+                    "issuer_vat": issuer_vat,
+                    "issue_date": issue_date,
+                    "total_amount": total_amount,
+                    "progressive_aa": progressive_aa,
+                }
+                missing = scrape_review.missing_receipt_fields(check_fields)
+                if missing:
+                    review_info = {
+                        "incomplete": True,
+                        "missing_fields": missing,
+                        "missing_labels": [scrape_review.field_label(x) for x in missing],
+                    }
+                    grp_name = str(session.get("active_group") or "") or None
+                    scrape_review.record_failed_url(
+                        url, reason="incomplete", missing_fields=missing,
+                        group=grp_name, scraper_source=str(scraped.get("source") or "") or None,
+                    )
+                    try:
+                        scrape_review.add_to_review_queue(
+                            get_group_base_dir(), url=url, mark=str(mark or ""),
+                            missing_fields=missing,
+                            fields={
+                                "issuer_vat": issuer_vat, "issuer_name": issuer_name,
+                                "issue_date": issue_date, "total_amount": total_amount,
+                                "progressive_aa": progressive_aa,
+                            },
+                        )
+                    except Exception:
+                        log.exception("api_scrape_receipt: add_to_review_queue failed")
+        except Exception:
+            log.exception("api_scrape_receipt: incomplete-receipt detection failed")
+
+        log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s incomplete=%s",
+                 url, mode, is_invoice, mark, review_info.get("incomplete"))
 
         return jsonify({
             "ok": True,
@@ -12750,6 +12818,7 @@ def api_scrape_receipt():
             "receipt_analysis": receipt_analysis,
             "vat_analysis": vat_analysis,
             "vat_analysis_inferred": vat_analysis_inferred,
+            "review": review_info,
             "raw": scraped
         })
     except Exception as e:
@@ -12757,6 +12826,38 @@ def api_scrape_receipt():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/receipt_review/list", methods=["GET"])
+@login_required
+def api_receipt_review_list():
+    """
+    Receipts from the active group that scraped with missing fields and still
+    need manual completion. The frontend uses this to warn (not block) before
+    the bridge/εξοδολόγιο is exported.
+    """
+    try:
+        import scrape_review
+        items = scrape_review.list_review_queue(get_group_base_dir())
+        return jsonify({"ok": True, "count": len(items), "items": items})
+    except Exception as e:
+        log.exception("api_receipt_review_list failed")
+        return jsonify({"ok": False, "error": str(e), "items": []}), 500
+
+
+@app.route("/api/receipt_review/resolve", methods=["POST"])
+@login_required
+def api_receipt_review_resolve():
+    """Remove one receipt from the active group's review queue (once completed)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        key = str(data.get("key") or data.get("mark") or data.get("url") or "").strip()
+        if not key:
+            return jsonify({"ok": False, "error": "missing key"}), 400
+        import scrape_review
+        ok = scrape_review.resolve_review(get_group_base_dir(), key)
+        return jsonify({"ok": bool(ok)})
+    except Exception as e:
+        log.exception("api_receipt_review_resolve failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/save_epsilon", methods=["POST"])
@@ -12906,6 +13007,22 @@ def save_summary():
     )
 
     def _save_summary_response(ok=True, message=None, error=None, status=200, **extra):
+        # On a successful receipt save, drop it from the review queue once it is
+        # complete (has αριθμός + ημερομηνία + σύνολο), so the warn-only export
+        # check stops flagging it. Fully guarded — never affects the save result.
+        if ok:
+            try:
+                s = summary or {}
+                if _is_receipt(s):
+                    num = str(s.get("number") or s.get("AA") or s.get("aa") or s.get("progressive_aa") or "").strip()
+                    dat = str(s.get("issueDate") or s.get("issue_date") or "").strip()
+                    tot = str(s.get("totalValue") or s.get("total_value") or s.get("total_amount") or "").strip()
+                    mk = str(s.get("mark") or s.get("MARK") or "").strip()
+                    if mk and num and dat and tot:
+                        import scrape_review
+                        scrape_review.resolve_review(get_group_base_dir(), mk)
+            except Exception:
+                log.exception("save_summary: review-queue resolve hook failed")
         if is_ajax_save:
             payload = {"ok": bool(ok)}
             if message:
@@ -19207,6 +19324,46 @@ def admin_users():
     """List and manage all users"""
     users = admin_panel.admin_list_all_users()
     return render_template('admin/users.html', users=users)
+
+
+@app.route("/admin/failed-scrape-urls", methods=["GET"])
+@login_required
+@_require_admin
+def admin_failed_scrape_urls():
+    """
+    General-admin view of every URL a scraper could not fully resolve (unknown
+    viewer, empty result, or a receipt missing required fields). This is the
+    backlog for deciding which viewers to add to the scrapers next.
+
+    ?format=json returns the raw list; ?download=1 streams the JSON file.
+    """
+    import scrape_review
+    if request.args.get("download") == "1":
+        path = scrape_review.failed_urls_path()
+        if os.path.exists(path):
+            return send_file(path, as_attachment=True, download_name="failed_scrape_urls.json")
+        return jsonify({"ok": True, "items": []})
+    rows = scrape_review.list_failed_urls(limit=1000)
+    if request.args.get("format") == "json":
+        return jsonify({"ok": True, "count": len(rows), "items": rows})
+    try:
+        return render_template("admin/failed_scrape_urls.html", rows=rows)
+    except Exception:
+        # No template yet — fall back to JSON so the data is still reachable.
+        return jsonify({"ok": True, "count": len(rows), "items": rows})
+
+
+@app.route("/admin/failed-scrape-urls/clear", methods=["POST"])
+@login_required
+@_require_admin
+def admin_failed_scrape_urls_clear():
+    """Remove one URL from the admin failed-URL log (e.g. once a scraper covers it)."""
+    import scrape_review
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "missing url"}), 400
+    return jsonify({"ok": bool(scrape_review.clear_failed_url(url))})
 
 
 @app.route("/admin/users/<int:user_id>")

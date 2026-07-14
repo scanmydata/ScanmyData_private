@@ -17,6 +17,32 @@
   box-shadow: 0 0 0 2px rgba(14,165,233,0.28) !important;
 }
 
+/* Dark mode: the rule cards are built with hardcoded light Tailwind classes
+   (bg-white / text-gray-*), so the supplier name (text-gray-800) rendered
+   dark-on-dark and disappeared. Re-map the card surface and text colours. */
+[data-theme="dark"] .afm-rule-row {
+  background-color: var(--bg-secondary, #1e293b) !important;
+  border-color: rgba(148,163,184,0.28) !important;
+  color: var(--text-primary, #e2e8f0);
+}
+[data-theme="dark"] .afm-rule-row:hover {
+  border-color: #38bdf8 !important;
+}
+[data-theme="dark"] .afm-rule-row .text-gray-800,
+[data-theme="dark"] .afm-rule-row .text-gray-700,
+[data-theme="dark"] .afm-rule-row .text-gray-600 {
+  color: var(--text-primary, #e2e8f0) !important;
+}
+[data-theme="dark"] .afm-rule-row .text-gray-500 {
+  color: var(--text-secondary, #94a3b8) !important;
+}
+[data-theme="dark"] .afm-rule-row .bg-slate-100 {
+  background-color: rgba(148,163,184,0.20) !important;
+}
+[data-theme="dark"] .afm-rule-row .text-slate-600 {
+  color: var(--text-primary, #e2e8f0) !important;
+}
+
 @media (max-width: 768px) {
   .afm-rules-grid {
     grid-template-columns: 1fr;

@@ -2625,7 +2625,11 @@ def scrape_vsgr(url, timeout=15, debug=False):
                 mydatapi_url = direct
                 break
 
-    if not mydatapi_url:
+    # Only pay the (very expensive) headless-browser cost when the page exposes
+    # NEITHER a myDATA link NOR a MARK. vs.gr's /iv/invoice/download/ pages render
+    # the MARK and full PEPPOL invoice data straight into the static HTML, so the
+    # browser fallback used to add ~12s per scan for nothing — skip it here.
+    if not mydatapi_url and not MARK_RE.search(page_text):
         try:
             from scraper import _resolve_mydatapi_via_browser
             mydatapi_url = _resolve_mydatapi_via_browser(page_url, timeout=timeout, debug=debug)
@@ -3599,6 +3603,107 @@ def scrape_onesys(url, timeout=20, debug=False):
         out["is_invoice"] = True
 
     if not (isinstance(out.get("vat_analysis"), dict) and out.get("vat_analysis")):
+        _infer_vat_analysis_from_total(out)
+    _ensure_vat_analysis(out)
+    return out
+
+
+_ETIMOLOGIERA_UUID_RE = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _etimologiera_fetch_preview(url, timeout=20, debug=False):
+    """
+    Resolve the AADE summary the same way the page's «Σύνοψη ΑΑΔΕ» button does:
+    the preview page is a JS SPA that reads its data from
+    /api/invoice/preview/<uuid>. That JSON is the authoritative myDATA record
+    (MARK, issuer/counterpart, series/ΑΑ, totals, VAT analysis). Returns
+    (invoice_dict, provider_dict) or (None, None).
+    """
+    m = _ETIMOLOGIERA_UUID_RE.search(url or "")
+    if not m:
+        return None, None
+    uid = m.group(1)
+    parsed = urlparse(url)
+    base = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+    api = f"{base}/api/invoice/preview/{uid}"
+    try:
+        r = requests.get(api, headers={**HEADERS, "Accept": "application/json"}, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        if debug:
+            print("etimologiera fetch error:", e)
+        return None, None
+    inv_list = data.get("invoice") if isinstance(data, dict) else None
+    invoice = (inv_list or [{}])[0] if isinstance(inv_list, list) else {}
+    provider = data.get("providerInfo") if isinstance(data, dict) else {}
+    return (invoice or {}), (provider or {})
+
+
+def scrape_etimologiera(url, timeout=20, debug=False):
+    """
+    einvoicing.etimologiera.gr invoice viewer (React SPA). Pulls the myDATA
+    summary from /api/invoice/preview/<uuid> — equivalent to pressing the
+    «Σύνοψη ΑΑΔΕ» button and reading the AADE record.
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "eTimologiera", "vat_analysis": None,
+        "vat_analysis_inferred": False, "counterpart_vat": None, "series": None,
+    }
+    invoice, provider = _etimologiera_fetch_preview(url, timeout=timeout, debug=debug)
+    if not invoice and not provider:
+        return out
+
+    issuer = invoice.get("issuer") or {}
+    counterpart = invoice.get("counterpart") or {}
+    header = invoice.get("invoiceHeader") or {}
+    summary = invoice.get("invoiceSummary") or {}
+    extra = invoice.get("extra") or {}
+
+    out["MARK"] = _normalize_mark_value(provider.get("mark")) if provider.get("mark") else None
+    out["issuer_vat"] = re.sub(r"\D", "", str(issuer.get("vatNumber") or "")) or None
+    out["counterpart_vat"] = re.sub(r"\D", "", str(counterpart.get("vatNumber") or "")) or None
+    out["issuer_name"] = (issuer.get("name") or extra.get("salerName") or "").strip() or None
+    if header.get("issueDate"):
+        out["issue_date"] = _norm_date_to_ddmmyyyy(header.get("issueDate"))
+    out["progressive_aa"] = str(header.get("aa") or "").strip() or None
+    out["series"] = str(header.get("series") or "").strip() or None
+    out["doc_type"] = str(extra.get("invoiceTypeName") or header.get("invoiceType") or "").strip() or None
+
+    gross = summary.get("totalGrossValue")
+    if gross is None:
+        gross = summary.get("totalPrintGrossValue")
+    if gross is not None:
+        out["total_amount"] = _clean_amount_to_comma(gross)
+
+    # Receipt document types are 11.x (ΑΛΠ/ΑΠΥ…) and 8.4/8.5; everything else
+    # (1.x/2.x/5.x…) is an invoice.
+    itype = str(header.get("invoiceType") or "").strip()
+    out["is_invoice"] = not (itype.startswith("11.") or itype in {"8.4", "8.5", "8.6"})
+
+    vat_map = {}
+    for row in (invoice.get("invoiceVatAnalysis") or []):
+        try:
+            key = _normalize_vat_rate_key(row.get("vatPercent"))
+            if key is None:
+                continue
+            net_f = _amount_to_float(row.get("netValuePerVat"))
+            vat_f = _amount_to_float(row.get("vatAmount"))
+            vat_map[str(key)] = {
+                "net_amount": _float_to_comma(net_f),
+                "vat_amount": _float_to_comma(vat_f),
+                "gross_amount": _float_to_comma((net_f or 0.0) + (vat_f or 0.0)),
+            }
+        except Exception:
+            continue
+    if vat_map:
+        out["vat_analysis"] = vat_map
+        out["vat_analysis_inferred"] = False
+    else:
         _infer_vat_analysis_from_total(out)
     _ensure_vat_analysis(out)
     return out
@@ -4911,6 +5016,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_mydatapi(url, timeout=timeout, debug=debug)
         elif "simplycloud.gr" in domain:
             result = scrape_simplycloud(url, timeout=timeout, debug=debug)
+        elif "etimologiera.gr" in domain:
+            result = scrape_etimologiera(url, timeout=timeout, debug=debug)
         elif "wedoconnect" in domain:
             result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
         elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:

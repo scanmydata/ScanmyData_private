@@ -1357,7 +1357,9 @@ def scrape_vsgr(url):
                 mydatapi_url = direct
                 break
 
-    if not mydatapi_url:
+    # Skip the expensive headless-browser fallback when the page already exposes
+    # a MARK (vs.gr /iv/invoice/download/ pages embed it), which was adding ~12s.
+    if not mydatapi_url and not MARK_RE.search(html or ""):
         mydatapi_url = _resolve_mydatapi_via_browser(page_url, timeout=20, debug=False)
 
     if mydatapi_url:
@@ -1778,6 +1780,36 @@ def scrape_iview(url):
     return [], None
 
 
+def scrape_etimologiera(url):
+    """
+    Επιστρέφει (marks, customer_vat) για URLs τύπου einvoicing.etimologiera.gr.
+    Η σελίδα είναι React SPA· τα δεδομένα (ΑΑΔΕ σύνοψη) διαβάζονται από το
+    /api/invoice/preview/<uuid> — ισοδύναμο με το κουμπί «Σύνοψη ΑΑΔΕ».
+    Επιστρέφεται το ΑΦΜ του πελάτη (counterpart) ώστε ο έλεγχος «ΑΦΜ vs ενεργός
+    πελάτης» στη ροή Τιμολογίων να ταιριάζει όταν ο πελάτης είναι ο λήπτης.
+    """
+    m = re.search(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})", url or "")
+    if not m:
+        return ([], None)
+    uid = m.group(1)
+    try:
+        p = urlparse(url)
+        base = f"{p.scheme or 'https'}://{p.netloc}"
+        r = requests.get(f"{base}/api/invoice/preview/{uid}",
+                         headers={**HEADERS, "Accept": "application/json"}, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"[RequestError] {e}")
+        return ([], None)
+    invoice = ((data.get("invoice") or [{}])[0]) if isinstance(data, dict) else {}
+    provider = (data.get("providerInfo") or {}) if isinstance(data, dict) else {}
+    mark = str(provider.get("mark") or "").strip()
+    marks = [mark] if len(mark) == 15 and mark.isdigit() else []
+    customer_vat = re.sub(r"\D", "", str((invoice.get("counterpart") or {}).get("vatNumber") or "")) or None
+    return (marks, customer_vat)
+
+
 def scrape_simplycloud(url):
     """
     Επιστρέφει (marks, counterpart_vat) για URLs τύπου app.simplycloud.gr.
@@ -1861,6 +1893,10 @@ def main():
         source = "MyData"
         data = scrape_mydatapi(url)
         marks = [data.get("MARK", "N/A")]
+
+    elif "etimologiera.gr" in domain:
+        source = "eTimologiera"
+        marks, counterpart_vat = scrape_etimologiera(url)
 
     elif "simplycloud.gr" in domain:
         source = "SimplyCloud"

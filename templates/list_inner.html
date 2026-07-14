@@ -3218,3 +3218,100 @@ input[type="checkbox"].rc-switch {
   });
 })();
 </script>
+
+<script>
+/* Receipt review queue: WARN (do not block) before exporting the bridge/εξοδολόγιο.
+   Receipts that scraped with missing fields are queued server-side; here we show a
+   dismissible banner listing them and a one-time flash when the user clicks download. */
+(function(){
+  if (window.__receiptReviewWarnInstalled) return;
+  window.__receiptReviewWarnInstalled = true;
+  var reviewQueue = [];
+
+  // Place the chip immediately to the LEFT of the download (.xlsx) button.
+  function insertBanner(el){
+    var dl = document.getElementById('listDownloadControls');
+    if (dl && dl.parentNode){ dl.parentNode.insertBefore(el, dl); return true; }
+    var toggle = document.getElementById('downloadToggle');
+    if (toggle && toggle.parentNode){ toggle.parentNode.insertBefore(el, toggle); return true; }
+    return false;
+  }
+
+  function showPanel(on){
+    var p = document.getElementById('receiptReviewPanel');
+    if (p) p.style.display = on ? 'block' : 'none';
+    var chip = document.getElementById('receiptReviewChip');
+    if (chip) chip.setAttribute('aria-expanded', on ? 'true' : 'false');
+  }
+
+  function renderBanner(){
+    var id = 'receiptReviewBanner';
+    var existing = document.getElementById(id);
+    if (!reviewQueue.length){ if (existing) existing.remove(); return; }
+    if (!existing){
+      existing = document.createElement('div');
+      existing.id = id;
+      existing.__pinned = false;
+      existing.style.cssText = 'display:inline-block;position:relative;margin:0 8px 0 0;vertical-align:middle;';
+      if (!insertBanner(existing)) return;
+      // Hover to reveal; leaving hides it (unless pinned by a click).
+      existing.addEventListener('mouseenter', function(){ showPanel(true); });
+      existing.addEventListener('mouseleave', function(){ if (!existing.__pinned) showPanel(false); });
+      existing.addEventListener('click', function(ev){
+        if (ev.target && ev.target.closest && ev.target.closest('#receiptReviewChip')){
+          existing.__pinned = !existing.__pinned;
+          showPanel(existing.__pinned);
+        }
+      });
+    }
+    var lines = reviewQueue.slice(0, 20).map(function(r){
+      var miss = (r.missing_labels && r.missing_labels.length) ? (' — λείπει: ' + r.missing_labels.join(', ')) : '';
+      var ident = r.mark || r.url || r.key || '';
+      return '<li style="margin:2px 0;word-break:break-all;">' + escapeHtmlLocal(ident) + escapeHtmlLocal(miss) + '</li>';
+    }).join('');
+    var more = reviewQueue.length > 20 ? ('<div style="margin-top:4px;">…και ' + (reviewQueue.length - 20) + ' ακόμη</div>') : '';
+    var chipStyle = 'cursor:pointer;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:9999px;'
+      + 'padding:4px 12px;font-size:0.85rem;font-weight:600;line-height:1.2;';
+    var panelStyle = 'display:none;position:absolute;z-index:60;top:calc(100% + 4px);left:0;min-width:300px;max-width:460px;'
+      + 'max-height:320px;overflow:auto;background:#fffbeb;color:#92400e;border:1px solid #f59e0b;border-radius:8px;'
+      + 'padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:0.85rem;';
+    existing.innerHTML =
+      '<button type="button" id="receiptReviewChip" aria-expanded="false" style="' + chipStyle + '">'
+      + '⚠️ ' + reviewQueue.length + ' αποδείξεις προς έλεγχο ▾</button>'
+      + '<div id="receiptReviewPanel" style="' + panelStyle + '">'
+      + '<div style="font-weight:600;margin-bottom:6px;">Ελλιπή στοιχεία — συμπλήρωσέ τες πριν την εξαγωγή</div>'
+      + '<ul style="margin:0 0 0 18px;list-style:disc;">' + lines + '</ul>' + more + '</div>';
+    // A fresh render replaces the panel node, so re-apply the current state.
+    if (existing.__pinned) showPanel(true);
+  }
+
+  function escapeHtmlLocal(t){ var d=document.createElement('div'); d.textContent = String(t==null?'':t); return d.innerHTML; }
+
+  function refresh(){
+    try {
+      fetch('/api/receipt_review/list', { credentials:'same-origin' })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){ reviewQueue = (j && j.items) ? j.items : []; renderBanner(); })
+        .catch(function(){});
+    } catch(_){}
+  }
+  window.__refreshReceiptReview = refresh;
+
+  // Warn (non-blocking) when the user opens the download menu / clicks an export link.
+  document.addEventListener('click', function(e){
+    var t = e.target && e.target.closest ? e.target.closest('#downloadToggle, #downloadMenu a, .download-menu-item') : null;
+    if (!t || !reviewQueue.length) return;
+    // Do NOT preventDefault — warn only.
+    if (typeof showFlash === 'function'){
+      showFlash('Προσοχή: ' + reviewQueue.length + ' αποδείξεις έχουν ελλιπή στοιχεία (δες την προειδοποίηση πάνω από τον πίνακα).', 'warning', 5000);
+    }
+  }, true);
+
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(refresh, 400); });
+  // Refresh after table rebuilds so newly-scanned incomplete receipts show up.
+  if (typeof window.FBP_INIT_TABULATOR === 'function'){
+    var _o = window.FBP_INIT_TABULATOR;
+    window.FBP_INIT_TABULATOR = function(){ var r=_o.apply(this,arguments); setTimeout(refresh, 300); return r; };
+  }
+})();
+</script>
