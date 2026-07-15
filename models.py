@@ -50,6 +50,11 @@ class User(UserMixin, db.Model):
     current_session_id = db.Column(db.String(128), nullable=True)
     session_started_at = db.Column(db.DateTime(), nullable=True)
     last_active_at = db.Column(db.DateTime(), nullable=True)
+    # Last time an open browser tab pinged /api/session/ping. This is a different
+    # signal from last_active_at: last_active_at means "the user interacted" and
+    # drives the inactivity logout, while this means "a tab is still open at all"
+    # and drives logout on tab/browser close. A closed tab simply stops pinging.
+    tab_alive_at = db.Column(db.DateTime(), nullable=True)
     # accumulated active time in seconds (sum of finished sessions)
     total_active_seconds = db.Column(db.Integer, nullable=False, default=0)
 
@@ -176,6 +181,19 @@ class User(UserMixin, db.Model):
         self.current_session_id = session_id
         self.session_started_at = now
         self.last_active_at = now
+        # The tab that just logged in counts as open; without this the very first
+        # request after login would look like a closed-tab session.
+        self.tab_alive_at = now
+
+    def tab_ping(self, session_id: str) -> bool:
+        """Mark that an open tab is still alive. Does NOT count as user activity."""
+        try:
+            if not session_id or self.current_session_id != session_id:
+                return False
+            self.tab_alive_at = datetime.datetime.utcnow()
+            return True
+        except Exception:
+            return False
 
     def heartbeat(self, session_id: str) -> bool:
         """Update last_active_at if session_id matches current_session_id. Returns True if updated."""
@@ -212,6 +230,7 @@ class User(UserMixin, db.Model):
             self.current_session_id = None
             self.session_started_at = None
             self.last_active_at = None
+            self.tab_alive_at = None
             return duration
         except Exception:
             return 0

@@ -1655,6 +1655,34 @@ def api_logout():
     return jsonify({'ok': True, 'reason': reason})
 
 
+@auth_bp.route('/api/session/ping', methods=['POST'])
+def api_session_ping():
+    """Called by every open tab on a timer, to say 'this tab still exists'.
+
+    Deliberately NOT user activity: it only refreshes tab_alive_at, never
+    last_active_at, so an idle-but-open tab still hits the inactivity logout.
+    When the last tab closes the pings stop and enforce_active_session_claim
+    retires the session once TAB_CLOSE_GRACE_SECONDS has passed.
+    """
+    if not getattr(current_user, 'is_authenticated', False):
+        return jsonify({'ok': False, 'error': 'not_authenticated'}), 401
+    sid = session.get('session_id')
+    if not sid or getattr(current_user, 'current_session_id', None) != sid:
+        return jsonify({'ok': False, 'error': 'session_conflict'}), 401
+    try:
+        from models import db as _db
+        current_user.tab_ping(sid)
+        _db.session.commit()
+    except Exception:
+        try:
+            from models import db as _db
+            _db.session.rollback()
+        except Exception:
+            pass
+        return jsonify({'ok': False, 'error': 'ping_failed'}), 500
+    return jsonify({'ok': True})
+
+
 @auth_bp.route('/api/user', methods=['GET'])
 def api_user():
     if getattr(current_user, 'is_authenticated', False):

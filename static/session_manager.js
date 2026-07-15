@@ -15,6 +15,11 @@
     ? serverTimeoutSeconds * 1000
     : 10 * 60 * 1000;
 
+  const serverPingSeconds = Number(window.TAB_PING_INTERVAL_SECONDS || 0);
+  const resolvedPingMs = Number.isFinite(serverPingSeconds) && serverPingSeconds > 0
+    ? serverPingSeconds * 1000
+    : 25 * 1000;
+
   // Configuration
   const CONFIG = {
     INACTIVITY_TIMEOUT: resolvedTimeoutMs,
@@ -22,7 +27,12 @@
     LOGOUT_WARNING_TIME: Math.min(30 * 1000, Math.max(10 * 1000, Math.floor(resolvedTimeoutMs * 0.2))),
     STORAGE_KEY: 'fbp_session_activity',
     STORAGE_KEY_TAB: 'fbp_session_tab_id',
-    LOGOUT_ENDPOINT: '/auth/api/logout'
+    // auth_bp is registered with no url_prefix (app.py), so its routes live at the
+    // root -- '/auth/api/logout' never existed and every inactivity logout 404'd.
+    LOGOUT_ENDPOINT: '/api/logout',
+    // Says "this tab is still open" -- see startTabPing().
+    PING_ENDPOINT: '/api/session/ping',
+    PING_INTERVAL: resolvedPingMs
   };
 
   // Session state
@@ -58,7 +68,38 @@
     // Detect tab/browser close
     attachUnloadListener();
 
-    console.info('SessionManager initialized. Inactivity timeout(ms):', CONFIG.INACTIVITY_TIMEOUT);
+    // Tell the server this tab exists, and keep telling it.
+    startTabPing();
+
+    console.info('SessionManager initialized. Inactivity timeout(ms):', CONFIG.INACTIVITY_TIMEOUT,
+                 'tab ping(ms):', CONFIG.PING_INTERVAL);
+  }
+
+  /**
+   * Tab/browser close detection.
+   *
+   * There is no event that reliably means "this tab is closing": beforeunload
+   * and pagehide fire on ordinary navigation and on reload too, so a beacon sent
+   * from them logs the user out mid-session (and races the next page load).
+   *
+   * So we invert it. An open tab keeps saying "I'm here" on a timer. Closing the
+   * tab, closing the browser, or killing the process all stop the pings by
+   * simply not happening, and the server retires the session once the pings are
+   * older than TAB_CLOSE_GRACE_SECONDS. Navigation and reload are safe because
+   * the next page starts pinging immediately. Several open tabs each ping, so
+   * closing one leaves the others working.
+   */
+  function startTabPing() {
+    const ping = function () {
+      // A hidden tab is still an open tab, so keep pinging while hidden.
+      fetch(CONFIG.PING_ENDPOINT, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+      }).catch(function () { /* offline//transient: the next tick retries */ });
+    };
+    ping();
+    setInterval(ping, CONFIG.PING_INTERVAL);
   }
 
   /**
@@ -203,39 +244,23 @@
    * Attach unload listener for tab/browser close
    */
   function attachUnloadListener() {
-    // Store tab ID in sessionStorage (cleared when tab closes)
-    let beforeUnloadFired = false;
+    // NOTE: there used to be a 'beforeunload' handler here that fired a
+    // sendBeacon logout with reason 'tab_close'. It has been removed.
+    //
+    // beforeunload does not mean "the tab is closing" -- it fires on every full
+    // page navigation and on reload too. The beacon was pointed at a URL that
+    // did not exist ('/auth/api/logout' -> 404), so it never actually logged
+    // anyone out and the breakage stayed invisible. Once the URL was corrected
+    // the real behaviour showed up: every login redirect, every form POST
+    // redirect and every refresh killed the session server-side and bounced the
+    // user straight back to the login page.
+    //
+    // There is no reliable way to tell a close from a navigation here, and we do
+    // not need one: abandoned sessions already expire server-side via
+    // last_active_at + SESSION_TIMEOUT_SECONDS in enforce_active_session_claim.
+    // The inactivity logout below still works and is the supported path.
 
-    window.addEventListener('beforeunload', function(e) {
-      // Mark that beforeunload fired for this session
-      beforeUnloadFired = true;
-      sessionStorage.setItem('fbp_beforeunload_fired', 'true');
-      
-      // Schedule logout after tab closes (use beacon or async logout)
-      // We'll use fetch with keepalive flag if available
-      try {
-        const logoutData = new FormData();
-        logoutData.append('reason', 'tab_close');
-        
-        // Use sendBeacon if available (most reliable for logout on unload)
-        if (navigator.sendBeacon) {
-          const payload = new URLSearchParams({ reason: 'tab_close' });
-          navigator.sendBeacon(CONFIG.LOGOUT_ENDPOINT, payload);
-        } else {
-          // Fallback: use fetch with keepalive
-          fetch(CONFIG.LOGOUT_ENDPOINT, {
-            method: 'POST',
-            body: logoutData,
-            keepalive: true,
-            credentials: 'same-origin'
-          }).catch(e => console.warn('Tab close logout failed:', e));
-        }
-      } catch (e) {
-        console.warn('Failed to notify logout on tab close:', e);
-      }
-    });
-
-    // Also detect tab visibility change (when user switches tabs)
+    // Detect tab visibility change (when user switches tabs)
     document.addEventListener('visibilitychange', function() {
       if (document.visibilityState === 'hidden') {
         // Tab is hidden - don't reset activity timer

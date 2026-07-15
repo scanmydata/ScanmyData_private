@@ -1,0 +1,13 @@
+{
+  "name": "scanmydata-assets",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build-time asset pipeline (Tailwind CSS). Replaces the Tailwind Play CDN, which compiled CSS in the browser on every page load.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./assets/tailwind.src.css -o ./static/styles/tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./assets/tailwind.src.css -o ./static/styles/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

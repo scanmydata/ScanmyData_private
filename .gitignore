@@ -7,3 +7,5 @@ __pycache__/
 *.db
 *.log
 data/
+# Tailwind build toolchain (the compiled CSS in static/styles/ IS committed)
+node_modules/

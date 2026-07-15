@@ -943,6 +943,13 @@ app.secret_key = os.getenv("FLASK_SECRET", "douradonis1997")
 app.config["UPLOAD_FOLDER"] = UPLOADS_DIR
 # Keep backend inactivity timeout aligned with frontend timeout.
 app.config.setdefault('SESSION_TIMEOUT_SECONDS', int(os.getenv('SESSION_TIMEOUT_SECONDS', '900')))
+# How long a session stays usable after its last open tab stopped pinging.
+# Open tabs ping /api/session/ping every TAB_PING_INTERVAL_SECONDS; closing the
+# tab (or the whole browser) just stops the pings, so the session goes stale on
+# its own. Must stay comfortably above the ping interval or a slow/queued ping
+# would look like a closed tab. Set to 0 to disable tab-close logout.
+app.config.setdefault('TAB_CLOSE_GRACE_SECONDS', int(os.getenv('TAB_CLOSE_GRACE_SECONDS', '90')))
+app.config.setdefault('TAB_PING_INTERVAL_SECONDS', int(os.getenv('TAB_PING_INTERVAL_SECONDS', '25')))
 
 # --- Initialize Logger ---
 logger = logging.getLogger(__name__)
@@ -988,7 +995,7 @@ try:
             # ignore DB creation errors during import; app can still run
             pass
         # Idempotent column migration: db.create_all() does NOT add new columns
-        # to existing SQLite tables, so add the 2FA columns if they are missing.
+        # to existing SQLite tables, so add them here if they are missing.
         try:
             from sqlalchemy import inspect as _sa_inspect, text as _sa_text
             _insp = _sa_inspect(db.engine)
@@ -1004,13 +1011,15 @@ try:
                 _missing.append("ALTER TABLE user ADD COLUMN email_otp_hash VARCHAR(128)")
             if 'email_otp_expires' not in _user_cols:
                 _missing.append("ALTER TABLE user ADD COLUMN email_otp_expires TIMESTAMP")
+            if 'tab_alive_at' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN tab_alive_at TIMESTAMP")
             if _missing:
                 with db.engine.begin() as _conn:
                     for _stmt in _missing:
                         _conn.execute(_sa_text(_stmt))
-                logger.info("Added 2FA columns to user table: %d", len(_missing))
+                logger.info("Added missing columns to user table: %d", len(_missing))
         except Exception:
-            logger.exception("Could not run 2FA column migration")
+            logger.exception("Could not run user column migration")
     # Register a SQLAlchemy after_commit hook to record DB activity per-user.
     try:
         from sqlalchemy import event
@@ -1511,6 +1520,10 @@ def session_heartbeat():
             '/api/support/ticket/me',
             '/api/support/events',
             '/api/sync_progress',
+            # Tab liveness only means a tab is open, not that anyone is using it.
+            # Counting it as activity would keep the inactivity logout from ever
+            # firing on an idle-but-open tab.
+            '/api/session/ping',
         }
         if path in non_interactive_paths:
             return None
@@ -1559,7 +1572,9 @@ def enforce_active_session_claim():
             return None
 
         path = (request.path or "")
-        if path.startswith('/static/') or path in ('/auth/login', '/auth/api/logout', '/logout'):
+        # auth_bp has no url_prefix, so these live at the root. The old '/auth/...'
+        # spellings matched nothing, which meant logout was never actually exempt.
+        if path.startswith('/static/') or path in ('/api/logout', '/logout'):
             return None
 
         sid = session.get('session_id')
@@ -1579,6 +1594,37 @@ def enforce_active_session_claim():
 
         timeout_seconds = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
         now = datetime.datetime.utcnow()
+
+        # Tab/browser close: open tabs ping /api/session/ping, so pings that
+        # stopped longer than the grace window ago mean every tab is gone and this
+        # session must not be reusable. The ping route itself is exempt, otherwise
+        # a machine coming back from sleep could never resume -- and exempting it
+        # is safe because a closed tab cannot ping, so a returning user still trips
+        # this on their first real request. Inactivity is handled separately below.
+        tab_grace = int(current_app.config.get('TAB_CLOSE_GRACE_SECONDS', 90))
+        tab_alive = getattr(current_user, 'tab_alive_at', None)
+        if tab_grace > 0 and tab_alive and path != '/api/session/ping' \
+                and (now - tab_alive).total_seconds() > tab_grace:
+            try:
+                from models import db as _db
+                current_user.end_session(sid)
+                _db.session.commit()
+            except Exception:
+                try:
+                    _db.session.rollback()
+                except Exception:
+                    pass
+            try:
+                logout_user()
+            except Exception:
+                pass
+            for key in ('active_credential', '_remote_qr_owner', 'session_id', '_last_heartbeat_ts'):
+                session.pop(key, None)
+            if path.startswith('/api/'):
+                return jsonify({'ok': False, 'error': 'session_closed',
+                                'message': 'Η συνεδρία έκλεισε επειδή το παράθυρο δεν είναι πλέον ανοιχτό.'}), 401
+            return redirect(url_for('auth.login', session_expired='1'))
+
         last_active = getattr(current_user, 'last_active_at', None)
         if last_active and (now - last_active).total_seconds() > timeout_seconds:
             # Timeout path: if admin policy is login/logout sync, schedule push in background.
