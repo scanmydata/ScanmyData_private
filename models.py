@@ -84,6 +84,33 @@ class User(UserMixin, db.Model):
 
     @property
     def groups(self):
+        """Groups this user belongs to.
+
+        Memoised for the duration of the request: the underlying lookup is a
+        Firebase round trip (~80ms) plus a DB query per group, and this property
+        gets touched repeatedly -- once per iteration in
+        templates/auth/groups.html, twice in one call in admin/auth.py's
+        api_user_groups, and on every page render via get_active_group() when no
+        active group is in the session. Without the cache those all became
+        separate network calls.
+        """
+        cache_key = f'_user_groups_cache_{self.id}'
+        try:
+            from flask import g, has_app_context
+        except Exception:
+            return self._load_groups()
+
+        if not has_app_context():
+            # Scripts / shell usage: no request to scope a cache to.
+            return self._load_groups()
+
+        cached = getattr(g, cache_key, None)
+        if cached is None:
+            cached = self._load_groups()
+            setattr(g, cache_key, cached)
+        return cached
+
+    def _load_groups(self):
         # If Firebase is enabled and user has firebase_uid, get groups from Firebase
         if self.firebase_uid:
             try:
@@ -96,12 +123,12 @@ class User(UserMixin, db.Model):
                         group = Group.query.filter_by(name=group_name).first()
                         if group:
                             firebase_groups.append(group)
-                    
+
                     if firebase_groups:
                         return firebase_groups
             except Exception as e:
                 print(f"Firebase groups fetch error: {e}")
-        
+
         # Fallback to local database
         return [ug.group for ug in self.user_groups]
 
@@ -271,20 +298,24 @@ class Group(db.Model):
         try:
             from firebase import firebase_config
             if firebase_config.is_firebase_enabled():
-                group_data = firebase_config.firebase_read_data(f'/groups/{self.name}')
-                if group_data and 'admins' in group_data:
+                # Read ONLY the admins child, never the whole /groups/<name> node:
+                # the backup/sync system stores the file tree at /groups/<name>/files,
+                # so the parent node is ~137MB+ and reading it took seconds (97s at
+                # worst) purely to pluck this one key.
+                admin_uids = firebase_config.firebase_read_data(f'/groups/{self.name}/admins')
+                if admin_uids:
                     # Convert admin UIDs to User objects
                     firebase_admins = []
-                    for uid in group_data['admins']:
+                    for uid in admin_uids:
                         user = User.query.filter_by(firebase_uid=uid).first()
                         if user:
                             firebase_admins.append(user)
-                    
+
                     if firebase_admins:
                         return firebase_admins
         except Exception as e:
             print(f"Firebase admins fetch error: {e}")
-        
+
         # Fallback to local database
         return [ug.user for ug in self.user_groups if ug.role == 'admin']
 

@@ -109,7 +109,14 @@ def _resolve_mydatapi_via_browser(url, timeout=20, debug=False):
         return None
 
     timeout_ms = int(max(timeout, 8) * 1000)
-    candidates = [url + ("&" if "?" in url else "?") + "peppol=true", url]
+    # How long to wait for the page to fire its own myDATA request after load.
+    # The listener below usually has the answer within ~1-2s; we poll rather than
+    # sleep, so a hit returns immediately and only a miss pays the full budget.
+    capture_ms = int(os.getenv("MYDATA_CAPTURE_WAIT_MS", "6000"))
+
+    # Plain URL first. The ?peppol=true variant is speculative -- it used to be
+    # tried FIRST, which meant every scrape paid for a pointless extra page load.
+    candidates = [url, url + ("&" if "?" in url else "?") + "peppol=true"]
     seen = set()
     candidates = [c for c in candidates if not (c in seen or seen.add(c))]
 
@@ -128,26 +135,83 @@ def _resolve_mydatapi_via_browser(url, timeout=20, debug=False):
 
             page.on("request", _capture_request)
 
-            for cu in candidates:
+            # We only care about the myDATA request this page makes, so don't
+            # download images/fonts/media. Faster, and less network noise.
+            def _skip_heavy(route):
                 try:
-                    page.goto(cu, wait_until="networkidle", timeout=timeout_ms)
-                    page.wait_for_timeout(4500)
+                    if route.request.resource_type in ("image", "media", "font"):
+                        route.abort()
+                    else:
+                        route.continue_()
                 except Exception:
-                    continue
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
 
-                # try direct extraction again after JS render
-                rendered = page.content()
-                rendered_url = _extract_mydatapi_url_from_text(rendered, page.url)
-                if rendered_url:
-                    browser.close()
-                    return rendered_url
+            try:
+                page.route("**/*", _skip_heavy)
+            except Exception:
+                pass
 
+            def _try_extract():
+                """Look for the myDATA URL in every place it can show up, cheapest first."""
+                # 1) a request the page fired (only happens once something is clicked)
                 if found["url"]:
-                    browser.close()
                     return found["url"]
-                if "mydatapi.aade.gr" in page.url and "TimologioQR/QRInfo" in page.url:
+                # 2) we were redirected straight onto it
+                try:
+                    if "mydatapi.aade.gr" in page.url and "TimologioQR/QRInfo" in page.url:
+                        return page.url
+                except Exception:
+                    pass
+                # 3) it is embedded in the markup -- the usual case for e-invoicing.gr,
+                #    which server-renders the link into the page
+                try:
+                    return _extract_mydatapi_url_from_text(page.content(), page.url)
+                except Exception:
+                    return None
+
+            def _poll_extract(budget_ms):
+                """Check immediately, then keep checking until the budget runs out."""
+                waited = 0
+                while True:
+                    got = _try_extract()
+                    if got:
+                        return got
+                    if waited >= budget_ms:
+                        return None
+                    try:
+                        page.wait_for_timeout(250)
+                    except Exception:
+                        return None
+                    waited += 250
+
+            for cu in candidates:
+                # Two things used to cost ~40s here, both fixed below.
+                #
+                # 1. wait_until="networkidle": these pages poll analytics, so the
+                #    network never falls idle and goto() burned its full 20s timeout
+                #    on every candidate.
+                # 2. `except: continue` after goto, which skipped the extraction
+                #    entirely whenever goto timed out -- i.e. always.
+                #
+                # Measured on the real URLs: goto(domcontentloaded) returns at ~1.5s
+                # and the myDATA link is already in the DOM at ~1.57s. The request
+                # listener never fires for these pages (nothing requests myDATA until
+                # a button is clicked), so checking page content FIRST is what makes
+                # this fast -- waiting on the listener just burns the budget.
+                try:
+                    page.goto(cu, wait_until="domcontentloaded", timeout=timeout_ms)
+                except Exception:
+                    # A timeout/error is not failure -- the answer may already be
+                    # on the page. Fall through and look.
+                    pass
+
+                got = _poll_extract(capture_ms)
+                if got:
                     browser.close()
-                    return page.url
+                    return got
 
                 clicked = False
 

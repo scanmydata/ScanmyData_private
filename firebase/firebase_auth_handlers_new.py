@@ -399,29 +399,30 @@ class FirebaseAuthHandler:
                 user_profile['group_roles'][group_name] = role
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
-            # Add to group's members list
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data:
-                if 'members' not in group_data:
-                    group_data['members'] = []
-                if 'admins' not in group_data:
-                    group_data['admins'] = []
-                
+            # Add to group's members list.
+            # Only members/admins are touched, so read and update just those children:
+            # /groups/<name> also carries the backup file tree under /files, and the
+            # old read-modify-write pulled ~137MB down and pushed it straight back.
+            if firebase_config.firebase_exists(f'/groups/{group_name}'):
+                members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+                admins = firebase_config.firebase_read_data(f'/groups/{group_name}/admins') or []
+
                 # Remove from both lists first
-                if uid in group_data['members']:
-                    group_data['members'].remove(uid)
-                if uid in group_data['admins']:
-                    group_data['admins'].remove(uid)
-                
+                if uid in members:
+                    members.remove(uid)
+                if uid in admins:
+                    admins.remove(uid)
+
                 # Add to appropriate list
                 if role == 'admin':
-                    if uid not in group_data['admins']:
-                        group_data['admins'].append(uid)
+                    if uid not in admins:
+                        admins.append(uid)
                 else:
-                    if uid not in group_data['members']:
-                        group_data['members'].append(uid)
-                
-                firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+                    if uid not in members:
+                        members.append(uid)
+
+                firebase_config.firebase_update_data(
+                    f'/groups/{group_name}', {'members': members, 'admins': admins})
             
             logger.info(f"User {uid} added to group: {group_name} (RTDB)")
             
@@ -480,20 +481,19 @@ class FirebaseAuthHandler:
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
             # Remove from group's members list
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data:
-                members = group_data.get('members', [])
-                admins = group_data.get('admins', [])
-                
+            # members/admins children only -- see add_user_to_group above
+            if firebase_config.firebase_exists(f'/groups/{group_name}'):
+                members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+                admins = firebase_config.firebase_read_data(f'/groups/{group_name}/admins') or []
+
                 if uid in members:
                     members.remove(uid)
                 if uid in admins:
                     admins.remove(uid)
-                
-                group_data['members'] = members
-                group_data['admins'] = admins
-                firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
-            
+
+                firebase_config.firebase_update_data(
+                    f'/groups/{group_name}', {'members': members, 'admins': admins})
+
             logger.info(f"User {uid} removed from group: {group_name} (RTDB)")
             
             # Log activity
@@ -565,13 +565,11 @@ class FirebaseAuthHandler:
             except Exception as e:
                 logger.debug(f"Firestore get failed: {e}, falling back to RTDB")
             
-            # Fallback to RTDB
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data:
-                members = group_data.get('members', [])
-                admins = group_data.get('admins', [])
-                return list(set(members + admins))
-            return []
+            # Fallback to RTDB -- members/admins children only, never the whole
+            # /groups/<name> node (it carries the >137MB /files backup tree).
+            members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+            admins = firebase_config.firebase_read_data(f'/groups/{group_name}/admins') or []
+            return list(set(list(members) + list(admins)))
             
         except Exception as e:
             logger.error(f"Failed to get members for group {group_name}: {e}")
@@ -621,9 +619,8 @@ def firebase_create_group(group_name: str, creator_uid: str, data_folder: str = 
         if not firebase_config.is_firebase_enabled():
             return False, "Firebase not enabled"
         
-        # Check if group already exists
-        existing = firebase_config.firebase_read_data(f'/groups/{group_name}')
-        if existing:
+        # Check if group already exists (shallow -- do not pull the whole node)
+        if firebase_config.firebase_exists(f'/groups/{group_name}'):
             return False, "Group already exists"
         
         # Create group data
@@ -710,18 +707,17 @@ def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[
             user_profile['groups'] = groups
             firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
         
-        # Update group data
-        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-        if group_data:
-            members = group_data.get('members', [])
-            admins = group_data.get('admins', [])
-            
+        # Update group data -- members/admins children only (see add_user_to_group)
+        if firebase_config.firebase_exists(f'/groups/{group_name}'):
+            members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+            admins = firebase_config.firebase_read_data(f'/groups/{group_name}/admins') or []
+
             # Remove from both lists first
             if uid in members:
                 members.remove(uid)
             if uid in admins:
                 admins.remove(uid)
-            
+
             # Add to appropriate list
             if role == 'admin':
                 if uid not in admins:
@@ -729,10 +725,9 @@ def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[
             else:
                 if uid not in members:
                     members.append(uid)
-            
-            group_data['members'] = members
-            group_data['admins'] = admins
-            firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+
+            firebase_config.firebase_update_data(
+                f'/groups/{group_name}', {'members': members, 'admins': admins})
         
         logger.info(f"User {uid} role set to '{role}' in group: {group_name} (RTDB)")
         
@@ -824,10 +819,11 @@ def firebase_delete_group(group_name: str, admin_uid: str) -> Tuple[bool, Option
         except Exception as e:
             logger.warning(f"Firestore delete error for group '{group_name}': {e}; falling back to RTDB")
 
-        # RTDB fallback: remove group from users and delete group node
-        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}') or {}
-        members = group_data.get('members') or []
-        admins = group_data.get('admins') or []
+        # RTDB fallback: remove group from users and delete group node.
+        # members/admins children only -- the node itself is >137MB and we are
+        # about to delete it anyway, so there is no reason to download it first.
+        members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+        admins = firebase_config.firebase_read_data(f'/groups/{group_name}/admins') or []
         all_uids = set(members) | set(admins)
 
         for uid in all_uids:

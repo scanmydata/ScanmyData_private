@@ -1,11 +1,38 @@
+# NOTE: adding a rule here does NOT untrack a file that is already committed --
+# git only consults .gitignore for untracked files. That is why `*.db` below never
+# stopped firebed.db from shipping. To actually stop tracking something:
+#     git rm --cached <path>      (keeps the file on disk)
+# Keep .dockerignore in sync: it decides what `COPY . /app` puts in the image.
+
+# --- secrets / credentials ---
 firebase-key.json
 .env
 drive_token.json
 *.pem
+
+# --- python ---
 __pycache__/
 *.pyc
+# Committed by accident from a GitHub Actions runner: it is a *Linux* venv
+# (pyvenv.cfg points at /home/runner/...) and is unusable on Windows.
+.venv/
+venv/
+
+# --- data / runtime artefacts ---
 *.db
-*.log
 data/
-# Tailwind build toolchain (the compiled CSS in static/styles/ IS committed)
+uploads/
+exports/
+test_screenshots/
+
+# --- logs ---
+# `*.log` alone misses the rotated ones (firebed.log.1, firebed.log.10, ...)
+*.log
+*.log.*
+
+# --- junk ---
+# Created by an unquoted `pip install psutil>=5.9.0` (the shell made a file named "=5.9.0")
+/=*
+
+# --- Tailwind build toolchain (the compiled CSS in static/styles/ IS committed) ---
 node_modules/

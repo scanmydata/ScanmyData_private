@@ -112,12 +112,25 @@ def api_list_groups():
 @login_required
 @_require_admin
 def api_get_group(group_name):
-    """Get group details"""
+    """Get group details.
+
+    Everything under /groups/<name> EXCEPT the `files` child is returned. `files`
+    is the backup file tree written by the sync system -- ~137MB for a real group
+    -- so reading the node whole meant shipping 137MB to a details modal that only
+    renders name/created_at/data_folder/folder_size_mb/members. The keys are
+    discovered with a shallow read so any new field still comes through.
+    """
     try:
-        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-        if not group_data:
+        keys = firebase_config.firebase_read_shallow(f'/groups/{group_name}')
+        if not keys:
             return jsonify({'success': False, 'error': 'Group not found'}), 404
-        
+
+        group_data = {}
+        for key in keys:
+            if key == 'files':
+                continue
+            group_data[key] = firebase_config.firebase_read_data(f'/groups/{group_name}/{key}')
+
         return jsonify({
             'success': True,
             'group': group_data
@@ -353,6 +366,8 @@ def api_backup_group(group_name):
         # Remote backup (Firebase)
         if target in ['remote', 'both']:
             backup_path = f'/backups/{group_name}/{datetime.now(timezone.utc).isoformat()}'
+            # Whole-node read is intentional here: this is a backup, it must copy
+            # everything including /files. Do not "optimise" it to a child read.
             group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
             if group_data:
                 firebase_config.firebase_write_data(backup_path, group_data)
@@ -507,6 +522,7 @@ def api_backup_all():
 
             for group in groups:
                 group_name = group.get('name') or group.get('group_name')
+                # Whole-node read is intentional: full backup, must include /files.
                 group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
                 if group_data:
                     backup_data['groups'][group['group_name']] = group_data

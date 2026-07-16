@@ -936,6 +936,52 @@ AADE_KEY_ENV = os.getenv("AADE_SUBSCRIPTION_KEY", "")
 MYDATA_ENV = (os.getenv("MYDATA_ENV") or "sandbox").lower()
 ALLOWED_CLIENT_EXT = {'.xlsx', '.xls', '.csv'}
 
+# How many old backups of a rotated file (client_db, chart_of_accounts) to keep.
+BACKUP_RETENTION = int(os.getenv('BACKUP_RETENTION', '5'))
+
+
+def _is_backup_name(name: str) -> bool:
+    """Does `name` look like one of our rotated backups?
+
+    `.bak.` is the form we write. `_bak_` is the SAME file after a Firebase
+    round trip: RTDB keys cannot contain '.', so the sync rewrites the dots to
+    underscores and pulls the file back down under the mangled name. Matching
+    only '.bak.' is why the mangled copies were never rotated away.
+    """
+    return '.bak.' in name or name.endswith('.bak') or '_bak_' in name
+
+
+def _prune_backups(target_base: str, prefix: str, keep: int = BACKUP_RETENTION) -> int:
+    """Keep the `keep` newest backups matching `prefix`, delete older ones.
+
+    Call this AFTER the new backup has been created, so `keep` is the count that
+    actually survives. Returns the number deleted.
+    """
+    found = []
+    try:
+        names = os.listdir(target_base)
+    except OSError:
+        return 0
+    for existing in names:
+        if not existing.startswith(prefix) or not _is_backup_name(existing):
+            continue
+        path = os.path.join(target_base, existing)
+        try:
+            found.append((os.path.getmtime(path), path, existing))
+        except OSError:
+            continue
+    found.sort(reverse=True)  # newest first
+    deleted = 0
+    for _, path, name in found[keep:]:
+        try:
+            os.remove(path)
+            deleted += 1
+        except Exception:
+            log.exception('Failed to remove old backup %s (continuing)', name)
+    if deleted:
+        log.info('Pruned %d old backup(s) of %s (keeping %d)', deleted, prefix, keep)
+    return deleted
+
 
 
 app = Flask(__name__, template_folder=TEMPLATES_DIR)
@@ -943,12 +989,13 @@ app.secret_key = os.getenv("FLASK_SECRET", "douradonis1997")
 app.config["UPLOAD_FOLDER"] = UPLOADS_DIR
 # Keep backend inactivity timeout aligned with frontend timeout.
 app.config.setdefault('SESSION_TIMEOUT_SECONDS', int(os.getenv('SESSION_TIMEOUT_SECONDS', '900')))
-# How long a session stays usable after its last open tab stopped pinging.
+# How long a session stays usable after its last sign of life.
 # Open tabs ping /api/session/ping every TAB_PING_INTERVAL_SECONDS; closing the
 # tab (or the whole browser) just stops the pings, so the session goes stale on
 # its own. Must stay comfortably above the ping interval or a slow/queued ping
-# would look like a closed tab. Set to 0 to disable tab-close logout.
-app.config.setdefault('TAB_CLOSE_GRACE_SECONDS', int(os.getenv('TAB_CLOSE_GRACE_SECONDS', '90')))
+# would look like a closed tab -- 90s was too tight, because a single scrape can
+# block for ~50s and pings do not always land. Set to 0 to disable tab-close logout.
+app.config.setdefault('TAB_CLOSE_GRACE_SECONDS', int(os.getenv('TAB_CLOSE_GRACE_SECONDS', '300')))
 app.config.setdefault('TAB_PING_INTERVAL_SECONDS', int(os.getenv('TAB_PING_INTERVAL_SECONDS', '25')))
 
 # --- Initialize Logger ---
@@ -1020,6 +1067,16 @@ try:
                 logger.info("Added missing columns to user table: %d", len(_missing))
         except Exception:
             logger.exception("Could not run user column migration")
+
+        # Resolve the storage backend once, here, where an app context exists.
+        # Background workers (fetch/bulk threads, activity timers) have no app
+        # context, so Setting.get() returns '' for them; without this cache they
+        # would fall back to 'firebase' and hit RTDB even on a Drive install.
+        try:
+            from firebase import firebase_config as _fc_prime
+            _fc_prime.prime_storage_backend_cache()
+        except Exception:
+            logger.exception("Could not resolve storage backend at startup")
     # Register a SQLAlchemy after_commit hook to record DB activity per-user.
     try:
         from sqlalchemy import event
@@ -1595,16 +1652,28 @@ def enforce_active_session_claim():
         timeout_seconds = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
         now = datetime.datetime.utcnow()
 
+        last_active = getattr(current_user, 'last_active_at', None)
+
         # Tab/browser close: open tabs ping /api/session/ping, so pings that
         # stopped longer than the grace window ago mean every tab is gone and this
         # session must not be reusable. The ping route itself is exempt, otherwise
         # a machine coming back from sleep could never resume -- and exempting it
         # is safe because a closed tab cannot ping, so a returning user still trips
         # this on their first real request. Inactivity is handled separately below.
-        tab_grace = int(current_app.config.get('TAB_CLOSE_GRACE_SECONDS', 90))
-        tab_alive = getattr(current_user, 'tab_alive_at', None)
-        if tab_grace > 0 and tab_alive and path != '/api/session/ping' \
-                and (now - tab_alive).total_seconds() > tab_grace:
+        #
+        # A ping is not the ONLY proof that a tab is open -- a real request is proof
+        # too. Pings can stop while the tab is very much alive (a long scrape, a
+        # throttled background tab, a sleeping laptop, a failed commit), and judging
+        # liveness on tab_alive_at alone then threw the user out mid-scrape with no
+        # message: the scrape's own AJAX got the 401 and search.html bounced them
+        # silently. So measure staleness from the most recent of the two -- a closed
+        # browser advances neither, so tab-close detection still works.
+        tab_grace = int(current_app.config.get('TAB_CLOSE_GRACE_SECONDS', 300))
+        last_seen = getattr(current_user, 'tab_alive_at', None)
+        if last_active and (not last_seen or last_active > last_seen):
+            last_seen = last_active
+        if tab_grace > 0 and last_seen and path != '/api/session/ping' \
+                and (now - last_seen).total_seconds() > tab_grace:
             try:
                 from models import db as _db
                 current_user.end_session(sid)
@@ -1625,7 +1694,7 @@ def enforce_active_session_claim():
                                 'message': 'Η συνεδρία έκλεισε επειδή το παράθυρο δεν είναι πλέον ανοιχτό.'}), 401
             return redirect(url_for('auth.login', session_expired='1'))
 
-        last_active = getattr(current_user, 'last_active_at', None)
+        # last_active was read above, for the tab-liveness check.
         if last_active and (now - last_active).total_seconds() > timeout_seconds:
             # Timeout path: if admin policy is login/logout sync, schedule push in background.
             # The worker itself defers while other users in the same group are active.
@@ -7928,15 +7997,6 @@ def upload_client_db():
             updated_clients = 0
 
         # Rotate backups only after merge is ready.
-        for existing in os.listdir(target_base):
-            if not existing.startswith('client_db'):
-                continue
-            if '.bak.' in existing or existing.endswith('.bak'):
-                try:
-                    os.remove(os.path.join(target_base, existing))
-                except Exception:
-                    log.exception('Failed to remove old backup %s (continuing)', existing)
-
         if os.path.exists(dest_path):
             ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
             backup_name = f"{dest_name}.bak.{ts}"
@@ -7952,6 +8012,9 @@ def upload_client_db():
                 os.rename(existing_path, os.path.join(target_base, f"{os.path.basename(existing_path)}.bak.{ts}"))
             except Exception:
                 log.exception('Failed to archive previous client_db variant %s', existing_path)
+
+        # Prune AFTER the new backups exist, so BACKUP_RETENTION is the surviving count.
+        _prune_backups(target_base, 'client_db')
 
         # Save merged dataset.
         try:
@@ -8122,17 +8185,9 @@ def _upload_chart_of_accounts_impl(category='G'):
         # Ένα αρχείο ανά κατηγορία (Β/Γ) για όλη την ομάδα
         dest_path = os.path.join(target_base, dest_name)
 
-        # 1) Διαγραφή παλιών backups (μόνο για αυτή την κατηγορία)
         backup_prefix = dest_name.replace('.xlsx', '')
-        for existing in os.listdir(target_base):
-            if existing.startswith(backup_prefix) and ('.bak.' in existing or existing.endswith('.bak')):
-                try:
-                    os.remove(os.path.join(target_base, existing))
-                    log.info("Removed old CoA %s backup: %s", category, existing)
-                except Exception:
-                    log.exception("Failed to remove old CoA %s backup %s", category, existing)
 
-        # 2) Backup του υπάρχοντος αρχείου (αν υπάρχει)
+        # 1) Backup του υπάρχοντος αρχείου (αν υπάρχει)
         if os.path.exists(dest_path):
             ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
             backup_name = f"{dest_name}.bak.{ts}"
@@ -8142,6 +8197,9 @@ def _upload_chart_of_accounts_impl(category='G'):
                 log.info("Backed up previous CoA %s: %s -> %s", category, dest_name, backup_name)
             except Exception:
                 log.exception("Failed to backup previous CoA %s %s", category, dest_name)
+
+        # 2) Κράτα μόνο τα BACKUP_RETENTION πιο πρόσφατα backups αυτής της κατηγορίας
+        _prune_backups(target_base, backup_prefix)
 
         # 3) Αποθήκευση νέου αρχείου
         try:
@@ -19681,6 +19739,12 @@ def admin_settings_save():
             current = (Setting.get('storage_backend', '') or '').strip().lower() or 'drive'
             if new_backend != current:
                 Setting.set('storage_backend', new_backend)
+                # Drop the cached value so worker threads pick the change up.
+                try:
+                    from firebase import firebase_config as _fc_inv
+                    _fc_inv.invalidate_storage_backend_cache()
+                except Exception:
+                    log.exception('could not invalidate storage backend cache')
                 flash(f'Αποθηκευτικό σύστημα άλλαξε σε {new_backend.upper()}', 'warning')
     except Exception as e:
         log.exception('failed to update storage_backend setting: %s', e)

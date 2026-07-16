@@ -1,12 +1,41 @@
+# What `COPY . /app` is allowed to put in the production image.
+# Keep roughly in sync with .gitignore, but note they are separate mechanisms:
+# a file can be untracked by git and still be copied into the image (and vice
+# versa -- firebed.db is tracked AND copied, which is how it becomes the prod DB).
+
 __pycache__
 *.pyc
 *.pyo
 *.pyd
+
+# --- secrets ---
 .env
 .env.local
+
+# --- virtualenvs ---
+# 'venv' did not match '.venv', so 8MB of a Linux venv from a GitHub Actions
+# runner was being copied into the image.
 venv
+.venv
+
+# --- vcs / tooling ---
 .git
 .gitignore
+.gitattributes
 node_modules
+.claude
+.vscode
+.devcontainer
+
+# --- runtime data (created in the container, not shipped) ---
 uploads
 data
+exports
+test_screenshots
+
+# --- logs (incl. rotated: firebed.log.1, firebed.log.10, ...) ---
+*.log
+*.log.*
+
+# --- not needed at runtime ---
+docs

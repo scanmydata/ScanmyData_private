@@ -52,19 +52,63 @@ _LOCAL_PAYLOAD_STATE_FILENAME = '.payload_state.json'
 # admin (or a manual Setting.set call) flips it to 'drive'.
 _DEFAULT_STORAGE_BACKEND = 'firebase'
 
+# Last value we managed to read from the DB.
+#
+# This exists because Setting.get() needs a Flask app context, and several
+# background workers (app.py's _bulk_worker and _do_fetch, the threading.Timer in
+# firebase_record_db_activity, ...) run without one. In that case Setting.get()
+# does not raise -- it quietly returns '' -- so _get_storage_backend() used to
+# fall all the way through to _DEFAULT_STORAGE_BACKEND ('firebase') and EVERY
+# `if _drive_backend_active()` gate silently evaluated False. The result was that
+# an install configured for Drive still hammered RTDB from its background threads:
+# ~25GB of /activity_logs and ~17GB of /groups/*/files downloads in the logs.
+#
+# Caching the last known good value makes the gate context-independent: once the
+# backend has been read even once (at startup, see prime_storage_backend_cache),
+# context-less callers get the real answer instead of the wrong default.
+_storage_backend_cache = None
+
 
 def _get_storage_backend() -> str:
+    global _storage_backend_cache
     try:
         from models import Setting
         val = (Setting.get('storage_backend', '') or '').strip().lower()
         if val in ('firebase', 'drive'):
+            _storage_backend_cache = val
             return val
     except Exception:
         pass
+
     env_val = (os.getenv('STORAGE_BACKEND') or '').strip().lower()
     if env_val in ('firebase', 'drive'):
         return env_val
+
+    # No app context (or the setting is unset): prefer the last value we actually
+    # saw over the compiled-in default, so a Drive install does not fall back to
+    # Firebase just because it is being asked from a worker thread.
+    if _storage_backend_cache in ('firebase', 'drive'):
+        return _storage_backend_cache
+
     return _DEFAULT_STORAGE_BACKEND
+
+
+def prime_storage_backend_cache() -> str:
+    """Read and cache the backend once, from somewhere that HAS an app context.
+
+    Call this during startup. Without it the cache is empty until the first
+    request, and anything running before that (e.g. the backup scheduler firing
+    immediately on boot) would still see the wrong default.
+    """
+    backend = _get_storage_backend()
+    logger.info('Storage backend resolved at startup: %s', backend)
+    return backend
+
+
+def invalidate_storage_backend_cache() -> None:
+    """Drop the cache so the next read re-reads the setting (admin changed it)."""
+    global _storage_backend_cache
+    _storage_backend_cache = None
 
 
 def _drive_backend_active() -> bool:
@@ -1016,17 +1060,45 @@ def firebase_write_data(path: str, data: Dict[str, Any]) -> bool:
 
 
 def firebase_read_data(path: str) -> Optional[Dict[str, Any]]:
-    """Read data from Firebase Realtime Database"""
+    """Read data from Firebase Realtime Database.
+
+    NOTE: this downloads the ENTIRE subtree at `path`. Never call it on
+    `/groups/<name>`: the sync system stores the backup file tree under
+    `/groups/<name>/files`, so that node is >137MB and a single read has taken
+    up to 97s. Read the specific child you need (e.g. `/groups/<name>/admins`),
+    or use `firebase_read_shallow` for an existence check.
+    """
     try:
         if not is_firebase_enabled():
             return None
-        
+
         ref = db.reference(path)
         data = ref.get()
         return data
     except Exception as e:
         logger.error(f"Failed to read data from Firebase at {path}: {e}")
         return None
+
+
+def firebase_read_shallow(path: str) -> Optional[Dict[str, Any]]:
+    """Read only the immediate child KEYS at `path`, not their contents.
+
+    RTDB returns `{key: True, ...}` for a shallow read, so this stays cheap even
+    on `/groups/<name>`, which is >137MB. Returns None when the path is missing.
+    """
+    try:
+        if not is_firebase_enabled():
+            return None
+
+        return db.reference(path).get(shallow=True)
+    except Exception as e:
+        logger.error(f"Failed shallow read from Firebase at {path}: {e}")
+        return None
+
+
+def firebase_exists(path: str) -> bool:
+    """Return True if `path` exists, without downloading its contents."""
+    return firebase_read_shallow(path) is not None
 
 
 def firebase_update_data(path: str, data: Dict[str, Any]) -> bool:
@@ -1459,9 +1531,23 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_
                         # Special-case: for root-level Excel files, store them under 'imports/'
                         if ext.lower() in ('.xls', '.xlsx'):
                             firebase_key = '/'.join(['imports', fname])
+                        elif ext.lower() in ext_map:
+                            firebase_key = f"{name_no_ext}{ext_map[ext.lower()]}"
                         else:
-                            suffix = ext_map.get(ext.lower(), f'_{ext.lower().lstrip(".")}')
-                            firebase_key = f"{name_no_ext}{suffix}"
+                            # Whatever splitext() returned is not a real extension, so do
+                            # not turn it into a suffix -- keep the name as it is.
+                            #
+                            # The old code did `ext_map.get(ext, f'_{ext.lstrip(".")}')`,
+                            # which mangled two cases and made this sync non-idempotent:
+                            #   client_db.xls.bak.20251027T225207Z -> ext='.20251027T225207Z'
+                            #     -> lowercased into the key (hence the `t225207z` keys)
+                            #   client_db_xls_bak_20251027t225207z -> ext='' -> suffix='_'
+                            #     -> a bare underscore appended to the name
+                            # Since the pulled-back file has no extension, every sync cycle
+                            # re-entered the second case and appended one MORE underscore,
+                            # minting a brand-new remote key each time. That is where the
+                            # 139 byte-identical client_db_*_bak_* keys came from.
+                            firebase_key = fname
                     else:
                         # File is in a subdirectory (excel/, epsilon/)
                         # Keep the path as-is

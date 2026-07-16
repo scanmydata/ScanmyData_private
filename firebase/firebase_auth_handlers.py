@@ -460,14 +460,15 @@ class FirebaseAuthHandler:
                     user_profile['groups'].append(group_name)
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
-            # Add to group's members list
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data:
-                if 'members' not in group_data:
-                    group_data['members'] = []
-                if uid not in group_data['members']:
-                    group_data['members'].append(uid)
-                firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+            # Add to group's members list.
+            # Read/write ONLY the members child: /groups/<name> also holds the
+            # backup file tree under /files, so the old read-modify-write of the
+            # whole node downloaded ~137MB and wrote it straight back.
+            if firebase_config.firebase_exists(f'/groups/{group_name}'):
+                members = firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+                if uid not in members:
+                    members.append(uid)
+                    firebase_config.firebase_write_data(f'/groups/{group_name}/members', members)
             
             logger.info(f"User {uid} added to group: {group_name}")
             
@@ -498,11 +499,11 @@ class FirebaseAuthHandler:
                 user_profile['groups'] = [g for g in user_profile['groups'] if g != group_name]
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
-            # Remove from group's members list
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data and 'members' in group_data:
-                group_data['members'] = [m for m in group_data['members'] if m != uid]
-                firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+            # Remove from group's members list (members child only -- see add_user_to_group)
+            members = firebase_config.firebase_read_data(f'/groups/{group_name}/members')
+            if members:
+                firebase_config.firebase_write_data(
+                    f'/groups/{group_name}/members', [m for m in members if m != uid])
             
             logger.info(f"User {uid} removed from group: {group_name}")
             
@@ -543,11 +544,9 @@ class FirebaseAuthHandler:
             if not firebase_config.is_firebase_enabled():
                 return []
             
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data and 'members' in group_data:
-                return group_data['members']
-            return []
-            
+            # members child only: /groups/<name> is >137MB (it holds /files)
+            return firebase_config.firebase_read_data(f'/groups/{group_name}/members') or []
+
         except Exception as e:
             logger.error(f"Failed to get members for group {group_name}: {e}")
             return []
