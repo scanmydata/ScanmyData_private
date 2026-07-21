@@ -8862,7 +8862,13 @@ def credentials_edit(name):
             flash("Υπάρχει ήδη άλλο credential με αυτό το όνομα", "error")
             return redirect(url_for("credentials_edit", name=name))
 
-        new_entry = {
+        # Ξεκίνα από το ΥΠΑΡΧΟΝ credential ώστε πεδία που δεν πειράζει η φόρμα
+        # επεξεργασίας -- afm_rules, repeat_entry, και ό,τι προστεθεί στο μέλλον --
+        # να επιβιώνουν. Το να ξαναχτίζαμε το dict από μια σταθερή λίστα πεδίων ήταν
+        # ακριβώς αυτό που έσβηνε σιωπηλά τους κανόνες ΑΦΜ σε κάθε αποθήκευση καρτέλας
+        # (και μετά το whole-file sync τους εξαφάνιζε και από το cloud).
+        new_entry = dict(credential) if isinstance(credential, dict) else {}
+        new_entry.update({
             "name": new_name,
             "user": user,
             "key": key,
@@ -8877,8 +8883,8 @@ def credentials_edit(name):
             "apodeixakia_supplier": apodeixakia_supplier,
             "apodeixakia_other_expenses": bool(apodeixakia_other_expenses),
             "custom_categories": credential.get("custom_categories", []),
-            "series_settings": series_settings or credential.get("series_settings", {})
-        }
+            "series_settings": series_settings or credential.get("series_settings", {}),
+        })
 
         updated = False
         for i, c in enumerate(creds):
