@@ -697,6 +697,13 @@ function afmRuleExtractVatKeyFromLine(line){
   return '';
 }
 
+// Collapse whitespace, trim, lowercase -- mirrors the server's _cat_norm so a
+// category counts as "already the rule's" whether it is stored as the rule KEY
+// or its display LABEL, and regardless of case/spacing.
+function afmRuleCatNorm(v){
+  return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
 function afmRuleApplyExpectedCategories(summary, validation){
   try {
     if (!summary || typeof summary !== 'object') return false;
@@ -711,17 +718,29 @@ function afmRuleApplyExpectedCategories(summary, validation){
       const vatKey = String((item && item.vat_key) || '').trim();
       const expected = String((item && item.expected) || '').trim();
       if (!vatKey || !expected) continue;
-      expectedByVat[vatKey] = expected;
+      // Keep the canonical value to assign, plus every form that should count as
+      // "already correct" (the key and the label the server sent for it).
+      expectedByVat[vatKey] = {
+        value: expected,
+        variants: new Set(
+          [afmRuleCatNorm(expected), afmRuleCatNorm(item && item.expected_label)]
+            .filter(Boolean)
+        ),
+      };
     }
 
     let changed = false;
     for (const ln of lines) {
       if (!ln || typeof ln !== 'object') continue;
       const vatKey = afmRuleExtractVatKeyFromLine(ln);
-      const expected = expectedByVat[vatKey];
-      if (!expected) continue;
-      if (String(ln.category || '').trim() === expected) continue;
-      ln.category = expected;
+      const exp = expectedByVat[vatKey];
+      if (!exp) continue;
+      // Only a genuine difference counts as a change. A label-vs-key spelling of
+      // the SAME characterization must NOT flip `changed` -- otherwise the
+      // "Κανόνας ΑΦΜ εφαρμόστηκε" flash fires even though the selected category
+      // already equals the rule's.
+      if (exp.variants.has(afmRuleCatNorm(ln.category))) continue;
+      ln.category = exp.value;
       changed = true;
     }
     return changed;
@@ -7194,6 +7213,13 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
       }
     } catch(_) {}
     try { window.__RC_LAST_SEARCH_MARK_OR_URL = typedMark; } catch(_){ }
+
+    // The user is actively searching the NEXT document. Any pending "clear the
+    // box after save" signal is now obsolete -- the box was already cleared at
+    // save time. Consuming it AFTER the AJAX (see below) used to wipe the mark
+    // the user just searched, which looked like a partial reload that saved
+    // nothing. Reset it up front so the freshly resolved mark is kept.
+    try { window.__RC_CLEAR_MARK_AFTER_SAVE = false; } catch(_){ }
 
     form.dataset.invoiceSubmitting = '1';
     try {

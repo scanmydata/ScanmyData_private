@@ -10044,6 +10044,27 @@ def fetch():
     except Exception:
         initial_last_fetch_date = None
 
+    # Last-fetch date per client for the bulk-fetch checklist. Keyed by the same
+    # tracking key the fetch flow writes (VAT preferred, name as fallback).
+    # only_meta=True on purpose: the activity.log fallback would re-scan the whole
+    # log once PER client, turning this into an O(clients x log) page load.
+    bulk_last_fetches = {}
+    try:
+        for _c in (creds or []):
+            _vat = str(_c.get("vat") or "").strip()
+            _name = str(_c.get("name") or "").strip()
+            _key = _vat or _name
+            if not _key:
+                continue
+            _raw = get_last_fetch_date(_key, only_meta=True)
+            _fmt = _format_last_fetch_date_for_display(_raw)
+            if _vat:
+                bulk_last_fetches[_vat] = _fmt
+            if _name:
+                bulk_last_fetches[_name] = _fmt
+    except Exception:
+        bulk_last_fetches = {}
+
     wants_json = (
         request.headers.get("X-Requested-With") == "XMLHttpRequest"
         or "application/json" in (request.headers.get("Accept") or "")
@@ -10315,7 +10336,8 @@ def fetch():
     return safe_render("fetch.html", credentials=creds, message=message,
                        error=error, preview=preview, active_page="fetch",
                        active_credential=active_name,
-                       last_fetch_date_display=initial_last_fetch_date)
+                       last_fetch_date_display=initial_last_fetch_date,
+                       bulk_last_fetches=bulk_last_fetches)
 
 
 @app.route("/credentials/get_settings", methods=["GET"])
@@ -12343,6 +12365,130 @@ def api_afm_rules_get():
         vat_constraints=_category_vat_constraints(client),
         vat=active_vat,
     )
+
+
+def _scan_mark_from_url(url: str) -> str:
+    """Best-effort: scrape a supported e-invoicing/myDATA URL and return its MARK.
+
+    Reuses the same per-provider scrapers as the /search flow. Only the MARK is
+    needed here -- the supplier (issuer) AFM is resolved from the stored myDATA
+    document, because the QR itself encodes the CUSTOMER's AFM (verified: both a
+    mydatapi and an e-invoicing.gr purchase URL return the buyer's own VAT).
+    """
+    try:
+        from urllib.parse import urlparse
+        from scraper import (
+            scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact,
+            scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr,
+            scrape_megasoft, scrape_etimologiera,
+        )
+    except Exception:
+        return ""
+
+    # Fix a malformed single-slash scheme (https:/x -> https://x), like /search does.
+    u = re.sub(r'^(https?):/([^/])', r'\1://\2', str(url or "").strip(), flags=re.I)
+    domain = urlparse(u).netloc.lower()
+
+    def _first_mark(marks):
+        for m in (marks or []):
+            m = str(m).strip()
+            if len(m) == 15 and m.isdigit():
+                return m
+        return ""
+
+    try:
+        if "wedoconnect" in domain:
+            return _first_mark(scrape_wedoconnect(u)[0])
+        if "etimologiera.gr" in domain:
+            return _first_mark(scrape_etimologiera(u)[0])
+        if "mydatapi.aade.gr" in domain:
+            mv = str((scrape_mydatapi(u) or {}).get("MARK") or "").strip()
+            return mv if len(mv) == 15 and mv.isdigit() else ""
+        if "einvoice.s1ecos.gr" in domain:
+            return _first_mark(scrape_einvoice(u)[0])
+        if "einvoice.impact.gr" in domain or "impact.gr" in domain:
+            mv = str(scrape_impact(u)[0] or "").strip()
+            return mv if len(mv) == 15 and mv.isdigit() else ""
+        if "epsilonnet.gr" in domain:
+            mv = str(scrape_epsilon(u)[0] or "").strip()
+            return mv if len(mv) == 15 and mv.isdigit() else ""
+        if "e-invoicing.pegcloud.io" in domain:
+            mv = str(scrape_pegcloud(u)[0] or "").strip()
+            return mv if len(mv) == 15 and mv.isdigit() else ""
+        if "e-invoicing.gr" in domain:
+            mv = str(scrape_einvoicing_gr(u)[0] or "").strip()
+            return mv if len(mv) == 15 and mv.isdigit() else ""
+        if "vs.gr" in domain:
+            return _first_mark(scrape_vsgr(u)[0])
+        if "megasoft" in domain or "invoicelink" in domain:
+            return _first_mark(scrape_megasoft(u)[0])
+    except Exception:
+        log.exception("_scan_mark_from_url failed for %s", u)
+    return ""
+
+
+@app.post("/api/afm_rules/scan")
+def api_afm_rules_scan():
+    """Scan an invoice URL/MARK and return the SUPPLIER (issuer) AFM for a rule.
+
+    The QR encodes the customer, so the issuer is resolved from the client's
+    stored myDATA documents by MARK (same source as rule enforcement). When the
+    MARK is not in the cache we ask the user to Fetch first, instead of guessing.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw = str(data.get("url") or data.get("mark") or data.get("value") or "").strip()
+    vat = str(data.get("vat") or "").strip()
+    if not vat:
+        try:
+            vat = str((get_active_credential_from_session() or {}).get("vat") or "").strip()
+        except Exception:
+            vat = ""
+    if not raw:
+        return jsonify(ok=False, error="Δώσε URL ή MARK παραστατικού."), 400
+    if not vat:
+        return jsonify(ok=False, error="Δεν βρέθηκε ενεργός πελάτης."), 400
+
+    # Resolve a MARK from the input: already a bare 15-digit MARK, a scannable URL,
+    # or an embedded MARK/mydatapi payload.
+    embedded = re.search(r'https?:/{1,2}[^\s]+', raw, re.I)
+    candidate = embedded.group(0).strip() if embedded else raw
+    norm = re.sub(r'^(https?):/([^/])', r'\1://\2', candidate, flags=re.I)
+
+    mark = ""
+    if re.fullmatch(r'\d{15}', norm):
+        mark = norm
+    elif re.match(r'^https?://', norm, re.I):
+        mark = _scan_mark_from_url(norm)
+    if not mark:
+        m = re.search(r'\b(\d{15})\b', raw)
+        mark = m.group(1) if m else ""
+    if not mark:
+        return jsonify(ok=False, error="Δεν βρέθηκε MARK στο παραστατικό."), 422
+
+    # Supplier AFM = issuer of the stored document for this MARK (never the active client).
+    supplier_afm = _resolve_supplier_afm_for_rule({"mark": mark}, active_vat=vat)
+    supplier_name = ""
+    try:
+        docs = json_read(group_path(f"{vat}_invoices.json")) or []
+        for d in docs:
+            if not isinstance(d, dict):
+                continue
+            if str(d.get("mark") or d.get("MARK") or "").strip() != mark:
+                continue
+            supplier_name = str(d.get("Name_issuer") or d.get("issuer_name") or d.get("issuer") or "").strip()
+            if not supplier_afm:
+                supplier_afm = _normalize_afm(d.get("AFM_issuer") or d.get("issuer_vat") or d.get("issuer_afm"))
+            break
+    except Exception:
+        log.exception("api_afm_rules_scan: cache lookup failed for mark %s vat %s", mark, vat)
+
+    if not supplier_afm:
+        return jsonify(
+            ok=False, mark=mark,
+            error=f"Βρέθηκε MARK {mark} αλλά ο εκδότης δεν είναι στην cache του πελάτη. Κάνε πρώτα Fetch.",
+        ), 200
+
+    return jsonify(ok=True, mark=mark, supplier_afm=supplier_afm, supplier_name=supplier_name)
 
 
 @app.post("/api/afm_rules/save")

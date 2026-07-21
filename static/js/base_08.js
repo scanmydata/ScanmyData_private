@@ -761,7 +761,7 @@
         }
 
         function ensureFlatpickrCss() {
-          const href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
+          const href = '/static/vendor/flatpickr-4.6.13.min.css';
           const existing = document.querySelector('link[rel="stylesheet"][href="' + href + '"]');
           if (existing) return;
           const link = document.createElement('link');
@@ -775,8 +775,8 @@
           if (!window.__fetchFallbackFlatpickrReady) {
             window.__fetchFallbackFlatpickrReady = (async function() {
               ensureFlatpickrCss();
-              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
-              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+              await loadScriptOnce('/static/vendor/flatpickr-4.6.13.min.js');
+              await loadScriptOnce('/static/vendor/flatpickr-gr-4.6.13.js');
             })();
           }
           try {
@@ -795,9 +795,9 @@
           } catch (_) {}
 
           try {
-            const _useEl = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.el);
+            const _useGr = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
             fetchDateInputs.forEach(function(input) {
-              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useEl ? { locale: 'el' } : {}));
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useGr ? { locale: 'gr' } : {}));
             });
           } catch (e) {
             console.warn('Fetch fallback flatpickr init failed', e);
@@ -863,7 +863,7 @@
         }
 
         function ensureFlatpickrCss() {
-          const href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
+          const href = '/static/vendor/flatpickr-4.6.13.min.css';
           const existing = document.querySelector('link[rel="stylesheet"][href="' + href + '"]');
           if (existing) return;
           const link = document.createElement('link');
@@ -877,8 +877,8 @@
           if (!window.__e3FallbackFlatpickrReady) {
             window.__e3FallbackFlatpickrReady = (async function() {
               ensureFlatpickrCss();
-              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
-              await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+              await loadScriptOnce('/static/vendor/flatpickr-4.6.13.min.js');
+              await loadScriptOnce('/static/vendor/flatpickr-gr-4.6.13.js');
             })();
           }
           try {
@@ -897,9 +897,9 @@
           } catch (_) {}
 
           try {
-            const _useEl = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.el);
+            const _useGr = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
             e3DateInputs.forEach(function(input) {
-              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useEl ? { locale: 'el' } : {}));
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useGr ? { locale: 'gr' } : {}));
             });
           } catch (e) {
             console.warn('E3 fallback flatpickr init failed', e);

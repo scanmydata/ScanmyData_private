@@ -77,6 +77,15 @@
           </div>
         </div>
 
+        <div>
+          <label for="ruleScanInput" class="block text-sm font-medium mb-1">Ή σκάναρε παραστατικό για αυτόματη συμπλήρωση ΑΦΜ προμηθευτή</label>
+          <div class="flex gap-2">
+            <input id="ruleScanInput" class="border rounded px-3 py-2 flex-1" placeholder="Επικόλλησε ή σκάναρε URL/QR παραστατικού" inputmode="text" autocomplete="off">
+            <button id="btnScanRule" type="button" class="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">Αναζήτηση</button>
+          </div>
+          <div id="ruleScanStatus" class="text-sm mt-1"></div>
+        </div>
+
         <div class="grid grid-cols-1 gap-2">
           <label class="text-sm font-medium">Αντιστοίχιση κατηγοριών</label>
 
@@ -589,8 +598,66 @@ const G_CATEGORY_DATA = (function(){
     }
   });
 
+  function setupScanRule(){
+    const btn = document.getElementById('btnScanRule');
+    const input = document.getElementById('ruleScanInput');
+    const status = document.getElementById('ruleScanStatus');
+    const afmInput = document.getElementById('ruleSupplierAfm');
+    const nameInput = document.getElementById('ruleSupplierName');
+    if (!btn || !input || !afmInput) return;
+
+    async function doScan(){
+      const value = String(input.value || '').trim();
+      if (!value){
+        status.textContent = 'Δώσε URL ή MARK παραστατικού.';
+        status.className = 'text-sm mt-1 text-red-600';
+        return;
+      }
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = 'Σκανάρισμα...';
+      status.textContent = '🔄 Ανάγνωση παραστατικού...';
+      status.className = 'text-sm mt-1 text-blue-600';
+      try {
+        const res = await fetch('/api/afm_rules/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ url: value, vat: VAT })
+        });
+        const data = await res.json().catch(() => null);
+        if (!data || !data.ok){
+          status.textContent = '⚠ ' + ((data && data.error) || 'Αποτυχία ανάγνωσης.');
+          status.className = 'text-sm mt-1 text-red-600';
+          return;
+        }
+        afmInput.value = normalizeAfm(data.supplier_afm);
+        if (data.supplier_name && nameInput && !String(nameInput.value || '').trim()){
+          nameInput.value = data.supplier_name;
+        }
+        // Reuse the existing VAT validation to confirm and fill the official name.
+        afmInput.dispatchEvent(new Event('input', { bubbles: true }));
+        status.textContent = `✓ ΑΦΜ προμηθευτή: ${afmInput.value}` + (data.mark ? ` (MARK ${data.mark})` : '');
+        status.className = 'text-sm mt-1 text-green-600 font-medium';
+        input.value = '';
+      } catch (err){
+        status.textContent = '⚠ Σφάλμα επικοινωνίας.';
+        status.className = 'text-sm mt-1 text-red-600';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
+    }
+
+    btn.addEventListener('click', doScan);
+    input.addEventListener('keydown', function(ev){
+      if (ev.key === 'Enter'){ ev.preventDefault(); doScan(); }
+    });
+  }
+
   populateMtypes();
   setupVATValidation();
+  setupScanRule();
   loadData();
 })();
 </script>

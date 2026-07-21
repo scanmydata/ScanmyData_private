@@ -159,9 +159,13 @@
             <input id="bulkCustomerSearch" type="search" placeholder="Αναζήτηση πελάτη ή ΑΦΜ..." class="mb-2 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300">
             <div id="bulkFetchCustomerList" class="border border-gray-300 rounded-lg p-2 min-h-[130px] max-h-[220px] overflow-auto focus-within:ring-2 focus-within:ring-sky-300">
               {% for c in credentials %}
+              {% set _lf = (bulk_last_fetches|default({})).get(c.vat) or (bulk_last_fetches|default({})).get(c.name) %}
               <label class="bulk-customer-row flex items-center gap-2 py-1 border-b border-gray-100 last:border-b-0 cursor-pointer" data-bulk-search="{{ ((c.name or '') ~ ' ' ~ (c.vat or ''))|lower }}">
                 <input class="bulkCustomerCheckbox" type="checkbox" value="{{ c.name }}">
-                <span>{{ c.name }}{% if c.vat %} ({{ c.vat }}){% endif %}</span>
+                <span class="flex-1">{{ c.name }}{% if c.vat %} ({{ c.vat }}){% endif %}</span>
+                <span class="text-xs whitespace-nowrap {% if _lf %}text-gray-500{% else %}text-gray-400 italic{% endif %}" title="Τελευταία λήψη">
+                  {% if _lf %}📅 {{ _lf }}{% else %}— καμία λήψη{% endif %}
+                </span>
               </label>
               {% endfor %}
             </div>
@@ -187,7 +191,7 @@
 {% endblock %}
 
 {% block scripts %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/flatpickr-4.6.13.min.css') }}" data-flatpickr="1">
 
 <!-- Dark-mode overrides for overlay and flatpickr -->
 <style>
@@ -242,8 +246,8 @@
   }
 </style>
 
-<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js"></script>
+<script src="{{ url_for('static', filename='vendor/flatpickr-4.6.13.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/flatpickr-gr-4.6.13.js') }}"></script>
 
 <script>
 (window.__runOnPageReady || function(fn){
@@ -307,10 +311,16 @@
     } catch (_) {}
 
     try {
-      const fromPicker = window.flatpickr(fromInput, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
-      const toPicker = window.flatpickr(toInput, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true });
-      const bulkFromPicker = bulkFromInput ? window.flatpickr(bulkFromInput, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true }) : null;
-      const bulkToPicker = bulkToInput ? window.flatpickr(bulkToInput, { locale: 'el', dateFormat: 'd/m/Y', allowInput: true }) : null;
+      // Greek locale key in flatpickr is 'gr' (not 'el'); only pass it if the
+      // locale bundle actually loaded, else flatpickr throws and no picker binds.
+      const _fpOpts = Object.assign(
+        { dateFormat: 'd/m/Y', allowInput: true },
+        (window.flatpickr.l10ns && window.flatpickr.l10ns.gr) ? { locale: 'gr' } : {}
+      );
+      const fromPicker = window.flatpickr(fromInput, _fpOpts);
+      const toPicker = window.flatpickr(toInput, _fpOpts);
+      const bulkFromPicker = bulkFromInput ? window.flatpickr(bulkFromInput, _fpOpts) : null;
+      const bulkToPicker = bulkToInput ? window.flatpickr(bulkToInput, _fpOpts) : null;
       fetchFlatpickrInstances = [fromPicker, toPicker, bulkFromPicker, bulkToPicker].filter(Boolean);
       fetchFlatpickrInstances.forEach(function(instance) {
         if (instance && instance.calendarContainer) {
@@ -353,8 +363,8 @@
     if (typeof window.flatpickr === 'function') return;
     if (!window.__flatpickrReadyPromise) {
       window.__flatpickrReadyPromise = (async function() {
-        await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
-        await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+        await loadScriptOnce("{{ url_for('static', filename='vendor/flatpickr-4.6.13.min.js') }}");
+        await loadScriptOnce("{{ url_for('static', filename='vendor/flatpickr-gr-4.6.13.js') }}");
       })();
     }
     try {

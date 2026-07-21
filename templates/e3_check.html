@@ -8196,22 +8196,41 @@
       });
     }
 
+    // Self-hosted flatpickr (was jsDelivr CDN). The CDN CSS loaded async and was
+    // NOT awaited before init, so on a partial reload the JS (already cached) drew
+    // the calendar a beat before its stylesheet applied -> the month-nav SVGs
+    // rendered at their intrinsic (huge) size = the "τεράστια βέλη". Local assets
+    // + awaiting the CSS below removes that race. Greek locale key is 'gr'.
     function ensureCss() {
-      const href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
-      if (document.querySelector('link[rel="stylesheet"][href="' + href + '"]')) return;
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-      document.head.appendChild(link);
+      const href = '/static/vendor/flatpickr-4.6.13.min.css';
+      let link = document.querySelector('link[rel="stylesheet"][data-flatpickr="1"]');
+      if (link) {
+        if (link.dataset.loaded === '1') return Promise.resolve();
+        return new Promise((res) => {
+          link.addEventListener('load', res, { once: true });
+          link.addEventListener('error', res, { once: true });
+        });
+      }
+      return new Promise((res) => {
+        link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.dataset.flatpickr = '1';
+        link.addEventListener('load', () => { link.dataset.loaded = '1'; res(); }, { once: true });
+        link.addEventListener('error', () => res(), { once: true });
+        document.head.appendChild(link);
+      });
     }
 
     async function ensureFlatpickrReady() {
+      // Always make sure the CSS is present, even if the JS was already loaded on
+      // a previous (partial) navigation.
+      await ensureCss();
       if (typeof window.flatpickr === 'function') return;
       if (!window.__e3CheckFlatpickrReadyPromise) {
         window.__e3CheckFlatpickrReadyPromise = (async function() {
-          ensureCss();
-          await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr');
-          await loadScriptOnce('https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js');
+          await loadScriptOnce('/static/vendor/flatpickr-4.6.13.min.js');
+          await loadScriptOnce('/static/vendor/flatpickr-gr-4.6.13.js');
         })();
       }
       try {
@@ -8229,15 +8248,23 @@
         });
       } catch (_) {}
 
+      // Partial reloads swap in fresh date inputs, orphaning the .flatpickr-calendar
+      // divs that flatpickr had appended to <body> (destroy() above only touches the
+      // CURRENT inputs). Those orphans are exactly what pops up "from below". After
+      // destroying the live ones, any calendar still in the DOM is an orphan -> drop it.
       try {
+        document.querySelectorAll('.flatpickr-calendar').forEach((cal) => cal.remove());
+      } catch (_) {}
+
+      try {
+        const useGr = !!(window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
         inputs.forEach((input) => {
-          window.flatpickr(input, {
-            locale: 'el',
+          window.flatpickr(input, Object.assign({
             dateFormat: 'd/m/Y',
             allowInput: true,
             appendTo: document.body,
             position: 'auto'
-          });
+          }, useGr ? { locale: 'gr' } : {}));
         });
       } catch (e) {
         console.warn('E3 page flatpickr init failed', e);
