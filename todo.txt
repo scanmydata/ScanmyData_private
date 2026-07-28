@@ -12,3 +12,4 @@ page tour
 
 οταν βγαζει το παραστατικο ειναι ηδη χαρακτηρισμενο στο invoices.json να λεει mydata και να σβηνει το περιεχομενο του search box
 στο fetch e3 info να σπαει το διαστημα που δινει ο χρηστης σε 3μηνο το πολυ για να φερνει σωστα τα χαρακτηρισμενα-αχαρακτηριστα
+https://www.eskap.gr/invoice/N6SABItNPqewTknDur3E1QGOjTk2Znfb να γινει και για αυτο scrape compliant
