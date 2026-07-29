@@ -187,6 +187,7 @@ const G_CATEGORY_DATA = (function(){
   let vatValidationTimeout = null;
   let lastValidatedVAT = '';
   let lastSuccessfulVAT = '';
+  let lastAppliedRuleAfm = '';
   let vatValidationRequestSeq = 0;
 
   function escapeHtml(unsafe){
@@ -344,7 +345,19 @@ const G_CATEGORY_DATA = (function(){
       statusIndicator.className = 'vat-status text-sm mt-1';
       statusIndicator.style.color = '';
 
-      if (!vat || vat.length < 9) return;
+      if (!vat || vat.length < 9) { lastAppliedRuleAfm = ''; return; }
+
+      // If this AFM already has a saved rule, load its classifications straight
+      // into the dropdowns (typing OR scanning an existing AFM brings its data).
+      // Applied once per AFM so it never fights the user editing a dropdown after.
+      if (vat !== lastAppliedRuleAfm) {
+        const existingRow = findRuleRowByAfm(vat);
+        if (existingRow) {
+          applyRuleFromRow(existingRow);
+          return; // name + mapping came from the rule; no validate_vat call needed
+        }
+      }
+
       if (vat === lastValidatedVAT) return;
       if (vat === lastSuccessfulVAT && String(nameInput.value || '').trim()) {
         statusIndicator.textContent = `✓ Έγκυρο ΑΦΜ: ${nameInput.value}`;
@@ -381,6 +394,7 @@ const G_CATEGORY_DATA = (function(){
     resetSupplierVatStatus();
     lastValidatedVAT = '';
     lastSuccessfulVAT = '';
+    lastAppliedRuleAfm = '';
     vatValidationRequestSeq += 1;
     ['a','b','g','d','e'].forEach(sfx => {
       const select = document.getElementById(`kat_fpa_${sfx}`);
@@ -467,24 +481,29 @@ const G_CATEGORY_DATA = (function(){
     });
   }
 
-  listEl.addEventListener('click', function(ev){
-    const delBtn = ev.target.closest('button[data-act="del"]');
-    if (delBtn) {
-      openDeleteModal(delBtn.dataset.afm);
-      return;
-    }
-    const row = ev.target.closest('.afm-rule-row');
-    if (!row) return;
+  // Find a rendered rule row whose supplier AFM matches (9-digit, normalized).
+  function findRuleRowByAfm(afm){
+    const norm = normalizeAfm(afm);
+    if (!norm || norm.length !== 9) return null;
+    return Array.from(listEl.querySelectorAll('.afm-rule-row'))
+      .find(r => normalizeAfm(r.dataset.afm || '') === norm) || null;
+  }
+
+  // Load a saved rule (name + per-ΦΠΑ classifications + MTYPE) into the form.
+  // Shared by the row click AND by typing/scanning an AFM that already has a rule.
+  function applyRuleFromRow(row){
+    if (!row) return false;
     currentSelectedAfm = row.dataset.afm || '';
     listEl.querySelectorAll('.afm-rule-row').forEach(node => node.classList.remove('selected','border-sky-400','ring-2','ring-sky-100','bg-sky-50'));
     row.classList.add('selected','border-sky-400','ring-2','ring-sky-100','bg-sky-50');
     document.getElementById('ruleSupplierAfm').value = row.dataset.afm || '';
     document.getElementById('ruleSupplierName').value = row.dataset.name || '';
-    resetSupplierVatStatus();
     lastValidatedVAT = normalizeAfm(row.dataset.afm || '');
     lastSuccessfulVAT = normalizeAfm(row.dataset.afm || '');
+    lastAppliedRuleAfm = lastValidatedVAT;
     vatValidationRequestSeq += 1;
-    const mapping = JSON.parse(row.dataset.mapping || '{}');
+    let mapping = {};
+    try { mapping = JSON.parse(row.dataset.mapping || '{}'); } catch(_) { mapping = {}; }
     ['a','b','g','d','e'].forEach(sfx => {
       const select = document.getElementById(`kat_fpa_${sfx}`);
       const vatKey = VAT_KEY_BY_SFX[sfx] || '';
@@ -495,6 +514,25 @@ const G_CATEGORY_DATA = (function(){
     });
     if (invoiceMtypeEl) invoiceMtypeEl.value = row.dataset.invoiceMtype || '';
     saveBtn.textContent = 'Ενημέρωση';
+    const statusIndicator = document.getElementById('ruleSupplierAfmStatus');
+    if (statusIndicator) {
+      statusIndicator.textContent = '✓ Φορτώθηκε αποθηκευμένος κανόνας για ' + (row.dataset.name || row.dataset.afm || 'το ΑΦΜ');
+      statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+      statusIndicator.style.color = '';
+    }
+    return true;
+  }
+
+  listEl.addEventListener('click', function(ev){
+    const delBtn = ev.target.closest('button[data-act="del"]');
+    if (delBtn) {
+      openDeleteModal(delBtn.dataset.afm);
+      return;
+    }
+    const row = ev.target.closest('.afm-rule-row');
+    if (!row) return;
+    resetSupplierVatStatus();
+    applyRuleFromRow(row);
   });
 
   const deleteModal = document.getElementById('confirmDeleteRuleModal');

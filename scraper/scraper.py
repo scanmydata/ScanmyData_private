@@ -903,6 +903,12 @@ def scrape_impact(url):
     full_text = soup.get_text(" ", strip=True)
     m = MARK_RE.search(full_text)
     return (m.group(0) if m else None), None
+
+
+def scrape_eskap(url):
+    """ESKAP (www.eskap.gr) — same shape as Impact: the page server-renders an
+    embedded mydatapi QRInfo URL. Returns (mark, counterpart_vat)."""
+    return scrape_impact(url)
 # -------------------- PEGCLOUD --------------------
 def scrape_pegcloud(url):
     """
@@ -1972,6 +1978,14 @@ def main():
 
     elif "einvoice.impact.gr" in domain or "impact.gr" in domain:
         source = "Impact E-Invoicing"
+        mark, counterpart_vat = scrape_impact(url)
+        marks = [mark] if mark else []
+
+    elif "eskap.gr" in domain:
+        # ESKAP server-renders the page with an embedded mydatapi QRInfo URL,
+        # exactly like Impact -- reuse the same extractor (embedded mydatapi
+        # first, MARK-in-page fallback).
+        source = "ESKAP E-Invoicing"
         mark, counterpart_vat = scrape_impact(url)
         marks = [mark] if mark else []
 

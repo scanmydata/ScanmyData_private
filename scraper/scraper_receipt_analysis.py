@@ -5022,7 +5022,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
             result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
         elif "einvoice.s1ecos.gr" in domain or "s1ecos.gr" in domain:
             result = scrape_s1ecos(url, timeout=timeout, debug=debug)
-        elif "impact.gr" in domain or "einvoice.impact" in domain:
+        elif "impact.gr" in domain or "einvoice.impact" in domain or "eskap.gr" in domain:
+            # ESKAP embeds a mydatapi QRInfo URL like Impact -> same extractor.
             result = scrape_impact(url, timeout=timeout, debug=debug)
         elif "epsilonnet.gr" in domain or "epsilon" in domain:
             result = scrape_epsilon(url, timeout=timeout, debug=debug)

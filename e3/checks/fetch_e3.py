@@ -106,21 +106,21 @@ def _fmt_ddmmyyyy(d: date) -> str:
     return d.strftime("%d/%m/%Y")
 
 
-def _quarter_chunks(date_from: str, date_to: str) -> List[Tuple[str, str]]:
-    """Split [date_from, date_to] into ≤92-day quarterly sub-ranges.
+def _bimonthly_chunks(date_from: str, date_to: str) -> List[Tuple[str, str]]:
+    """Split [date_from, date_to] into ≤2-month calendar sub-ranges.
 
-    Why: AADE's RequestE3Info returns the same entry across multiple
-    paging windows when the range spans many months (observed for the
-    full-year 2025 range on ΑΦΜ 036209456 in 06/2026 — page 4 and page 5
-    both started with mark 400011925882593). With a yearly fetch + tuple
-    dedup we accidentally dropped legitimate line items of the same
-    invoice that happened to share an amount, mismatching the official
-    AADE PDF totals by €1.4k on κωδ. 561 and €3k on κωδ. 102.
+    Why: AADE's RequestE3Info returns the same entry across multiple paging
+    windows when the range spans many months (observed for the full-year 2025
+    range on ΑΦΜ 036209456 in 06/2026 — page 4 and page 5 both started with mark
+    400011925882593). With a yearly fetch + tuple dedup we accidentally dropped
+    legitimate line items of the same invoice that happened to share an amount,
+    mismatching the official AADE PDF totals by €1.4k on κωδ. 561 and €3k on
+    κωδ. 102. Quarterly (3-month) windows still overlapped, mis-reporting which
+    marks are classified vs unclassified, so we split into 2-month windows.
 
-    Splitting into quarters keeps each paged result small enough that
-    cross-page overlap doesn't happen, and a mark can only appear in
-    one quarter (it has exactly one IssueDate), so quarter results are
-    naturally disjoint.
+    Bimonthly windows (Jan–Feb, Mar–Apr, …) keep each paged result small enough
+    that cross-page overlap doesn't happen, and a mark can only appear in one
+    window (it has exactly one IssueDate), so the windows are naturally disjoint.
     """
     try:
         start = _parse_ddmmyyyy(date_from)
@@ -135,17 +135,18 @@ def _quarter_chunks(date_from: str, date_to: str) -> List[Tuple[str, str]]:
     while cursor <= end:
         year = cursor.year
         month = cursor.month
-        q_start_month = ((month - 1) // 3) * 3 + 1
-        q_start = date(year, q_start_month, 1)
-        # Last day of the quarter
-        if q_start_month + 3 > 12:
-            q_end = date(year, 12, 31)
+        b_start_month = ((month - 1) // 2) * 2 + 1   # 1, 3, 5, 7, 9, 11
+        b_start = date(year, b_start_month, 1)
+        b_end_month = b_start_month + 1              # 2, 4, 6, 8, 10, 12
+        # Last day of the second month of the bimonth.
+        if b_end_month == 12:
+            b_end = date(year, 12, 31)
         else:
-            q_end = date(year, q_start_month + 3, 1) - timedelta(days=1)
-        chunk_from = max(cursor, q_start)
-        chunk_to = min(end, q_end)
+            b_end = date(year, b_end_month + 1, 1) - timedelta(days=1)
+        chunk_from = max(cursor, b_start)
+        chunk_to = min(end, b_end)
         chunks.append((_fmt_ddmmyyyy(chunk_from), _fmt_ddmmyyyy(chunk_to)))
-        cursor = q_end + timedelta(days=1)
+        cursor = b_end + timedelta(days=1)
     return chunks
 
 
@@ -162,8 +163,8 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
         "amount": 123.45,
       }
 
-    Splits the range into quarterly sub-fetches automatically to avoid
-    AADE's cross-page overlap on long ranges (see `_quarter_chunks`).
+    Splits the range into ≤2-month sub-fetches automatically to avoid
+    AADE's cross-page overlap on long ranges (see `_bimonthly_chunks`).
     """
     # Only chunk if a real range was given. The bulk callers pass
     # mark="0" + dates; if a specific mark is passed we don't chunk
@@ -171,12 +172,12 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
     if _safe_strip(mark) and _safe_strip(mark) != "0":
         return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
 
-    chunks = _quarter_chunks(date_from, date_to)
+    chunks = _bimonthly_chunks(date_from, date_to)
     if len(chunks) <= 1:
         return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
 
     if debug:
-        print(f"[RequestE3Info] Splitting {date_from}–{date_to} into {len(chunks)} quarters")
+        print(f"[RequestE3Info] Splitting {date_from}–{date_to} into {len(chunks)} two-month windows")
     out: List[dict] = []
     for cf, ct in chunks:
         out.extend(_fetch_e3_entries_single_range(mark, cf, ct, aade_user, aade_key, debug=debug))

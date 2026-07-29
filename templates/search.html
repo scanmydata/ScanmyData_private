@@ -1074,6 +1074,76 @@ async function handleAfmRuleManualCategoryEdit(previousSummary, currentSummary){
 async function validateAfmRuleBeforeSave(summary, options){
   try {
     if (options && options.isReceipt) return true;
+
+    // The AFM-rule check must reflect the classifications that will actually apply.
+    // Two things can leave the passed summary's line categories blank at this point:
+    //  (1) a manual dropdown selection that only lives in #summaryJsonInput, and
+    //  (2) the invoice repeat-entry profile, which fills categories a beat AFTER
+    //      this check runs. Either way the server then sees blank categories and
+    //      reports a false "differs from rule" mismatch even though the resulting
+    //      categories match the rule. So fill blanks here before validating:
+    //  first from the live summary input (manual selections)...
+    try {
+      const liveRaw = document.getElementById('summaryJsonInput')?.value || '';
+      if (liveRaw && summary && Array.isArray(summary.lines)) {
+        const live = JSON.parse(liveRaw);
+        if (live && Array.isArray(live.lines)) {
+          const byId = {};
+          live.lines.forEach(l => { if (l && l.id != null) byId[String(l.id)] = String(l.category || '').trim(); });
+          summary.lines.forEach(l => {
+            if (l && l.id != null && !String(l.category || '').trim() && byId[String(l.id)]) {
+              l.category = byId[String(l.id)];
+            }
+          });
+        }
+      }
+    } catch(_) {}
+
+    // ...then, for any line STILL blank, apply the invoice repeat-entry mapping
+    // (per ΦΠΑ rate) exactly as the auto-fill would, so the rule is compared
+    // against the categories the profile is about to set.
+    try {
+      if (summary && Array.isArray(summary.lines)
+          && summary.lines.some(l => l && !String(l.category || '').trim())) {
+        const repeatSwitchEl = document.getElementById('repeatEntrySwitch');
+        const repeatOn = !!(repeatSwitchEl && repeatSwitchEl.checked);
+        if (repeatOn && typeof apiGetRepeatEntry === 'function') {
+          const vatForRepeat = String((typeof rcResolveActiveVat === 'function' ? rcResolveActiveVat() : '') || '').trim();
+          const repResp = await apiGetRepeatEntry(vatForRepeat);
+          const rawMap = (repResp && repResp.repeat_entry && repResp.repeat_entry.mapping) ? repResp.repeat_entry.mapping : {};
+          const rmap = (typeof normalizeMapping === 'function') ? normalizeMapping(rawMap) : (rawMap || {});
+          // Self-contained rate extractor -> maps to normalizeMapping's keys.
+          // (Not reusing __rcNormalizeVatCategory: it lives in another script
+          // scope and is not reachable here.)
+          const rateOf = (l) => {
+            const s = String((l && (l.vatCategory || l.vat_category)) || '').toLowerCase();
+            if (/\b24\b|24%/.test(s)) return '24%';
+            if (/\b17\b|17%/.test(s)) return '17%';
+            if (/\b13\b|13%/.test(s)) return '13%';
+            if (/\b9\b|9%/.test(s)) return '9%';
+            if (/\b6\b|6%/.test(s)) return '6%';
+            if (/\b4\b|4%/.test(s)) return '4%';
+            if (/άνευ|ανευ|απαλλ|χωρ|exempt|\b0\b|0%/.test(s)) return '0%';
+            // Fallback: derive from the numeric vat/amount ratio when no label.
+            const amt = parseFloat(String((l && l.amount) || '').replace(/\./g, '').replace(',', '.'));
+            const vat = parseFloat(String((l && l.vat) || '').replace(/\./g, '').replace(',', '.'));
+            if (Number.isFinite(amt) && amt > 0 && Number.isFinite(vat)) {
+              const p = Math.round((vat / amt) * 100);
+              if ([24, 17, 13, 9, 6, 4, 0].includes(p)) return p + '%';
+            }
+            return '';
+          };
+          if (rmap && Object.keys(rmap).length) {
+            summary.lines.forEach(l => {
+              if (!l || String(l.category || '').trim()) return;
+              const mapped = String(rmap[rateOf(l)] || '').trim();
+              if (mapped) l.category = mapped;
+            });
+          }
+        }
+      }
+    } catch(_) {}
+
     const payload = {
       summary: summary || {},
       is_receipt: !!(options && options.isReceipt),
@@ -7291,6 +7361,12 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         try { window.__RC_PENDING_FORCE_SUMMARY = null; } catch(_){ }
         const b = document.getElementById('existingBanner');
         if (b) b.style.display = 'none';
+        // Already recorded in myDATA -> nothing to enter here, so clear the search
+        // box for the next document (suppress the empty-box nav side-effect).
+        try { window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 3000; } catch(_) {}
+        try { window.__RC_CLEAR_MARK_AFTER_SAVE = true; } catch(_) {}
+        try { if (typeof clearSearchInputs === 'function') clearSearchInputs(); } catch(_) {}
+        try { if (typeof clearReceiptSearchCacheOnClose === 'function') clearReceiptSearchCacheOnClose(); } catch(_) {}
         return;
       }
 

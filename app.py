@@ -10891,6 +10891,7 @@ def search():
                 "einvoice.s1ecos.gr",
                 "impact.gr",
                 "einvoice.impact.gr",
+                "eskap.gr",
                 "epsilonnet.gr",
             )
             is_invoice_url = any(d in domain for d in invoice_domains)
@@ -10927,7 +10928,8 @@ def search():
                         # Cleanup: ensure marks are valid 15-digit strings
                         if scraped_marks:
                             scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                    elif "einvoice.impact.gr" in domain or "impact.gr" in domain:
+                    elif "einvoice.impact.gr" in domain or "impact.gr" in domain or "eskap.gr" in domain:
+                        # ESKAP embeds a mydatapi QRInfo URL like Impact -> same scraper.
                         mark_val, scraped_afm_impact = scrape_impact(mark)
                         scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                         if not scraped_afm:
@@ -11020,7 +11022,7 @@ def search():
             # flag for already classified docs
             classified_docs = [d for d in docs_for_mark if str(d.get("classification", "")).strip().lower() == "χαρακτηρισμενο"]
             if classified_docs:
-                classified_message = f"Το MARK {mark} είναι ήδη χαρακτηρισμένο στο invoices.json."
+                classified_message = f"Το MARK {mark} είναι ήδη χαρακτηρισμένο στο myDATA."
                 if not is_ajax_search:
                     flash(classified_message, "warning")
                 classified_flag = True
@@ -12406,7 +12408,7 @@ def _scan_mark_from_url(url: str) -> str:
             return mv if len(mv) == 15 and mv.isdigit() else ""
         if "einvoice.s1ecos.gr" in domain:
             return _first_mark(scrape_einvoice(u)[0])
-        if "einvoice.impact.gr" in domain or "impact.gr" in domain:
+        if "einvoice.impact.gr" in domain or "impact.gr" in domain or "eskap.gr" in domain:
             mv = str(scrape_impact(u)[0] or "").strip()
             return mv if len(mv) == 15 and mv.isdigit() else ""
         if "epsilonnet.gr" in domain:

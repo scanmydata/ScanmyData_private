@@ -759,11 +759,18 @@
     } else if (status === 'completed') {
       setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
       try { if (typeof window.__clearGlobalFetchProgressTarget === 'function') window.__clearGlobalFetchProgressTarget(); } catch (_) {}
-      showFetchFlash(message || 'Η λήψη ολοκληρώθηκε.', 'success');
+      // Terminal flash once per fetch cycle (see the overlap guard in the poller).
+      if (!window.__singleFetchTerminalFlashed) {
+        window.__singleFetchTerminalFlashed = true;
+        showFetchFlash(message || 'Η λήψη ολοκληρώθηκε.', 'success');
+      }
     } else if (status === 'error') {
       setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
       try { if (typeof window.__clearGlobalFetchProgressTarget === 'function') window.__clearGlobalFetchProgressTarget(); } catch (_) {}
-      showFetchFlash(message || 'Σφάλμα κατά τη λήψη.', 'error');
+      if (!window.__singleFetchTerminalFlashed) {
+        window.__singleFetchTerminalFlashed = true;
+        showFetchFlash(message || 'Σφάλμα κατά τη λήψη.', 'error');
+      }
     } else {
       setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
       clearFetchProgressFlash('single');
@@ -774,8 +781,17 @@
 
   function startFetchProgressPolling(query) {
     clearFetchProgressPolling();
+    // New fetch cycle -> allow exactly one terminal (completed/error) flash.
+    window.__singleFetchTerminalFlashed = false;
 
+    // Guard against overlapping ticks: setInterval fires every 1500ms regardless
+    // of whether the previous (async) tick has resolved. On completion a slow tick
+    // could still be awaiting when the next one fires, so BOTH saw "completed" and
+    // flashed -> the intermittent double "Η λήψη ολοκληρώθηκε" toast.
+    let ticking = false;
     const tick = async function() {
+      if (ticking) return;
+      ticking = true;
       try {
         const state = await pollFetchProgressOnce(query);
         if (state.status !== 'running') {
@@ -783,6 +799,8 @@
         }
       } catch (err) {
         console.warn('Fetch progress polling failed', err);
+      } finally {
+        ticking = false;
       }
     };
 
@@ -889,19 +907,28 @@
       try { window.__clearGlobalBulkFetchTarget(); } catch (_) {}
       setBulkButtonsState(status);
       setBulkStatusText(msg || 'Η μαζική λήψη ολοκληρώθηκε.');
-      showFetchFlash(msg || 'Η μαζική λήψη ολοκληρώθηκε.', 'success');
+      if (!window.__bulkFetchTerminalFlashed) {
+        window.__bulkFetchTerminalFlashed = true;
+        showFetchFlash(msg || 'Η μαζική λήψη ολοκληρώθηκε.', 'success');
+      }
     } else if (status === 'stopped') {
       saveBulkFetchJobId('');
       try { window.__clearGlobalBulkFetchTarget(); } catch (_) {}
       setBulkButtonsState(status);
       setBulkStatusText(msg || 'Η μαζική λήψη διακόπηκε.');
-      showFetchFlash(msg || 'Η μαζική λήψη διακόπηκε.', 'success');
+      if (!window.__bulkFetchTerminalFlashed) {
+        window.__bulkFetchTerminalFlashed = true;
+        showFetchFlash(msg || 'Η μαζική λήψη διακόπηκε.', 'success');
+      }
     } else if (status === 'error') {
       saveBulkFetchJobId('');
       try { window.__clearGlobalBulkFetchTarget(); } catch (_) {}
       setBulkButtonsState(status);
       setBulkStatusText(msg || 'Σφάλμα στη μαζική λήψη.');
-      showFetchFlash(msg || 'Σφάλμα στη μαζική λήψη.', 'error');
+      if (!window.__bulkFetchTerminalFlashed) {
+        window.__bulkFetchTerminalFlashed = true;
+        showFetchFlash(msg || 'Σφάλμα στη μαζική λήψη.', 'error');
+      }
     } else {
       saveBulkFetchJobId('');
       try { window.__clearGlobalBulkFetchTarget(); } catch (_) {}
@@ -914,7 +941,15 @@
 
   function startBulkFetchProgressPolling() {
     clearBulkFetchProgressPolling();
+    // New bulk cycle -> allow exactly one terminal (completed/stopped/error) flash.
+    window.__bulkFetchTerminalFlashed = false;
+    // Same overlap guard as the single-fetch poller: an async tick still awaiting
+    // when the next interval fires used to let two ticks both see the terminal
+    // status and flash twice.
+    let ticking = false;
     const tick = async function() {
+      if (ticking) return;
+      ticking = true;
       try {
         const state = await pollBulkFetchProgressOnce();
         const status = String(state.status || 'not_started');
@@ -926,6 +961,8 @@
         clearBulkFetchProgressPolling();
         setBulkStatusText(String((err && err.message) || 'Σφάλμα polling μαζικής λήψης.'));
         setBulkButtonsState('error');
+      } finally {
+        ticking = false;
       }
     };
 
@@ -1348,7 +1385,9 @@
           throw new Error(data.error || 'Αποτυχία εκκίνησης λήψης.');
         }
 
-        showFetchFlash(data.message || 'Η λήψη ξεκίνησε.', 'success');
+        // No separate "started" toast: upsertFetchProgressFlash above already
+        // shows the persistent progress banner, so a second toast here was a
+        // duplicate "Η λήψη ξεκίνησε" flash.
         startFetchProgressPolling(progressQuery);
         startLastFetchPolling(previousValue, {
           credentialName: requestCredential,
@@ -1356,8 +1395,9 @@
         });
       } catch (err) {
         setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
+        // upsertFetchProgressFlash with an error type already emits the toast, so
+        // the extra showFetchFlash below was a duplicate error flash.
         upsertFetchProgressFlash(err.message || 'Αποτυχία εκκίνησης λήψης.', 1, 'error');
-        showFetchFlash(err.message || 'Αποτυχία εκκίνησης λήψης.', 'error');
       } finally {
         try {
           waitOverlay.style.display = 'none';
