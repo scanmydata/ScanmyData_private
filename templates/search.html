@@ -12099,20 +12099,30 @@ document.addEventListener('submit', function(ev){
 
     const onChange = debounce(trySubmit, 140);
 
+    // A GENUINE user paste/keystroke means the user is actively entering the next
+    // document, so a lingering post-save/refocus auto-submit suppression window
+    // (set by rcScheduleSearchBoxRefocus / clearSearchInputs for ~5s) is obsolete
+    // and must not swallow this input -- otherwise a pasted link within 5s of the
+    // previous save didn't auto-submit until the user pressed Enter. Only trusted
+    // events clear it, so programmatic value changes during a reload still can't.
+    const clearSuppressIfTrusted = (e) => {
+      if (e && e.isTrusted) { try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = 0; } catch(_) {} }
+    };
+
     // Wire inputs if present
     if (markEl) {
-      markEl.addEventListener('input', onChange);
-      markEl.addEventListener('keyup', onChange);
-      markEl.addEventListener('paste', ()=>setTimeout(onChange,0));
+      markEl.addEventListener('input', (e)=>{ clearSuppressIfTrusted(e); onChange(); });
+      markEl.addEventListener('keyup', (e)=>{ clearSuppressIfTrusted(e); onChange(); });
+      markEl.addEventListener('paste', (e)=>{ clearSuppressIfTrusted(e); setTimeout(onChange,0); });
     }
     // url input could be injected later; observe for appearance
     let tries = 30;
     const iv = setInterval(()=>{
       const u = document.getElementById('scrapeUrlInput');
       if (u) {
-        u.addEventListener('input', onChange);
-        u.addEventListener('keyup', onChange);
-        u.addEventListener('paste', ()=>setTimeout(onChange,0));
+        u.addEventListener('input', (e)=>{ clearSuppressIfTrusted(e); onChange(); });
+        u.addEventListener('keyup', (e)=>{ clearSuppressIfTrusted(e); onChange(); });
+        u.addEventListener('paste', (e)=>{ clearSuppressIfTrusted(e); setTimeout(onChange,0); });
         clearInterval(iv);
       }
       if(--tries<=0) clearInterval(iv);

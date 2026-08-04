@@ -369,7 +369,22 @@ def _pick_col(cols: List[str], tokens: List[str]) -> Optional[str]:
                 return orig
     return None
 
+# Parsed client_db maps cached by path -> (mtime, map). This function is called
+# once per uncached counterparty AFM during classification/fetch, and re-reading
+# + re-parsing the whole Excel each time was the dominant cost. Keyed by mtime so
+# a re-uploaded client_db (new mtime) is picked up automatically.
+_CLIENT_MAP_CACHE: Dict[str, Any] = {}
+
+
 def _load_client_map(path: str) -> Dict[str, Any]:
+    try:
+        _mtime = os.path.getmtime(path)
+        _cached = _CLIENT_MAP_CACHE.get(path)
+        if _cached is not None and _cached[0] == _mtime:
+            return _cached[1]
+    except Exception:
+        _mtime = None
+
     df = _read_first_sheet_any(path)
     col_afm  = _pick_col(list(df.columns), ["αφμ", "afm", "vat"])
     col_id   = _pick_col(list(df.columns), ["συναλλ", "κωδ", "cust", "id", "code"])
@@ -394,7 +409,10 @@ def _load_client_map(path: str) -> Dict[str, Any]:
             nm = str(r.get(col_name, "") or "").strip()
             if nm:
                 names[afm_str] = nm
-    return {"by_afm": by_afm, "ids": ids_in_db, "names": names, "columns": list(df.columns)}
+    result = {"by_afm": by_afm, "ids": ids_in_db, "names": names, "columns": list(df.columns)}
+    if _mtime is not None:
+        _CLIENT_MAP_CACHE[path] = (_mtime, result)
+    return result
 
 # ----------------------- paths (robust client_db discovery) -----------------------
 def _discover_client_db_in_data_dir(data_dir: str = "data", vat: Optional[str] = None) -> Optional[str]:

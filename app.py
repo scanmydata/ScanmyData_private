@@ -2439,6 +2439,11 @@ if APP_DIR not in sys.path:
     sys.path.append(APP_DIR)
 
 
+# client_db path -> mtime already seeded into the shared vat_name_cache, so the
+# per-AFM enrichment below re-seeds only when the file actually changes.
+_CLIENT_DB_SEED_VERSIONS: Dict[str, Any] = {}
+
+
 def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str = None) -> Optional[str]:
     """
     Εμπλουτισμός ονόματος εκδότη με βάση το ΑΦΜ του.
@@ -2495,11 +2500,21 @@ def _enrich_issuer_name_from_afm(vat: str, issuer_afm: str, existing_name: str =
                 client_map = _load_client_map(client_db_path)
 
                 # Διασταύρωση/ενημέρωση της κοινής βάσης από το client_db της ομάδας.
+                # Seed the shared cache ONCE per client_db version: this runs on the
+                # first uncached AFM and re-inserting every row on each subsequent
+                # miss was pure overhead (a SELECT per row for no change).
                 try:
                     import vat_name_cache
-                    seeded = vat_name_cache.store_from_client_map(client_map)
-                    if seeded:
-                        log.info(f"Seeded {seeded} AFM→name pairs into shared cache from client_db")
+                    _seed_ver = None
+                    try:
+                        _seed_ver = os.path.getmtime(client_db_path)
+                    except Exception:
+                        _seed_ver = None
+                    if _CLIENT_DB_SEED_VERSIONS.get(client_db_path) != _seed_ver:
+                        seeded = vat_name_cache.store_from_client_map(client_map)
+                        _CLIENT_DB_SEED_VERSIONS[client_db_path] = _seed_ver
+                        if seeded:
+                            log.info(f"Seeded {seeded} AFM→name pairs into shared cache from client_db")
                 except Exception:
                     log.exception("vat_name_cache seeding from client_db failed")
 
