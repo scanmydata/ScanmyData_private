@@ -12128,6 +12128,27 @@ document.addEventListener('submit', function(ev){
       if(--tries<=0) clearInterval(iv);
     }, 200);
 
+    // Robustness: the element-level listeners above are LOST when a post-save
+    // partial reload replaces the search-box fragment. Without them, a pasted
+    // link into the freshly-rebuilt box no longer clears the 5s post-save
+    // suppression window -- so the link->MARK conversion refused to auto-submit
+    // until that window (and the green "just saved" row highlight) expired.
+    // Bind the trusted-clear once at the DOCUMENT level so it survives element
+    // replacement and works no matter which search input receives the paste.
+    if (!window.__RC_TRUSTED_CLEAR_DELEGATED) {
+      window.__RC_TRUSTED_CLEAR_DELEGATED = true;
+      const delegatedTrustedClear = (e) => {
+        if (!e || !e.isTrusted) return;
+        const t = e.target;
+        if (!t || (t.id !== 'markInput' && t.id !== 'scrapeUrlInput')) return;
+        try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = 0; } catch(_) {}
+        if (e.type === 'paste') setTimeout(onChange, 0); else onChange();
+      };
+      document.addEventListener('input', delegatedTrustedClear, true);
+      document.addEventListener('keyup', delegatedTrustedClear, true);
+      document.addEventListener('paste', delegatedTrustedClear, true);
+    }
+
     // Initial pass (for browser autofill)
     window.addEventListener('load', ()=> setTimeout(onChange, 60));
 

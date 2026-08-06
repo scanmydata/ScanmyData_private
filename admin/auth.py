@@ -1387,7 +1387,17 @@ def get_active_group():
     name = session.get('active_group')
     if name:
         try:
-            return Group.query.filter_by(name=name).first()
+            grp = Group.query.filter_by(name=name).first()
+            # Cache name->folder in the session so the SQLAlchemy after_commit
+            # hook can record idle-sync activity WITHOUT emitting SQL inside the
+            # after_commit event (which SQLAlchemy forbids and which otherwise
+            # errored on every commit).
+            try:
+                if grp is not None and getattr(grp, 'data_folder', None):
+                    session['active_group_folder'] = grp.data_folder
+            except Exception:
+                pass
+            return grp
         except Exception:
             return None
 
@@ -1396,6 +1406,11 @@ def get_active_group():
         if getattr(current_user, 'is_authenticated', False):
             groups = current_user.groups
             if groups and len(groups) == 1:
+                try:
+                    if getattr(groups[0], 'data_folder', None):
+                        session['active_group_folder'] = groups[0].data_folder
+                except Exception:
+                    pass
                 return groups[0]
     except Exception:
         pass

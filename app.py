@@ -1030,6 +1030,21 @@ try:
     app.config.setdefault('SQLALCHEMY_DATABASE_URI', os.getenv('DATABASE_URL') or 'sqlite:///' + os.path.join(BASE_DIR, 'firebed.db'))
     app.config.setdefault('SQLALCHEMY_TRACK_MODIFICATIONS', False)
 
+    # Pool sizing / health. We run 1 gunicorn worker with 8 threads plus a
+    # handful of background daemons (backup scheduler, fetch/bulk workers,
+    # activity timers). The stock QueuePool (5 + 10 overflow = 15) is easy to
+    # exhaust when a background thread holds a connection during slow Drive
+    # I/O; give some headroom, fail fast instead of blocking 30s, and recycle
+    # stale connections. pool_pre_ping avoids "server closed the connection"
+    # errors on long-idle background threads.
+    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {
+        'pool_size': 10,
+        'max_overflow': 20,
+        'pool_timeout': 10,
+        'pool_recycle': 1800,
+        'pool_pre_ping': True,
+    })
+
     db.init_app(app)
     login_manager.init_app(app)
     app.register_blueprint(auth_bp)
@@ -1093,14 +1108,19 @@ try:
             try:
                 if not getattr(current_user, 'is_authenticated', False):
                     return
-                # active_group is group.name — translate to data_folder
+                # active_group is group.name — translate to data_folder.
+                # IMPORTANT: SQLAlchemy forbids emitting SQL inside an
+                # after_commit event, so we must NOT run Group.query here (it
+                # raised on every commit). Read the folder from the session
+                # cache populated by get_active_group() instead. If it's not
+                # cached (e.g. background thread with no request), skip.
                 active_group_name = flask_session.get('active_group')
                 if not active_group_name:
                     return
-                grp = Group.query.filter_by(name=active_group_name).first()
-                if not grp:
+                data_folder = flask_session.get('active_group_folder')
+                if not data_folder:
                     return
-                _fc.firebase_record_db_activity(current_user.id, grp.data_folder)
+                _fc.firebase_record_db_activity(current_user.id, data_folder)
             except Exception as e:
                 try:
                     current_app.logger.debug('After commit: %s', e)
@@ -20601,11 +20621,30 @@ def _firebase_backup_scheduler_loop():
                     interval_secs = max(interval_secs, safety_net_secs)
 
                 groups = Group.query.all() or []
+                # Snapshot only the fields we need, then release the DB
+                # connection back to the pool BEFORE the slow sync below.
+                # firebase_pull/push can block on Drive I/O for tens of
+                # seconds (the logs show 97s for a 151MB group). Holding a
+                # checked-out connection for that whole time is exactly what
+                # exhausts the QueuePool (size 5 + overflow 10) and produces
+                # the "QueuePool limit ... connection timed out" errors on the
+                # automatic group pushes.
+                group_specs = [
+                    (
+                        str(getattr(grp, 'name', '') or '').strip(),
+                        str(getattr(grp, 'data_folder', '') or '').strip(),
+                    )
+                    for grp in groups
+                ]
+                try:
+                    from models import db as _db
+                    _db.session.remove()
+                except Exception:
+                    pass
+
                 now_ts = time.time()
-                for grp in groups:
+                for group_name, group_folder in group_specs:
                     try:
-                        group_name = str(getattr(grp, 'name', '') or '').strip()
-                        group_folder = str(getattr(grp, 'data_folder', '') or '').strip()
                         if not group_name or not group_folder:
                             continue
 
@@ -20684,7 +20723,7 @@ def _firebase_backup_scheduler_loop():
                         _firebase_backup_last_run[group_name] = time.time()
                         log.info('Scheduled Firebase backup sync done for group=%s sync_ok=%s', group_name, sync_result)
                     except Exception:
-                        log.exception('Scheduled Firebase backup sync failed for group=%s', getattr(grp, 'name', None))
+                        log.exception('Scheduled Firebase backup sync failed for group=%s', group_name)
 
                 # Back up / restore the global AFM→name cache to the cloud.
                 # First iteration forces a pull so the cache is warm on boot
