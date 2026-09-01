@@ -1907,17 +1907,37 @@ document.getElementById('email-form')?.addEventListener('submit', async (e) => {
     });
     
     const data = await response.json();
-    
-    if (data.success) {
-      showSuccessModal('✅ Επιτυχία', 
-        `Email στάλθηκε επιτυχώς σε ${data.results?.sent || userIds.length} χρήστες!${data.results?.failed > 0 ? ` (${data.results.failed} αποτυχίες)` : ''}`, 
+
+    const escapeHtml = (s) => String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const sent = data.results?.sent ?? 0;
+    const failed = data.results?.failed ?? 0;
+    const errors = data.results?.errors || [];
+    const errorsHtml = errors.length
+      ? `<div style="margin-top:10px;text-align:left;font-size:0.85em;max-height:180px;overflow:auto">
+           <strong>Λεπτομέρειες αποτυχιών:</strong>
+           <ul style="margin:6px 0 0 18px">${errors.map(x => `<li>${escapeHtml(String(x))}</li>`).join('')}</ul>
+         </div>`
+      : '';
+
+    if (data.success && failed === 0) {
+      // Full success.
+      showSuccessModal('✅ Επιτυχία',
+        `Email στάλθηκε επιτυχώς σε ${sent} χρήστες!`,
         () => {
           e.target.reset();
           document.querySelectorAll('.user-email-checkbox').forEach(cb => cb.checked = false);
           document.getElementById('selectAllUsers').checked = false;
         });
+    } else if (data.success && failed > 0) {
+      // Partial success — show what went through AND why the rest failed.
+      showErrorModal('⚠️ Μερική Αποστολή',
+        `Στάλθηκε σε ${sent} χρήστες, ${failed} απέτυχαν.${errorsHtml}`);
     } else {
-      showErrorModal('❌ Σφάλμα Αποστολής', data.error || 'Άγνωστο σφάλμα αποστολής email');
+      // Total failure — surface the concrete reason.
+      showErrorModal('❌ Σφάλμα Αποστολής',
+        `${data.error || 'Άγνωστο σφάλμα αποστολής email'}${errorsHtml}`);
     }
   } catch (err) {
     console.error('Email send error:', err);

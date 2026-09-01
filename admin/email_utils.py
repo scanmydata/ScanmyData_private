@@ -10,6 +10,22 @@ from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
+# Thread-local storage for the last send failure reason. Send functions return
+# a plain bool for backward compatibility; callers that need the *reason* (e.g.
+# the admin bulk-send) read it via get_last_send_error() right after the call.
+import threading as _threading
+_send_ctx = _threading.local()
+
+
+def _set_last_send_error(msg: Optional[str]) -> None:
+    _send_ctx.error = (msg or '')
+
+
+def get_last_send_error() -> str:
+    """Return the reason for the most recent send failure on this thread ('' if none)."""
+    return getattr(_send_ctx, 'error', '') or ''
+
+
 # Email config from environment
 EMAIL_PROVIDER = os.getenv('EMAIL_PROVIDER', 'smtp')  # 'smtp', 'oauth2_outlook', 'resend', or 'railway_proxy'
 SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
@@ -56,6 +72,9 @@ def get_email_provider() -> str:
 def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
     """Send an email via SMTP, OAuth2, Resend, or Railway Proxy based on configuration"""
     
+    # Reset the per-thread failure reason for this attempt.
+    _set_last_send_error(None)
+
     # Get current provider from settings or environment
     provider = get_email_provider()
     logger.info(f"send_email called: to={to_email}, subject={subject}, provider={provider}")
@@ -202,7 +221,9 @@ def _inline_logo_into_html(html: str) -> str:
 def send_smtp_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
     """Send an email via traditional SMTP"""
     if not SMTP_USER or not SMTP_PASSWORD:
-        logger.warning(f"SMTP not configured; skipping email to {to_email}")
+        msg = 'Ο SMTP δεν έχει ρυθμιστεί (SMTP_USER/SMTP_PASSWORD)'
+        logger.warning(f"{msg}; skipping email to {to_email}")
+        _set_last_send_error(msg)
         return False
     
     try:
@@ -255,9 +276,11 @@ def send_smtp_email(to_email: str, subject: str, html_body: str, text_body: Opti
             server.sendmail(SENDER_EMAIL, to_email, root.as_string())
         
         logger.info(f"Email sent via SMTP to {to_email}: {subject}")
+        _set_last_send_error(None)
         return True
     except Exception as e:
         logger.error(f"Failed to send SMTP email to {to_email}: {e}")
+        _set_last_send_error(f'SMTP σφάλμα ({type(e).__name__}): {e}')
         return False
 
 
@@ -323,7 +346,9 @@ def _resend_embed_data_uri_images(html: str) -> tuple[str, list[dict]]:
 def send_resend_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
     """Send an email via Resend API"""
     if not RESEND_API_KEY:
-        logger.warning(f"Resend API key not configured; skipping email to {to_email}")
+        msg = 'Το κλειδί Resend (RESEND_API_KEY) δεν έχει ρυθμιστεί στο περιβάλλον'
+        logger.warning(f"{msg}; skipping email to {to_email}")
+        _set_last_send_error(msg)
         return False
 
     # Inline the local logo image (if present) so that we can embed it when sending via Resend.
@@ -370,19 +395,29 @@ def send_resend_email(to_email: str, subject: str, html_body: str, text_body: Op
         email = resend.Emails.send(params)
         
         logger.info(f"Email sent via Resend to {to_email}: {subject} (ID: {email.get('id', 'unknown')})")
+        _set_last_send_error(None)
         return True
-        
+
     except ImportError:
-        logger.error("Resend library not available. Install it with: pip install resend")
+        msg = 'Η βιβλιοθήκη resend δεν είναι εγκατεστημένη (pip install resend)'
+        logger.error(f"{msg}")
+        _set_last_send_error(msg)
         return False
     except Exception as e:
+        resend_reason = f'Resend σφάλμα ({type(e).__name__}): {e}'
         logger.error(f"Failed to send Resend email to {to_email}: {e}")
         logger.error(f"Resend error details - Type: {type(e).__name__}, Args: {e.args}")
         logger.error(f"Resend sender was: {sender}, API key present: {bool(RESEND_API_KEY)}")
-        
+        _set_last_send_error(resend_reason)
+
         # Fallback to SMTP if Resend fails
         logger.warning(f"Falling back to SMTP for {to_email}")
-        return send_smtp_email(to_email, subject, html_body, text_body)
+        ok = send_smtp_email(to_email, subject, html_body, text_body)
+        if not ok:
+            # Preserve both reasons so the admin sees why the primary path failed.
+            smtp_reason = get_last_send_error()
+            _set_last_send_error(f'{resend_reason} | SMTP fallback: {smtp_reason}')
+        return ok
 
 
 def send_railway_proxy_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
@@ -684,24 +719,29 @@ def send_bulk_email_to_users(user_ids: list, subject: str, html_body: str) -> di
     from models import User
     
     results = {'sent': 0, 'failed': 0, 'errors': []}
-    
+
     for uid in user_ids:
         try:
             user = User.query.get(uid)
             if not user or not user.email:
                 results['failed'] += 1
-                results['errors'].append(f'User {uid}: no email')
+                results['errors'].append(f'User {uid}: δεν έχει καταχωρημένο email')
+                logger.warning(f"Bulk email: user {uid} has no email address")
                 continue
-            
+
             if send_email(user.email, subject, html_body):
                 results['sent'] += 1
+                logger.info(f"Bulk email sent to {user.email}")
             else:
                 results['failed'] += 1
-                results['errors'].append(f'User {uid}: send failed')
+                reason = get_last_send_error() or 'άγνωστος λόγος αποτυχίας'
+                results['errors'].append(f'{user.email}: {reason}')
+                logger.warning(f"Bulk email failed to {user.email}: {reason}")
         except Exception as e:
             results['failed'] += 1
             results['errors'].append(f'User {uid}: {str(e)}')
-    
+            logger.exception(f"Bulk email exception for user {uid}")
+
     return results
 
 

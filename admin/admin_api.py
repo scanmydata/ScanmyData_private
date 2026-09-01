@@ -1401,6 +1401,19 @@ def api_send_email():
                                 continue
 
                 results = send_bulk_email_to_users(user_ids, subject, html_body)
+                sent = int(results.get('sent', 0))
+                failed = int(results.get('failed', 0))
+                errors = results.get('errors', []) or []
+
+                # Always log the outcome server-side — failures at WARNING level
+                # with the concrete per-recipient reasons for later diagnosis.
+                if failed:
+                        logger.warning(
+                                "Admin bulk email: %d sent, %d failed. Reasons: %s",
+                                sent, failed, ' | '.join(errors[:20])
+                        )
+                else:
+                        logger.info("Admin bulk email: %d sent, 0 failed", sent)
 
                 # Log the admin action (include recipient list and sent/failed counts)
                 try:
@@ -1409,21 +1422,36 @@ def api_send_email():
                                 'user_count': len(user_ids),
                                 'recipient_count': len(recipients),
                                 'recipients': recipients,
-                                'sent': results.get('sent', 0),
-                                'failed': results.get('failed', 0),
-                                'errors': results.get('errors', [])
+                                'sent': sent,
+                                'failed': failed,
+                                'errors': errors
                         })
                 except Exception:
                         logger.debug('Failed to log admin send_email action')
 
+                # Total failure -> report as an error so the UI shows WHY, not a
+                # misleading green "success" banner.
+                if sent == 0 and failed > 0:
+                        detail = '; '.join(errors[:5]) if errors else 'άγνωστος λόγος'
+                        return jsonify({
+                                'success': False,
+                                'error': f'Απέτυχε η αποστολή και στους {failed} παραλήπτες. Λόγος: {detail}',
+                                'results': results
+                        }), 502
+
+                # Full or partial success.
+                if failed:
+                        message = f'Στάλθηκε σε {sent} χρήστες — {failed} απέτυχαν.'
+                else:
+                        message = f'Στάλθηκε επιτυχώς σε {sent} χρήστες.'
                 return jsonify({
                         'success': True,
-                        'message': f'Email sent to {results["sent"]} users, {results["failed"]} failed',
+                        'message': message,
                         'results': results
                 })
         except Exception as e:
-                logger.error(f"Error sending admin email: {e}")
-                return jsonify({'success': False, 'error': str(e)}), 500
+                logger.exception("Error sending admin email")
+                return jsonify({'success': False, 'error': f'Σφάλμα διακομιστή: {e}'}), 500
 
 
 @admin_api_bp.route('/email-config', methods=['GET', 'POST'])
