@@ -2323,26 +2323,53 @@ def _resolve_client_db_path(vat: str) -> str | None:
     vat = str(vat or "").strip()
     base = get_group_base_dir()  # π.χ. .../data/<group>
 
-    # 1) Κοίτα πρώτα στον φάκελο της ομάδας
-    candidates = [
-        os.path.join(base, f"client_db_{vat}.xlsx"),
-        os.path.join(base, f"{vat}_client_db.xlsx"),
-        os.path.join(base, "client_db.xlsx"),
-        os.path.join(base, f"client_db_{vat}.xls"),
-        os.path.join(base, f"{vat}_client_db.xls"),
-        os.path.join(base, "client_db.xls"),
-        os.path.join(base, "client_db.csv"),
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
+    # Ο drive-backup κατεβάζει συχνά το client_db μέσα σε υποφάκελο
+    # imports/Imports. Έλεγξε ΚΑΙ τον root ΚΑΙ αυτούς τους υποφακέλους ώστε να
+    # μη βγάζει ψευδώς "client_db_missing" όταν το αρχείο υπάρχει κανονικά.
+    search_dirs = [base]
+    _seen = {os.path.normcase(os.path.abspath(base))}
+    for sub in ("imports", "Imports"):
+        sub_dir = os.path.join(base, sub)
+        _k = os.path.normcase(os.path.abspath(sub_dir))
+        if os.path.isdir(sub_dir) and _k not in _seen:
+            search_dirs.append(sub_dir)
+            _seen.add(_k)
 
-    # 2) Fallback: «έξυπνη» ανακάλυψη στον φάκελο της ομάδας
+    # 1) Κοίτα πρώτα στους φακέλους της ομάδας (root + imports).
+    #    Οι per-VAT ονομασίες έχουν προτεραιότητα (χαμηλότερο rank). Όταν το ΙΔΙΟ
+    #    όνομα υπάρχει σε πολλές τοποθεσίες (π.χ. ένα μικρό client_db.xlsx στη
+    #    ρίζα από χαλασμένο upload ΚΑΙ το πλήρες στο imports/), προτίμησε το
+    #    ΜΕΓΑΛΥΤΕΡΟ ώστε το export να μη χρησιμοποιεί ελλιπή βάση.
+    names = [
+        f"client_db_{vat}.xlsx",
+        f"{vat}_client_db.xlsx",
+        "client_db.xlsx",
+        f"client_db_{vat}.xls",
+        f"{vat}_client_db.xls",
+        "client_db.xls",
+        "client_db.csv",
+    ]
+    ranked = []  # (name_rank, -size, path)
+    for d in search_dirs:
+        for rank, nm in enumerate(names):
+            p = os.path.join(d, nm)
+            if os.path.exists(p):
+                try:
+                    sz = os.path.getsize(p)
+                except OSError:
+                    sz = 0
+                ranked.append((rank, -sz, p))
+    if ranked:
+        ranked.sort()
+        return ranked[0][2]
+
+    # 2) Fallback: «έξυπνη» ανακάλυψη στους φακέλους της ομάδας (root + imports)
     try:
         from epsilon_bridges import _discover_client_db_in_data_dir
-        fb = _discover_client_db_in_data_dir(base, vat=vat)
-        if fb:
-            return fb
+        for d in search_dirs:
+            fb = _discover_client_db_in_data_dir(d, vat=vat)
+            if fb:
+                return fb
     except Exception:
         pass
 
@@ -3819,6 +3846,33 @@ def get_existing_client_ids() -> set:
     Falls back to empty set if no client_db exists.
     """
     client_ids = set()
+
+    # Βρες το καλύτερο client_db μέσα σε έναν φάκελο (root + imports/, το
+    # μεγαλύτερο, εκτός backups) και διάβασε τα ΑΦΜ του.
+    def _afms_from_dir(folder_path):
+        out = set()
+        try:
+            from epsilon_bridges import _discover_client_db_in_data_dir
+            path = _discover_client_db_in_data_dir(folder_path)
+        except Exception:
+            path = None
+        if not path or not os.path.exists(path):
+            return out
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in ['.xls', '.xlsx']:
+                df = pd.read_excel(path, dtype=str)
+            else:
+                df = pd.read_csv(path, dtype=str)
+            df.fillna('', inplace=True)
+            for afm in df.get("ΑΦΜ", []):
+                afm_str = str(afm).strip()
+                if afm_str:
+                    out.add(afm_str)
+        except Exception:
+            pass
+        return out
+
     try:
         # If Flask-Login is present and there's a current_user, restrict to their folders.
         try:
@@ -3831,40 +3885,14 @@ def get_existing_client_ids() -> set:
                     folder_path = os.path.join(BASE_DIR, 'data', folder)
                     if not os.path.isdir(folder_path):
                         continue
-                    for existing in os.listdir(folder_path):
-                        if existing.startswith('client_db') and os.path.splitext(existing)[1].lower() in ALLOWED_CLIENT_EXT:
-                            path = os.path.join(folder_path, existing)
-                            ext = os.path.splitext(path)[1].lower()
-                            if ext in ['.xls', '.xlsx']:
-                                df = pd.read_excel(path, dtype=str)
-                            else:
-                                df = pd.read_csv(path, dtype=str)
-                            df.fillna('', inplace=True)
-                            for afm in df.get("ΑΦΜ", []):
-                                afm_str = str(afm).strip()
-                                if afm_str:
-                                    client_ids.add(afm_str)
-                            break
+                    client_ids |= _afms_from_dir(folder_path)
                 return client_ids
         except Exception:
             # fallback to global behaviour if login not available
             pass
 
         # αναζήτηση τρέχοντος client_db (global or per-group base)
-        for existing in os.listdir(get_group_base_dir()):
-            if existing.startswith('client_db') and os.path.splitext(existing)[1].lower() in ALLOWED_CLIENT_EXT:
-                path = os.path.join(get_group_base_dir(), existing)
-                ext = os.path.splitext(path)[1].lower()
-                if ext in ['.xls', '.xlsx']:
-                    df = pd.read_excel(path, dtype=str)
-                else:
-                    df = pd.read_csv(path, dtype=str)
-                df.fillna('', inplace=True)
-                for afm in df.get("ΑΦΜ", []):
-                    afm_str = str(afm).strip()
-                    if afm_str:
-                        client_ids.add(afm_str)
-                break  # παίρνουμε μόνο το πρώτο υπάρχον client_db
+        client_ids |= _afms_from_dir(get_group_base_dir())
     except Exception:
         try:
             log.exception("Failed to get existing client IDs from client_db")
@@ -7963,16 +7991,44 @@ def upload_client_db():
             ), 400
 
         # Determine existing client_db file (if any).
+        # ΣΗΜΑΝΤΙΚΟ: ο drive-backup επαναφέρει συχνά το client_db μέσα σε
+        # υποφάκελο imports/ αντί για τη ρίζα της ομάδας. Ψάξε ΚΑΙ εκεί, αλλιώς
+        # το upload δεν βλέπει την παλιά βάση, δεν κάνει merge, και δημιουργεί
+        # νέο client_db στη ρίζα αφήνοντας την παλιά αδιάβαστη.
         existing_path = None
         existing_ext = None
-        for existing in os.listdir(target_base):
-            if not existing.startswith('client_db'):
-                continue
-            ext_candidate = os.path.splitext(existing)[1].lower()
-            if ext_candidate in ALLOWED_CLIENT_EXT and '.bak.' not in existing and not existing.endswith('.bak'):
-                existing_path = os.path.join(target_base, existing)
-                existing_ext = ext_candidate
-                break
+        _existing_search_dirs = [target_base]
+        _seen_dirs = {os.path.normcase(os.path.abspath(target_base))}
+        for _sub in ('imports', 'Imports'):
+            _sub_dir = os.path.join(target_base, _sub)
+            _key = os.path.normcase(os.path.abspath(_sub_dir))
+            # dedupe: σε case-insensitive FS (Windows) imports==Imports είναι ο ίδιος φάκελος
+            if os.path.isdir(_sub_dir) and _key not in _seen_dirs:
+                _existing_search_dirs.append(_sub_dir)
+                _seen_dirs.add(_key)
+        # Μάζεψε ΟΛΟΥΣ τους υποψηφίους (root + imports) και διάλεξε τον ΜΕΓΑΛΥΤΕΡΟ
+        # (κατά μέγεθος αρχείου ≈ πλήθος γραμμών). Έτσι, αν μια προηγούμενη
+        # χαλασμένη ενημέρωση άφησε ένα μικρό client_db στη ρίζα ενώ η πλήρης
+        # βάση βρίσκεται στο imports/, το merge γίνεται πάνω στην ΠΛΗΡΗ βάση και
+        # δεν χάνονται δεδομένα.
+        _candidates = []
+        for _dir in _existing_search_dirs:
+            for existing in os.listdir(_dir):
+                if not existing.startswith('client_db'):
+                    continue
+                if '.bak.' in existing or existing.endswith('.bak') or '_bak_' in existing:
+                    continue
+                ext_candidate = os.path.splitext(existing)[1].lower()
+                if ext_candidate in ALLOWED_CLIENT_EXT:
+                    _full = os.path.join(_dir, existing)
+                    try:
+                        _sz = os.path.getsize(_full)
+                    except OSError:
+                        _sz = 0
+                    _candidates.append((_sz, _full, ext_candidate))
+        if _candidates:
+            _candidates.sort(key=lambda t: t[0], reverse=True)
+            _, existing_path, existing_ext = _candidates[0]
 
         # Keep stable naming convention client_db{.ext}; if a client_db already exists, preserve its extension.
         final_ext = existing_ext or ext
@@ -8031,20 +8087,33 @@ def upload_client_db():
             new_clients = len(upload_unique_afm)
             updated_clients = 0
 
+        # Helper: μοναδικό όνομα backup ώστε να μη συγκρούονται δύο rotations
+        # μέσα στο ίδιο δευτερόλεπτο (συμβαίνει όταν αρχειοθετούμε ΚΑΙ το παλιό
+        # root αρχείο ΚΑΙ το αντίγραφο από τον φάκελο imports/, που έχουν το ίδιο
+        # basename). Το '.bak.' παραμένει στο όνομα ώστε το _prune_backups να το
+        # αναγνωρίζει.
+        def _unique_backup_path(base_name: str) -> str:
+            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
+            cand = os.path.join(target_base, f"{base_name}.bak.{ts}")
+            n = 1
+            while os.path.exists(cand):
+                cand = os.path.join(target_base, f"{base_name}.bak.{ts}-{n}")
+                n += 1
+            return cand
+
         # Rotate backups only after merge is ready.
         if os.path.exists(dest_path):
-            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
-            backup_name = f"{dest_name}.bak.{ts}"
             try:
-                os.rename(dest_path, os.path.join(target_base, backup_name))
+                os.rename(dest_path, _unique_backup_path(dest_name))
             except Exception:
                 log.exception('Failed to backup previous client_db %s (continuing)', dest_name)
 
-        # If existing file had different extension, archive it too (single active canonical file remains).
+        # Archive the source existing file too when it is NOT the same file as
+        # dest (e.g. it lived in imports/ or had a different extension), so a
+        # single active canonical client_db remains at the group root.
         if existing_path and os.path.exists(existing_path) and os.path.abspath(existing_path) != os.path.abspath(dest_path):
-            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
             try:
-                os.rename(existing_path, os.path.join(target_base, f"{os.path.basename(existing_path)}.bak.{ts}"))
+                os.rename(existing_path, _unique_backup_path(os.path.basename(existing_path)))
             except Exception:
                 log.exception('Failed to archive previous client_db variant %s', existing_path)
 
@@ -8084,11 +8153,23 @@ def upload_client_db():
         except Exception:
             log.exception('[Client DB Upload] Shared cache seeding failed (continuing)')
 
+        # Πλήθος μοναδικών πελατών = μοναδικά, μη-κενά ΑΦΜ στην τελική βάση
+        # (διαφορετικό από τις γραμμές: μπορεί να υπάρχουν κενές/διπλές γραμμές).
+        try:
+            if 'ΑΦΜ' in df_merged.columns:
+                _afm_series = df_merged['ΑΦΜ'].astype(str).str.strip()
+                total_clients = int(_afm_series[_afm_series != ''].nunique())
+            else:
+                total_clients = 0
+        except Exception:
+            total_clients = 0
+
         uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
         meta_extra = {
             'original_filename': uploaded_original_name,
             'storage_filename': dest_name,
             'total_rows': int(merged_rows),
+            'total_clients': int(total_clients),
             'source_rows': int(merge_source_rows),
             'new_clients': int(new_clients),
             'existing_clients': int(updated_clients),
@@ -8108,6 +8189,7 @@ def upload_client_db():
             uploaded_at=uploaded_at_iso,
             detected_columns=sorted(list(headers_set)),
             total_rows=int(merged_rows),
+            total_clients=int(total_clients),
             source_rows=int(merge_source_rows),
             new_clients=int(new_clients),
             existing_clients=int(updated_clients)
@@ -8705,48 +8787,53 @@ def client_db_info():
         except Exception:
             pass
 
-        meta = read_client_meta(base_dir=target_base)
-        counts = {'total_rows': 0, 'new_rows': 0, 'updated_rows': 0}
+        meta = read_client_meta(base_dir=target_base) or {}
 
-        if meta:
-            # Prefer precomputed counts from metadata (upload path stores these for low-resource environments).
-            if any(k in meta for k in ('total_rows', 'new_clients', 'existing_clients')):
-                counts.update({
-                    'total_rows': int(meta.get('total_rows') or 0),
-                    'new_rows': int(meta.get('new_clients') or 0),
-                    'updated_rows': int(meta.get('existing_clients') or 0),
-                })
-            else:
-                # Fallback only for old metadata versions.
-                p = os.path.join(target_base, str(meta.get('storage_filename') or meta.get('filename') or 'client_db.xlsx'))
-                if os.path.exists(p):
-                    try:
-                        ext = os.path.splitext(p)[1].lower()
-                        if ext in ['.xls', '.xlsx']:
-                            df = pd.read_excel(p, dtype=str)
-                        else:
-                            df = pd.read_csv(p, dtype=str)
-                        df.fillna('', inplace=True)
-                        counts['total_rows'] = len(df)
-                    except Exception:
-                        log.exception("Failed to count client_db rows")
+        # Βρες το ΠΡΑΓΜΑΤΙΚΟ canonical client_db (root + imports/, το μεγαλύτερο,
+        # εκτός backups) και μέτρα ΑΠΕΥΘΕΙΑΣ από το αρχείο, ώστε το UI να δείχνει
+        # ΠΑΝΤΑ σωστά νούμερα (γραμμές + πελάτες) ανεξάρτητα από παλιό/λάθος meta.
+        try:
+            from epsilon_bridges import _discover_client_db_in_data_dir
+            canonical = _discover_client_db_in_data_dir(target_base)
+        except Exception:
+            canonical = None
 
-            return jsonify(exists=True, filename=meta.get('storage_filename') or meta.get('filename'),
-                           uploaded_at=meta.get('uploaded_at'),
-                           **counts), 200
-
-        # fallback: if any client_db.* exists but no meta file
-        for existing in os.listdir(target_base):
-            if existing.startswith('client_db') and os.path.splitext(existing)[1].lower() in ALLOWED_CLIENT_EXT:
-                p = os.path.join(target_base, existing)
+        total_rows = 0
+        total_clients = 0
+        filename = None
+        uploaded_at = None
+        if canonical and os.path.exists(canonical):
+            filename = os.path.basename(canonical)
+            try:
+                ext = os.path.splitext(canonical)[1].lower()
+                if ext in ['.xls', '.xlsx']:
+                    df = pd.read_excel(canonical, dtype=str)
+                else:
+                    df = pd.read_csv(canonical, dtype=str)
+                df.fillna('', inplace=True)
+                total_rows = len(df)
+                if 'ΑΦΜ' in df.columns:
+                    _a = df['ΑΦΜ'].astype(str).str.strip()
+                    total_clients = int(_a[_a != ''].nunique())
+            except Exception:
+                log.exception("Failed to count client_db rows/clients")
+            uploaded_at = (meta.get('uploaded_at') if meta else None)
+            if not uploaded_at:
                 try:
-                    mtime = _dt.utcfromtimestamp(os.path.getmtime(p)).replace(microsecond=0).isoformat() + 'Z'
-                    counts.update({'total_rows': 0, 'new_rows': 0, 'updated_rows': 0})
-                    return jsonify(exists=True, filename=existing, uploaded_at=mtime, **counts), 200
+                    uploaded_at = _dt.utcfromtimestamp(os.path.getmtime(canonical)).replace(microsecond=0).isoformat() + 'Z'
                 except Exception:
-                    continue
+                    uploaded_at = None
 
-        return jsonify(exists=False, filename=None, uploaded_at=None, **counts), 200
+        if not filename:
+            return jsonify(exists=False, filename=None, uploaded_at=None,
+                           total_rows=0, total_clients=0, new_rows=0, updated_rows=0), 200
+
+        # new/updated: πληροφοριακά από το τελευταίο upload (αν υπάρχει meta)
+        new_rows = int(meta.get('new_clients') or 0) if meta else 0
+        updated_rows = int(meta.get('existing_clients') or 0) if meta else 0
+        return jsonify(exists=True, filename=filename, uploaded_at=uploaded_at,
+                       total_rows=int(total_rows), total_clients=int(total_clients),
+                       new_rows=new_rows, updated_rows=updated_rows), 200
     except Exception:
         log.exception("Failed to read client_db info")
         return jsonify(exists=False, filename=None, uploaded_at=None, total_rows=0, new_rows=0, updated_rows=0), 500
@@ -16677,6 +16764,49 @@ def activity_check_updates():
         return jsonify({'ok': False, 'error': str(exc)}), 500
 
 # --- νέο route: προεπισκόπηση Epsilon (ίδιο tab) ---
+def _exported_marks_path(vat: str) -> str:
+    """Per-group, per-VAT file that remembers which MARKs have already been
+    exported to a bridge/εξοδολόγιο, so the preview can flag them and the user
+    can optionally exclude already-exported records."""
+    vat = str(vat or "").strip()
+    return os.path.join(group_path("epsilon"), f"{vat}_exported_marks.json")
+
+
+def _load_exported_marks(vat: str) -> Dict[str, str]:
+    """Return {mark: last_exported_iso}. Tolerates legacy list form."""
+    try:
+        data = _safe_json_read(_exported_marks_path(vat), default={})
+        marks = data.get("marks") if isinstance(data, dict) else None
+        if isinstance(marks, dict):
+            return {str(k): str(v or "") for k, v in marks.items() if str(k).strip()}
+        if isinstance(marks, list):
+            return {str(m).strip(): "" for m in marks if str(m).strip()}
+    except Exception:
+        pass
+    return {}
+
+
+def _record_exported_marks(vat: str, marks) -> int:
+    """Upsert the given MARKs into the per-VAT exported set. Returns count added/updated."""
+    try:
+        path = _exported_marks_path(vat)
+        existing = _load_exported_marks(vat)
+        now = _dt.utcnow().replace(microsecond=0).isoformat() + "Z"
+        n = 0
+        for m in (marks or []):
+            m = str(m).strip()
+            if m:
+                existing[m] = now
+                n += 1
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"marks": existing, "updated_at": now}, fh, ensure_ascii=False, indent=2)
+        return n
+    except Exception:
+        log.exception("Failed to record exported marks for vat=%s", vat)
+        return 0
+
+
 @app.route("/epsilon/preview")
 def epsilon_preview():
     vat = (request.args.get("vat") or (get_active_credential_from_session() or {}).get("vat") or "").strip()
@@ -16732,6 +16862,12 @@ def epsilon_preview():
     missing_excel_marks: List[str] = []
     missing_excel_rows: List[Dict[str, Any]] = []
 
+    # MARKs που έχουν ήδη εξαχθεί προηγουμένως (για επισήμανση/προαιρετική εξαίρεση)
+    try:
+        exported_marks = sorted(_load_exported_marks(vat).keys())
+    except Exception:
+        exported_marks = []
+
     # πέρασέ τα στο template
     return render_template("epsilon_preview.html",
                            vat=vat,
@@ -16740,13 +16876,17 @@ def epsilon_preview():
                            bridge_issues=issues,
                            category_labels=category_labels,
                            missing_excel_marks=missing_excel_marks,
-                           missing_excel_rows=missing_excel_rows)
+                           missing_excel_rows=missing_excel_rows,
+                           exported_marks=exported_marks)
 
 
 @app.route("/export/fastimport/kinitseis")
 def export_fastimport_kinitseis():
     vat = request.args.get("vat") or ""
     confirm = request.args.get("confirm_new_partners") == "1"
+    # Μορφή εξαγωγής: "xlsx" (default, zip με .ect) ή "ld" (αρχείο HyperLog)
+    export_format = (request.args.get("format") or "xlsx").strip().lower()
+    want_ld = export_format == "ld"
 
     # Προαιρετικό φιλτράρισμα από το preview: MARKs που ο χρήστης διέγραψε πριν το export
     excluded_marks_raw = (request.args.get("excluded_marks") or "").strip()
@@ -16865,6 +17005,18 @@ def export_fastimport_kinitseis():
     except Exception:
         pass
     
+    # Αν ζητήθηκε .ld, όρισε τη διαδρομή του ώστε ο exporter να το γράψει
+    # παράλληλα με το xlsx (από τα ΙΔΙΑ flat/partners_rows).
+    ld_out = None
+    if want_ld:
+        try:
+            _cat_tag = "G" if is_g_category else "B"
+            _exports_dir = group_path("exports")
+            os.makedirs(_exports_dir, exist_ok=True)
+            ld_out = os.path.join(_exports_dir, f"{vat}_{_cat_tag}_CATEGORY_EPSILON_BRIDGE.ld")
+        except Exception:
+            ld_out = None
+
     ok, out_path, issues = export_func(
         vat=vat,
         credentials_json=credentials_path_for_request(),
@@ -16875,9 +17027,86 @@ def export_fastimport_kinitseis():
         base_invoices_dir=group_path("epsilon"),
         base_exports_dir=group_path("exports"),
         fiscal_year=fiscal_year,
+        out_ld=ld_out,
     )
 
     if ok and out_path:
+        # Κατέγραψε τα MARKs που μόλις εξήχθησαν, ώστε η επόμενη προεπισκόπηση να
+        # τα επισημαίνει και ο χρήστης να μπορεί προαιρετικά να τα εξαιρέσει.
+        # (Το preview εδώ έχει ήδη φιλτράρει τα excluded_marks μέσω temp json.)
+        try:
+            _exported_now = [
+                str(r.get("MARK") or r.get("mark") or "").strip()
+                for r in (preview.get("rows") or [])
+            ]
+            _exported_now = [m for m in _exported_now if m]
+            if _exported_now:
+                _record_exported_marks(vat, _exported_now)
+        except Exception:
+            current_app.logger.exception("Failed to record exported marks after export")
+
+        # --- ΝΕΟ: αν ζητήθηκε .ld, στείλε το αρχείο HyperLog αντί για xlsx/zip ---
+        if want_ld:
+            # Βρες τη διαδρομή του .ld από τα issues (ld_created) ή από το ld_out
+            ld_final = None
+            for it in (issues or []):
+                if it.get("code") == "ld_created" and it.get("path"):
+                    ld_final = it.get("path")
+                    break
+            if not ld_final and ld_out and os.path.exists(ld_out):
+                ld_final = ld_out
+
+            # Το xlsx γράφτηκε ούτως ή άλλως — δεν το χρειαζόμαστε στη λήψη .ld
+            try:
+                if out_path and os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+
+            if ld_final and os.path.exists(ld_final):
+                try:
+                    from utils import log_user_activity
+                    from flask_login import current_user
+                    from admin.auth import get_active_group
+                    grp = get_active_group()
+                    log_user_activity(
+                        user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+                        group_name=grp.name if grp else 'unknown',
+                        action='export_bridge_ld',
+                        details={
+                            'book_category': book_category if book_category else ('Β' if is_b_category else 'Γ'),
+                            'file_name': os.path.basename(ld_final),
+                            'file_size_kb': round(os.path.getsize(ld_final) / 1024.0, 1),
+                            'vat': vat,
+                        },
+                        user_email=getattr(current_user, 'email', None),
+                        user_username=getattr(current_user, 'username', None),
+                    )
+                except Exception as e:
+                    current_app.logger.error(f"Failed to log .ld export activity: {e}")
+
+                download_name = f"{vat}_epsilon_bridge_{'G' if is_g_category else 'B'}.ld"
+
+                @after_this_request
+                def _cleanup_ld_after_download(response):
+                    try:
+                        if ld_final and os.path.exists(ld_final):
+                            os.remove(ld_final)
+                    except OSError:
+                        pass
+                    return response
+
+                return send_file(ld_final, as_attachment=True,
+                                 download_name=download_name,
+                                 mimetype="application/octet-stream")
+
+            # Δεν γράφτηκε .ld — μάζεψε τα ld_ errors για να τα δει ο χρήστης
+            ld_err_msgs = [str(it.get("message") or "")
+                           for it in (issues or [])
+                           if str(it.get("code", "")).startswith("ld_") and it.get("level") == "error"]
+            combined = " • ".join(m for m in ld_err_msgs if m) or "Δεν ήταν δυνατή η δημιουργία του αρχείου .ld."
+            return jsonify({"ok": False, "error": combined}), 400
+
         # Calculate file size and row count for logging
         file_size_mb = 0
         rows_count = 0
@@ -18265,38 +18494,65 @@ def api_e3_brain_member_amka():
         if not taxis_user or not taxis_pass:
             return jsonify({"ok": False, "error": "Απαιτούνται κωδικοί TAXISnet για αυτήν την ενέργεια."}), 400
 
-        try:
-            from e3.checks.aade_playwright_fetch_e1 import run as aade_run
-        except Exception:
-            return jsonify({"ok": False, "error": "AADE helper unavailable."}), 500
-
         import asyncio, tempfile, uuid, shutil
         tmpdir = Path(tempfile.mkdtemp(prefix="aade_amka_"))
         out_file = tmpdir / f"aade_amka_{uuid.uuid4().hex}.pdf"
+
+        def _aade_fallback():
+            """FALLBACK: AADE (Playwright, headed) με AFM hint για τον συγκεκριμένο
+            μέλος. Επιστρέφει (res_dict_or_None, error_str_or_None, tb_or_None)."""
+            try:
+                from e3.checks.aade_playwright_fetch_e1 import run as aade_run
+            except Exception:
+                return None, "AADE helper unavailable.", None
+            try:
+                res = asyncio.run(aade_run(taxis_user, taxis_pass, year, str(out_file),
+                                           headless=False, name=name, afm_hint=afm))
+                return res, None, None
+            except Exception as e:
+                import traceback as _tb
+                return None, str(e), _tb.format_exc()
+
+        # 1) ΚΥΡΙΑ διαδικασία: MyAMKA BFF (καθαρό HTTP, γρήγορο). Επιστρέφει το ΑΜΚΑ
+        #    του ΚΑΤΟΧΟΥ των κωδικών TAXISnet.
+        primary = {"ok": False}
         try:
-            # prefer a headed session to improve AADE reliability on this machine
-            # pass AFM hint so the fetcher can prefer AMKA candidates near this AFM
-            res = asyncio.run(aade_run(taxis_user, taxis_pass, year, str(out_file), headless=False, name=name, afm_hint=afm))
-            # include tmpdir listing for debugging convenience
+            from e3.checks.myamka_http import retrieve_amka
+            primary = retrieve_amka(taxis_user, taxis_pass, timeout=30.0) or {"ok": False}
+        except Exception:
+            log.exception("MyAMKA primary import/call failed")
+            primary = {"ok": False, "reason": "primary-error"}
+
+        if primary.get("ok") and primary.get("amka"):
+            return jsonify({"ok": True, "afm": afm, "amka": primary.get("amka"),
+                            "amka_list": primary.get("amkaList"), "source": "myamka",
+                            "note": "Το ΑΜΚΑ ανακτήθηκε από το MyAMKA (κάτοχος κωδικών TAXISnet)."}), 200
+
+        # 2) FALLBACK: AADE (Playwright, headed). Τρέχει όταν το MyAMKA απέτυχε.
+        aade_res, aade_error, aade_tb = _aade_fallback()
+        files = []
+        try:
+            files = [str(p.relative_to(tmpdir)) for p in tmpdir.rglob('*') if p.is_file()]
+        except Exception:
             files = []
-            try:
-                files = [str(p.relative_to(tmpdir)) for p in tmpdir.rglob('*') if p.is_file()]
-            except Exception:
-                files = []
-            return jsonify({"ok": True, "afm": res.get("afm"), "amka": res.get("amka"), "raw": res, "debug_files": files, "debug_dir": str(tmpdir)}), 200
-        except Exception as e:
-            # collect debug files if any
-            files = []
-            try:
-                files = [str(p.relative_to(tmpdir)) for p in tmpdir.rglob('*') if p.is_file()]
-            except Exception:
-                files = []
-            import traceback as _tb
-            tb = _tb.format_exc()
-            return jsonify({"ok": False, "error": str(e), "traceback": tb, "debug_files": files, "debug_dir": str(tmpdir)}), 500
-        finally:
-            # keep tmpdir for debugging if needed; do not remove automatically
-            pass
+        aade_amka = (aade_res or {}).get("amka") if isinstance(aade_res, dict) else None
+
+        if aade_amka:
+            return jsonify({"ok": True, "afm": (aade_res or {}).get("afm") or afm,
+                            "amka": aade_amka, "source": "aade", "raw": aade_res,
+                            "primary_reason": primary.get("reason"),
+                            "debug_files": files, "debug_dir": str(tmpdir)}), 200
+
+        # 3) Ούτε MyAMKA ούτε AADE
+        if aade_error:
+            return jsonify({"ok": False, "error": aade_error, "traceback": aade_tb,
+                            "primary_reason": primary.get("reason"),
+                            "debug_files": files, "debug_dir": str(tmpdir)}), 500
+        # Το AADE έτρεξε αλλά δεν βρήκε ΑΜΚΑ (διατηρούμε το παλιό contract: ok=True, amka=None)
+        return jsonify({"ok": True, "afm": (aade_res or {}).get("afm") or afm,
+                        "amka": None, "source": "aade", "raw": aade_res,
+                        "primary_reason": primary.get("reason"),
+                        "debug_files": files, "debug_dir": str(tmpdir)}), 200
     except Exception as e:
         log.exception('api_e3_brain_member_amka failed')
         return jsonify({"ok": False, "error": str(e)}), 500

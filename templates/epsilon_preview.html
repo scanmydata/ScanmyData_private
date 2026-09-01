@@ -55,6 +55,15 @@
 [data-theme="dark"] .border-amber-200 {
   border-color: #eec45b !important;
 }
+/* Γραμμές που έχουν ήδη εξαχθεί σε προηγούμενη γέφυρα/εξοδολόγιο */
+#epsilonTable tbody tr.row-previously-exported > td {
+  background-color: #fff7ed !important;   /* απαλό πορτοκαλί */
+  box-shadow: inset 3px 0 0 0 #f59e0b;    /* αριστερή μπάρα */
+}
+[data-theme="dark"] #epsilonTable tbody tr.row-previously-exported > td {
+  background-color: #3a2f1a !important;
+  box-shadow: inset 3px 0 0 0 #f59e0b;
+}
 </style>
 <style>
   .container { max-width: min(1800px, 96vw); }
@@ -93,11 +102,31 @@
     </div>
 
     <div class="flex items-center gap-2">
-      <button id="resetRemovedRowsBtn" class="btn" disabled>Επαναφορά διαγραφών</button>
-      <button id="exportBridgeBtn" class="btn btn-primary" disabled
-              title="Απενεργό: απαιτείται κάθε γραμμή να έχει CUSTID, Χαρακτηρισμούς & Λογαριασμούς">
-        Λήψη Γέφυρας (Strict)
+      <button id="excludeExportedBtn" class="btn hidden" type="button"
+              title="Εξαίρεσε όσες εγγραφές έχουν ήδη εξαχθεί σε προηγούμενη γέφυρα/εξοδολόγιο">
+        Εξαίρεση ήδη εξαγμένων
       </button>
+      <button id="resetRemovedRowsBtn" class="btn" disabled>Επαναφορά διαγραφών</button>
+      <div id="exportBridgeWrap" class="relative inline-flex">
+        <button id="exportBridgeBtn" class="btn btn-primary rounded-r-none" disabled
+                title="Απενεργό: απαιτείται κάθε γραμμή να έχει CUSTID, Χαρακτηρισμούς & Λογαριασμούς">
+          Λήψη Γέφυρας (Strict)
+        </button>
+        <button id="exportBridgeCaret" type="button" class="btn btn-primary rounded-l-none px-2 border-l border-white/40"
+                disabled aria-haspopup="true" aria-expanded="false"
+                title="Περισσότερες μορφές λήψης">▾</button>
+        <div id="exportBridgeMenu"
+             class="hidden absolute right-0 top-full mt-1 min-w-[260px] bg-white border border-gray-200 rounded shadow-lg z-50 overflow-hidden">
+          <button type="button" data-format="xlsx"
+                  class="export-format-item block w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50">
+            📊 Λήψη XLSX (γέφυρα + .ect)
+          </button>
+          <button type="button" data-format="ld"
+                  class="export-format-item block w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50 border-t border-gray-100">
+            🔐 Λήψη αρχείου HyperLog (.ld)
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -113,6 +142,10 @@
   {% endif %}
 
   <div id="removedRowsInfo" class="hidden mb-3 p-2 rounded border border-sky-200 bg-sky-50 text-sky-800 text-sm"></div>
+  <div id="exportedLegend" class="hidden mb-3 p-2 rounded border border-amber-300 bg-amber-50 text-amber-900 text-sm">
+    <span class="inline-block w-3 h-3 align-middle mr-1" style="background:#fff7ed;box-shadow:inset 3px 0 0 0 #f59e0b;"></span>
+    Οι <strong>πορτοκαλί</strong> γραμμές έχουν ήδη εξαχθεί σε προηγούμενη γέφυρα/εξοδολόγιο. Περιλαμβάνονται κανονικά — μπορείς να τις εξαιρέσεις μεμονωμένα («Διαγραφή») ή όλες μαζί με το κουμπί «Εξαίρεση ήδη εξαγμένων».
+  </div>
 
   <div class="text-sm text-gray-500 mb-2">Σύνολα προσαρμόζονται στο φίλτρο αναζήτησης</div>
 
@@ -233,6 +266,8 @@ const BRIDGE_ISSUES = {{ (bridge_issues or [])|tojson|safe }};
 const CATEGORY_LABELS = {{ (category_labels or {})|tojson|safe }};
 const MISSING_EXCEL_ROWS = {{ (missing_excel_rows or [])|tojson|safe }};
 const EXCLUDED_MARKS = new Set();
+// MARKs που έχουν ήδη εξαχθεί σε προηγούμενη γέφυρα/εξοδολόγιο (opt-in exclude).
+const EXPORTED_MARKS = new Set(({{ (exported_marks or [])|tojson|safe }} || []).map(m => String(m).trim()).filter(Boolean));
 const INVOICE_TYPE_LABELS = {
   "1.1": "Τιμολόγιο Πώλησης",
   "1.2": "Τιμολόγιο Πώλησης / Ενδοκοινοτικές Παραδόσεις",
@@ -441,6 +476,8 @@ function updateTotalsAndExportState(api){
     btn.dataset.exportMode = (allowPartnersFlow && okExceptCust && !okStrict) ? 'partners' : 'strict';
     btn.dataset.exportReady = canExport ? '1' : '0';
   }
+  const caretBtn = document.getElementById('exportBridgeCaret');
+  if (caretBtn) caretBtn.disabled = !canExport;
 
   if (allowPartnersFlow && okExceptCust && !okStrict){
     // Μόνο τα CUSTID λείπουν -> θα εμφανιστεί modal για δημιουργία
@@ -457,6 +494,7 @@ function updateTotalsAndExportState(api){
 }
 
 function updateRemovedRowsInfo(){
+  updateExcludeExportedBtn();
   const info = document.getElementById('removedRowsInfo');
   const resetBtn = document.getElementById('resetRemovedRowsBtn');
   if(!info || !resetBtn) return;
@@ -470,6 +508,34 @@ function updateRemovedRowsInfo(){
   info.classList.remove('hidden');
   info.textContent = `Έχεις αφαιρέσει ${count} παραστατικά από την προεπισκόπηση. Η εξαγωγή θα τα αγνοήσει.`;
   resetBtn.disabled = false;
+}
+
+// Κουμπί «Εξαίρεση ήδη εξαγμένων»: εμφανίζεται μόνο όταν υπάρχουν ήδη-εξαγμένες
+// γραμμές που δεν έχουν εξαιρεθεί, με μετρητή.
+function updateExcludeExportedBtn(){
+  const btn = document.getElementById('excludeExportedBtn');
+  const legend = document.getElementById('exportedLegend');
+  let n = 0;          // ήδη-εξαγμένες, ΜΗ εξαιρεμένες (για το κουμπί)
+  let inDataset = 0;  // ήδη-εξαγμένες συνολικά στο dataset (για το legend)
+  try {
+    for (const r of (TABLE_DATA||[])){
+      const mk = String(r.MARK||'').trim();
+      if (mk && EXPORTED_MARKS.has(mk)){
+        inDataset++;
+        if (!EXCLUDED_MARKS.has(mk)) n++;
+      }
+    }
+  } catch(_){ n = 0; inDataset = 0; }
+  if(legend){
+    legend.classList.toggle('hidden', !(EXPORTED_MARKS.size && inDataset > 0));
+  }
+  if(!btn) return;
+  if(!EXPORTED_MARKS.size || n <= 0){
+    btn.classList.add('hidden');
+  } else {
+    btn.classList.remove('hidden');
+    btn.textContent = `Εξαίρεση ήδη εξαγμένων (${n})`;
+  }
 }
 
 function extractFilenameFromDisposition(disposition){
@@ -562,7 +628,9 @@ async function performBridgeDownload(url, options){
     const baseMsg = mode === 'partners'
       ? 'Η γέφυρα δημιουργήθηκε και λήφθηκε (με νέους συναλλασσόμενους).'
       : 'Η γέφυρα λήφθηκε με επιτυχία.';
-    if (filename.toLowerCase().endsWith('.zip')){
+    if (options.format === 'ld' || filename.toLowerCase().endsWith('.ld')){
+      showFlash('Το αρχείο HyperLog (.ld) λήφθηκε. Άνοιξέ το απευθείας στο Epsilon Net HyperLog (συνιστάται δοκιμαστική εισαγωγή πρώτα).', 'success', 7000);
+    } else if (filename.toLowerCase().endsWith('.zip')){
       // Detect category from filename or global data
       const isGCategory = window.G_CATEGORY_DATA || filename.toLowerCase().includes('g_kat') || filename.toLowerCase().includes('γ');
       const ectFile = isGCategory ? 'g_kat.ect' : 'b_kat.ect';
@@ -686,7 +754,8 @@ async function initEpsilonPreviewPage(){
         _missVat: missVat,
         _missLcodes: missAcc,
         _isReceipt: isRec,
-        _markKey: String(r.MARK || '').trim()
+        _markKey: String(r.MARK || '').trim(),
+        _exported: EXPORTED_MARKS.has(String(r.MARK || '').trim())
       };
     });
   }
@@ -747,6 +816,12 @@ async function initEpsilonPreviewPage(){
     pageLength: 25,
     deferRender: true,
     dom: 'lrtip',
+    createdRow: function(row, data){
+      if (data && data._exported){
+        $(row).addClass('row-previously-exported');
+        $(row).attr('title', 'Έχει ήδη εξαχθεί σε προηγούμενη γέφυρα/εξοδολόγιο');
+      }
+    },
     drawCallback: function(){ updateTotalsAndExportState(this.api()); }
   });
 
@@ -820,15 +895,48 @@ async function initEpsilonPreviewPage(){
     }
   });
 
-  // Export
+  // Εξαίρεση ΟΛΩΝ των ήδη-εξαγμένων εγγραφών (opt-in). Οι μεμονωμένες εξαιρέσεις
+  // γίνονται με το κουμπί «Διαγραφή» της κάθε γραμμής.
+  document.getElementById('excludeExportedBtn')?.addEventListener('click', function(){
+    let added = 0;
+    for (const r of (TABLE_DATA||[])){
+      const mk = String(r.MARK||'').trim();
+      if (mk && EXPORTED_MARKS.has(mk) && !EXCLUDED_MARKS.has(mk)){
+        EXCLUDED_MARKS.add(mk);
+        added++;
+      }
+    }
+    // Ξαναχτίσε τον πίνακα κρατώντας ΚΑΙ τις προηγούμενες διαγραφές.
+    dt.clear().rows.add(mapAllRows().filter(rr => !EXCLUDED_MARKS.has(rr._markKey))).draw(false);
+    updateTotalsAndExportState(dt);
+    if (typeof showFlash === 'function'){
+      showFlash(added ? `Εξαιρέθηκαν ${added} ήδη εξαγμένες εγγραφές από τη γέφυρα/εξοδολόγιο.`
+                      : 'Δεν υπάρχουν ήδη εξαγμένες εγγραφές για εξαίρεση.',
+                added ? 'info' : 'warning', 3000);
+    }
+  });
+
+  // Export — κοινή λογική για XLSX (default) και .ld (HyperLog)
   const exportBtn = document.getElementById('exportBridgeBtn');
-  exportBtn?.addEventListener('click', async function(){
-    if (this.disabled || this.dataset.busy === '1') return;
+  const caretBtn  = document.getElementById('exportBridgeCaret');
+  const exportMenu = document.getElementById('exportBridgeMenu');
+
+  function closeExportMenu(){
+    if (exportMenu) exportMenu.classList.add('hidden');
+    if (caretBtn) caretBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  async function doBridgeExport(format){
+    format = (format === 'ld') ? 'ld' : 'xlsx';
+    if (!exportBtn || exportBtn.disabled || exportBtn.dataset.busy === '1') return;
     const baseUrl = "/export/fastimport/kinitseis?vat=" + encodeURIComponent(ACTIVE_VAT);
-    const mode = this.dataset.exportMode || 'strict';
+    const mode = exportBtn.dataset.exportMode || 'strict';
     let targetUrl = baseUrl;
     if (EXCLUDED_MARKS.size > 0){
       targetUrl += '&excluded_marks=' + encodeURIComponent(Array.from(EXCLUDED_MARKS).join(','));
+    }
+    if (format === 'ld'){
+      targetUrl += '&format=ld';
     }
     if (mode === 'partners'){
       const proceed = await showModalConfirm(
@@ -840,7 +948,39 @@ async function initEpsilonPreviewPage(){
       if (!proceed) return;
       targetUrl += '&confirm_new_partners=1';
     }
-    await performBridgeDownload(targetUrl, { mode });
+    await performBridgeDownload(targetUrl, { mode, format });
+  }
+
+  // Κύριο κουμπί -> προεπιλογή XLSX (ίδια συμπεριφορά όπως πριν)
+  exportBtn?.addEventListener('click', function(){ doBridgeExport('xlsx'); });
+
+  // Caret -> άνοιγμα/κλείσιμο μενού επιλογών μορφής
+  caretBtn?.addEventListener('click', function(e){
+    e.stopPropagation();
+    if (this.disabled) return;
+    if (!exportMenu) return;
+    const isHidden = exportMenu.classList.contains('hidden');
+    exportMenu.classList.toggle('hidden', !isHidden);
+    this.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+  });
+
+  // Επιλογές μενού
+  exportMenu?.querySelectorAll('.export-format-item').forEach(function(item){
+    item.addEventListener('click', function(){
+      const fmt = this.getAttribute('data-format') || 'xlsx';
+      closeExportMenu();
+      doBridgeExport(fmt);
+    });
+  });
+
+  // Κλείσιμο μενού με click έξω ή Esc
+  document.addEventListener('click', function(e){
+    if (!exportMenu || exportMenu.classList.contains('hidden')) return;
+    const wrap = document.getElementById('exportBridgeWrap');
+    if (wrap && !wrap.contains(e.target)) closeExportMenu();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeExportMenu();
   });
 
   // Show issues modal immediately if there are issues

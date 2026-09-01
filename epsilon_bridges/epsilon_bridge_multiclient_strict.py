@@ -416,25 +416,44 @@ def _load_client_map(path: str) -> Dict[str, Any]:
 
 # ----------------------- paths (robust client_db discovery) -----------------------
 def _discover_client_db_in_data_dir(data_dir: str = "data", vat: Optional[str] = None) -> Optional[str]:
-    """Find any plausible client db file in /data, even if named differently."""
+    """Find any plausible client db file in /data, even if named differently.
+
+    Scans the given dir AND its imports/Imports subfolder, since the drive
+    backup restores client_db into an imports/ subfolder.
+    """
     if not os.path.isdir(data_dir):
         return None
+    # Scan root + imports/Imports subfolder (ρηχά, όχι πλήρης αναδρομή ώστε να
+    # μην πιάνει bak/backup αρχεία σε άσχετους υποφακέλους)
+    scan_dirs = [data_dir]
+    for sub in ("imports", "Imports"):
+        sub_dir = os.path.join(data_dir, sub)
+        if os.path.isdir(sub_dir):
+            scan_dirs.append(sub_dir)
+
     candidates = []
-    for fn in os.listdir(data_dir):
-        lower = fn.lower()
-        if lower.endswith((".xlsx", ".xls", ".csv")) and ("client" in lower or "συναλλ" in lower or "customers" in lower):
-            full = os.path.join(data_dir, fn)
-            size = os.path.getsize(full)
-            mtime = os.path.getmtime(full)
-            score = 0
-            if "client_db" in lower: score += 50
-            if "client" in lower: score += 20
-            if vat and str(vat) in lower: score += 15
-            if lower.endswith(".xlsx"): score += 10
-            if lower.endswith(".xls"): score += 8
-            if lower.endswith(".csv"): score += 5
-            score += min(size // 1024, 100)  # larger sheet slightly preferred
-            candidates.append((score, mtime, full))
+    for d in scan_dirs:
+        for fn in os.listdir(d):
+            lower = fn.lower()
+            # Απόρριψε ρητά backup snapshots (client_db_..._bak_...)
+            if "bak" in lower or ".bak" in lower:
+                continue
+            if lower.endswith((".xlsx", ".xls", ".csv")) and ("client" in lower or "συναλλ" in lower or "customers" in lower):
+                full = os.path.join(d, fn)
+                try:
+                    size = os.path.getsize(full)
+                    mtime = os.path.getmtime(full)
+                except OSError:
+                    continue
+                score = 0
+                if "client_db" in lower: score += 50
+                if "client" in lower: score += 20
+                if vat and str(vat) in lower: score += 15
+                if lower.endswith(".xlsx"): score += 10
+                if lower.endswith(".xls"): score += 8
+                if lower.endswith(".csv"): score += 5
+                score += min(size // 1024, 100)  # larger sheet slightly preferred
+                candidates.append((score, mtime, full))
     if not candidates:
         return None
     # pick by best score then most recent
@@ -872,10 +891,15 @@ def export_multiclient_strict(
     out_xlsx: Optional[str] = None,
     base_invoices_dir: str = "data/epsilon",
     base_exports_dir: str = "exports",
-    fiscal_year: Optional[int] = None):
+    fiscal_year: Optional[int] = None,
+    out_ld: Optional[str] = None):
     """
     ΜΟΝΟ export: κρατάει ΚΙΝΗΣΕΙΣ όπως είναι και χτίζει ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥΣ,
     χωρίς να αλλάξει τίποτα στη λογική εύρεσης λογαριασμών/κατηγοριών/ΦΠΑ.
+
+    Αν δοθεί out_ld, γράφει επιπλέον ένα κρυπτογραφημένο .ld (HyperLog) από τα
+    ΙΔΙΑ flat/partners_rows, χωρίς να αλλάξει το return contract: η διαδρομή του
+    .ld επιστρέφεται μέσα στα issues ως {"code": "ld_created", "path": ...}.
     """
     preview = build_preview_strict_multiclient(
         vat=vat,
@@ -1057,6 +1081,20 @@ def export_multiclient_strict(
             ws2.set_column(2, 2, 40)           # ΕΠΩΝΥΜΙΑ
         except Exception:
             pass
+
+    # ---------- ΝΕΟ: προαιρετική παραγωγή .ld για απευθείας άνοιγμα στο HyperLog ----------
+    if out_ld:
+        try:
+            try:
+                from .ld_writer import emit_ld_from_bridge as _emit_ld_from_bridge
+            except ImportError:
+                from ld_writer import emit_ld_from_bridge as _emit_ld_from_bridge
+            issues.extend(_emit_ld_from_bridge(
+                flat, partners_rows, out_ld, kind="SX",
+            ))
+        except Exception as _ld_err:
+            issues.append({"code": "ld_error", "level": "warn",
+                           "message": f"Αποτυχία δημιουργίας .ld: {_ld_err}"})
 
     return True, paths["out"], issues
 

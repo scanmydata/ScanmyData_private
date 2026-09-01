@@ -833,6 +833,48 @@ def drive_pull_shared_file(remote_name: str) -> Optional[bytes]:
         return None
 
 
+def _consolidate_root_imports(target_dir: str) -> None:
+    """Guarantee ONE canonical client_db (and other root Excel/CSV) at the group
+    ROOT. Legacy/vestigial copies under a local imports/ subfolder are collapsed:
+    the LARGER (more complete) copy becomes the canonical root file, the smaller
+    is archived as <name>.bak.<ts> (never deleted — no data loss). This heals the
+    old root+imports split so exports/UI always see a single, correct base.
+    """
+    try:
+        imp = os.path.join(target_dir, "imports")
+        if not os.path.isdir(imp):
+            return
+        import time as _t
+        for fn in os.listdir(imp):
+            low = fn.lower()
+            if not low.endswith((".xls", ".xlsx", ".csv")):
+                continue
+            if ".bak." in low or low.endswith(".bak") or "_bak_" in low:
+                continue
+            src = os.path.join(imp, fn)
+            root_dst = os.path.join(target_dir, fn)
+            ts = _t.strftime("%Y%m%dT%H%M%SZ", _t.gmtime())
+            try:
+                if os.path.exists(root_dst):
+                    if os.path.getsize(src) > os.path.getsize(root_dst):
+                        # imports copy is more complete -> promote to root,
+                        # archive the smaller root copy.
+                        os.replace(root_dst, os.path.join(target_dir, f"{fn}.bak.{ts}"))
+                        os.replace(src, root_dst)
+                    else:
+                        # root already canonical -> archive the imports duplicate.
+                        os.replace(src, os.path.join(imp, f"{fn}.bak.{ts}"))
+                    logger.info("[DRIVE PULL] Consolidated client_db to group root: %s", fn)
+                else:
+                    # No root copy yet -> the imports file IS the canonical one.
+                    os.replace(src, root_dst)
+                    logger.info("[DRIVE PULL] Promoted imports/%s to group root", fn)
+            except Exception:
+                logger.debug("[DRIVE PULL] consolidate skip %s", fn)
+    except Exception:
+        logger.debug("[DRIVE PULL] _consolidate_root_imports failed")
+
+
 def drive_pull_group_to_local(
     group_name: str,
     local_data_root: str = None,
@@ -877,7 +919,15 @@ def drive_pull_group_to_local(
         for rel_path, meta in index.items():
             if rel_path == ".sync_meta.json":
                 continue
-            local_path = os.path.join(target_dir, rel_path.replace("/", os.sep))
+            # Root-level Excel files are stored remotely under imports/ (see the
+            # push side, _remote_key_for). Materialize them BACK in the group
+            # ROOT — mirroring the RTDB pull — so the client_db keeps ONE
+            # canonical location (root) instead of splitting into a separate
+            # local imports/ copy on every pull cycle.
+            if rel_path.startswith("imports/"):
+                local_path = os.path.join(target_dir, os.path.basename(rel_path))
+            else:
+                local_path = os.path.join(target_dir, rel_path.replace("/", os.sep))
             try:
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
             except Exception:
@@ -960,6 +1010,9 @@ def drive_pull_group_to_local(
             "[DRIVE PULL] group=%s created=%d failed=%d bytes=%d -> %s",
             group_name, files_created, files_failed, bytes_downloaded, target_dir,
         )
+
+        # Collapse any root+imports client_db split into a single canonical root file.
+        _consolidate_root_imports(target_dir)
 
         # Activity log (firebase_pull action for log-viewer compatibility).
         try:

@@ -957,7 +957,8 @@ def export_g_category(
     out_xlsx: Optional[str] = None,
     base_invoices_dir: str = "data/epsilon",
     base_exports_dir: str = "exports",
-    fiscal_year: Optional[int] = None
+    fiscal_year: Optional[int] = None,
+    out_ld: Optional[str] = None
 ) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
     """
     Export γέφυρας για Γ Κατηγορία με διπλογραφική μέθοδο.
@@ -1199,5 +1200,19 @@ def export_g_category(
             ws2.set_column(2, 2, 40)           # ΕΠΩΝΥΜΙΑ
         except Exception:
             pass
+
+    # ---------- ΝΕΟ: προαιρετική παραγωγή .ld (HyperLog, Γενική Λογιστική) ----------
+    if out_ld:
+        try:
+            try:
+                from .ld_writer import emit_ld_from_bridge as _emit_ld_from_bridge
+            except ImportError:
+                from ld_writer import emit_ld_from_bridge as _emit_ld_from_bridge
+            nonfatal_issues.extend(_emit_ld_from_bridge(
+                flat, partners_rows, out_ld, kind="GL",
+            ))
+        except Exception as _ld_err:
+            nonfatal_issues.append({"code": "ld_error", "level": "warn",
+                                    "message": f"Αποτυχία δημιουργίας .ld: {_ld_err}"})
 
     return True, paths["out"], nonfatal_issues
