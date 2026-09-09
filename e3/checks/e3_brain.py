@@ -2124,11 +2124,15 @@ def process_client(
     kartela_ergodoti_result: Optional[Dict[str, Any]] = None
     ika_emp_user = _norm_text(client.get("ika_employer_username"))
     ika_emp_pass = _norm_text(client.get("ika_employer_password"))
+    ika_emp_ame = _norm_text(client.get("ika_employer_ame"))
+    efka_taxis_user = _norm_text(client.get("taxisnet_username"))
+    efka_taxis_pass = _norm_text(client.get("taxisnet_password"))
     has_payroll_flag = bool(client.get("has_payroll")) or bool(ika_emp_user and ika_emp_pass)
     # Ο χρήστης μπορεί να επιλέξει να ΜΗΝ αποθηκευτεί/τρέξει η Οικονομική Καρτέλα
     # Εργοδότη (default: ναι, για συμβατότητα).
     save_kartela = _flags.get("save_kartela_ergodoti", True)
-    if save_kartela and has_payroll_flag and ika_emp_user and ika_emp_pass and afm:
+    if (save_kartela and has_payroll_flag and ika_emp_user and ika_emp_pass
+            and efka_taxis_user and efka_taxis_pass and afm):
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
         kart_pdf_dir = _resolve_pdfs_dir("kartela_ergodoti", afm)
@@ -2145,10 +2149,14 @@ def process_client(
             kart_args = [
                 sys.executable,
                 str(checks_dir / "kartela_ergodoti.py"),
-                "--username", ika_emp_user,
-                "--password", ika_emp_pass,
+                "--efka-username", efka_taxis_user,
+                "--efka-password", efka_taxis_pass,
+                "--teka-username", ika_emp_user,
+                "--teka-password", ika_emp_pass,
+                "--ame", ika_emp_ame,
                 "--afm", afm,
                 "--date-from", f"01/01/{year}",
+                "--date-to", f"31/12/{year}",
                 "--pdf-dir", str(target_dir),
                 "--summary-out", str(summary_path),
             ]

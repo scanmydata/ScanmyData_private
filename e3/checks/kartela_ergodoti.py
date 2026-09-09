@@ -80,8 +80,8 @@ LANDING_URL = "https://www.e-efka.gov.gr/el/elektronikes-yperesies/oikonomike-ka
 # «Είσοδος στην υπηρεσία» → popup) σπάει πλέον: ο σύνδεσμος πάει κατευθείαν στην
 # app και το e-Access επιστρέφει secureError «Δεν έχετε δικαίωμα πρόσβασης».
 EACCESS_LOGIN_URL = "https://apps.e-efka.gov.gr/eAccess/login.xhtml"
-EFKA_APP_URL = "https://apps.e-efka.gov.gr/eEmployerTransactions/"
-EFKA_REPORT_URL = "https://apps.e-efka.gov.gr/eEmployerTransactions/secure/transactionsReport.xhtml"
+EFKA_APP_URL = "https://services.e-efka.gov.gr/ssp.efka.emp-transactions-ext/secure/transactions.xhtml"
+EFKA_REPORT_URL = EFKA_APP_URL
 TEKA_APP_URL = "https://apps.e-efka.gov.gr/eTekaEmployerTransactions/secure/index.xhtml"
 TEKA_REPORT_URL = "https://apps.e-efka.gov.gr/eTekaEmployerTransactions/secure/transactionsReport.xhtml?mode=default"
 
@@ -124,7 +124,8 @@ def _save_download(dl: Download, out_dir: Path, prefix: str, afm: str) -> Path:
     return target
 
 
-def _login_employer(context: BrowserContext, username: str, password: str) -> Page:
+def _login_employer(context: BrowserContext, username: str, password: str,
+                    ame: str = "") -> Page:
     """Log into e-EFKA e-Access with **employer** credentials (κωδικοί ΕΦΚΑ/ΚΕΑΟ).
 
     Navigates straight to the e-Access login page, fills «Κωδικός Χρήστη» +
@@ -135,20 +136,31 @@ def _login_employer(context: BrowserContext, username: str, password: str) -> Pa
     """
     page = context.new_page()
     page.set_default_timeout(NAV_TIMEOUT)
-    logging.info("Opening e-Access login %s", EACCESS_LOGIN_URL)
-    page.goto(EACCESS_LOGIN_URL, wait_until="domcontentloaded")
+    logging.info("Opening new EFKA employer-card service %s", EFKA_APP_URL)
+    page.goto(EFKA_APP_URL, wait_until="domcontentloaded")
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except PlaywrightTimeoutError:
         pass
 
-    # Employer login form (JSF): #j_username / #j_password, submit button «Είσοδος».
-    user_field = page.locator("#j_username")
+    employer_link = page.get_by_role("link", name="Είσοδος Εργοδότη")
+    if employer_link.count():
+        employer_link.first.click()
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        except PlaywrightTimeoutError:
+            pass
+
+    # New service authentication is hosted by GSIS/TaxisNet. Some employer
+    # accounts use this provider even though the destination is EFKA.
+    user_field = page.locator("#j_username:visible")
     if user_field.count() == 0:
-        user_field = page.get_by_role("textbox", name="Κωδικός Χρήστη:")
-    pass_field = page.locator("#j_password")
+        user_field = page.locator("input[name='username']:visible")
+    if user_field.count() == 0:
+        user_field = page.get_by_role("textbox", name=re.compile(r"Χρήστης|Κωδικός Χρήστη"))
+    pass_field = page.locator("#j_password:visible")
     if pass_field.count() == 0:
-        pass_field = page.locator("input[type='password']")
+        pass_field = page.locator("input[name='password']:visible, input[type='password']:visible")
 
     if user_field.count() == 0 or pass_field.count() == 0:
         body_text = (page.locator("body").inner_text(timeout=5000) or "")[:300]
@@ -163,7 +175,9 @@ def _login_employer(context: BrowserContext, username: str, password: str) -> Pa
     # «Είσοδος» = employer submit. ΠΡΟΣΟΧΗ: να ΜΗΝ πατηθεί «Συνέχεια στο TAXISNET».
     submit = page.get_by_role("button", name="Είσοδος", exact=True)
     if submit.count() == 0:
-        submit = page.locator("button:has-text('Είσοδος'):not(:has-text('TAXIS'))")
+        submit = page.get_by_role("button", name=re.compile(r"^(Είσοδος|Σύνδεση)$"))
+    if submit.count() == 0:
+        submit = page.locator("button[type='submit'], input[type='submit']")
     try:
         with page.expect_navigation(timeout=NAV_TIMEOUT):
             submit.first.click()
@@ -192,15 +206,79 @@ def _login_employer(context: BrowserContext, username: str, password: str) -> Pa
             "Τα στοιχεία που εισάγατε δεν είναι έγκυρα."
         )
 
-    # Establish the employer-app session (and confirm access — no secureError).
     try:
-        page.goto(EFKA_APP_URL, wait_until="domcontentloaded")
+        page.locator(
+            "button, input[type='submit'], a"
+        ).filter(has_text=re.compile(r"(Συνέχεια|Αποστολή)"))
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    consent = page.locator(
+        "input[type='submit'][value='Αποστολή'], button:has-text('Αποστολή')"
+    )
+    if consent.count() == 0:
+        consent = page.get_by_role("button", name="Συνέχεια", exact=True)
+    if consent.count() == 0:
+        consent = page.get_by_role("link", name="Συνέχεια", exact=True)
+    if consent.count() == 0:
+        consent = page.locator("input[type='submit'][value='Συνέχεια']")
+    if consent.count():
+        logging.info(
+            "GSIS consent actions: %s",
+            page.locator("button, input[type='submit'], a").evaluate_all(
+                "els => els.map(e => ({tag:e.tagName, text:e.innerText || e.value, "
+                "name:e.name, value:e.value, href:e.href})).slice(-12)"
+            ),
+        )
+        try:
+            with page.expect_navigation(timeout=NAV_TIMEOUT):
+                consent.first.click()
+        except PlaywrightTimeoutError:
+            consent.first.click()
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except PlaywrightTimeoutError:
             pass
-    except Exception as exc:
-        raise RuntimeError(f"Δεν άνοιξε η εφαρμογή Καρτέλας Εργοδότη: {exc}")
+
+    # The new EFKA broker callback presents a second form after GSIS consent.
+    # Its default role is construction-project liable, not common-enterprise
+    # employer, so submitting the default silently sends the flow elsewhere.
+    role_select = page.locator("select#role[name='role']")
+    if role_select.count():
+        employer_option = role_select.locator("option[value='external-employer']")
+        if employer_option.count() == 0:
+            raise RuntimeError("Η νέα EFKA σελίδα δεν διαθέτει ρόλο Εργοδότης Κοινής Επιχείρησης.")
+        role_select.select_option("external-employer")
+        ame_field = page.locator("#ame, input[name='ame']")
+        if ame_field.count() == 0:
+            raise RuntimeError("Δεν εντοπίστηκε το πεδίο ΑΜΕ στη νέα EFKA σελίδα.")
+        if not ame:
+            raise RuntimeError(
+                "Η νέα EFKA σελίδα απαιτεί ΑΜΕ 10 ψηφίων για τον ρόλο Εργοδότης "
+                "Κοινής Επιχείρησης. Δώστε --ame ή IKA_EMP_AME."
+            )
+        ame_field.first.fill(ame)
+        role_submit = page.locator(
+            "#submit-role-attribute, input[name='submit-role-attribute']"
+        )
+        if role_submit.count() == 0:
+            raise RuntimeError("Δεν εντοπίστηκε η υποβολή επιλογής ρόλου EFKA.")
+        try:
+            with page.expect_navigation(timeout=NAV_TIMEOUT):
+                role_submit.first.click()
+        except PlaywrightTimeoutError:
+            role_submit.first.click()
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+
+    if "transactions.xhtml" not in (page.url or ""):
+        post_login_text = (page.locator("body").inner_text(timeout=5000) or "")[:500]
+        raise RuntimeError(
+            "Η autentikοποίηση δεν επέστρεψε στη νέα καρτέλα EFKA. "
+            f"Τελική URL: {page.url}. Μήνυμα: {post_login_text.replace(chr(10), ' ')}"
+        )
 
     if "secureError" in (page.url or ""):
         body_text = (page.locator("body").inner_text(timeout=5000) or "")[:300]
@@ -212,17 +290,107 @@ def _login_employer(context: BrowserContext, username: str, password: str) -> Pa
     return page
 
 
+def _login_legacy_teka(context: BrowserContext, username: str, password: str) -> Page:
+    """Log into the unchanged TEKA service with IKA employer credentials."""
+    page = context.new_page()
+    page.set_default_timeout(NAV_TIMEOUT)
+    page.goto(EACCESS_LOGIN_URL, wait_until="domcontentloaded")
+    user_field = page.locator("#j_username")
+    pass_field = page.locator("#j_password")
+    if user_field.count() == 0 or pass_field.count() == 0:
+        raise RuntimeError("Δεν εντοπίστηκε η παλιά φόρμα login ΤΕΚΑ.")
+    user_field.fill(username)
+    pass_field.fill(password)
+    submit = page.get_by_role("button", name="Είσοδος", exact=True)
+    try:
+        with page.expect_navigation(timeout=NAV_TIMEOUT):
+            submit.click()
+    except PlaywrightTimeoutError:
+        submit.click()
+    page.goto(TEKA_APP_URL, wait_until="domcontentloaded")
+    if "login" in (page.url or "").lower() or "j_security_check" in (page.url or ""):
+        raise RuntimeError("Αποτυχία σύνδεσης ΤΕΚΑ με τα credentials IKA.")
+    return page
+
+
+def _extract_ame_from_page(page: Page) -> str:
+    """Extract a ten-digit AME displayed by the TEKA employer service."""
+    text = page.locator("body").inner_text(timeout=5000) or ""
+    match = re.search(r"(?:ΑΜΕ|AME)\D{0,40}(\d{10})", text, flags=re.I)
+    return match.group(1) if match else ""
+
+
+def _page_ame(page: Page) -> str:
+    text = page.locator("body").inner_text(timeout=5000) or ""
+    match = re.search(r"(?:ΑΜΕ|ΑΜΟΕ|AME)\D{0,40}(\d{10})", text, flags=re.I)
+    return match.group(1) if match else ""
+
+
+def _extract_ame_from_pdf(pdf_path: Path) -> str:
+    """Extract the ten-digit AME from a TEKA PDF header."""
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(pdf_path) as pdf:
+            text = "\n".join((page.extract_text() or "") for page in pdf.pages)
+    except Exception as exc:
+        logging.warning("Could not read AME from PDF %s: %s", pdf_path, exc)
+        return ""
+    match = re.search(r"(?:Α\.Μ\.Ε\./Α\.Μ\.Ο\.Ε|ΑΜΕ|AME)\s*:?\s*(\d{10})",
+                      text, flags=re.I)
+    return match.group(1) if match else ""
+
+
+def _set_date_range(page: Page, date_from: str, date_to: str, label: str) -> None:
+    """Fill the new EFKA date inputs despite generated ids/names."""
+    changed = page.evaluate(
+        """([dateFrom, dateTo]) => {
+            const inputs = Array.from(document.querySelectorAll('input'));
+            const find = (patterns) => inputs.find(el => {
+                const key = `${el.id} ${el.name}`.toLowerCase().replace(/[^a-z]/g, '');
+                return patterns.some(pattern => key.includes(pattern));
+            });
+            const from = find(['datefrom', 'fromdate', 'datebegin', 'begin']);
+            const to = find(['dateto', 'todate', 'dateend', 'end']);
+            if (!from || !to) return false;
+            for (const [input, value] of [[from, dateFrom], [to, dateTo]]) {
+                const setter = Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype, 'value').set;
+                setter.call(input, value);
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+                input.dispatchEvent(new Event('change', {bubbles: true}));
+            }
+            return true;
+        }""",
+        [date_from, date_to],
+    )
+    if not changed:
+        details = page.evaluate(
+            """() => ({
+                url: location.href,
+                inputs: Array.from(document.querySelectorAll('input, select, textarea')).map(el => ({
+                    tag: el.tagName, id: el.id, name: el.name, type: el.type,
+                    placeholder: el.placeholder, aria: el.getAttribute('aria-label')
+                })).slice(0, 80),
+                text: (document.body.innerText || '').slice(0, 500)
+            })"""
+        )
+        logging.error("[%s] Date controls not found: %s", label, details)
+        raise RuntimeError(f"[{label}] Δεν εντοπίστηκαν τα πεδία ημερομηνίας.")
+    logging.info("[%s] Date range set: %s - %s", label, date_from, date_to)
+
+
 def _extract_year(date_from: str) -> Optional[str]:
-    """The «Εκτύπωση» report page expects a *year* (yyyy) not a date range."""
     if not date_from:
         return None
-    m = re.search(r"(20\d{2})", date_from)
-    return m.group(1) if m else None
+    match = re.search(r"(20\d{2})", date_from)
+    return match.group(1) if match else None
 
 
 def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
-                          out_dir: Path, prefix: str, afm: str,
-                          label: str) -> dict:
+                          out_dir: Path, prefix: str, afm: str, label: str,
+                          date_from: Optional[str] = None,
+                          date_to: Optional[str] = None) -> dict:
     """Navigate to the PrimeFaces ``transactionsReport.xhtml`` view and click
     its «Εκτύπωση» button. The button does a form POST with ``target='_blank'``
     so the PDF is served into a new tab. Chromium typically auto-downloads
@@ -241,41 +409,45 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
     except PlaywrightTimeoutError:
         pass
 
+    discovered_ame = _page_ame(page)
+
+    if date_from and date_to:
+        _set_date_range(page, date_from, date_to, label)
+
     # The year selector is a PrimeFaces ``SelectOneMenu``: the visible
     # element is a div/span wrapper, the underlying form value lives in a
     # hidden ``<select id='year_input' name='year_input'>``. Setting it
     # via ``select_option`` updates the form value reliably even though
     # the native select is not visible.
     if year:
-        try:
-            # The year selector is a PrimeFaces ``SelectOneMenu`` whose
-            # underlying ``<select>`` is ``aria-hidden`` (Playwright refuses
-            # to ``select_option`` on it). PrimeFaces composite IDs differ
-            # per page (``year_input`` on EFKA, ``transactionsReportForm:year_input``
-            # on TEKA), so we match by name *suffix*. The set+dispatch dance
-            # keeps the JSF lifecycle happy.
-            changed = page.evaluate(
-                """(yr) => {
-                    const sel = document.querySelector(
-                        "select[id$='year_input'], select[name$='year_input']"
-                    );
-                    if (!sel) return false;
-                    const opt = Array.from(sel.options).find(o => o.value === String(yr));
-                    if (!opt) return false;
-                    sel.value = opt.value;
-                    sel.dispatchEvent(new Event('change', {bubbles: true}));
-                    return true;
-                }""",
-                str(year),
-            )
-            if changed:
-                logging.info("[%s] Year set to %s.", label, year)
-            else:
-                logging.info("[%s] Year %s not found in dropdown — using default.",
-                             label, year)
-        except Exception as exc:
-            logging.info("[%s] Could not set year (%s) — using default.", label, exc)
+        changed = page.evaluate(
+            """(yr) => {
+                const sel = document.querySelector("select[id$='year_input'], select[name$='year_input']");
+                if (!sel) return false;
+                const opt = Array.from(sel.options).find(o => o.value === String(yr));
+                if (!opt) return false;
+                sel.value = opt.value;
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+            }""",
+            str(year),
+        )
+        logging.info("[%s] Year %s %s.", label, year, "set" if changed else "not found")
 
+    if date_from and date_to:
+        # New EFKA opens a PrimeFaces dialog before submitting the PDF form.
+        print_launcher = page.locator("button[title='Εκτύπωση Κινήσεων']")
+        if print_launcher.count() == 0:
+            return {"ok": False, "pdf": None,
+                    "error": f"{label}: δεν βρέθηκε το κουμπί Εκτύπωση Κινήσεων"}
+        try:
+            print_launcher.first.click(force=True, no_wait_after=True)
+            page.locator("#PrintTransactionsForm").wait_for(
+                state="attached", timeout=NAV_TIMEOUT
+            )
+        except Exception as exc:
+            return {"ok": False, "pdf": None,
+                    "error": f"{label}: άνοιγμα print dialog απέτυχε: {exc}"}
     # The original click-based flow opens the PDF in a new "_blank" tab and
     # Chromium displays it inline (built-in viewer), so no Playwright
     # ``download`` event fires and the response is hard to retrieve through
@@ -291,14 +463,16 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
                 // depending on the page (EFKA: transactionsForm, TEKA:
                 // transactionsReportForm). Locate the button and use its
                 // enclosing form so we POST to whichever endpoint matches.
-                const btn = document.querySelector(
+                const dialogForm = document.querySelector("#PrintTransactionsForm");
+                const legacyButton = document.querySelector(
                     "button[type='submit'][title='Εκτύπωση']"
                 );
+                const form = dialogForm || (legacyButton && legacyButton.closest('form'));
+                const btn = dialogForm
+                    ? dialogForm.querySelector("button[type='submit'][title='Εκτύπωση']")
+                    : legacyButton;
                 if (!btn) return {ok: false, status: 0, ct: '',
                                   text: 'print button (title=Εκτύπωση) not found'};
-                const form = btn.closest('form');
-                if (!form) return {ok: false, status: 0, ct: '',
-                                   text: 'enclosing <form> for print button not found'};
                 const fd = new FormData(form);
                 // PrimeFaces decides which action to fire from the button's
                 // name being in the form data — explicitly add it.
@@ -315,8 +489,8 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
                 });
                 const ct = resp.headers.get('content-type') || '';
                 if (!resp.ok || !/pdf|octet-stream/i.test(ct)) {
-                    return {ok: false, status: resp.status, ct,
-                            text: (await resp.text()).slice(0, 400)};
+                        return {ok: false, status: resp.status, ct,
+                            text: (await resp.text()).slice(0, 2500)};
                 }
                 const buf = await resp.arrayBuffer();
                 const u8 = new Uint8Array(buf);
@@ -358,18 +532,22 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
         c += 1
     target.write_bytes(body_bytes)
     logging.info("[%s] Saved PDF → %s (%d bytes)", label, target, len(body_bytes))
-    return {"ok": True, "pdf": str(target), "error": None}
+    pdf_ame = _extract_ame_from_pdf(target) if label == "TEKA" else ""
+    return {"ok": True, "pdf": str(target), "error": None,
+            "ame": pdf_ame or discovered_ame,
+            "exists": target.exists(), "size": target.stat().st_size}
 
 
 def _open_efka_kartela(context: BrowserContext, portal: Page,
-                       date_from: str, out_dir: Path, afm: str) -> dict:
+                       date_from: str, date_to: str, out_dir: Path, afm: str) -> dict:
     """Download the EFKA Κίνηση Εργοδότη report PDF."""
     page = context.new_page()
     page.set_default_timeout(NAV_TIMEOUT)
     try:
         return _download_report_pdf(
-            page, EFKA_REPORT_URL, _extract_year(date_from),
-            out_dir, "kartela_ergodoti_efka", afm, "EFKA")
+            page, EFKA_REPORT_URL, None,
+            out_dir, "kartela_ergodoti_efka", afm, "EFKA",
+            date_from=date_from, date_to=date_to)
     finally:
         try:
             page.close()
@@ -393,8 +571,12 @@ def _open_teka_kartela(context: BrowserContext, portal: Page,
             pass
 
 
-def run_extractor(username: str, password: str, afm: str, date_from: str,
-                  pdf_dir: Path, headless: bool) -> dict:
+def run_extractor(efka_username: str, efka_password: str,
+                  teka_username: str, teka_password: str,
+                  afm: str, ame: str, date_from: str,
+                  date_to: str,
+                  pdf_dir: Path, headless: bool,
+                  include_teka: bool = True) -> dict:
     summary = {
         "ok": False,
         "afm": afm,
@@ -410,9 +592,28 @@ def run_extractor(username: str, password: str, afm: str, date_from: str,
         context = browser.new_context(accept_downloads=True, user_agent=DESKTOP_UA,
                                       locale="el-GR")
         try:
-            portal = _login_employer(context, username, password)
-            summary["efka"] = _open_efka_kartela(context, portal, date_from, pdf_dir, afm)
-            summary["teka"] = _open_teka_kartela(context, portal, date_from, pdf_dir, afm)
+            if include_teka:
+                teka_portal = _login_legacy_teka(context, teka_username, teka_password)
+                discovered_ame = _extract_ame_from_page(teka_portal)
+                if not ame and discovered_ame:
+                    ame = discovered_ame
+                    logging.info("Discovered AME from TEKA session.")
+                summary["teka"] = _open_teka_kartela(
+                    context, teka_portal, date_from, pdf_dir, afm
+                )
+                if not ame:
+                    ame = summary["teka"].get("ame") or _extract_ame_from_page(teka_portal)
+                    if ame:
+                        logging.info("Discovered AME from TEKA report: %s", ame)
+                try:
+                    teka_portal.close()
+                except Exception:
+                    pass
+            else:
+                summary["teka"] = {"ok": False, "pdf": None, "error": "skipped (--efka-only)"}
+            summary["ame"] = ame
+            portal = _login_employer(context, efka_username, efka_password, ame=ame)
+            summary["efka"] = _open_efka_kartela(context, portal, date_from, date_to, pdf_dir, afm)
             summary["ok"] = bool(summary["efka"]["ok"] or summary["teka"]["ok"])
             # Best-effort logout
             try:
@@ -449,14 +650,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Εξαγωγή Οικονομικής Καρτέλας Εργοδότη (EFKA + TEKA) με PDF download verification."
     )
-    parser.add_argument("--username", default=os.getenv("IKA_EMP_USER"),
-                        help="Όνομα χρήστη (Εργοδότη) Ι.Κ.Α.")
-    parser.add_argument("--password", default=os.getenv("IKA_EMP_PASS"),
-                        help="Συνθηματικό (Εργοδότη) Ι.Κ.Α.")
+    parser.add_argument("--username", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--password", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--efka-username", default=os.getenv("EFKA_TAXIS_USER"),
+                        help="TaxisNet username for the new EFKA service.")
+    parser.add_argument("--efka-password", default=os.getenv("EFKA_TAXIS_PASS"),
+                        help="TaxisNet password for the new EFKA service.")
+    parser.add_argument("--teka-username", default=os.getenv("IKA_EMP_USER"),
+                help="IKA employer username for the unchanged TEKA service.")
+    parser.add_argument("--teka-password", default=os.getenv("IKA_EMP_PASS"),
+                        help="IKA employer password for the unchanged TEKA service.")
     parser.add_argument("--afm", default=os.getenv("IKA_EMP_AFM", ""),
                         help="ΑΦΜ εργοδότη (μόνο για το naming των PDFs).")
+    parser.add_argument("--ame", default=os.getenv("IKA_EMP_AME", ""),
+                        help="Αριθμός Μητρώου Εργοδότη (ΑΜΕ), 10 ψηφία.")
     parser.add_argument("--date-from", default=os.getenv("IKA_EMP_DATE_FROM", "01/01/2025"),
                         help="Ημερομηνία 'Από' για το grid (dd/mm/yyyy).")
+    parser.add_argument("--date-to", default=os.getenv("IKA_EMP_DATE_TO", "31/12/2025"),
+                        help="Ημερομηνία 'Έως' για το grid (dd/mm/yyyy).")
     parser.add_argument("--pdf-dir", default=os.getenv("IKA_EMP_PDF_DIR"),
                         help="Φάκελος εξόδου για τα PDFs. Default: ./ergodoti_pdfs/")
     parser.add_argument("--summary-out", default=os.getenv("IKA_EMP_SUMMARY_OUT"),
@@ -465,11 +676,21 @@ def main() -> int:
                         help="Run browser in headless mode (default: headed locally).")
     parser.add_argument("--headed", dest="headless", action="store_false",
                         help="Force headed mode.")
+    parser.add_argument("--efka-only", action="store_true",
+                        help="Run only the EFKA employer card and skip TEKA.")
     parser.set_defaults(headless=default_headless())
     args = parser.parse_args()
 
-    if not args.username or not args.password:
-        print("ERROR: --username και --password είναι υποχρεωτικά (ή θέσε IKA_EMP_USER/IKA_EMP_PASS).",
+    efka_username = args.efka_username or args.username
+    efka_password = args.efka_password or args.password
+    teka_username = args.teka_username or args.username
+    teka_password = args.teka_password or args.password
+    if not efka_username or not efka_password:
+        print("ERROR: EFKA TaxisNet credentials are required.",
+              file=sys.stderr)
+        return 2
+    if not args.efka_only and (not teka_username or not teka_password):
+        print("ERROR: TEKA IKA credentials are required unless --efka-only is used.",
               file=sys.stderr)
         return 2
 
@@ -479,12 +700,17 @@ def main() -> int:
     pdf_dir.mkdir(parents=True, exist_ok=True)
 
     summary = run_extractor(
-        username=args.username,
-        password=args.password,
+        efka_username=efka_username,
+        efka_password=efka_password,
+        teka_username=teka_username,
+        teka_password=teka_password,
         afm=args.afm,
+        ame=args.ame,
         date_from=args.date_from,
+        date_to=args.date_to,
         pdf_dir=pdf_dir,
         headless=bool(args.headless),
+        include_teka=not args.efka_only,
     )
 
     summary_target = Path(args.summary_out) if args.summary_out else (pdf_dir / "kartela_ergodoti_summary.json")
