@@ -125,6 +125,35 @@
           <p class="text-gray-500">Φόρτωση...</p>
         </div>
       </div>
+
+      <!-- Export Permissions (.ld / backup .zip) -->
+      <div class="bg-white border border-gray-200 rounded-lg p-6">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="text-lg font-bold">🔐 Δικαιώματα Προηγμένων Εξαγωγών</h3>
+          <button onclick="loadExportPerms()" class="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">
+            🔄 Ανανέωση
+          </button>
+        </div>
+        <p class="text-sm text-gray-500 mb-4">
+          Ενεργοποίησε ανά ομάδα τη λήψη <strong>HyperLog (.ld)</strong> και την <strong>Ενημέρωση Backup Epsilon (.zip)</strong>
+          στη σελίδα προεπισκόπησης epsilon. Χωρίς αυτά, η ομάδα βλέπει μόνο τη λήψη εξοδολογίου / epsilon excel.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-200 text-gray-600">
+                <th class="text-left px-3 py-2 font-medium">Ομάδα</th>
+                <th class="text-center px-3 py-2 font-medium">🔐 HyperLog (.ld)</th>
+                <th class="text-center px-3 py-2 font-medium">🗂️ Backup (.zip)</th>
+              </tr>
+            </thead>
+            <tbody id="export-perms-tbody">
+              <tr><td colspan="3" class="px-3 py-3 text-gray-500">Φόρτωση...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="export-perms-status" class="text-sm mt-3 hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -567,7 +596,7 @@ function showTab(tabName) {
   
   // Load data for specific tabs
   if (tabName === 'users') loadUsers();
-  else if (tabName === 'groups') loadGroups();
+  else if (tabName === 'groups') { loadGroups(); loadExportPerms(); }
   else if (tabName === 'activity') {
     loadActivity();
     startActivityAutoRefresh(); // Start auto-refresh when activity tab is shown
@@ -2643,6 +2672,73 @@ window.addEventListener('load', function() {
   // Auto-refresh stats every 30 seconds
   setInterval(loadStats, 30000);
 });
+
+// ==================== EXPORT PERMISSIONS (.ld / backup .zip) ====================
+function _escHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function loadExportPerms() {
+  const tbody = document.getElementById('export-perms-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="3" class="px-3 py-3 text-gray-500">Φόρτωση...</td></tr>';
+  try {
+    const res = await fetch('/admin/export-permissions', { credentials: 'same-origin' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Αποτυχία φόρτωσης');
+    const groups = data.groups || [];
+    if (!groups.length) {
+      tbody.innerHTML = '<tr><td colspan="3" class="px-3 py-3 text-gray-500">Δεν υπάρχουν ομάδες.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = groups.map(g => {
+      const nm = _escHtml(g.name);
+      return `<tr class="border-b border-gray-100">
+        <td class="px-3 py-2 font-medium text-gray-800">${nm}</td>
+        <td class="px-3 py-2 text-center">
+          <input type="checkbox" class="w-4 h-4" ${g.ld ? 'checked' : ''}
+                 onchange="setExportPerm('${nm.replace(/'/g,'&#39;')}','ld',this.checked,this)">
+        </td>
+        <td class="px-3 py-2 text-center">
+          <input type="checkbox" class="w-4 h-4" ${g.backup ? 'checked' : ''}
+                 onchange="setExportPerm('${nm.replace(/'/g,'&#39;')}','backup',this.checked,this)">
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-3 text-red-600">Σφάλμα: ${_escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function setExportPerm(group, key, value, el) {
+  const status = document.getElementById('export-perms-status');
+  if (el) el.disabled = true;
+  try {
+    const body = { group: group };
+    body[key] = !!value;
+    const res = await fetch('/admin/export-permissions', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Αποτυχία αποθήκευσης');
+    if (status) {
+      status.className = 'text-sm mt-3 text-green-700';
+      status.textContent = `✔ Αποθηκεύτηκε: ${group} — ${key === 'ld' ? 'HyperLog (.ld)' : 'Backup (.zip)'} ${value ? 'ενεργό' : 'ανενεργό'}.`;
+      status.classList.remove('hidden');
+      setTimeout(() => status.classList.add('hidden'), 4000);
+    }
+  } catch (e) {
+    if (el) el.checked = !value; // rollback
+    if (status) {
+      status.className = 'text-sm mt-3 text-red-600';
+      status.textContent = `Σφάλμα: ${e.message}`;
+      status.classList.remove('hidden');
+    }
+  } finally {
+    if (el) el.disabled = false;
+  }
+}
 </script>
 
 <style>

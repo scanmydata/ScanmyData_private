@@ -16868,6 +16868,9 @@ def epsilon_preview():
     except Exception:
         exported_marks = []
 
+    # Δικαιώματα προηγμένων εξαγωγών (.ld / backup .zip) ανά ομάδα
+    _perms = _group_export_perms(_active_group_name())
+
     # πέρασέ τα στο template
     return render_template("epsilon_preview.html",
                            vat=vat,
@@ -16877,7 +16880,9 @@ def epsilon_preview():
                            category_labels=category_labels,
                            missing_excel_marks=missing_excel_marks,
                            missing_excel_rows=missing_excel_rows,
-                           exported_marks=exported_marks)
+                           exported_marks=exported_marks,
+                           allow_ld_export=_perms["ld"],
+                           allow_backup_export=_perms["backup"])
 
 
 @app.route("/export/fastimport/kinitseis")
@@ -16887,6 +16892,10 @@ def export_fastimport_kinitseis():
     # Μορφή εξαγωγής: "xlsx" (default, zip με .ect) ή "ld" (αρχείο HyperLog)
     export_format = (request.args.get("format") or "xlsx").strip().lower()
     want_ld = export_format == "ld"
+
+    # Το .ld είναι «προηγμένη» εξαγωγή — μόνο αν ο master admin το ενεργοποίησε για την ομάδα.
+    if want_ld and not _group_export_perms(_active_group_name())["ld"]:
+        return jsonify({"ok": False, "error": "Η λήψη αρχείου HyperLog (.ld) δεν είναι ενεργοποιημένη για την ομάδα σας."}), 403
 
     # Προαιρετικό φιλτράρισμα από το preview: MARKs που ο χρήστης διέγραψε πριν το export
     excluded_marks_raw = (request.args.get("excluded_marks") or "").strip()
@@ -17210,6 +17219,311 @@ def export_fastimport_kinitseis():
     for it in (issues or []):
         flash(it.get("message") or "Αποτυχία εξαγωγής.", "error")
     return redirect(url_for("search", vat=vat))
+
+
+# ---------------------------------------------------------------------------
+# Per-group δικαιώματα «προηγμένων» εξαγωγών (.ld HyperLog & backup .zip).
+# Ο master admin τα ενεργοποιεί ανά ομάδα από το dashboard· αλλιώς η ομάδα βλέπει
+# μόνο τη λήψη εξοδολογίου / epsilon excel (xlsx).
+# ---------------------------------------------------------------------------
+EXPORT_PERMS_PATH = os.path.join(BASE_DIR, "data", "group_export_permissions.json")
+
+
+def _load_export_permissions() -> dict:
+    data = _safe_json_read(EXPORT_PERMS_PATH, default={})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_export_permissions(data: dict) -> None:
+    os.makedirs(os.path.dirname(EXPORT_PERMS_PATH), exist_ok=True)
+    with open(EXPORT_PERMS_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _group_export_perms(group_name: str) -> dict:
+    g = _load_export_permissions().get(str(group_name or ""), {})
+    if not isinstance(g, dict):
+        g = {}
+    return {"ld": bool(g.get("ld")), "backup": bool(g.get("backup"))}
+
+
+def _active_group_name() -> str:
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        return str(getattr(grp, "name", "") or "")
+    except Exception:
+        return ""
+
+
+def _produce_bridge_xlsx(vat, excluded_marks=None, confirm=False):
+    """Τρέχει τη γέφυρα (ίδιο pipeline με το export_fastimport_kinitseis) και
+    επιστρέφει (ok, xlsx_path, preview, is_g_category, book_category, issues, missing_map).
+    Παράγει ΜΟΝΟ το καθαρό xlsx της γέφυρας (χωρίς bundling .ect / .ld) — για να το
+    διαβάσει ο epsilon_backup_writer. Ο caller πρέπει να σβήσει το xlsx_path.
+    """
+    excluded_marks = set(excluded_marks or [])
+    temp_invoices_json = None
+    if excluded_marks:
+        try:
+            from epsilon_bridges import resolve_paths_for_vat, load_epsilon_invoices
+            paths_for_invoices = resolve_paths_for_vat(vat, None, None, None, group_path("epsilon"))
+            all_invoices = load_epsilon_invoices(paths_for_invoices["invoices"])
+            filtered_invoices = [
+                rec for rec in (all_invoices or [])
+                if str(rec.get("MARK") or rec.get("mark") or "").strip() not in excluded_marks
+            ]
+            with tempfile.NamedTemporaryFile(mode="w", suffix="_filtered_epsilon_invoices.json",
+                                             delete=False, encoding="utf-8") as tf:
+                json.dump(filtered_invoices, tf, ensure_ascii=False, indent=2)
+                temp_invoices_json = tf.name
+        except Exception:
+            current_app.logger.exception("backup: failed to apply excluded MARKs filter")
+            temp_invoices_json = None
+
+    book_category = ""
+    apod_type = ""
+    try:
+        creds = _safe_json_read(credentials_path_for_request(), default=[])
+        cl = creds if isinstance(creds, list) else [creds]
+        active = next((c for c in cl if str(c.get("vat")) == str(vat)), (cl[0] if cl else {}))
+        active = active if isinstance(active, dict) else {}
+        apod_type = str(active.get("apodeixakia_type", "")).lower()
+        book_category = str(active.get("book_category") or "").strip().upper()
+    except Exception:
+        pass
+    is_g_category = book_category in ("Γ", "G")
+
+    base_client_db = _resolve_client_db_path(vat)
+    invoices_fallback = os.path.join("data", "epsilon", vat, f"{vat}_epsilon_invoices.json")
+
+    if is_g_category:
+        from epsilon_bridges import build_preview_strict_g_category as build_preview
+        from epsilon_bridges import export_g_category as export_func
+    else:
+        from epsilon_bridges import (
+            build_preview_strict_multiclient as build_preview,
+            export_multiclient_strict as export_func,
+        )
+
+    fiscal_year = None
+    try:
+        from epsilon_bridges import _read_active_fiscal_year
+        fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
+    except Exception:
+        pass
+
+    preview = build_preview(
+        vat=vat,
+        credentials_json=credentials_path_for_request(),
+        cred_settings_json=settings_file_path(),
+        invoices_json=temp_invoices_json,
+        client_db=base_client_db,
+        base_invoices_dir=group_path("epsilon"),
+        fiscal_year=fiscal_year,
+    )
+
+    missing_map = {}
+    if apod_type == "afm":
+        missing_map = _collect_missing_afm_from_preview(preview.get("rows")) or {}
+        if missing_map and not confirm:
+            if temp_invoices_json:
+                try: os.remove(temp_invoices_json)
+                except OSError: pass
+            return (False, None, preview, is_g_category, book_category, [], missing_map)
+
+    client_db_path = base_client_db
+    if apod_type == "afm" and confirm and missing_map:
+        client_db_path = _make_temp_client_db_with_new_ids(
+            vat=vat, base_client_db_path=base_client_db,
+            missing_map=missing_map, invoices_fallback_json=invoices_fallback,
+        )
+
+    try:
+        ok, out_path, issues = export_func(
+            vat=vat,
+            credentials_json=credentials_path_for_request(),
+            cred_settings_json=settings_file_path(),
+            invoices_json=temp_invoices_json,
+            client_db=client_db_path,
+            out_xlsx=None,
+            base_invoices_dir=group_path("epsilon"),
+            base_exports_dir=group_path("exports"),
+            fiscal_year=fiscal_year,
+            out_ld=None,
+        )
+    finally:
+        if temp_invoices_json:
+            try: os.remove(temp_invoices_json)
+            except OSError: pass
+
+    return (bool(ok and out_path), out_path, preview, is_g_category, book_category, issues, missing_map)
+
+
+def _merge_partners_into_client_db(vat, partners):
+    """Ενημέρωσε (best-effort) το client_db της ομάδας με τυχόν ΝΕΟΥΣ συναλλασσόμενους
+    από τη γέφυρα. Δεν πειράζει υπάρχουσες γραμμές — απλώς προσθέτει όσα ΑΦΜ λείπουν.
+    Επιστρέφει πλήθος γραμμών που προστέθηκαν."""
+    partners = partners or []
+    if not partners:
+        return 0
+    path = _resolve_client_db_path(vat)
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".csv":
+            df = pd.read_csv(path, dtype=str)
+        else:
+            df = pd.read_excel(path, dtype=str)
+        df.fillna("", inplace=True)
+        afm_col = "ΑΦΜ" if "ΑΦΜ" in df.columns else next((c for c in df.columns if "ΑΦΜ" in c or c.upper() == "AFM"), None)
+        aa_col = "Α/Α" if "Α/Α" in df.columns else next((c for c in df.columns if c.strip() in ("Α/Α", "AA")), None)
+        name_col = "ΕΠΩΝΥΜΙΑ" if "ΕΠΩΝΥΜΙΑ" in df.columns else next((c for c in df.columns if "ΕΠΩΝΥΜ" in c), None)
+        if not afm_col:
+            return 0
+        existing = set(str(a).strip() for a in df[afm_col].tolist())
+        new_rows = []
+        for p in partners:
+            afm = str(p.get("afm") or "").strip()
+            if not afm or afm in existing:
+                continue
+            row = {c: "" for c in df.columns}
+            row[afm_col] = afm
+            if aa_col and p.get("aa"):
+                row[aa_col] = str(p.get("aa"))
+            if name_col and p.get("name"):
+                row[name_col] = str(p.get("name"))
+            new_rows.append(row)
+            existing.add(afm)
+        if not new_rows:
+            return 0
+        df2 = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+        if ext == ".csv":
+            df2.to_csv(path, index=False, encoding="utf-8-sig")
+        else:
+            df2.to_excel(path, index=False)
+        return len(new_rows)
+    except Exception:
+        current_app.logger.exception("backup: failed to merge partners into client_db")
+        return 0
+
+
+@app.route("/export/fastimport/backup", methods=["POST"])
+def export_fastimport_backup():
+    """Δέξου ένα τρέχον backup της Epsilon (.zip), τρέξε τη γέφυρα, ένεσε τις νέες
+    εγγραφές (ΧΩΡΙΣ MARK) στους πίνακες arts/ardt/trns και επίστρεψε το ενημερωμένο
+    zip με ΙΔΙΑ ονοματολογία. Δεν αγγίζει λογαριασμούς/πελάτες του backup· ενημερώνει
+    το client_db της ομάδας με τυχόν νέους συναλλασσόμενους."""
+    # Δικαίωμα ομάδας (ο master admin το ενεργοποιεί από το dashboard)
+    if not _group_export_perms(_active_group_name())["backup"]:
+        return jsonify({"ok": False, "error": "Η ενημέρωση backup Epsilon δεν είναι ενεργοποιημένη για την ομάδα σας."}), 403
+
+    vat = (request.args.get("vat") or request.form.get("vat") or "").strip()
+    up = request.files.get("backup")
+    if not up or not (up.filename or "").strip():
+        return jsonify({"ok": False, "error": "Δεν επιλέχθηκε αρχείο backup (.zip)."}), 400
+    orig_name = os.path.basename(up.filename)
+    if not orig_name.lower().endswith(".zip"):
+        return jsonify({"ok": False, "error": "Το αρχείο πρέπει να είναι .zip (backup Epsilon)."}), 400
+
+    backup_bytes = up.read()
+    if not backup_bytes:
+        return jsonify({"ok": False, "error": "Το αρχείο backup είναι κενό."}), 400
+
+    excluded_marks_raw = (request.form.get("excluded_marks") or request.args.get("excluded_marks") or "").strip()
+    excluded_marks = {m.strip() for m in excluded_marks_raw.split(",") if m.strip()}
+    confirm = (request.form.get("confirm_new_partners") or request.args.get("confirm_new_partners")) == "1"
+    confirm_accounts = (request.form.get("confirm_accounts") or request.args.get("confirm_accounts")) == "1"
+
+    ok, xlsx_path, preview, is_g, book_category, issues, missing_map = _produce_bridge_xlsx(
+        vat, excluded_marks=excluded_marks, confirm=confirm)
+
+    if not ok:
+        if missing_map and not confirm:
+            return jsonify({"ok": False, "code": "need_confirm",
+                            "error": "Υπάρχουν αποδείξεις χωρίς CUSTID — απαιτείται δημιουργία προσωρινών συναλλασσόμενων.",
+                            "missing": len(missing_map)}), 409
+        msgs = [str(it.get("message") or "") for it in (issues or []) if it.get("message")]
+        return jsonify({"ok": False, "error": " • ".join(m for m in msgs if m) or "Αποτυχία δημιουργίας γέφυρας."}), 400
+
+    try:
+        from epsilon_bridges.epsilon_backup_writer import EpsilonBackup, read_bridge_xlsx
+        kin, par = read_bridge_xlsx(xlsx_path)
+        if not kin:
+            return jsonify({"ok": False, "error": "Η γέφυρα δεν παρήγαγε εγγραφές προς εισαγωγή."}), 400
+        bk = EpsilonBackup(backup_bytes)
+        report = bk.add_articles_from_bridge(kin, par, username="SCANMYDATA")
+        out_bytes = bk.to_zip_bytes()
+        changed = sorted(bk.diff_entries(out_bytes))
+    except Exception as e:
+        current_app.logger.exception("backup: injection failed")
+        return jsonify({"ok": False, "error": f"Σφάλμα ενημέρωσης backup: {e}"}), 500
+    finally:
+        try:
+            if xlsx_path and os.path.exists(xlsx_path):
+                os.remove(xlsx_path)
+        except OSError:
+            pass
+
+    # Έλεγχος λογαριασμών: αν κάποιος λογαριασμός των εγγραφών ΔΕΝ υπάρχει στο
+    # λογιστικό σχέδιο (acct) του backup, ενημέρωσε τον χρήστη και ζήτα επιβεβαίωση
+    # πριν εφαρμοστούν (το ενημερωμένο zip απορρίπτεται μέχρι να επιβεβαιώσει).
+    unknown_accts = list(report.get("unknown_accounts") or [])
+    if unknown_accts and not confirm_accounts:
+        return jsonify({
+            "ok": False, "code": "account_mismatch",
+            "error": "Εντοπίστηκαν λογαριασμοί που δεν υπάρχουν στο λογιστικό σχέδιο του backup.",
+            "unknown_accounts": unknown_accts,
+            "posted": report.get("posted", 0),
+        }), 409
+
+    # Ενημέρωση client_db ομάδας με νέους συναλλασσόμενους (best-effort)
+    added = _merge_partners_into_client_db(vat, report.get("client_db"))
+
+    # Κατέγραψε τα MARKs που εξήχθησαν (guard επόμενης προεπισκόπησης)
+    try:
+        exported_now = [str(r.get("MARK") or r.get("mark") or "").strip() for r in (preview.get("rows") or [])]
+        exported_now = [m for m in exported_now if m]
+        if exported_now:
+            _record_exported_marks(vat, exported_now)
+    except Exception:
+        current_app.logger.exception("backup: failed to record exported marks")
+
+    try:
+        from utils import log_user_activity
+        from flask_login import current_user
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        log_user_activity(
+            user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+            group_name=grp.name if grp else 'unknown',
+            action='export_backup_inject',
+            details={
+                'book_category': book_category or ('G' if is_g else 'B'),
+                'posted': report.get("posted"), 'skipped': len(report.get("skipped") or []),
+                'balance_ok': report.get("balance_ok"), 'changed_tables': changed,
+                'client_db_added': added, 'file_name': orig_name, 'vat': vat,
+            },
+            user_email=getattr(current_user, 'email', None),
+            user_username=getattr(current_user, 'username', None),
+        )
+    except Exception as e:
+        current_app.logger.error(f"Failed to log backup inject activity: {e}")
+
+    resp = send_file(io.BytesIO(out_bytes), as_attachment=True,
+                     download_name=orig_name, mimetype="application/zip")
+    # Σύνοψη αποτελέσματος για το UI (headers — το σώμα είναι το zip)
+    try:
+        resp.headers["X-Backup-Posted"] = str(report.get("posted", 0))
+        resp.headers["X-Backup-Skipped"] = str(len(report.get("skipped") or []))
+        resp.headers["X-Backup-Balance"] = "ok" if report.get("balance_ok") else "imbalance"
+        resp.headers["X-Backup-Changed"] = ",".join(changed)
+        resp.headers["X-Backup-ClientDbAdded"] = str(added)
+        resp.headers["Access-Control-Expose-Headers"] = "X-Backup-Posted,X-Backup-Skipped,X-Backup-Balance,X-Backup-Changed,X-Backup-ClientDbAdded"
+    except Exception:
+        pass
+    return resp
 
 
 # --- μικρά helpers για parsing από μηνύματα (προαιρετικά) ---
@@ -19864,6 +20178,54 @@ def admin_dashboard():
         logger.exception(f"Admin dashboard error: {e}")
         flash(f'Σφάλμα: {str(e)}', 'danger')
         return redirect(url_for('home'))
+
+
+@app.route("/admin/export-permissions", methods=["GET"])
+@login_required
+@_require_admin
+def admin_export_permissions_get():
+    """Master admin: λίστα ομάδων με τα δικαιώματα προηγμένων εξαγωγών (.ld / backup .zip)."""
+    perms = _load_export_permissions()
+    try:
+        groups = admin_panel.admin_list_all_groups() or []
+    except Exception:
+        groups = []
+    out = []
+    for g in groups:
+        name = g.get("name") if isinstance(g, dict) else getattr(g, "name", None)
+        if not name:
+            continue
+        gp = perms.get(str(name), {}) if isinstance(perms.get(str(name), {}), dict) else {}
+        out.append({"name": name, "ld": bool(gp.get("ld")), "backup": bool(gp.get("backup"))})
+    out.sort(key=lambda x: (x["name"] or "").lower())
+    return jsonify({"ok": True, "groups": out})
+
+
+@app.route("/admin/export-permissions", methods=["POST"])
+@login_required
+@_require_admin
+def admin_export_permissions_set():
+    """Master admin: όρισε τα δικαιώματα προηγμένων εξαγωγών για μία ομάδα.
+    body JSON: {group: <name>, ld: bool, backup: bool}."""
+    data = request.get_json(silent=True) or {}
+    group = str(data.get("group") or "").strip()
+    if not group:
+        return jsonify({"ok": False, "error": "missing group"}), 400
+    perms = _load_export_permissions()
+    entry = perms.get(group, {})
+    if not isinstance(entry, dict):
+        entry = {}
+    if "ld" in data:
+        entry["ld"] = bool(data.get("ld"))
+    if "backup" in data:
+        entry["backup"] = bool(data.get("backup"))
+    perms[group] = entry
+    try:
+        _save_export_permissions(perms)
+    except Exception as e:
+        current_app.logger.exception("Failed to save export permissions")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "group": group, "ld": bool(entry.get("ld")), "backup": bool(entry.get("backup"))})
 
 
 @app.route("/admin/users")

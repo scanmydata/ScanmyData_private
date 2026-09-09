@@ -112,6 +112,7 @@
                 title="Απενεργό: απαιτείται κάθε γραμμή να έχει CUSTID, Χαρακτηρισμούς & Λογαριασμούς">
           Λήψη Γέφυρας (Strict)
         </button>
+        {% if allow_ld_export or allow_backup_export %}
         <button id="exportBridgeCaret" type="button" class="btn btn-primary rounded-l-none px-2 border-l border-white/40"
                 disabled aria-haspopup="true" aria-expanded="false"
                 title="Περισσότερες μορφές λήψης">▾</button>
@@ -121,12 +122,23 @@
                   class="export-format-item block w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50">
             📊 Λήψη XLSX (γέφυρα + .ect)
           </button>
+          {% if allow_ld_export %}
           <button type="button" data-format="ld"
                   class="export-format-item block w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50 border-t border-gray-100">
             🔐 Λήψη αρχείου HyperLog (.ld)
           </button>
+          {% endif %}
+          {% if allow_backup_export %}
+          <button type="button" data-format="backup"
+                  class="export-format-item block w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50 border-t border-gray-100"
+                  title="Ανέβασε τρέχον backup Epsilon (.zip) — το ενημερώνουμε με τις νέες εγγραφές (χωρίς MARK) και σου δίνουμε το ίδιο zip">
+            🗂️ Ενημέρωση Backup Epsilon (.zip)
+          </button>
+          {% endif %}
         </div>
+        {% endif %}
       </div>
+      <input type="file" id="backupZipInput" accept=".zip,application/zip" class="hidden" />
     </div>
   </div>
 
@@ -579,13 +591,17 @@ async function performBridgeDownload(url, options){
     btn.dataset.busy = '1';
   }
   try {
-    const res = await fetch(url, { credentials: 'same-origin' });
+    const fetchOpts = { credentials: 'same-origin' };
+    if (options.method) fetchOpts.method = options.method;
+    if (options.body) fetchOpts.body = options.body;
+    const res = await fetch(url, fetchOpts);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     if (!res.ok){
       let message = 'Αποτυχία εξαγωγής γέφυρας.';
       if (contentType.includes('application/json')){
         try {
           const data = await res.json();
+          if (data && data.code){ return data; }  // control-flow (need_confirm / account_mismatch)
           if (data && (data.error || data.message)){
             message = data.error || data.message;
           }
@@ -607,7 +623,7 @@ async function performBridgeDownload(url, options){
     }
 
     const blob = await res.blob();
-    let filename = extractFilenameFromDisposition(res.headers.get('content-disposition') || '');
+    let filename = options.downloadName || extractFilenameFromDisposition(res.headers.get('content-disposition') || '');
     if (!filename){
       const ext = contentType.includes('zip') ? '.zip' : '.xlsx';
       filename = 'epsilon_bridge' + ext;
@@ -628,6 +644,20 @@ async function performBridgeDownload(url, options){
     const baseMsg = mode === 'partners'
       ? 'Η γέφυρα δημιουργήθηκε και λήφθηκε (με νέους συναλλασσόμενους).'
       : 'Η γέφυρα λήφθηκε με επιτυχία.';
+    if (options.format === 'backup'){
+      const posted = res.headers.get('X-Backup-Posted') || '?';
+      const skipped = res.headers.get('X-Backup-Skipped') || '0';
+      const balance = res.headers.get('X-Backup-Balance') || '';
+      const changed = res.headers.get('X-Backup-Changed') || '';
+      const added = res.headers.get('X-Backup-ClientDbAdded') || '0';
+      let msg = `Το backup ενημερώθηκε: ${posted} εγγραφές προστέθηκαν`;
+      if (Number(skipped) > 0) msg += `, ${skipped} παραλείφθηκαν`;
+      if (balance && balance !== 'ok') msg += ' — ΠΡΟΣΟΧΗ: ανισοσκελισμός!';
+      if (Number(added) > 0) msg += ` · +${added} στο client_db`;
+      if (changed) msg += ` (πίνακες: ${changed})`;
+      showFlash(msg, (balance && balance !== 'ok') ? 'warning' : 'success', 9000);
+      return true;
+    }
     if (options.format === 'ld' || filename.toLowerCase().endsWith('.ld')){
       showFlash('Το αρχείο HyperLog (.ld) λήφθηκε. Άνοιξέ το απευθείας στο Epsilon Net HyperLog (συνιστάται δοκιμαστική εισαγωγή πρώτα).', 'success', 7000);
     } else if (filename.toLowerCase().endsWith('.zip')){
@@ -927,8 +957,9 @@ async function initEpsilonPreviewPage(){
   }
 
   async function doBridgeExport(format){
-    format = (format === 'ld') ? 'ld' : 'xlsx';
+    format = (format === 'ld' || format === 'backup') ? format : 'xlsx';
     if (!exportBtn || exportBtn.disabled || exportBtn.dataset.busy === '1') return;
+    if (format === 'backup'){ await doBackupUpdate(); return; }
     const baseUrl = "/export/fastimport/kinitseis?vat=" + encodeURIComponent(ACTIVE_VAT);
     const mode = exportBtn.dataset.exportMode || 'strict';
     let targetUrl = baseUrl;
@@ -949,6 +980,63 @@ async function initEpsilonPreviewPage(){
       targetUrl += '&confirm_new_partners=1';
     }
     await performBridgeDownload(targetUrl, { mode, format });
+  }
+
+  // Ενημέρωση backup Epsilon: ζήτα .zip, POST στη γέφυρα, λήψη ενημερωμένου zip (ίδιο όνομα)
+  async function doBackupUpdate(){
+    const input = document.getElementById('backupZipInput');
+    if (!input) return;
+    const file = await new Promise((resolve)=>{
+      input.value = '';
+      const onChange = ()=>{ input.removeEventListener('change', onChange); resolve(input.files && input.files[0]); };
+      input.addEventListener('change', onChange);
+      input.click();
+    });
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.zip')){
+      showFlash('Επίλεξε ένα αρχείο .zip (backup Epsilon).', 'error', 5000);
+      return;
+    }
+    const buildForm = (confirmPartners, confirmAccounts)=>{
+      const fd = new FormData();
+      fd.append('backup', file, file.name);
+      fd.append('vat', ACTIVE_VAT);
+      if (EXCLUDED_MARKS.size > 0) fd.append('excluded_marks', Array.from(EXCLUDED_MARKS).join(','));
+      if (confirmPartners) fd.append('confirm_new_partners', '1');
+      if (confirmAccounts) fd.append('confirm_accounts', '1');
+      return fd;
+    };
+    const url = "/export/fastimport/backup?vat=" + encodeURIComponent(ACTIVE_VAT);
+    let confirmPartners = false, confirmAccounts = false;
+    for (let i = 0; i < 4; i++){
+      const res = await performBridgeDownload(url, {
+        method: 'POST', body: buildForm(confirmPartners, confirmAccounts),
+        format: 'backup', downloadName: file.name
+      });
+      if (res === true) return;              // λήφθηκε το ενημερωμένο zip
+      if (!res || !res.code) return;         // σφάλμα (έχει ήδη εμφανιστεί) ή άκυρο
+      if (res.code === 'need_confirm'){
+        const proceed = await showModalConfirm(
+          'Επιβεβαίωση δημιουργίας συναλλασσόμενων',
+          'Υπάρχουν αποδείξεις χωρίς CUSTID. Θα δημιουργηθούν προσωρινοί συναλλασσόμενοι. Συνέχεια;',
+          'Επιβεβαίωση', 'Άκυρο'
+        );
+        if (!proceed) return;
+        confirmPartners = true; continue;
+      }
+      if (res.code === 'account_mismatch'){
+        const accts = (res.unknown_accounts || []).join(', ');
+        const proceed = await showModalConfirm(
+          'Λογαριασμοί εκτός λογιστικού σχεδίου',
+          'Οι εξής λογαριασμοί δεν βρέθηκαν στο λογιστικό σχέδιο του backup: ' + accts +
+          '. Θέλεις να εφαρμοστούν οι εγγραφές με αυτούς τους λογαριασμούς;',
+          'Εφαρμογή', 'Άκυρο'
+        );
+        if (!proceed) return;
+        confirmAccounts = true; continue;
+      }
+      return;
+    }
   }
 
   // Κύριο κουμπί -> προεπιλογή XLSX (ίδια συμπεριφορά όπως πριν)
