@@ -1495,31 +1495,35 @@
     </div>
 
     <div id="brainTabBulk" class="brain-tab-panel hidden">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-        <div>
-          <input id="brainYearBulk" type="number" min="2017" max="2100" placeholder="Έτος (υποχρεωτικό)"
+      <div class="flex flex-col md:flex-row md:items-start gap-4 mb-4">
+        <div class="shrink-0">
+          <label class="block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Έτος</label>
+          <input id="brainYearBulk" type="number" min="2017" max="2100" placeholder="π.χ. 2025"
             required
-            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
-          <div id="brainYearBulkHint" class="text-xs text-amber-700 dark:text-amber-300 mt-1">⚠ Συμπλήρωσε πρώτα έτος για να ενεργοποιηθούν οι επιλογές πηγής πελατών.</div>
+            class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-36" />
+          <div id="brainYearBulkHint" class="text-xs text-amber-700 dark:text-amber-300 mt-1 max-w-[220px]">⚠ Συμπλήρωσε πρώτα έτος για να ενεργοποιηθούν οι επιλογές πηγής πελατών.</div>
         </div>
-        <div class="grid grid-cols-1 gap-2">
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainRunEfkaTekaBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
-            ΕΦΚΑ/ΤΕΚΑ
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
-                 title="ΚΕΑΟ Πιστώσεις (μόνο μέλη εταιριών / ατομικές). Κύρια εισφορά → 585.007, πρόσθετα τέλη + προσαυξήσεις → 588.">
-            <input id="brainRunKeaoBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-            ΚΕΑΟ Πιστώσεις
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainRunMisthBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
-            Μισθωτήρια
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input id="brainRunE9Bulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
-            Ε9
-          </label>
+        <div class="flex-1">
+          <label class="block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Έλεγχοι</label>
+          <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input id="brainRunEfkaTekaBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+              ΕΦΚΑ/ΤΕΚΑ
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                   title="ΚΕΑΟ Πιστώσεις (μόνο μέλη εταιριών / ατομικές). Κύρια εισφορά → 585.007, πρόσθετα τέλη + προσαυξήσεις → 588.">
+              <input id="brainRunKeaoBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+              ΚΕΑΟ Πιστώσεις
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input id="brainRunMisthBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+              Μισθωτήρια
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input id="brainRunE9Bulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+              Ε9
+            </label>
+          </div>
         </div>
       </div>
       <div class="brain-pdfs-section border rounded-lg p-3 mb-4">
@@ -1536,9 +1540,14 @@
         </div>
       </div>
       <div class="flex flex-wrap gap-3 items-center mb-4">
-        <button id="brainBulkPickBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
-          Επιλογή Excel κωδικών
-        </button>
+        <div class="inline-flex items-center gap-1">
+          <button id="brainBulkPickBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
+            Επιλογή Excel κωδικών
+          </button>
+          <button id="brainExcelHintBtn" type="button" aria-label="Πώς εξάγω τους κωδικούς σε Excel;"
+                  title="Πώς εξάγω τους κωδικούς σε Excel;"
+                  class="w-7 h-7 inline-flex items-center justify-center rounded-full border border-sky-400 text-sky-600 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-900/40 font-bold text-sm leading-none">i</button>
+        </div>
         <button id="brainBulkFromActiveBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition">
           📥 Από αποθηκευμένους πελάτες ομάδας
         </button>
@@ -1562,6 +1571,48 @@
         <button id="brainBulkSaveCredsBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition" title="Μαζική αποθήκευση credentials των επιλεγμένων εταιριών στην ενεργή ομάδα">
           💾 Μαζική αποθήκευση credentials
         </button>
+      </div>
+    </div>
+
+    <!-- Hint modal: πώς εξάγω τους κωδικούς σε Excel (Hyper/Extra & TaxSystem) -->
+    <div id="brainExcelHintModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4"
+         style="background:rgba(0,0,0,.55);">
+      <div class="bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-lg font-bold flex items-center gap-2">📊 Εξαγωγή κωδικών σε Excel</h3>
+          <button id="brainExcelHintClose" type="button" class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xl leading-none">✕</button>
+        </div>
+        <div class="px-5 py-4 text-sm space-y-4">
+          <p class="text-gray-600 dark:text-gray-300">
+            Η εφαρμογή αναγνωρίζει μόνη της και τις δύο μορφές. Βγάλτε το αρχείο από το πρόγραμμά σας
+            και μετά πατήστε «Επιλογή Excel κωδικών».
+          </p>
+          <div>
+            <div class="font-semibold text-gray-900 dark:text-white mb-1">Hyper / Extra Λογιστική</div>
+            <ol class="list-decimal list-inside space-y-1 text-gray-700 dark:text-gray-300">
+              <li>Παράμετροι → Εταιρεία → <strong>Εκτύπωση Κωδικών Υπηρεσιών μέσω Internet</strong></li>
+              <li>Η εκτύπωση είναι διεταιρική: περιλαμβάνει τους κωδικούς σύνδεσης για κάθε εταιρεία.</li>
+              <li>Στην προεπισκόπηση, πατήστε <strong>Εξαγωγή</strong> και επιλέξτε <strong>Excel</strong> (κουμπί με το εικονίδιο του Excel)· αποθηκεύστε το αρχείο <strong>.xlsx</strong>.</li>
+            </ol>
+            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Δίνει: «Κωδικοί Υπηρεσιών μέσω Internet» (μπλοκ με Excel).</div>
+          </div>
+          <div>
+            <div class="font-semibold text-gray-900 dark:text-white mb-1">TaxSystem</div>
+            <ol class="list-decimal list-inside space-y-1 text-gray-700 dark:text-gray-300">
+              <li>Κεντρικό Μενού → Εκτυπώσεις → <strong>Κωδικοί e-Υπηρεσιών</strong></li>
+              <li>Πατήστε <strong>Επιλογή Όλων</strong></li>
+              <li>Πατήστε <strong>Εξαγωγή σε Excel</strong></li>
+              <li>Δώστε όνομα αρχείου και θέση αποθήκευσης και πατήστε <strong>Save</strong></li>
+            </ol>
+            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Δίνει: «Κωδικοί Υπόχρεων» (πλατύς πίνακας).</div>
+          </div>
+          <div class="text-xs text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-3">
+            🔒 Διαβάζονται μόνο τα πεδία <strong>myDATA</strong>. Οι υπόλοιποι κωδικοί (Taxisnet, ΕΦΚΑ, ΙΚΑ, ΓΕΜΗ) δεν φορτώνονται ποτέ στη μνήμη.
+          </div>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 dark:border-gray-700 text-right">
+          <button id="brainExcelHintClose2" type="button" class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 px-4 py-2 rounded-lg font-medium">Κλείσιμο</button>
+        </div>
       </div>
     </div>
 
@@ -1777,12 +1828,25 @@
         container = document.body;
       }
     }
-    const id = `brainFlashMessage-${Date.now()}`;
-    const el = document.createElement('div');
-    el.id = id;
+    // ΣΤΑΘΕΡΟ id: επαναχρησιμοποιούμε το ΙΔΙΟ στοιχείο ώστε διαδοχικά μηνύματα
+    // να ΑΝΤΙΚΑΘΙΣΤΟΥΝ το προηγούμενο αντί να στοιβάζονται (ο χρήστης έβλεπε
+    // 3-4 flash ταυτόχρονα και δεν καταλάβαινε τι συνέβη).
+    const id = 'brainFlashMessage';
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.setAttribute('data-flash', '');
+      el.style.pointerEvents = 'auto';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'space-between';
+      el.style.gap = '0.75rem';
+      container.prepend(el);
+    }
     el.className = `flash-banner flash-${kind}`;
-    el.setAttribute('data-flash', '');
-    el.setAttribute('data-ttl', '5000');
+    const effTtl = Number(ttl == null ? 5000 : ttl);
+    el.setAttribute('data-ttl', String(effTtl));
     const textNode = document.createElement('span');
     textNode.textContent = message;
     textNode.style.flex = '1 1 auto';
@@ -1799,14 +1863,13 @@
     closeBtn.style.marginLeft = '0.75rem';
     closeBtn.style.pointerEvents = 'auto';
     closeBtn.addEventListener('click', () => el.remove());
-    el.style.pointerEvents = 'auto';
-    el.style.display = 'flex';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'space-between';
-    el.style.gap = '0.75rem';
-    el.append(textNode, closeBtn);
-    container.prepend(el);
-    setTimeout(() => el.remove(), 5000);
+    el.replaceChildren(textNode, closeBtn);
+    try { if (el.__hideTimer) clearTimeout(el.__hideTimer); } catch (_) {}
+    if (effTtl > 0) {
+      el.__hideTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, effTtl);
+    } else {
+      el.__hideTimer = null; // ttl=0 → persistent
+    }
   }
 
   function showBrainAfmStatus(message, type = 'info', ttl = 5000) {
@@ -2435,20 +2498,37 @@
         }
       }
 
-      const partnerMessage = E3_BRAIN_MEMBERS.length
-        ? `Βρέθηκαν ${E3_BRAIN_MEMBERS.length} ενεργοί εταίροι/ιδιοκτήτες. Συμπλήρωσε τα πεδία.`
-        : (isIndividual ? 'Ατομική επιχείρηση: συμπλήρωσε TAXISnet και ΑΜΚΑ.' : 'Δεν βρέθηκαν ενεργοί εταίροι/ιδιοκτήτες για αυτή την εταιρεία.');
-      const companyMessage = data.message || `Η διεύθυνση και η νομική μορφή ανακτήθηκαν. ${partnerMessage}`;
-      showBrainAfmStatus(companyMessage, E3_BRAIN_MEMBERS.length ? 'success' : (isIndividual ? 'info' : 'warning'));
+      // === ΕΝΑ ενοποιημένο μήνυμα κατάστασης (αντί για 3-4 flash ταυτόχρονα) ===
+      // Μετράμε μέλη χωρίς ΑΦΜ (δεν ήρθαν από ΑΑΔΕ/ΓΕΜΗ → «NOAFM_x» ή κενό).
+      const missingAfmCount = E3_BRAIN_MEMBERS.filter((m) => {
+        const a = String((m && m.afm) || '').trim();
+        return !a || a.startsWith('NOAFM_');
+      }).length;
+      const parts = [];
+      parts.push(data.message || 'Εταιρικά στοιχεία ανακτήθηκαν (διεύθυνση & νομική μορφή).');
+      if (isIndividual) {
+        parts.push('Ατομική επιχείρηση — συμπλήρωσε TAXISnet & ΑΜΚΑ.');
+      } else if (E3_BRAIN_MEMBERS.length) {
+        parts.push(`Βρέθηκαν ${E3_BRAIN_MEMBERS.length} μέλη.`);
+        if (missingAfmCount) {
+          parts.push(`⚠ ${missingAfmCount} ${missingAfmCount === 1 ? 'μέλος' : 'μέλη'} χωρίς ΑΦΜ από ΑΑΔΕ/ΓΕΜΗ — συμπλήρωσέ το χειροκίνητα.`);
+        }
+      } else {
+        parts.push('Δεν βρέθηκαν ενεργά μέλη για αυτή την εταιρεία.');
+      }
+      if (!isIndividual && data.gemi_only) {
+        parts.push(data.gemi_only_message || 'Τα μέλη προέρχονται μόνο από ΓΕΜΗ — δεν επιβεβαιώθηκαν στην ΑΑΔΕ.');
+      }
+      if (!isIndividual && (!taxisUser || !taxisPass)) {
+        parts.push('Συμπλήρωσε κωδικούς TAXISnet για αντιπαραβολή με ΑΑΔΕ/ΓΕΜΗ.');
+      }
+      let sev = 'success';
+      if (isIndividual) sev = 'info';
+      else if (!E3_BRAIN_MEMBERS.length || missingAfmCount || data.gemi_only || !taxisUser || !taxisPass) sev = 'warning';
+      // success → auto-hide· warning/info με ζητήματα → μένει (ttl=0) μέχρι νέα ενέργεια.
+      showBrainAfmStatus(parts.join(' '), sev, sev === 'success' ? 6000 : 0);
       // Persist non-sensitive form data so it survives partial navigation
       try { saveE3BrainState(); } catch(_) {}
-      // If server indicated GEMI-only members, show an explicit warning so user notices
-      if (!isIndividual && data.gemi_only) {
-        try {
-          const msg = data.gemi_only_message || 'Οι συνεργάτες προέρχονται μόνο από το ΓΕΜΗ. Συμπλήρωσε κωδικούς TAXISnet για έλεγχο στην ΑΑΔΕ.';
-          showBrainAfmStatus(msg, 'warning', 0);
-        } catch (e) {}
-      }
 
       // Show AADE-check button only when: company, GEMI-only members, TAXIS creds not prefilled
       try {
@@ -2459,10 +2539,6 @@
           } else {
             checkBtn.classList.add('hidden');
           }
-        }
-        // If company and TAXIS creds missing, advise user to fill them
-        if (!isIndividual && (!taxisUser || !taxisPass)) {
-          showBrainAfmStatus('Για να γίνει αντιπαραβολή με εξωτερικές πηγές (AADE/ΓΕΜΗ) συμπλήρωσε τους κωδικούς TAXISnet.', 'warning', 10000);
         }
       } catch(_){}
       // After a successful address fetch, persist the snapshot
@@ -7541,6 +7617,22 @@
         previewE3BrainBulk(file);
       });
     }
+
+    // «i» hint modal: πώς εξάγω τους κωδικούς σε Excel (Hyper/Extra & TaxSystem).
+    (function wireExcelHint(){
+      const hintBtn = document.getElementById('brainExcelHintBtn');
+      const modal = document.getElementById('brainExcelHintModal');
+      if (!modal || (hintBtn && hintBtn.dataset.bound === '1')) return;
+      const open = () => modal.classList.remove('hidden');
+      const close = () => modal.classList.add('hidden');
+      if (hintBtn) { hintBtn.dataset.bound = '1'; hintBtn.addEventListener('click', open); }
+      ['brainExcelHintClose', 'brainExcelHintClose2'].forEach((id) => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', close);
+      });
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) close(); });
+    })();
 
     // Bulk «Εκτέλεση επιλεγμένων» is also wired through the delegated
     // handler (case 'brainRunSelectedBulkBtn'); the previous direct binding

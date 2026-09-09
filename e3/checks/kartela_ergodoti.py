@@ -75,10 +75,23 @@ except Exception:  # pragma: no cover — running standalone, not as a module
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 LANDING_URL = "https://www.e-efka.gov.gr/el/elektronikes-yperesies/oikonomike-kartela-ergodote"
+# e-Access ενοποιημένο login. Οι εργοδότες συνδέονται με «κωδικούς ΕΦΚΑ/ΚΕΑΟ»
+# (Κωδικός Χρήστη + Συνθηματικό) — ΟΧΙ μέσω TAXISnet. Η παλιά ροή (landing page →
+# «Είσοδος στην υπηρεσία» → popup) σπάει πλέον: ο σύνδεσμος πάει κατευθείαν στην
+# app και το e-Access επιστρέφει secureError «Δεν έχετε δικαίωμα πρόσβασης».
+EACCESS_LOGIN_URL = "https://apps.e-efka.gov.gr/eAccess/login.xhtml"
 EFKA_APP_URL = "https://apps.e-efka.gov.gr/eEmployerTransactions/"
 EFKA_REPORT_URL = "https://apps.e-efka.gov.gr/eEmployerTransactions/secure/transactionsReport.xhtml"
 TEKA_APP_URL = "https://apps.e-efka.gov.gr/eTekaEmployerTransactions/secure/index.xhtml"
 TEKA_REPORT_URL = "https://apps.e-efka.gov.gr/eTekaEmployerTransactions/secure/transactionsReport.xhtml?mode=default"
+
+# Realistic desktop User-Agent. Χωρίς αυτό, το e-EFKA gov site φορτώνει
+# διαφορετικά για το default «HeadlessChrome» UA (bot detection) και ο σύνδεσμος
+# «Είσοδος στην υπηρεσία» δεν γίνεται ποτέ visible σε headless → timeout.
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 NAV_TIMEOUT = 45000
 SHORT_WAIT = 800
@@ -112,89 +125,91 @@ def _save_download(dl: Download, out_dir: Path, prefix: str, afm: str) -> Path:
 
 
 def _login_employer(context: BrowserContext, username: str, password: str) -> Page:
-    """Open the landing page, click «Είσοδος στην υπηρεσία», fill IKA creds.
+    """Log into e-EFKA e-Access with **employer** credentials (κωδικοί ΕΦΚΑ/ΚΕΑΟ).
 
-    Returns the popup ``Page`` after successful authentication. After login
-    the IKA portal redirects the popup directly into the ``eEmployerTransactions``
-    app (i.e. the EFKA Καρτέλα Εργοδότη grid is already open on the popup).
-    Auth cookies remain attached to the context, so the TEKA app can be
-    opened in a fresh page without re-authenticating.
+    Navigates straight to the e-Access login page, fills «Κωδικός Χρήστη» +
+    «Συνθηματικό» and presses «Είσοδος» (NOT «Συνέχεια στο TAXISNET»). After a
+    successful login the session cookies stay on the context, so the EFKA/TEKA
+    employer-card report pages open in fresh pages without re-authenticating.
+    Returns the logged-in ``Page``.
     """
     page = context.new_page()
     page.set_default_timeout(NAV_TIMEOUT)
-    logging.info("Opening landing page %s", LANDING_URL)
-    page.goto(LANDING_URL, wait_until="domcontentloaded")
-
-    entry_link = page.get_by_role("link", name="Είσοδος στην υπηρεσία").first
-    entry_link.wait_for(state="visible", timeout=NAV_TIMEOUT)
-
-    with page.expect_popup(timeout=NAV_TIMEOUT) as popup_info:
-        entry_link.click()
-    portal = popup_info.value
-    portal.set_default_timeout(NAV_TIMEOUT)
+    logging.info("Opening e-Access login %s", EACCESS_LOGIN_URL)
+    page.goto(EACCESS_LOGIN_URL, wait_until="domcontentloaded")
     try:
-        portal.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        page.wait_for_load_state("networkidle", timeout=15000)
     except PlaywrightTimeoutError:
-        logging.info("Popup domcontentloaded not reached — continuing.")
+        pass
 
-    # The IKA employer login form. Field labels: «Κωδικός Χρήστη:» and
-    # «Συνθηματικό:» — NOT TAXISnet.
-    user_field = portal.get_by_role("textbox", name="Κωδικός Χρήστη:")
+    # Employer login form (JSF): #j_username / #j_password, submit button «Είσοδος».
+    user_field = page.locator("#j_username")
     if user_field.count() == 0:
-        user_field = portal.locator(
-            "input[name*='user' i], input[id*='user' i], input[name*='username' i]"
-        )
-    pass_field = portal.get_by_role("textbox", name="Συνθηματικό:")
+        user_field = page.get_by_role("textbox", name="Κωδικός Χρήστη:")
+    pass_field = page.locator("#j_password")
     if pass_field.count() == 0:
-        pass_field = portal.locator("input[type='password']")
+        pass_field = page.locator("input[type='password']")
 
     if user_field.count() == 0 or pass_field.count() == 0:
+        body_text = (page.locator("body").inner_text(timeout=5000) or "")[:300]
         raise RuntimeError(
-            "Δεν εντοπίστηκαν τα πεδία ΙΚΑ login (Κωδικός Χρήστη / Συνθηματικό)."
+            "Δεν εντοπίστηκαν τα πεδία login ΕΦΚΑ/ΚΕΑΟ (Κωδικός Χρήστη / Συνθηματικό). "
+            "Body: " + body_text.replace("\n", " ")
         )
 
     user_field.first.fill(username, timeout=NAV_TIMEOUT)
     pass_field.first.fill(password, timeout=NAV_TIMEOUT)
 
-    submit = portal.get_by_role("button", name="Είσοδος")
+    # «Είσοδος» = employer submit. ΠΡΟΣΟΧΗ: να ΜΗΝ πατηθεί «Συνέχεια στο TAXISNET».
+    submit = page.get_by_role("button", name="Είσοδος", exact=True)
     if submit.count() == 0:
-        submit = portal.locator(
-            "button:has-text('Είσοδος'), input[type='submit'][value*='Είσοδος']"
-        )
-
+        submit = page.locator("button:has-text('Είσοδος'):not(:has-text('TAXIS'))")
     try:
-        with portal.expect_navigation(timeout=NAV_TIMEOUT):
+        with page.expect_navigation(timeout=NAV_TIMEOUT):
             submit.first.click()
     except PlaywrightTimeoutError:
         submit.first.click()
     try:
-        portal.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT)
     except PlaywrightTimeoutError:
         pass
 
-    # Smoke check: after login the popup should expose the EFKA Καρτέλα grid
-    # (heading «Οικονομική Καρτέλα Εργοδότη» + Α.Μ.Ε. field). Either the heading
-    # appears, OR an explicit link to the service exists on a hub page.
-    landed = False
-    for needle in [
-        "text=Α.Μ.Ε",            # the employer card grid header
-        "text=Επωνυμία",        # company name row on the card grid
-        "role=link[name=/Οικονομική Καρτέλα Εργοδότη/]",
-        "role=heading[name=/Οικονομική Καρτέλα Εργοδότη/]",
-    ]:
-        try:
-            portal.locator(needle).first.wait_for(state="visible", timeout=8000)
-            landed = True
-            break
-        except PlaywrightTimeoutError:
-            continue
-    if not landed:
-        body_text = (portal.locator("body").inner_text(timeout=5000) or "")[:500]
+    # Login failure detection: still on the login page or an explicit error.
+    cur = page.url or ""
+    body_text = (page.locator("body").inner_text(timeout=5000) or "")
+    low = body_text.lower()
+    login_failed = (
+        "login.xhtml" in cur
+        or "j_security_check" in cur
+        or "σφάλμα εισόδου" in low
+        or "δεν είναι έγκυρα" in low
+        or "λάθος" in low
+        or "authentication_error" in cur.lower()
+    )
+    if login_failed:
         raise RuntimeError(
-            "Login φαίνεται να απέτυχε — δεν εμφανίστηκαν τα services. Body: "
+            "Αποτυχία σύνδεσης — ελέγξτε τους κωδικούς ΕΦΚΑ/ΚΕΑΟ (Εργοδότη). "
+            "Τα στοιχεία που εισάγατε δεν είναι έγκυρα."
+        )
+
+    # Establish the employer-app session (and confirm access — no secureError).
+    try:
+        page.goto(EFKA_APP_URL, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+    except Exception as exc:
+        raise RuntimeError(f"Δεν άνοιξε η εφαρμογή Καρτέλας Εργοδότη: {exc}")
+
+    if "secureError" in (page.url or ""):
+        body_text = (page.locator("body").inner_text(timeout=5000) or "")[:300]
+        raise RuntimeError(
+            "Το e-Access απέρριψε την πρόσβαση στην Καρτέλα Εργοδότη (secureError). "
+            "Πιθανόν λάθος τύπος κωδικών ή η υπηρεσία είναι προσωρινά μη διαθέσιμη. "
             + body_text.replace("\n", " ")
         )
-    return portal
+    return page
 
 
 def _extract_year(date_from: str) -> Optional[str]:
@@ -392,7 +407,8 @@ def run_extractor(username: str, password: str, afm: str, date_from: str,
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless, args=chromium_launch_args())
-        context = browser.new_context(accept_downloads=True)
+        context = browser.new_context(accept_downloads=True, user_agent=DESKTOP_UA,
+                                      locale="el-GR")
         try:
             portal = _login_employer(context, username, password)
             summary["efka"] = _open_efka_kartela(context, portal, date_from, pdf_dir, afm)
