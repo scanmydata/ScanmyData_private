@@ -18838,9 +18838,21 @@ def api_e3_brain_member_amka():
             primary = {"ok": False, "reason": "primary-error"}
 
         if primary.get("ok") and primary.get("amka"):
-            return jsonify({"ok": True, "afm": afm, "amka": primary.get("amka"),
-                            "amka_list": primary.get("amkaList"), "source": "myamka",
-                            "note": "Το ΑΜΚΑ ανακτήθηκε από το MyAMKA (κάτοχος κωδικών TAXISnet)."}), 200
+            owner_afm = str(primary.get("afm") or "").strip()
+            resp = {"ok": True, "afm": afm, "amka": primary.get("amka"),
+                    "amka_list": primary.get("amkaList"), "source": "myamka",
+                    "owner_afm": owner_afm or None,
+                    "note": "Το ΑΜΚΑ ανακτήθηκε από το MyAMKA (κάτοχος κωδικών TAXISnet)."}
+            # Επαλήθευση: το ΑΜΚΑ πρέπει να ανήκει στο ΑΦΜ που περιμένουμε.
+            if afm and owner_afm and owner_afm != afm:
+                resp["afm_mismatch"] = True
+                resp["warning"] = (
+                    f"Προσοχή: το ΑΜΚΑ ανήκει στο ΑΦΜ {owner_afm}, όχι στο αναμενόμενο {afm}. "
+                    "Ελέγξτε μήπως χρησιμοποιήθηκαν λάθος κωδικοί TAXISnet (π.χ. άλλης ατομικής/μέλους)."
+                )
+            elif afm and owner_afm and owner_afm == afm:
+                resp["afm_verified"] = True
+            return jsonify(resp), 200
 
         # 2) FALLBACK: AADE (Playwright, headed). Τρέχει όταν το MyAMKA απέτυχε.
         aade_res, aade_error, aade_tb = _aade_fallback()
@@ -18852,10 +18864,21 @@ def api_e3_brain_member_amka():
         aade_amka = (aade_res or {}).get("amka") if isinstance(aade_res, dict) else None
 
         if aade_amka:
-            return jsonify({"ok": True, "afm": (aade_res or {}).get("afm") or afm,
-                            "amka": aade_amka, "source": "aade", "raw": aade_res,
-                            "primary_reason": primary.get("reason"),
-                            "debug_files": files, "debug_dir": str(tmpdir)}), 200
+            owner_afm = str((aade_res or {}).get("afm") or "").strip()
+            resp = {"ok": True, "afm": afm or owner_afm,
+                    "amka": aade_amka, "source": "aade", "raw": aade_res,
+                    "owner_afm": owner_afm or None,
+                    "primary_reason": primary.get("reason"),
+                    "debug_files": files, "debug_dir": str(tmpdir)}
+            if afm and owner_afm and owner_afm != afm:
+                resp["afm_mismatch"] = True
+                resp["warning"] = (
+                    f"Προσοχή: το ΑΜΚΑ ανήκει στο ΑΦΜ {owner_afm}, όχι στο αναμενόμενο {afm}. "
+                    "Ελέγξτε μήπως χρησιμοποιήθηκαν λάθος κωδικοί TAXISnet (π.χ. άλλης ατομικής/μέλους)."
+                )
+            elif afm and owner_afm and owner_afm == afm:
+                resp["afm_verified"] = True
+            return jsonify(resp), 200
 
         # 3) Ούτε MyAMKA ούτε AADE
         if aade_error:

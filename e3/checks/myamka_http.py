@@ -66,6 +66,36 @@ def _collect_amka(node: Any, acc: set) -> None:
             _collect_amka(v, acc)
 
 
+_AFM_KEY = re.compile(r"(afm|αφμ|vat|tin)", re.I)
+
+
+def valid_afm(s: str) -> bool:
+    """Έλεγχος checksum ελληνικού ΑΦΜ (mod 11) ώστε να ξεχωρίζουμε γνήσια ΑΦΜ
+    από τυχαίους 9ψήφιους αριθμούς μέσα στο json."""
+    s = re.sub(r"\D", "", str(s or ""))
+    if len(s) != 9 or s == "000000000":
+        return False
+    ds = [int(c) for c in s]
+    chk = sum(ds[i] * (2 ** (8 - i)) for i in range(8))
+    return (chk % 11) % 10 == ds[8]
+
+
+def _collect_afm(node: Any, acc: set) -> None:
+    """Μάζεψε ΑΦΜ (9 ψηφία, έγκυρο checksum) που βρίσκονται κάτω από κλειδιά
+    afm/αφμ/vat/tin — ώστε να επαληθεύουμε ότι το ΑΜΚΑ ανήκει στο σωστό πρόσωπο."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(v, (str, int)) and _AFM_KEY.search(str(k)):
+                cand = re.sub(r"\D", "", str(v))
+                if valid_afm(cand):
+                    acc.add(cand)
+            else:
+                _collect_afm(v, acc)
+    elif isinstance(node, list):
+        for x in node:
+            _collect_afm(x, acc)
+
+
 class _HyperSession:
     """Λεπτό wrapper γύρω από requests.Session: follow() που ακολουθεί ΚΑΙ τα
     HTTP 3xx ΚΑΙ τα JSF <partial-response> redirects (όπως το lib/hyper-http.js)."""
@@ -172,7 +202,16 @@ def retrieve_amka(user: str, password: str, timeout: float = 30.0) -> Dict[str, 
         amkas = sorted(found)
         if not amkas:
             return {"ok": False, "reason": "NotFound", "source": "myamka"}
-        return {"ok": True, "amka": amkas[0], "amkaList": amkas, "source": "myamka"}
+        # Εξαγωγή ΑΦΜ κατόχου (αν υπάρχει στο response) για επαλήθευση ότι το
+        # ΑΜΚΑ ανήκει στο σωστό πρόσωπο (π.χ. μπερδεμένοι κωδικοί TAXISnet).
+        afms: set = set()
+        _collect_afm(data, afms)
+        result = {"ok": True, "amka": amkas[0], "amkaList": amkas, "source": "myamka"}
+        if afms:
+            afm_sorted = sorted(afms)
+            result["afm"] = afm_sorted[0]
+            result["afmList"] = afm_sorted
+        return result
     except Exception as e:
         log.exception("MyAMKA fallback retrieve_amka failed")
         return {"ok": False, "reason": f"Exception: {e}", "source": "myamka"}

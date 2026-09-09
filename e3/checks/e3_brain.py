@@ -2125,7 +2125,10 @@ def process_client(
     ika_emp_user = _norm_text(client.get("ika_employer_username"))
     ika_emp_pass = _norm_text(client.get("ika_employer_password"))
     has_payroll_flag = bool(client.get("has_payroll")) or bool(ika_emp_user and ika_emp_pass)
-    if has_payroll_flag and ika_emp_user and ika_emp_pass and afm:
+    # Ο χρήστης μπορεί να επιλέξει να ΜΗΝ αποθηκευτεί/τρέξει η Οικονομική Καρτέλα
+    # Εργοδότη (default: ναι, για συμβατότητα).
+    save_kartela = _flags.get("save_kartela_ergodoti", True)
+    if save_kartela and has_payroll_flag and ika_emp_user and ika_emp_pass and afm:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
         kart_pdf_dir = _resolve_pdfs_dir("kartela_ergodoti", afm)
@@ -2193,7 +2196,7 @@ def process_client(
             except Exception as exc:
                 warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
                 kartela_ergodoti_result = {"ok": False, "error": str(exc)}
-    elif has_payroll_flag and not (ika_emp_user and ika_emp_pass):
+    elif save_kartela and has_payroll_flag and not (ika_emp_user and ika_emp_pass):
         warnings.append(
             "Έχει επισημανθεί μισθοδοσία αλλά λείπουν τα IKA Εργοδότη credentials — "
             "η Οικονομική Καρτέλα Εργοδότη παραλείπεται."
@@ -3079,6 +3082,10 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload["_download_misth_pdfs"] = bool(payload.get("download_misth_pdfs", False))
     payload["_download_e9_pdfs"] = bool(payload.get("download_e9_pdfs", False))
     payload["_download_keao_pdfs"] = bool(payload.get("download_keao_pdfs", False))
+    # Οικονομική Καρτέλα Εργοδότη (ΕΦΚΑ/ΤΕΚΑ): αποθήκευση PDFs ναι/όχι. Default
+    # True για συμβατότητα με την προηγούμενη συμπεριφορά (έτρεχε πάντα όταν
+    # υπήρχαν IKA Εργοδότη credentials). Ο χρήστης μπορεί να το απενεργοποιήσει.
+    payload["_save_kartela_ergodoti"] = bool(payload.get("save_kartela_ergodoti", True))
     headed = bool(payload.get("headed", False))
 
     results: List[Dict[str, Any]] = []
@@ -3126,6 +3133,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "download_misth_pdfs": payload["_download_misth_pdfs"],
                     "download_e9_pdfs": payload["_download_e9_pdfs"],
                     "download_keao_pdfs": payload["_download_keao_pdfs"],
+                    "save_kartela_ergodoti": payload["_save_kartela_ergodoti"],
                 },
                 job_id=job_id,
             )

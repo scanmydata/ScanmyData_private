@@ -1441,6 +1441,11 @@
             <input id="brainDownloadKeaoPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Λήψη PDF Πιστώσεων ΚΕΑΟ (ανά φορέα)
           </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                 title="Οικονομική Καρτέλα Εργοδότη ΕΦΚΑ + ΤΕΚΑ (απαιτεί κωδικούς Ι.Κ.Α. Εργοδότη). Απενεργοποίησέ το για να μην τρέξει/αποθηκευτεί.">
+            <input id="brainSaveKartelaErgodoti" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
+            Αποθήκευση Οικονομικής Καρτέλας Εργοδότη (ΕΦΚΑ/ΤΕΚΑ)
+          </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 md:col-span-2">
             <input id="brainSaveComparisonPdf" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Αποθήκευση πίνακα αντιπαραβολής σε PDF μετά την εκτέλεση
@@ -2596,11 +2601,19 @@
         return;
       }
       const amka = data.amka || '';
+      // Έλεγχος ότι το ΑΜΚΑ ανήκει στο σωστό ΑΦΜ (μπερδεμένοι κωδικοί σε
+      // εταιρία με 2+ μέλη ή λάθος ατομική). Σε ασυμφωνία ΔΕΝ αποθηκεύουμε.
+      if (data.afm_mismatch) {
+        if (statusEl) statusEl.textContent = '⚠️ Λάθος ΑΦΜ — δεν αποθηκεύτηκε';
+        try { showBrainFlash(data.warning || 'Το ΑΜΚΑ ανήκει σε άλλο ΑΦΜ — ελέγξτε τους κωδικούς TAXISnet.', 'error'); } catch(_) {}
+        if (btn) btn.disabled = false;
+        return;
+      }
       const input = document.getElementById('brainMemberAmkaInput_' + credKey);
       if (input) input.value = amka;
       if (!E3_BRAIN_MEMBER_CREDS[credKey]) E3_BRAIN_MEMBER_CREDS[credKey] = {};
       E3_BRAIN_MEMBER_CREDS[credKey].amka = amka;
-      if (statusEl) statusEl.textContent = amka ? 'Ανακτήθηκε' : 'Δεν βρέθηκε ΑΜΚΑ';
+      if (statusEl) statusEl.textContent = amka ? (data.afm_verified ? 'Ανακτήθηκε ✓ (σωστό ΑΦΜ)' : 'Ανακτήθηκε') : 'Δεν βρέθηκε ΑΜΚΑ';
     } catch (e) {
       try { if (statusEl) statusEl.textContent = 'Σφάλμα'; } catch(_) {}
     } finally {
@@ -2660,8 +2673,15 @@
         return;
       }
       const amka = data.amka || '';
+      // Έλεγχος ότι το ΑΜΚΑ ανήκει στο ΑΦΜ της ατομικής (μπερδεμένοι κωδικοί).
+      // Σε ασυμφωνία ΔΕΝ γεμίζουμε ούτε αποθηκεύουμε.
+      if (data.afm_mismatch) {
+        if (statusEl) statusEl.textContent = '⚠️ Λάθος ΑΦΜ — δεν αποθηκεύτηκε';
+        try { showBrainFlash(data.warning || 'Το ΑΜΚΑ ανήκει σε άλλο ΑΦΜ — ελέγξτε τους κωδικούς TAXISnet.', 'error'); } catch(_) {}
+        return;
+      }
       if (amkaEl) amkaEl.value = amka;
-      if (statusEl) statusEl.textContent = amka ? 'Ανακτήθηκε' : 'Δεν βρέθηκε ΑΜΚΑ';
+      if (statusEl) statusEl.textContent = amka ? (data.afm_verified ? 'Ανακτήθηκε ✓ (σωστό ΑΦΜ)' : 'Ανακτήθηκε') : 'Δεν βρέθηκε ΑΜΚΑ';
       // After ΑΜΚΑ is in hand, persist the snapshot in-memory AND to the
       // group credential store so the user can leave the page / restart
       // the server without losing progress (covers "δεν κάνει αποθήκευση
@@ -4294,11 +4314,14 @@
     const downloadMisthPdfsEl = document.getElementById('brainDownloadMisthPdfs');
     const downloadE9PdfsEl = document.getElementById('brainDownloadE9Pdfs');
     const downloadKeaoPdfsEl = document.getElementById('brainDownloadKeaoPdfs');
+    const saveKartelaErgodotiEl = document.getElementById('brainSaveKartelaErgodoti');
     const downloadEfkaPdfs = !!(downloadEfkaPdfsEl && downloadEfkaPdfsEl.checked);
     const downloadTekaPdfs = !!(downloadTekaPdfsEl && downloadTekaPdfsEl.checked);
     const downloadMisthPdfs = !!(downloadMisthPdfsEl && downloadMisthPdfsEl.checked);
     const downloadE9Pdfs = !!(downloadE9PdfsEl && downloadE9PdfsEl.checked);
     const downloadKeaoPdfs = !!(downloadKeaoPdfsEl && downloadKeaoPdfsEl.checked);
+    // Default ΝΑΙ αν το checkbox λείπει (συμβατότητα).
+    const saveKartelaErgodoti = saveKartelaErgodotiEl ? !!saveKartelaErgodotiEl.checked : true;
 
     // Helper: every early-return below needs to clean up the "instant
     // feedback" overlay we threw up at the top of this function — otherwise
@@ -4484,6 +4507,7 @@
       download_misth_pdfs: downloadMisthPdfs,
       download_e9_pdfs: downloadE9Pdfs,
       download_keao_pdfs: downloadKeaoPdfs,
+      save_kartela_ergodoti: saveKartelaErgodoti,
       // Default to headless so the brain works when Flask runs as a
       // background service (no interactive desktop / no visible
       // chromium window stealing focus). The extractors still launch
@@ -5985,6 +6009,7 @@
       download_misth_pdfs: _bulkSaveAllPdfs && runMisth,
       download_e9_pdfs: _bulkSaveAllPdfs && runE9,
       download_keao_pdfs: _bulkSaveAllPdfs && runKeao,
+      save_kartela_ergodoti: _bulkSaveAllPdfs,
       save_comparison_pdf: false,
       headed: false,
       auto_active_group_clients: true,
@@ -7257,10 +7282,11 @@
     const nameEl = document.getElementById('brainName');
     console.log('[E3] Elements found:', { runSingleBtn: !!runSingleBtn, saveCredsBtn: !!saveCredsBtn, fetchAddressBtn: !!document.getElementById('brainFetchAddressBtn') });
 
-    if (runSingleBtn && runSingleBtn.dataset.bound !== '1') {
-      runSingleBtn.dataset.bound = '1';
-      runSingleBtn.addEventListener('click', runE3BrainSingle);
-    }
+    // Single-run is wired ONLY through the delegated click handler above
+    // (case 'brainRunSingleBtn'). A previous direct addEventListener here
+    // fired in parallel with the delegated one, so the "Χωρίς ελέγχους"
+    // confirmation (and the whole run) triggered TWICE. Keep this comment as
+    // a tripwire — same fix as the bulk «Από ενεργή ομάδα» button below.
 
     // Bulk: load-from-active is wired ONLY through the delegated handler
     // above (case 'brainBulkFromActiveBtn'). The previous direct
