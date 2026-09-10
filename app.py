@@ -19215,6 +19215,7 @@ def api_e3_brain_save_credentials():
             # «Οικονομική Καρτέλα Εργοδότη» extractor in atomic + bulk runs.
             _iku = str(company.get("ika_employer_username") or "").strip()
             _ikp = str(company.get("ika_employer_password") or "").strip()
+            _ikame = str(company.get("ika_employer_ame") or "").strip()
             _has_payroll = company.get("has_payroll")
             if _has_payroll is None:
                 _has_payroll = bool(_iku or _ikp)
@@ -19231,6 +19232,7 @@ def api_e3_brain_save_credentials():
                     "mydata_key": str(company.get("mydata_key") or "").strip(),
                     "ika_employer_username": _iku,
                     "ika_employer_password": _ikp,
+                    "ika_employer_ame": _ikame,
                     "has_payroll": _has_payroll,
                     "address": str(company.get("address") or "").strip(),
                     "legal_type": str(company.get("legal_type") or "").strip(),

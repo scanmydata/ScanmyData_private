@@ -531,8 +531,12 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
     # ίδιο path -> write_bytes το αντικαθιστά αυτόματα). Διαφορετικά έτη ΔΕΝ
     # πειράζονται μεταξύ τους — ο σκοπός του έτους στο filename είναι να
     # συνυπάρχουν καρτέλες πολλών ετών χωρίς να συγκρούονται.
+    # Το EFKA path (νέα υπηρεσία) περνάει year=None και δίνει date_from/date_to
+    # αντ' αυτού — fallback στο έτος του date_from/date_to ώστε το filename να
+    # μην καταλήγει σε «..._unknown.pdf».
+    effective_year = year or _extract_year(date_from) or _extract_year(date_to)
     afm_token = _safe_name(afm or "unknown")
-    year_token = _safe_name(year or "unknown")
+    year_token = _safe_name(effective_year or "unknown")
     target = out_dir / f"{prefix}_{afm_token}_{year_token}.pdf"
 
     # Καθάρισε ΜΟΝΟ τα «ορφανά» αρχεία του ΠΑΛΙΟΥ bug (πριν μπει το έτος στο

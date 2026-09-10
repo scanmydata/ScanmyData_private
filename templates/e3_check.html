@@ -1376,6 +1376,13 @@
               autocomplete="new-password"
               class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
           </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ΑΜΕ (Αριθμός Μητρώου Εργοδότη)</label>
+            <input id="brainIkaEmpAme" type="text" placeholder="10 ψηφία" maxlength="10"
+              autocomplete="off"
+              title="Απαιτείται από τη νέα υπηρεσία ΕΦΚΑ όταν ο λογαριασμός TaxisNet έχει πάνω από έναν ρόλο (πρέπει να επιλεγεί ρητά «Εργοδότης Κοινής Επιχείρησης»)."
+              class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
+          </div>
           <div class="md:col-span-2 flex flex-wrap items-center gap-2">
             <button type="button" id="brainSaveIkaEmpBtn"
                     class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"
@@ -2161,9 +2168,11 @@
     }
     const userEl = document.getElementById('brainIkaEmpUser');
     const passEl = document.getElementById('brainIkaEmpPass');
+    const ameEl = document.getElementById('brainIkaEmpAme');
     const chk = document.getElementById('brainHasPayroll');
     if (userEl) userEl.value = co.ika_employer_username || '';
     if (passEl) passEl.value = co.ika_employer_password || '';
+    if (ameEl) ameEl.value = co.ika_employer_ame || '';
     if (chk) { chk.checked = true; try { onBrainHasPayrollToggle(); } catch (_) {} }
     if (statusEl) statusEl.textContent = '✔ Φορτώθηκαν αποθηκευμένοι κωδικοί.';
     showBrainFlash('Φορτώθηκαν οι αποθηκευμένοι κωδικοί Εργοδότη Ι.Κ.Α.', 'success', 4000);
@@ -2230,9 +2239,11 @@
     // after an Excel import that already carried the columns.
     const ikaUserEl = document.getElementById('brainIkaEmpUser');
     const ikaPassEl = document.getElementById('brainIkaEmpPass');
+    const ikaAmeEl = document.getElementById('brainIkaEmpAme');
     const payrollChk = document.getElementById('brainHasPayroll');
     if (ikaUserEl) ikaUserEl.value = client.ika_employer_username || '';
     if (ikaPassEl) ikaPassEl.value = client.ika_employer_password || '';
+    if (ikaAmeEl) ikaAmeEl.value = client.ika_employer_ame || '';
     if (payrollChk) {
       payrollChk.checked = Boolean(client.has_payroll
         || client.ika_employer_username || client.ika_employer_password);
@@ -2253,6 +2264,7 @@
         if (mdKeyEl && co.mydata_key && !mdKeyEl.value) mdKeyEl.value = co.mydata_key;
         if (ikaUserEl && co.ika_employer_username && !ikaUserEl.value) ikaUserEl.value = co.ika_employer_username;
         if (ikaPassEl && co.ika_employer_password && !ikaPassEl.value) ikaPassEl.value = co.ika_employer_password;
+        if (ikaAmeEl && co.ika_employer_ame && !ikaAmeEl.value) ikaAmeEl.value = co.ika_employer_ame;
         if (payrollChk) {
           payrollChk.checked = Boolean(co.has_payroll
             || co.ika_employer_username || co.ika_employer_password
@@ -2967,9 +2979,11 @@
     if (mdKeyEl) mdKeyEl.value = co.mydata_key || '';
     const ikaUserEl2 = document.getElementById('brainIkaEmpUser');
     const ikaPassEl2 = document.getElementById('brainIkaEmpPass');
+    const ikaAmeEl2 = document.getElementById('brainIkaEmpAme');
     const payrollChk2 = document.getElementById('brainHasPayroll');
     if (ikaUserEl2) ikaUserEl2.value = co.ika_employer_username || '';
     if (ikaPassEl2) ikaPassEl2.value = co.ika_employer_password || '';
+    if (ikaAmeEl2) ikaAmeEl2.value = co.ika_employer_ame || '';
     if (payrollChk2) {
       payrollChk2.checked = Boolean(co.has_payroll
         || co.ika_employer_username || co.ika_employer_password);
@@ -4409,6 +4423,7 @@
     const _payrollChk = document.getElementById('brainHasPayroll');
     const _ikaU = get('brainIkaEmpUser');
     const _ikaP = get('brainIkaEmpPass');
+    const _ikaAme = get('brainIkaEmpAme');
     const company = {
       afm: afm,
       name: get('brainName'),
@@ -4420,6 +4435,7 @@
       mydata_key: get('brainMydataKey'),
       ika_employer_username: _ikaU,
       ika_employer_password: _ikaP,
+      ika_employer_ame: _ikaAme,
       has_payroll: Boolean((_payrollChk && _payrollChk.checked) || _ikaU || _ikaP),
     };
     // Build members from E3_BRAIN_MEMBERS + E3_BRAIN_MEMBER_CREDS.
@@ -4779,6 +4795,7 @@
         // kartela_ergodoti_pdfs/.
         ika_employer_username: String(((document.getElementById('brainIkaEmpUser') || {}).value) || '').trim(),
         ika_employer_password: String(((document.getElementById('brainIkaEmpPass') || {}).value) || '').trim(),
+        ika_employer_ame: String(((document.getElementById('brainIkaEmpAme') || {}).value) || '').trim(),
         has_payroll: Boolean((document.getElementById('brainHasPayroll') || {}).checked),
         member_credentials: memberCredsForPayload,
       }
