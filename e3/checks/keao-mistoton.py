@@ -261,9 +261,11 @@ def _gsis_submit_and_approve(http: _HyperHttp, user: str, password: str) -> Dict
     return {"ok": True, "page": page}
 
 
-def _efka_non_employee_login(username: str, password: str, afm: str, amka: str) -> Dict[str, Any]:
-    """Same login as efka_teka_certificate.py's efka_non_employee_login()."""
-    http = _HyperHttp()
+def _efka_non_employee_login(http: "_HyperHttp", username: str, password: str, afm: str, amka: str) -> Dict[str, Any]:
+    """Same login as efka_teka_certificate.py's efka_non_employee_login().
+    Takes the caller's _HyperHttp instance (not its own) so the caller can
+    read back the authenticated cookie jar afterwards — see
+    _login_and_open_keao, which hands those cookies to Playwright."""
     LAND = SVC + "ssp.commonservices.home/views/secure/index.xhtml"
     r = http.follow("GET", LAND)
     act = _decode_html(_form_action_of(r["text"], "social-external-non-employee"))
@@ -310,15 +312,39 @@ def _cookies_for_playwright(http: _HyperHttp) -> List[Dict[str, str]]:
     return out
 
 
+def _dump_diagnostics(page: Page, output_dir: Path, tag: str) -> None:
+    """Best-effort screenshot + trimmed HTML dump so a selector-mismatch
+    failure is diagnosable from the returned JSON/log alone, without
+    another live round-trip."""
+    try:
+        dump_dir = output_dir / "_diag"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            page.screenshot(path=str(dump_dir / f"{tag}.png"))
+        except Exception:
+            pass
+        html = page.content()
+        (dump_dir / f"{tag}.html").write_text(html, encoding="utf-8")
+        logging.warning("[keao] diagnostics for %s: url=%s title=%r saved -> %s",
+                        tag, page.url, _safe_html_title(html), dump_dir)
+    except Exception as exc:
+        logging.warning("[keao] could not save diagnostics for %s: %s", tag, exc)
+
+
+def _safe_html_title(html: str) -> str:
+    m = re.search(r"<title[^>]*>([\s\S]*?)</title>", html, re.I)
+    return _strip_tags(m.group(1)) if m else ""
+
+
 def _login_and_open_keao(context: BrowserContext, page: Page, username: str,
-                         password: str, afm: str, amka: str) -> Page:
+                         password: str, afm: str, amka: str, output_dir: Path) -> Page:
     """HTTP-login (Keycloak/GSIS, ΑΦΜ+ΑΜΚΑ role-select) then hand the
     resulting session cookies to the Playwright context and land on the
     ΚΕΑΟ ΑΜΟ picker. Raises RuntimeError with the failure reason on
     login failure, matching the previous function's "raises on bad
     creds" contract."""
     http = _HyperHttp()
-    L = _efka_non_employee_login(username, password, afm, amka)
+    L = _efka_non_employee_login(http, username, password, afm, amka)
     if not L.get("ok"):
         raise RuntimeError(f"login_failed:{L.get('reason')}")
     context.add_cookies(_cookies_for_playwright(http))
@@ -336,7 +362,14 @@ def _login_and_open_keao(context: BrowserContext, page: Page, username: str,
         raise RuntimeError("login_failed:NoKeaoLink")
     page.goto(keao_url, timeout=NAV_TIMEOUT)
     page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-    page.wait_for_selector("[id='amoForm:dt-table_data']", timeout=DEFAULT_TIMEOUT)
+    try:
+        page.wait_for_selector("[id='amoForm:dt-table_data']", timeout=DEFAULT_TIMEOUT)
+    except PlaywrightTimeoutError:
+        _dump_diagnostics(page, output_dir, "amo_picker_timeout")
+        raise RuntimeError(
+            f"picker_not_found: η σελίδα φόρτωσε (url={page.url}) αλλά δεν βρέθηκε ο πίνακας "
+            "ΑΜΟ — δες _diag/amo_picker_timeout.html/.png στον φάκελο εξόδου."
+        )
     return page
 
 
@@ -682,7 +715,7 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
 
     try:
         try:
-            picker = _login_and_open_keao(context, page, username, password, afm, amka)
+            picker = _login_and_open_keao(context, page, username, password, afm, amka, output_dir)
         except RuntimeError as exc:
             result["status"] = str(exc)
             return result
