@@ -433,6 +433,12 @@ def _click_select_for_amo(picker: Page, amo: str) -> bool:
             return False
         btn.first.click()
         picker.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        # The click is a PrimeFaces AJAX submit, not always a full page
+        # navigation — domcontentloaded can resolve before the debtor
+        # detail view has actually replaced the picker content, which was
+        # producing false "no ΑΜΟ" reads immediately afterwards. Give the
+        # AJAX response a moment to land.
+        picker.wait_for_timeout(SHORT_WAIT)
         return True
     return False
 
@@ -453,8 +459,24 @@ def _back_to_picker(page: Page, keao_url: str) -> bool:
 
 
 def _has_no_amo_message(page: Page) -> bool:
+    """True only if a VISIBLE «no ΑΜΟ» banner is on the page.
+
+    JSF/PrimeFaces pages routinely carry a <p:messages> (or similar)
+    component template for every possible message string, hidden/empty
+    until actually populated — a plain `.count() > 0` text match hits
+    that hidden template even when the real page shows real data, which
+    is exactly what made every registry come back "no_amo" on the first
+    live run (100% false-positive rate is the giveaway).
+    """
     try:
-        return page.locator(f"text={NO_AMO_TEXT}").count() > 0
+        loc = page.locator(f"text={NO_AMO_TEXT}")
+        for i in range(loc.count()):
+            try:
+                if loc.nth(i).is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
     except Exception:
         return False
 
@@ -643,14 +665,17 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         return record
 
     if _has_no_amo_message(picker):
+        _dump_diagnostics(picker, output_dir, f"no_amo_select_{safe}")
         record["status"] = "no_amo"
         return record
 
     state = _open_credits_tab(picker, date_from)
     if state == "no_amo":
+        _dump_diagnostics(picker, output_dir, f"no_amo_creditstab_{safe}")
         record["status"] = "no_amo"
         return record
     if state == "empty":
+        _dump_diagnostics(picker, output_dir, f"empty_credits_{safe}")
         record["status"] = "no_credits"
         return record
 
