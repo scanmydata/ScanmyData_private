@@ -18326,20 +18326,67 @@ def api_e3_brain_company_members():
         except Exception:
             fetch_registry = None
 
+        # Parsed early (normally done further below, next to the member-
+        # reconciliation code) because the AADE fallback right below also
+        # needs them.
+        taxis_user = (payload.get('taxis_user') or payload.get('taxisUser') or '').strip()
+        taxis_pass = (payload.get('taxis_pass') or payload.get('taxisPass') or payload.get('taxis_password') or '').strip()
+
         fetcher = BusinessPortalFetcher()
         partners_result = fetcher.fetch_partners(afm)
         if not isinstance(partners_result, dict):
             raise ValueError("Μη έγκυρο αποτέλεσμα από Business Portal.")
 
+        aade_fallback_used = False
         if not partners_result.get("success"):
-            err = partners_result.get("error") or "Αποτυχία ανάκτησης συνεργατών."
-            return jsonify({"ok": False, "error": str(err)}), 400
+            # Primary source (Business Portal / ΓΕΜΗ) failed outright — fall
+            # back to a direct ΑΑΔΕ (myAADE) lookup for at least the address
+            # + legal-type/identity fields, instead of failing the whole
+            # request. Only possible when TAXISnet creds were supplied
+            # (needed to log into myAADE); no members come back from this
+            # path (aade_profile.py fetches identity/address, not partners).
+            aade_result = None
+            if taxis_user and taxis_pass:
+                try:
+                    from e3.checks.aade_profile import fetch_company_profile as _aade_fetch_profile
+                    aade_result = _aade_fetch_profile(taxis_user, taxis_pass, afm)
+                except Exception:
+                    log.exception("AADE address fallback failed for afm=%s", afm)
+                    aade_result = None
+            if not (isinstance(aade_result, dict) and aade_result.get("ok")):
+                err = partners_result.get("error") or "Αποτυχία ανάκτησης συνεργατών."
+                return jsonify({"ok": False, "error": str(err)}), 400
+            aade_fallback_used = True
+            partners_result = {
+                "success": True,
+                "partners": [],
+                "company": {
+                    "address": aade_result.get("address") or "",
+                    "legalType": aade_result.get("kind") or "",
+                    "name": aade_result.get("name") or "",
+                    "doy": aade_result.get("doy") or "",
+                },
+            }
 
         company_payload = partners_result.get("company") if isinstance(partners_result.get("company"), dict) else {}
         if not company_payload.get("address") or not company_payload.get("legalType"):
             profile_result = fetcher.fetch_company_profile(afm)
             if isinstance(profile_result, dict) and profile_result.get("success"):
                 company_payload = {**company_payload, **(profile_result.get("company") or {})}
+
+        # Business Portal succeeded but STILL has no usable address (the
+        # internal fetch_company_profile() fallback above didn't help
+        # either) — try the same ΑΑΔΕ fallback for the address alone,
+        # keeping whatever members/legal-type Business Portal already found.
+        if not company_payload.get("address") and taxis_user and taxis_pass and not aade_fallback_used:
+            try:
+                from e3.checks.aade_profile import fetch_company_profile as _aade_fetch_profile
+                aade_result = _aade_fetch_profile(taxis_user, taxis_pass, afm)
+                if isinstance(aade_result, dict) and aade_result.get("ok") and aade_result.get("address"):
+                    company_payload = {**company_payload, "address": aade_result["address"]}
+                    aade_fallback_used = True
+            except Exception:
+                log.exception("AADE address-only fallback failed for afm=%s", afm)
 
         summary = _extract_company_summary(company_payload)
         legal_type = summary.get("legal_type") or company_payload.get("legalType") or ""
@@ -18461,11 +18508,10 @@ def api_e3_brain_company_members():
                 })
 
         # If TAXIS credentials were provided, attempt to fetch AADE/TAXIS registry and reconcile
+        # (taxis_user/taxis_pass parsed earlier, next to the AADE address fallback).
         reconciliation = None
         company_info_registry = None
         company_info_error = None
-        taxis_user = (payload.get('taxis_user') or payload.get('taxisUser') or '').strip()
-        taxis_pass = (payload.get('taxis_pass') or payload.get('taxisPass') or payload.get('taxis_password') or '').strip()
         if fetch_registry and taxis_user and taxis_pass:
             try:
                 reg_res = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
@@ -18670,6 +18716,11 @@ def api_e3_brain_company_members():
                 "partners_raw": partners,
                 "gemi_only": bool(gemi_only),
                 "gemi_only_message": ("Οι συνεργάτες προέρχονται μόνο από το ΓΕΜΗ. Συμπλήρωσε κωδικούς TAXISnet για έλεγχο στην ΑΑΔΕ.") if gemi_only else None,
+                "aade_fallback_used": bool(aade_fallback_used),
+                "aade_fallback_message": (
+                    "Η κύρια πηγή (Business Portal/ΓΕΜΗ) απέτυχε — η διεύθυνση/στοιχεία "
+                    "ανακτήθηκαν εναλλακτικά από την ΑΑΔΕ (myAADE). Επιβεβαίωσε χειροκίνητα αν χρειάζεται."
+                ) if aade_fallback_used else None,
             }
         ), 200
     except Exception as e:

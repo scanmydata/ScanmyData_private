@@ -2570,12 +2570,16 @@
       if (!isIndividual && data.gemi_only) {
         parts.push(data.gemi_only_message || 'Τα μέλη προέρχονται μόνο από ΓΕΜΗ — δεν επιβεβαιώθηκαν στην ΑΑΔΕ.');
       }
+      if (data.aade_fallback_used) {
+        parts.push(data.aade_fallback_message || '⚠ Η διεύθυνση ανακτήθηκε εναλλακτικά από την ΑΑΔΕ (η κύρια πηγή απέτυχε).');
+      }
       if (!isIndividual && (!taxisUser || !taxisPass)) {
         parts.push('Συμπλήρωσε κωδικούς TAXISnet για αντιπαραβολή με ΑΑΔΕ/ΓΕΜΗ.');
       }
       let sev = 'success';
       if (isIndividual) sev = 'info';
       else if (!E3_BRAIN_MEMBERS.length || missingAfmCount || data.gemi_only || !taxisUser || !taxisPass) sev = 'warning';
+      if (data.aade_fallback_used) sev = 'warning';
       // success → auto-hide· warning/info με ζητήματα → μένει (ttl=0) μέχρι νέα ενέργεια.
       showBrainAfmStatus(parts.join(' '), sev, sev === 'success' ? 6000 : 0);
       // Persist non-sensitive form data so it survives partial navigation
