@@ -125,7 +125,15 @@ UA = (
     "(KHTML, like Gecko) Chrome/120 Safari/537.36"
 )
 SVC = "https://services.e-efka.gov.gr/"
-_KEAO_LINK_TEXT = "Ηλεκτρονική Πλατφόρμα Οφειλετών - KEAO"
+# The live link text is "person Ηλεκτρονική Πλατφόρμα Οφειλετών - KEAO" — the
+# leading "person" is a material-icon ligature's text node (present in the
+# raw HTML same as any other text, so it ends up in the extracted link
+# label too), and "KEAO" is spelled with LATIN K/E/A/O (not Greek ΚΕΑΟ) —
+# confirmed from the user's own Playwright recording of the real page
+# (`get_by_role("link", name="person Ηλεκτρονική Πλατφόρμα Οφειλετών - KEAO")`).
+# Match on the distinctive Greek phrase alone so neither of those two traps
+# (icon-ligature prefix, Greek/Latin homoglyph) can break the lookup again.
+_KEAO_LINK_PHRASE = "Ηλεκτρονική Πλατφόρμα Οφειλετών"
 
 
 def _decode_html(s: Optional[str]) -> str:
@@ -274,12 +282,22 @@ def _efka_non_employee_login(username: str, password: str, afm: str, amka: str) 
     })
     if not _has_id(rr["text"], "viewsPanel") or "Καλώς ήρθατε" not in rr["text"]:
         return {"ok": False, "reason": "LandPage"}
+
+    # The user's real recording re-navigates to LAND explicitly after login
+    # before clicking any nav link, instead of trusting whatever the
+    # role-select POST happened to render — do the same cheap extra GET so
+    # we collect links from the actual home page, not just the POST
+    # response (which may carry a slimmer/different nav).
+    home = http.follow("GET", LAND)
+    pages_to_scan = [home["text"], rr["text"]] if home["text"] else [rr["text"]]
+
     links: Dict[str, str] = {}
-    for m in re.finditer(r'<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>', rr["text"], re.I):
-        t = _strip_tags(m.group(2))
-        if t:
-            links[t] = urljoin(SVC, _decode_html(m.group(1)))
-    return {"ok": True, "landing": rr["text"], "links": links}
+    for page_text in pages_to_scan:
+        for m in re.finditer(r'<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>', page_text, re.I):
+            t = _strip_tags(m.group(2))
+            if t and t not in links:
+                links[t] = urljoin(SVC, _decode_html(m.group(1)))
+    return {"ok": True, "landing": home["text"] or rr["text"], "links": links}
 
 
 def _cookies_for_playwright(http: _HyperHttp) -> List[Dict[str, str]]:
@@ -304,10 +322,17 @@ def _login_and_open_keao(context: BrowserContext, page: Page, username: str,
     if not L.get("ok"):
         raise RuntimeError(f"login_failed:{L.get('reason')}")
     context.add_cookies(_cookies_for_playwright(http))
-    keao_url = L["links"].get(_KEAO_LINK_TEXT)
+    keao_url = next((v for k, v in L["links"].items() if _KEAO_LINK_PHRASE in k), None)
     if not keao_url:
-        keao_url = next((v for k, v in L["links"].items() if "ΚΕΑΟ" in k.upper()), None)
+        # Fallback: KEAO/ΚΕΑΟ as either Latin or Greek letters, in case the
+        # phrase itself ever changes wording.
+        keao_url = next(
+            (v for k, v in L["links"].items() if "KEAO" in k.upper() or "ΚΕΑΟ" in k.upper()),
+            None,
+        )
     if not keao_url:
+        logging.warning("[keao] no ΚΕΑΟ link found — available landing links: %s",
+                        list(L["links"].keys()))
         raise RuntimeError("login_failed:NoKeaoLink")
     page.goto(keao_url, timeout=NAV_TIMEOUT)
     page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
