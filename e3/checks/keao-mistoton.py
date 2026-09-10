@@ -1,7 +1,22 @@
 """KEAO credits/payments extractor across every non-employer registry.
 
-Logs into the KEAO portal via TAXISNET, opens the registry-selection
-picker, and for **every registry except «Ι.Κ.Α. ΕΡΓΟΔΟΤΗΣ»** walks the
+Login (2026-09-10, REWRITTEN): the old standalone KEAO/idika TAXISnet popup
+login (www.e-efka.gov.gr → popup → «Συνέχεια στο TAXISNET» → ΑΦΜ/«Είσοδος»)
+no longer matches the live portal. Replaced with the SAME proven
+services.e-efka.gov.gr Keycloak «μη μισθωτού» login already used by
+efka_teka_certificate.py / kartela_ergodoti.py (TAXISnet -> GSIS OAuth2 ->
+role-select POST with ΑΦΜ+ΑΜΚΑ) — done PURE HTTP (fast, no browser needed
+just to authenticate), then the resulting session cookies are handed to the
+Playwright browser context (`context.add_cookies`) so the rest of this
+script's browser automation (registry picker, credits grid, screenshots)
+runs already logged in. This flow — and the new ΑΜΟ-picker table structure
+(`#amoForm:dt-table`, replacing the old `#dataTable_data`) — was confirmed
+against a real Playwright codegen recording the user captured by hand
+(credentials blanked out in the recording itself; never seen by this
+script's author).
+
+Logs into e-EFKA (non-employee), opens the registry-selection ΑΜΟ picker,
+and for **every registry except «Ι.Κ.Α. ΕΡΓΟΔΟΤΗΣ»** walks the
 «Κινήσεις Οφειλέτη → Πιστώσεις Οφειλών» grid with a date filter,
 screenshotting just the «Ηλεκτρονική Καρτέλα Οφειλέτη» card (no
 sidebar / no govgr header) on every paginated screen and stitching
@@ -25,9 +40,13 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin, urlencode, urlsplit
 
+import requests
 from PIL import Image
 from playwright.sync_api import (
+    BrowserContext,
     Page,
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
@@ -44,8 +63,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 DEFAULT_TIMEOUT = 30000
 NAV_TIMEOUT = 45000
 SHORT_WAIT = 600
-
-KEAO_ENTRY_URL = "https://www.e-efka.gov.gr/el/elektronikes-yperesies/ilektronikes-ypiresies-keao"
 
 NO_AMO_TEXT = "Δεν βρέθηκε Αριθμός Μητρώου Οφειλέτη"
 EMPLOYER_TOKEN = "ΕΡΓΟΔΟΤ"  # excludes any «ΕΡΓΟΔΟΤΗΣ» variant
@@ -97,72 +114,210 @@ def _safe_filename(s: str, fallback: str = "registry") -> str:
     return (s or fallback)[:120]
 
 
-def _login_taxisnet(page: Page, username: str, password: str, afm: str) -> Page:
-    """Log into KEAO via TAXISNET. Returns the post-login KEAO page."""
-    page.goto(KEAO_ENTRY_URL, timeout=NAV_TIMEOUT)
-    with page.context.expect_page() as popup_info:
-        page.get_by_role("link", name="Είσοδος στην υπηρεσία").click()
-    popup = popup_info.value
-    popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-
-    taxis_btn = popup.get_by_role("button", name="Συνέχεια στο TAXISNET")
-    if taxis_btn.count():
-        taxis_btn.first.click()
-        popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-
-    user_box = popup.get_by_role("textbox", name="Χρήστης:")
-    if user_box.count() == 0:
-        user_box = popup.locator("input[name='j_username'], input[name*='user' i]")
-    pwd_box = popup.get_by_role("textbox", name="Κωδικός:")
-    if pwd_box.count() == 0:
-        pwd_box = popup.locator("input[type='password']")
-    user_box.first.fill(username)
-    pwd_box.first.fill(password)
-
-    login_btn = popup.get_by_role("button", name="Σύνδεση")
-    if login_btn.count() == 0:
-        login_btn = popup.locator("button:has-text('Σύνδεση'), input[type='submit']")
-    login_btn.first.click()
-    popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-
-    radios = popup.get_by_role("radio")
-    if radios.count() >= 2:
-        radios.nth(1).check()
-        send_btn = popup.get_by_role("button", name="Αποστολή")
-        if send_btn.count():
-            send_btn.first.click()
-            popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-
-    afm_box = popup.get_by_role("textbox", name="ΑΦΜ:")
-    if afm_box.count():
-        afm_box.first.fill(afm)
-        enter_btn = popup.get_by_role("button", name="Είσοδος")
-        if enter_btn.count() == 0:
-            enter_btn = popup.locator("button:has-text('Είσοδος')")
-        enter_btn.first.click()
-        popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-
-    return popup
+# ------------------------------------------------------------ HTTP login
+# Pure-HTTP port of the same services.e-efka.gov.gr Keycloak «μη μισθωτού»
+# login used by efka_teka_certificate.py — see that file for the fuller
+# discovery notes. Doing the login over HTTP (not Playwright) is faster and
+# lets us reach the exact InvalidCredentials boundary during structural
+# testing without ever driving a real browser to a login form.
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120 Safari/537.36"
+)
+SVC = "https://services.e-efka.gov.gr/"
+_KEAO_LINK_TEXT = "Ηλεκτρονική Πλατφόρμα Οφειλετών - KEAO"
 
 
-def _open_registry_picker(page: Page) -> Page:
-    """Click «Επιλογή Μητρώου» and return the resulting page."""
-    link = page.locator("a").filter(has_text="Επιλογή Μητρώου").first
-    link.wait_for(state="visible", timeout=NAV_TIMEOUT)
-    try:
-        with page.context.expect_page(timeout=8000) as picker_info:
-            link.click()
-        picker = picker_info.value
-    except PlaywrightTimeoutError:
-        picker = page
-    picker.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-    picker.wait_for_selector("#dataTable_data", timeout=DEFAULT_TIMEOUT)
-    return picker
+def _decode_html(s: Optional[str]) -> str:
+    s = s or ""
+    s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"')
+    s = re.sub(r"&#0*47;", "/", s)
+    return s.replace("&lt;", "<").replace("&gt;", ">")
+
+
+def _strip_tags(s: Optional[str]) -> str:
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return re.sub(r"\s+", " ", _decode_html(s)).strip()
+
+
+def _form_action_of(html: str, id_: str) -> str:
+    e = re.escape(id_)
+    m = re.search(r'<form\b[^>]*action="([^"]*)"[^>]*>(?:(?!</form>)[\s\S])*?id="' + e + '"', html, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r'<form\b(?:(?!</form>)[\s\S])*?id="' + e + r'"(?:(?!</form>)[\s\S])*?action="([^"]*)"', html, re.I)
+    return m.group(1) if m else ""
+
+
+def _own_form_action(html: str, id_: str) -> str:
+    e = re.escape(id_)
+    m = re.search(r'<form[^>]*id="' + e + '"[^>]*action="([^"]*)"', html, re.I)
+    if not m:
+        m = re.search(r'<form[^>]*action="([^"]*)"[^>]*id="' + e + '"', html, re.I)
+    return m.group(1) if m else ""
+
+
+def _has_id(html: str, id_: str) -> bool:
+    return re.search(r'id="' + re.escape(id_) + '"', html) is not None
+
+
+class _HyperHttp:
+    """Minimal cookie jar + redirect-following requests wrapper. See
+    efka_teka_certificate.py's _HyperHttp for the full rationale (manual
+    jar instead of requests.Session for the same liberal cross-domain
+    cookie merge the real portal relies on)."""
+
+    def __init__(self, timeout: float = 30.0):
+        self.jar: Dict[str, Dict[str, str]] = {}
+        self.timeout = timeout
+
+    @staticmethod
+    def _host(url: str) -> str:
+        return (urlsplit(url).hostname or "").lower()
+
+    def _store(self, url: str, resp: requests.Response) -> None:
+        host = self._host(url)
+        self.jar.setdefault(host, {})
+        try:
+            raws = resp.raw.headers.getlist("Set-Cookie")
+        except Exception:
+            sc = resp.headers.get("Set-Cookie")
+            raws = [sc] if sc else []
+        for raw in raws:
+            kv = raw.split(";", 1)[0]
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                self.jar[host][k.strip()] = v.strip()
+
+    def _cookie(self, url: str) -> str:
+        host = self._host(url)
+        parts: List[str] = []
+        for h, kv in self.jar.items():
+            if host == h or host.endswith(h) or h.endswith("gsis.gr") or h.endswith("e-efka.gov.gr") or h.endswith("idika.org.gr"):
+                for k, v in kv.items():
+                    parts.append(f"{k}={v}")
+        return "; ".join(parts)
+
+    def _once(self, method: str, url: str, form: Optional[Dict[str, str]] = None) -> requests.Response:
+        headers = {"User-Agent": UA, "Accept-Language": "el-GR,el;q=0.9,en;q=0.8"}
+        ck = self._cookie(url)
+        if ck:
+            headers["Cookie"] = ck
+        data = None
+        if form is not None:
+            headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+            data = urlencode(form).encode("utf-8")
+        resp = requests.request(method, url, headers=headers, data=data,
+                                allow_redirects=False, timeout=self.timeout)
+        self._store(url, resp)
+        return resp
+
+    def follow(self, method: str, url: str, form: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        res = self._once(method, url, form)
+        loc = res.headers.get("Location")
+        cur = url
+        hops = 0
+        while loc and 300 <= res.status_code < 400 and hops < 25:
+            cur = urljoin(cur, loc)
+            res = self._once("GET", cur)
+            loc = res.headers.get("Location")
+            hops += 1
+        text = res.text
+        guard = 0
+        while "<partial-response><redirect url=" in text and guard < 12:
+            m = re.search(r'redirect url="([^"]*)"', text)
+            if not m:
+                break
+            cur = urljoin(cur, m.group(1).replace("&amp;", "&"))
+            res = self._once("GET", cur)
+            loc = res.headers.get("Location")
+            while loc and 300 <= res.status_code < 400 and hops < 25:
+                cur = urljoin(cur, loc)
+                res = self._once("GET", cur)
+                loc = res.headers.get("Location")
+                hops += 1
+            text = res.text
+            guard += 1
+        return {"url": cur, "status": res.status_code, "text": text}
+
+
+def _gsis_submit_and_approve(http: _HyperHttp, user: str, password: str) -> Dict[str, Any]:
+    rl = http.follow("POST", "https://oauth2.gsis.gr/oauth2server/j_spring_security_check",
+                     {"j_username": user, "j_password": password})
+    if rl["url"].endswith("authentication_error=true") or re.search(r'name="j_password"', rl["text"], re.I):
+        return {"ok": False, "reason": "InvalidCredentials"}
+    page = rl
+    if re.search(r'id="confirmationForm"', rl["text"], re.I) or re.search(r"user_oauth_approval", rl["text"], re.I):
+        page = http.follow("POST", "https://oauth2.gsis.gr/oauth2server/oauth/authorize",
+                           {"user_oauth_approval": "true", "scope.read": "true"})
+    return {"ok": True, "page": page}
+
+
+def _efka_non_employee_login(username: str, password: str, afm: str, amka: str) -> Dict[str, Any]:
+    """Same login as efka_teka_certificate.py's efka_non_employee_login()."""
+    http = _HyperHttp()
+    LAND = SVC + "ssp.commonservices.home/views/secure/index.xhtml"
+    r = http.follow("GET", LAND)
+    act = _decode_html(_form_action_of(r["text"], "social-external-non-employee"))
+    if not act:
+        return {"ok": False, "reason": "HomeForm"}
+    http.follow("POST", urljoin(SVC, act), {})
+    g = _gsis_submit_and_approve(http, username, password)
+    if not g["ok"]:
+        return g
+    role_action = _decode_html(_own_form_action(g["page"]["text"], "kc-form-select-role"))
+    if not role_action:
+        return {"ok": False, "reason": "SelectRole"}
+    rr = http.follow("POST", urljoin(g["page"]["url"], role_action), {
+        "role": "external-non-employee", "afm": afm, "amka": amka, "pa": "", "ame": "", "amoe": "",
+        "authorizing-afm": "", "authorizing-contractor-afm": "", "submit-role-attribute": "Υποβολή",
+    })
+    if not _has_id(rr["text"], "viewsPanel") or "Καλώς ήρθατε" not in rr["text"]:
+        return {"ok": False, "reason": "LandPage"}
+    links: Dict[str, str] = {}
+    for m in re.finditer(r'<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>', rr["text"], re.I):
+        t = _strip_tags(m.group(2))
+        if t:
+            links[t] = urljoin(SVC, _decode_html(m.group(1)))
+    return {"ok": True, "landing": rr["text"], "links": links}
+
+
+def _cookies_for_playwright(http: _HyperHttp) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for host, kv in http.jar.items():
+        if not host:
+            continue
+        for name, value in kv.items():
+            out.append({"name": name, "value": value, "domain": host, "path": "/"})
+    return out
+
+
+def _login_and_open_keao(context: BrowserContext, page: Page, username: str,
+                         password: str, afm: str, amka: str) -> Page:
+    """HTTP-login (Keycloak/GSIS, ΑΦΜ+ΑΜΚΑ role-select) then hand the
+    resulting session cookies to the Playwright context and land on the
+    ΚΕΑΟ ΑΜΟ picker. Raises RuntimeError with the failure reason on
+    login failure, matching the previous function's "raises on bad
+    creds" contract."""
+    http = _HyperHttp()
+    L = _efka_non_employee_login(username, password, afm, amka)
+    if not L.get("ok"):
+        raise RuntimeError(f"login_failed:{L.get('reason')}")
+    context.add_cookies(_cookies_for_playwright(http))
+    keao_url = L["links"].get(_KEAO_LINK_TEXT)
+    if not keao_url:
+        keao_url = next((v for k, v in L["links"].items() if "ΚΕΑΟ" in k.upper()), None)
+    if not keao_url:
+        raise RuntimeError("login_failed:NoKeaoLink")
+    page.goto(keao_url, timeout=NAV_TIMEOUT)
+    page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+    page.wait_for_selector("[id='amoForm:dt-table_data']", timeout=DEFAULT_TIMEOUT)
+    return page
 
 
 def _list_registry_rows(picker: Page) -> list[dict]:
     """Return list of {forea, amo, epwnymia} for every registry row."""
-    rows = picker.locator("#dataTable_data tr")
+    rows = picker.locator("[id='amoForm:dt-table_data'] tr")
     n = rows.count()
     out = []
     for i in range(n):
@@ -180,8 +335,13 @@ def _list_registry_rows(picker: Page) -> list[dict]:
 
 
 def _click_select_for_amo(picker: Page, amo: str) -> bool:
-    """Click «Επιλογή» on the row whose Α.Μ.Ο. matches. Returns True on click."""
-    rows = picker.locator("#dataTable_data tr")
+    """Click the «Επιλογή» button on the row whose Α.Μ.Ο. matches.
+
+    The button's widget id (e.g. ``amoForm:dt-table:0:j_idt156``) is a
+    PrimeFaces-generated id we don't rely on — locate the row by its
+    Α.Μ.Ο. cell instead and click whatever button is in that row.
+    """
+    rows = picker.locator("[id='amoForm:dt-table_data'] tr")
     n = rows.count()
     for i in range(n):
         cells = rows.nth(i).locator("td")
@@ -193,9 +353,7 @@ def _click_select_for_amo(picker: Page, amo: str) -> bool:
             continue
         if row_amo != amo:
             continue
-        btn = rows.nth(i).get_by_role("button", name="Επιλογή")
-        if btn.count() == 0:
-            btn = rows.nth(i).locator("button:has-text('Επιλογή')")
+        btn = rows.nth(i).locator("button")
         if btn.count() == 0:
             return False
         btn.first.click()
@@ -204,25 +362,16 @@ def _click_select_for_amo(picker: Page, amo: str) -> bool:
     return False
 
 
-def _back_to_picker(page: Page) -> bool:
-    """From a debtor view, click sidebar «Επιλογή Μητρώου» to return to the picker.
-
-    Targets the explicit menu link the KEAO portal renders for the
-    registry-picker — ``<a … href="/eDebtor/secure/amo.xhtml">Επιλογή
-    Μητρώου</a>`` — and falls back to a generic «Επιλογή Μητρώου» text
-    match so a label tweak does not break the loop.
-
-    Re-using the same browser session for every registry is what keeps
-    us off the TAXISNET OAM-6 «too many sessions» rate-limit.
-    """
-    link = page.locator("a[href*='/eDebtor/secure/amo.xhtml']").first
-    if link.count() == 0:
-        link = page.locator("a").filter(has_text="Επιλογή Μητρώου").first
+def _back_to_picker(page: Page, keao_url: str) -> bool:
+    """Return to the ΑΜΟ picker by re-navigating to the captured ΚΕΑΟ
+    landing URL — avoids depending on an unconfirmed sidebar selector in
+    the new portal (the old «Επιλογή Μητρώου» sidebar link belonged to
+    the retired eDebtor portal). Re-navigating a URL we already reached
+    once in this same authenticated session is safe and idempotent."""
     try:
-        link.wait_for(state="visible", timeout=NAV_TIMEOUT)
-        link.click()
+        page.goto(keao_url, timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_selector("#dataTable_data", timeout=DEFAULT_TIMEOUT)
+        page.wait_for_selector("[id='amoForm:dt-table_data']", timeout=DEFAULT_TIMEOUT)
         return True
     except PlaywrightTimeoutError:
         return False
@@ -465,7 +614,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
     return record
 
 
-def run(playwright, username: str, password: str, afm: str,
+def run(playwright, username: str, password: str, afm: str, amka: str,
         date_from: str, year: int, output_dir: Path, headless: bool) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -507,8 +656,12 @@ def run(playwright, username: str, password: str, afm: str,
     }
 
     try:
-        keao_page = _login_taxisnet(page, username, password, afm)
-        picker = _open_registry_picker(keao_page)
+        try:
+            picker = _login_and_open_keao(context, page, username, password, afm, amka)
+        except RuntimeError as exc:
+            result["status"] = str(exc)
+            return result
+        keao_url = picker.url
 
         all_registries = _list_registry_rows(picker)
         if not all_registries:
@@ -524,7 +677,7 @@ def run(playwright, username: str, password: str, afm: str,
                 # The picker page has navigated to a debtor view from the
                 # previous iteration — go back to the picker before the
                 # next selection.
-                if not _back_to_picker(picker):
+                if not _back_to_picker(picker, keao_url):
                     logging.warning("Could not return to registry picker before %s", reg["forea"])
                     break
 
@@ -566,6 +719,7 @@ def main() -> None:
     parser.add_argument("--username", default=os.getenv("KEAO_USER", ""))
     parser.add_argument("--password", default=os.getenv("KEAO_PASSWORD", ""))
     parser.add_argument("--afm", default=os.getenv("KEAO_AFM", ""))
+    parser.add_argument("--amka", default=os.getenv("KEAO_AMKA", ""), help="ΑΜΚΑ (απαιτείται για το role-select του νέου login).")
     parser.add_argument("--date-from", default="01/01/2025")
     parser.add_argument("--year", type=int, default=2025)
     parser.add_argument("--output-dir", default="keao_out")
@@ -581,9 +735,12 @@ def main() -> None:
         headless = True
 
     afm = args.afm or args.username
+    if not args.amka:
+        print("ERROR: --amka είναι υποχρεωτικό (χρειάζεται στο role-select του login).", file=sys.stderr)
+        raise SystemExit(2)
 
     with sync_playwright() as p:
-        result = run(p, args.username, args.password, afm,
+        result = run(p, args.username, args.password, afm, args.amka,
                      args.date_from, args.year, Path(args.output_dir), headless)
 
     Path(args.output_json).write_text(

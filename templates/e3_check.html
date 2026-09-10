@@ -1404,7 +1404,8 @@
         <button type="button" id="brainLoadE3Btn" style="display:none;"></button>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+               title="Κάνει scrape το ΕΦΚΑ/ΤΕΚΑ (585.007) ΚΑΙ κατεβάζει τη Φορολογική Βεβαίωση PDF ανά μέλος για αυτόματη αντιπαραβολή του ποσού δίπλα στο 585.007.">
           <input id="brainRunEfkaTeka" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           ΕΦΚΑ/ΤΕΚΑ
         </label>
@@ -1420,11 +1421,6 @@
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input id="brainRunE9" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           Ε9
-        </label>
-        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
-               title="Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF) — ΝΕΟ, πειραματικό. Κατεβάζει τη βεβαίωση ανά μέλος/ασφαλισμένο και εξάγει υποψήφιο ποσό για αντιπαραβολή δίπλα στο ΕΦΚΑ/ΤΕΚΑ (η αναγνώριση ποσού δεν έχει ακόμη επικυρωθεί σε πραγματικό PDF).">
-          <input id="brainRunTaxCertificate" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-          🧪 Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο)
         </label>
       </div>
       <div id="brainPdfsSection" class="brain-pdfs-section border rounded-lg p-3 mb-4">
@@ -4501,7 +4497,6 @@
     const runKeaoEl = document.getElementById('brainRunKeao');
     const runMisthEl = document.getElementById('brainRunMisth');
     const runE9El = document.getElementById('brainRunE9');
-    const runTaxCertEl = document.getElementById('brainRunTaxCertificate');
 
     // === Pre-flight: capture checkbox + extractor selection BEFORE any
     // async work so the user-visible "what we are about to run" matches
@@ -4512,7 +4507,9 @@
     const runKeao = !!(runKeaoEl && runKeaoEl.checked);
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
-    const runTaxCertificate = !!(runTaxCertEl && runTaxCertEl.checked);
+    // Η βεβαίωση PDF (τ. πειραματική) τρέχει πλέον μαζί με το ΕΦΚΑ/ΤΕΚΑ —
+    // δεν υπάρχει πια ξεχωριστό checkbox· ο ίδιος διακόπτης οδηγεί και τα δύο.
+    const runTaxCertificate = runEfkaTeka;
     // Optional EFKA/TEKA/MISTH/E9/KEAO PDF download toggles.
     const downloadEfkaPdfsEl = document.getElementById('brainDownloadEfkaPdfs');
     const downloadTekaPdfsEl = document.getElementById('brainDownloadTekaPdfs');
@@ -4533,7 +4530,7 @@
     // the user is stuck looking at a spinner with no progress.
     const _earlyExit = () => { try { hideGlobalWaitOverlay(); } catch (_) {} };
 
-    if (!runEfkaTeka && !runKeao && !runMisth && !runE9 && !runTaxCertificate && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs && !downloadKeaoPdfs) {
+    if (!runEfkaTeka && !runKeao && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs && !downloadKeaoPdfs) {
       // Hide the overlay while the modal is open so it doesn't steal focus.
       try { hideGlobalWaitOverlay(); } catch (_) {}
       let proceedNoChecks = false;
@@ -4898,21 +4895,26 @@
     let updated = false;
 
     const efkaTotal = checks.efka_teka_total;
-    if (efkaTotal !== null && efkaTotal !== undefined) {
-      // Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο, opt-in) — προστίθεται ως
-      // ΠΡΟΣΘΕΤΗ πληροφορία στην ετικέτα (ΔΕΝ αντικαθιστά το value που
-      // τροφοδοτεί τη σύγκριση με myDATA/Excel) γιατί η αναγνώριση ποσού
-      // μέσα στο PDF δεν έχει ακόμη επικυρωθεί σε πραγματικό certificate.
+    const taxCertTotal = checks.tax_certificate_total;
+    if ((efkaTotal !== null && efkaTotal !== undefined) || (taxCertTotal !== null && taxCertTotal !== undefined)) {
+      // Η Φορολογική Βεβαίωση PDF τρέχει πλέον μαζί με το ΕΦΚΑ/ΤΕΚΑ και
+      // προστίθεται ως ΠΡΟΣΘΕΤΗ πληροφορία στην ετικέτα — δεν αντικαθιστά
+      // το value που τροφοδοτεί τη σύγκριση με myDATA/Excel. Εμφανίζεται
+      // ΑΚΟΜΑ ΚΙ ΑΝ το scrape ΕΦΚΑ/ΤΕΚΑ απέτυχε/δεν έτρεξε, ώστε η
+      // βεβαίωση να μη χάνεται σιωπηλά.
       let label = 'ΕΦΚΑ/ΤΕΚΑ';
-      const taxCertTotal = checks.tax_certificate_total;
       if (taxCertTotal !== null && taxCertTotal !== undefined) {
         const fmtCert = Number(taxCertTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
-        const diff = Math.abs(Number(taxCertTotal) - Number(efkaTotal));
-        const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
-        label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
+        if (efkaTotal !== null && efkaTotal !== undefined) {
+          const diff = Math.abs(Number(taxCertTotal) - Number(efkaTotal));
+          const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
+          label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
+        } else {
+          label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} € (το scrape ΕΦΚΑ/ΤΕΚΑ δεν έδωσε ποσό)`;
+        }
       }
       E3_BRAIN_CHECKS.set('585.007', {
-        value: Number(efkaTotal),
+        value: Number(efkaTotal !== null && efkaTotal !== undefined ? efkaTotal : taxCertTotal),
         label,
         source: 'brain'
       });
@@ -6237,6 +6239,7 @@
       year,
       run_extractors: runEfkaTeka || runKeao || runMisth || runE9,
       run_efka_teka: runEfkaTeka,
+      run_tax_certificate: runEfkaTeka,
       run_keao: runKeao,
       run_misth: runMisth,
       run_e9: runE9,
@@ -8042,6 +8045,20 @@
         : (/kartela_ergodoti_teka(?:_|$)/i.test(stem) ? 'ΤΕΚΑ' : 'Εργοδότη');
       const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
       return `ΚΑΡΤΕΛΑ ΕΡΓΟΔΟΤΗ ${service}${afm ? ` · ΑΦΜ ${afm}` : ''}`;
+    }
+    if (kind === 'tax_certificate') {
+      // efka_teka_cert_<efka|teka>_<afm>_<year>.pdf — distinguish ΕΦΚΑ μη
+      // μισθωτών από ΤΕΚΑ (η γενική διαδρομή παρακάτω πετάει ακριβώς αυτό
+      // το token επειδή ταιριάζει με το φίλτρο ^efka$|^teka$).
+      const service = /(?:^|_)efka(?:_|$)/i.test(stem)
+        ? 'ΕΦΚΑ'
+        : (/(?:^|_)teka(?:_|$)/i.test(stem) ? 'ΤΕΚΑ' : '');
+      const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
+      const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
+      const bits = ['ΦΟΡ. ΒΕΒΑΙΩΣΗ', service].filter(Boolean);
+      if (year) bits.push(year);
+      if (afm) bits.push(`ΑΦΜ ${afm}`);
+      return bits.join(' · ');
     }
     const parts = stem.split(/[_\s]+/).filter(Boolean);
     // Look for a 4-digit year somewhere in the name.

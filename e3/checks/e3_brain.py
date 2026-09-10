@@ -2352,6 +2352,7 @@ def process_client(
                     "--username", t.taxisnet_username,
                     "--password", t.taxisnet_password,
                     "--afm", t.afm,
+                    "--amka", t.amka,
                     "--date-from", f"01/01/{year}",
                     "--year", str(year),
                     "--output-dir", str(out_dir),
