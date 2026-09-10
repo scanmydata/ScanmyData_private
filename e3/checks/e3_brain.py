@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
@@ -1508,6 +1509,8 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "keao_pdfs"
         elif kind_lower in ("kartela_ergodoti", "ergodoti", "kartela"):
             root_name = "kartela_ergodoti_pdfs"
+        elif kind_lower in ("tax_certificate", "efka_teka_certificate"):
+            root_name = "tax_certificate_pdfs"
         else:
             return None
         uid = getattr(current_user, "id", None)
@@ -1517,6 +1520,39 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
         return target
     except Exception:
         return None
+
+
+def _append_retrieval_log(entry: Dict[str, Any]) -> None:
+    """Προσάρτησε ΜΙΑ γραμμή (JSONL) στο log ανάκτησης της ενεργής ομάδας:
+    data/<group>/e3_brain_retrieval_log.jsonl. Best-effort — ποτέ δεν πετάει
+    exception προς τα έξω (δεν πρέπει ένα σφάλμα logging να ρίξει τον έλεγχο).
+    Κάθε γραμμή = ένα (client, run) με ημερομηνία/ώρα, ποιοι έλεγχοι έτρεξαν,
+    αποτέλεσμα και πόσα PDFs αποθηκεύτηκαν — ιστορικό ανά ομάδα, όχι μόνο η
+    τελευταία κατάσταση."""
+    try:
+        from flask import has_request_context
+        if not has_request_context():
+            return
+        from admin.auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return
+        folder = str(getattr(grp, "data_folder", "") or "").strip()
+        if not folder:
+            return
+        log_path = Path(__file__).resolve().parents[2] / "data" / folder / "e3_brain_retrieval_log.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        row = dict(entry)
+        row["ts"] = datetime.now().isoformat(timespec="seconds")
+        row["user"] = {
+            "id": getattr(current_user, "id", None),
+            "username": getattr(current_user, "username", None),
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        logging.getLogger(__name__).exception("e3_brain: failed to append retrieval log")
 
 
 def _run_script_and_read_json(args: List[str], cwd: Path, output_file: str) -> Tuple[bool, Dict[str, Any], str]:
@@ -2110,6 +2146,69 @@ def process_client(
                     warnings.append(f"TEKA extractor: {teka_err}")
 
     efka_teka_total = round(efka_teka_total, 2)
+
+    # ------------------------------------------------------------------
+    # Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (φορολογικής χρήσης) — PDF-based.
+    # ΠΡΟΑΙΡΕΤΙΚΟΣ έλεγχος (opt-in, default OFF): κατεβάζει τη βεβαίωση PDF
+    # ανά μέλος/ασφαλισμένο και εξάγει ένα υποψήφιο συνολικό ποσό ΓΙΑ
+    # ΣΥΓΚΡΙΣΗ με το efka_teka_total παραπάνω — ΔΕΝ το αντικαθιστά, καθώς η
+    # αναγνώριση ποσού μέσα στο PDF δεν έχει ακόμη επικυρωθεί έναντι
+    # πραγματικού certificate. Login: TAXISnet (services.e-efka.gov.gr,
+    # Keycloak-brokered) — ίδια creds με το ΕΦΚΑ/ΤΕΚΑ scrape παραπάνω.
+    tax_certificate_total = 0.0
+    tax_certificate_available = False
+    tax_certificate_results: List[Dict[str, Any]] = []
+    if _flag_for("tax_certificate") and not missing_member_credentials:
+        root = Path(__file__).resolve().parents[2]
+        checks_dir = root / "e3" / "checks"
+        _publish_brain_step(job_id, f"Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ — {input_name or afm}", percent=32)
+        for t in targets:
+            cert_pdf_dir = _resolve_pdfs_dir("tax_certificate", t.afm or afm)
+            with tempfile.TemporaryDirectory(prefix=f"e3cert_{t.afm}_") as tmpdir:
+                tmp = Path(tmpdir)
+                target_dir = cert_pdf_dir if cert_pdf_dir is not None else (tmp / "out")
+                target_dir.mkdir(parents=True, exist_ok=True)
+                summary_path = tmp / "efka_teka_certificate_summary.json"
+                cert_args = [
+                    sys.executable,
+                    str(checks_dir / "efka_teka_certificate.py"),
+                    "--username", t.taxisnet_username,
+                    "--password", t.taxisnet_password,
+                    "--afm", t.afm or afm,
+                    "--amka", t.amka,
+                    "--year", str(year),
+                    "--pdf-dir", str(target_dir),
+                    "--summary-out", str(summary_path),
+                ]
+                if not headed:
+                    cert_args.append("--headless")
+                try:
+                    proc = subprocess.run(cert_args, capture_output=True, text=True, timeout=300)
+                    cert_result: Dict[str, Any] = {"afm": t.afm, "name": t.full_name, "ok": proc.returncode == 0}
+                    if summary_path.exists():
+                        try:
+                            cert_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                            cert_result["summary"] = cert_summary
+                            for kind in ("efka", "teka"):
+                                amt = (((cert_summary.get(kind) or {}).get("amount") or {}).get("best_guess"))
+                                if amt:
+                                    tax_certificate_total += float(amt)
+                                    tax_certificate_available = True
+                        except Exception:
+                            pass
+                    if proc.returncode != 0:
+                        warnings.append(
+                            f"Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ: αποτυχία για {t.full_name or t.afm} "
+                            "(δες tax_certificate_results στο response)."
+                        )
+                    tax_certificate_results.append(cert_result)
+                except subprocess.TimeoutExpired:
+                    warnings.append(f"Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ: timeout για {t.full_name or t.afm}.")
+                    tax_certificate_results.append({"afm": t.afm, "name": t.full_name, "ok": False, "error": "timeout"})
+                except Exception as exc:
+                    warnings.append(f"Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ: {exc}")
+                    tax_certificate_results.append({"afm": t.afm, "name": t.full_name, "ok": False, "error": str(exc)})
+    tax_certificate_total = round(tax_certificate_total, 2)
 
     # ------------------------------------------------------------------
     # «Οικονομική Καρτέλα Εργοδότη» (EFKA + TEKA employer-side).
@@ -2927,6 +3026,33 @@ def process_client(
     # banner in the UI was getting stuck at "70%" because no progress
     # event was published past the e9 step before the function returned.
     _publish_brain_step(job_id, f"Ολοκλήρωση πελάτη {input_name or afm}", percent=95)
+
+    # Log/αυτόματη αποθήκευση δεδομένων ανάκτησης (ημερομηνία/ώρα + ποιοι
+    # έλεγχοι έτρεξαν + αποτέλεσμα) — ιστορικό ανά ομάδα σε JSONL, ώστε να
+    # μπορεί να ελεγχθεί ΠΟΤΕ και ΤΙ ανακτήθηκε για κάθε πελάτη.
+    try:
+        _append_retrieval_log({
+            "afm": afm,
+            "name": input_name or vat_name,
+            "year": year,
+            "job_id": job_id,
+            "checks_run": {
+                "efka_teka": _flags.get("efka_teka", run_extractors),
+                "keao": _flags.get("keao", run_extractors),
+                "misth": _flags.get("misth", run_extractors),
+                "e9": _flags.get("e9", run_extractors),
+                "kartela_ergodoti": save_kartela,
+            },
+            "ok": len(errors) == 0,
+            "warnings_count": len(warnings),
+            "errors_count": len(errors),
+            "errors": errors[:5],
+            "pdfs_saved": pdfs_saved,
+            "kartela_ergodoti_ok": (kartela_ergodoti_result or {}).get("ok") if kartela_ergodoti_result else None,
+        })
+    except Exception:
+        pass
+
     return {
         "afm": afm,
         "name": input_name or vat_name,
@@ -2947,6 +3073,12 @@ def process_client(
         "missing_member_credentials": missing_member_credentials,
         "checks": {
             "efka_teka_total": efka_teka_total if efka_teka_available else None,
+            # Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, opt-in, νέο) — ΔΕΝ
+            # αντικαθιστά το efka_teka_total, εμφανίζεται δίπλα του για
+            # χειροκίνητη αντιπαραβολή (η αναγνώριση ποσού στο PDF είναι
+            # ανεπικύρωτη ακόμη — βλ. tax_certificate_results/amount.candidates).
+            "tax_certificate_total": tax_certificate_total if tax_certificate_available else None,
+            "tax_certificate_results": tax_certificate_results,
             "mydata_585_007": mydata_585_007,
             "excel_585_007": excel_585_007,
             "mydata_585_014": mydata_585_014,
@@ -3086,6 +3218,9 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
     # True για συμβατότητα με την προηγούμενη συμπεριφορά (έτρεχε πάντα όταν
     # υπήρχαν IKA Εργοδότη credentials). Ο χρήστης μπορεί να το απενεργοποιήσει.
     payload["_save_kartela_ergodoti"] = bool(payload.get("save_kartela_ergodoti", True))
+    # Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο) — opt-in, default OFF
+    # (ανεπικύρωτο ακόμη σε πραγματικό certificate· βλ. checks/efka_teka_certificate.py).
+    payload["_run_tax_certificate"] = bool(payload.get("run_tax_certificate", False))
     headed = bool(payload.get("headed", False))
 
     results: List[Dict[str, Any]] = []
@@ -3134,6 +3269,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "download_e9_pdfs": payload["_download_e9_pdfs"],
                     "download_keao_pdfs": payload["_download_keao_pdfs"],
                     "save_kartela_ergodoti": payload["_save_kartela_ergodoti"],
+                    "tax_certificate": payload["_run_tax_certificate"],
                 },
                 job_id=job_id,
             )

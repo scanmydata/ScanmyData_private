@@ -1376,10 +1376,23 @@
               autocomplete="new-password"
               class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
           </div>
+          <div class="md:col-span-2 flex flex-wrap items-center gap-2">
+            <button type="button" id="brainSaveIkaEmpBtn"
+                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"
+                    title="Αποθήκευση κωδικών Εργοδότη Ι.Κ.Α. για το τρέχον ΑΦΜ (χωρίς να πειράξει άλλα αποθηκευμένα στοιχεία)">
+              💾 Αποθήκευση κωδικών Εργοδότη
+            </button>
+            <button type="button" id="brainLoadIkaEmpBtn"
+                    class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 px-3 py-1.5 rounded-lg text-sm font-medium transition"
+                    title="Φόρτωση αποθηκευμένων κωδικών Εργοδότη Ι.Κ.Α. για το τρέχον ΑΦΜ">
+              📂 Χρήση αποθηκευμένων
+            </button>
+            <span id="brainIkaEmpStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
+          </div>
           <div class="md:col-span-2 text-xs text-gray-500 dark:text-gray-400">
-            ℹ️ Τα στοιχεία αυτά αποθηκεύονται στο per-client store με «Αποθήκευση Credentials Ομάδας».
-            Όταν συμπληρωθούν, ο έλεγχος τραβάει αυτόματα την Οικονομική Καρτέλα Εργοδότη
-            (ΕΦΚΑ + ΤΕΚΑ) και κρατάει τα PDFs στον per-AFM φάκελο.
+            ℹ️ Τα στοιχεία αυτά αποθηκεύονται στο per-client store (μαζί με «Αποθήκευση Credentials Ομάδας»
+            ή ξεχωριστά με το κουμπί «Αποθήκευση κωδικών Εργοδότη» παραπάνω). Όταν συμπληρωθούν, ο έλεγχος
+            τραβάει αυτόματα την Οικονομική Καρτέλα Εργοδότη (ΕΦΚΑ + ΤΕΚΑ) και κρατάει τα PDFs στον per-AFM φάκελο.
           </div>
         </div>
       </div>
@@ -1413,6 +1426,11 @@
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input id="brainRunE9" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           Ε9
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+               title="Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF) — ΝΕΟ, πειραματικό. Κατεβάζει τη βεβαίωση ανά μέλος/ασφαλισμένο και εξάγει υποψήφιο ποσό για αντιπαραβολή δίπλα στο ΕΦΚΑ/ΤΕΚΑ (η αναγνώριση ποσού δεν έχει ακόμη επικυρωθεί σε πραγματικό PDF).">
+          <input id="brainRunTaxCertificate" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+          🧪 Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο)
         </label>
       </div>
       <div id="brainPdfsSection" class="brain-pdfs-section border rounded-lg p-3 mb-4">
@@ -1468,6 +1486,7 @@
             <button type="button" class="brain-pdf-chip" data-kind="e9">Ε9/ENFIA</button>
             <button type="button" class="brain-pdf-chip" data-kind="keao">ΚΕΑΟ</button>
             <button type="button" class="brain-pdf-chip" data-kind="kartela_ergodoti">Καρτέλα Εργοδότη</button>
+            <button type="button" class="brain-pdf-chip" data-kind="tax_certificate">Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ</button>
           </div>
           <span id="brainPdfsStatus" class="brain-pdfs-status text-xs"></span>
         </div>
@@ -1631,6 +1650,32 @@
         <span id="brainImportExcelStatus" class="text-sm"></span>
       </div>
       <div id="brainCredsList" class="overflow-x-auto w-full max-w-full"></div>
+
+      <!-- Log ανακτήσεων: ημερομηνία/ώρα, ποιοι έλεγχοι έτρεξαν, αποτέλεσμα — ανά (client, run). -->
+      <div class="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <button id="brainRetrievalLogBtn" type="button" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 px-3 py-1 rounded-lg text-sm font-medium transition">
+            📜 Log Ανακτήσεων
+          </button>
+          <span class="text-xs text-gray-500 dark:text-gray-400">Ιστορικό εκτελέσεων ελέγχου ανά πελάτη (ημερομηνία/ώρα, τύποι ελέγχων, αποτέλεσμα).</span>
+        </div>
+        <div id="brainRetrievalLogWrap" class="hidden overflow-x-auto w-full max-w-full">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                <th class="py-1 pr-3">Ημ/νία-Ώρα</th>
+                <th class="py-1 pr-3">ΑΦΜ / Επωνυμία</th>
+                <th class="py-1 pr-3">Έτος</th>
+                <th class="py-1 pr-3">Έλεγχοι</th>
+                <th class="py-1 pr-3">PDFs</th>
+                <th class="py-1 pr-3">Αποτέλεσμα</th>
+                <th class="py-1 pr-3">Χρήστης</th>
+              </tr>
+            </thead>
+            <tbody id="brainRetrievalLogTbody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto hidden" style="max-height: 340px;display:none;"></pre>
@@ -2069,6 +2114,62 @@
   }
   try { window.onBrainHasPayrollToggle = onBrainHasPayrollToggle; } catch (_) {}
 
+  // Αποθήκευση/Επιλογή κωδικών Εργοδότη Ι.Κ.Α. (Οικονομική Καρτέλα Εργοδότη).
+  // ΠΡΟΣΟΧΗ: το backend save_credentials κάνει ΠΛΗΡΗ αντικατάσταση της
+  // εγγραφής ανά ΑΦΜ (όχι merge πεδίο-προς-πεδίο) — γι' αυτό η αποθήκευση
+  // ΠΡΕΠΕΙ να στέλνει ΟΛΗ τη φόρμα (μέσω autoSaveBrainCredentialsFromForm),
+  // ποτέ μόνο τα δύο πεδία Ι.Κ.Α., αλλιώς θα σβηνόταν το υπόλοιπο προφίλ.
+  async function saveBrainIkaEmployerCreds() {
+    const statusEl = document.getElementById('brainIkaEmpStatus');
+    const btn = document.getElementById('brainSaveIkaEmpBtn');
+    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+    if (!afm || afm.length !== 9) {
+      if (statusEl) statusEl.textContent = 'Δώσε πρώτα έγκυρο ΑΦΜ.';
+      showBrainFlash('Δώσε έγκυρο ΑΦΜ 9 ψηφίων πριν την αποθήκευση.', 'error');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    if (statusEl) statusEl.textContent = 'Αποθήκευση...';
+    try {
+      const ok = await autoSaveBrainCredentialsFromForm({ verbose: false });
+      if (ok) {
+        if (statusEl) statusEl.textContent = '✔ Αποθηκεύτηκαν.';
+        showBrainFlash('Αποθηκεύτηκαν οι κωδικοί Εργοδότη Ι.Κ.Α. για ΑΦΜ ' + afm + '.', 'success', 4000);
+      } else {
+        if (statusEl) statusEl.textContent = 'Αποτυχία αποθήκευσης.';
+        showBrainFlash('Αποτυχία αποθήκευσης κωδικών Εργοδότη.', 'error');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  try { window.saveBrainIkaEmployerCreds = saveBrainIkaEmployerCreds; } catch (_) {}
+
+  function loadBrainIkaEmployerCreds() {
+    const statusEl = document.getElementById('brainIkaEmpStatus');
+    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+    if (!afm || afm.length !== 9) {
+      showBrainFlash('Δώσε έγκυρο ΑΦΜ 9 ψηφίων.', 'error');
+      return;
+    }
+    const stored = (E3_BRAIN_CREDS_CACHE || []).find(c => String((c.company || {}).afm || '').trim() === afm);
+    const co = (stored && stored.company) || {};
+    if (!stored || (!co.ika_employer_username && !co.ika_employer_password)) {
+      if (statusEl) statusEl.textContent = 'Δεν βρέθηκαν αποθηκευμένοι κωδικοί Εργοδότη για αυτό το ΑΦΜ.';
+      showBrainFlash('Δεν υπάρχουν αποθηκευμένοι κωδικοί Εργοδότη Ι.Κ.Α. για ΑΦΜ ' + afm + '.', 'warning', 5000);
+      return;
+    }
+    const userEl = document.getElementById('brainIkaEmpUser');
+    const passEl = document.getElementById('brainIkaEmpPass');
+    const chk = document.getElementById('brainHasPayroll');
+    if (userEl) userEl.value = co.ika_employer_username || '';
+    if (passEl) passEl.value = co.ika_employer_password || '';
+    if (chk) { chk.checked = true; try { onBrainHasPayrollToggle(); } catch (_) {} }
+    if (statusEl) statusEl.textContent = '✔ Φορτώθηκαν αποθηκευμένοι κωδικοί.';
+    showBrainFlash('Φορτώθηκαν οι αποθηκευμένοι κωδικοί Εργοδότη Ι.Κ.Α.', 'success', 4000);
+  }
+  try { window.loadBrainIkaEmployerCreds = loadBrainIkaEmployerCreds; } catch (_) {}
+
   function updateBrainAmkaVisibility(isIndividual) {
     const amkaWrapper = document.getElementById('brainAmkaWrapper');
     const amkaEl = document.getElementById('brainAmka');
@@ -2199,18 +2300,18 @@
     }
   }
 
-  function onBrainActiveClientSelectChange() {
-    const select = document.getElementById('brainActiveClientSelect');
-    if (!select) return;
-    // Switching the active client invalidates the E3 table that's currently
-    // on screen — it belongs to the PREVIOUSLY selected client. Hide it and
-    // clear the in-memory brain check overlays so the user doesn't see the
-    // previous client's amounts until the next αντλήση/brain run repopulates.
+  // Καθαρισμός κατάστασης κατά την αλλαγή ενεργού πελάτη στο Ε3 (Ατομικός):
+  // ο πίνακας E3, η κάρτα «μη χαρακτηρισμένα» και η λίστα αποθηκευμένων PDFs
+  // ανήκουν όλα στον ΠΡΟΗΓΟΥΜΕΝΟ πελάτη — αν δεν καθαριστούν, ο επόμενος
+  // πελάτης «κληρονομεί» οπτικά στοιχεία που δεν του ανήκουν. Καλείται από
+  // ΚΑΘΕ σημείο που αλλάζει τον ενεργό πελάτη (dropdown ενεργής ομάδας,
+  // φόρτωση από «Αποθηκευμένα»). Επιστρέφει helper `refreshForAfm(afm)` που
+  // ο caller πρέπει να καλέσει ΑΦΟΥ γεμίσει τη φόρμα, για να ανανεωθεί η
+  // λίστα PDFs του ΝΕΟΥ πελάτη (αυτόματα, χωρίς να χρειάζεται manual «Όλα τα
+  // διαθέσιμα PDFs»).
+  function _resetBrainClientSwitchState() {
     const e3Container = document.getElementById('e3DataContainer');
     if (e3Container) e3Container.style.display = 'none';
-    // The «μη χαρακτηρισμένα παραστατικά» card also belongs to the previous
-    // client — hide it and reset its contents so the new client doesn't
-    // inherit stale unclassified counts/totals until the next αντλήση runs.
     const unclassifiedCard = document.getElementById('unclassifiedSummaryCard');
     if (unclassifiedCard) {
       unclassifiedCard.classList.add('e3-hidden');
@@ -2226,8 +2327,6 @@
     if (unclassifiedTotalEl) unclassifiedTotalEl.textContent = '0,00';
     try { E3_BRAIN_CHECKS.clear(); } catch (_) {}
     try { E3_LAST_DATA = null; } catch (_) {}
-    // Wipe the αποθηκευμένα PDFs list immediately — it belongs to the
-    // previous AFM. The refresh below repopulates it for the new client.
     try {
       _BRAIN_PDFS_AGGREGATE = [];
       const pdfsListEl = document.getElementById('brainPdfsList');
@@ -2235,19 +2334,29 @@
       const pdfsStatusEl = document.getElementById('brainPdfsStatus');
       if (pdfsStatusEl) pdfsStatusEl.textContent = '';
     } catch (_) {}
+    return function refreshForAfm(afm) {
+      try {
+        if (afm && typeof refreshBrainAllPdfs === 'function') {
+          refreshBrainAllPdfs({ afm }).catch(() => {});
+        }
+      } catch (_) {}
+    };
+  }
+
+  function onBrainActiveClientSelectChange() {
+    const select = document.getElementById('brainActiveClientSelect');
+    if (!select) return;
+    // Switching the active client invalidates the E3 table + unclassified
+    // card + PDFs list currently on screen — they belong to the PREVIOUSLY
+    // selected client.
+    const _refreshPdfsForNewAfmRaw = _resetBrainClientSwitchState();
     const afm = String(select.value || '').trim();
     // Refresh the saved-PDFs list for the newly selected AFM. Pass the AFM
     // explicitly so the refresh doesn't race against #brainAfm being
     // populated by the parallel fillBrainSingleClientFromSaved path —
     // previously the status would end up "stuck" on the previous AFM if
     // refreshBrainAllPdfs read #brainAfm before it was updated.
-    const _refreshPdfsForNewAfm = () => {
-      try {
-        if (typeof refreshBrainAllPdfs === 'function') {
-          refreshBrainAllPdfs({ afm }).catch(() => {});
-        }
-      } catch (_) {}
-    };
+    const _refreshPdfsForNewAfm = () => _refreshPdfsForNewAfmRaw(afm);
     if (!afm) {
       clearBrainSingleTypeHint();
       // Empty selection → just blank out the panel, nothing to fetch.
@@ -2776,11 +2885,68 @@
     }
   }
 
+  async function toggleBrainRetrievalLog() {
+    const wrap = document.getElementById('brainRetrievalLogWrap');
+    const btn = document.getElementById('brainRetrievalLogBtn');
+    if (!wrap) return;
+    const willShow = wrap.classList.contains('hidden');
+    if (!willShow) { wrap.classList.add('hidden'); return; }
+    wrap.classList.remove('hidden');
+    const tbody = document.getElementById('brainRetrievalLogTbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="py-2 text-gray-500">Φόρτωση...</td></tr>';
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await fetch('/api/e3/brain/retrieval_log?limit=80');
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error((data && data.error) || 'Αποτυχία φόρτωσης log.');
+      const rows = Array.isArray(data.entries) ? data.entries : [];
+      if (!tbody) return;
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-2 text-gray-500">Δεν υπάρχουν καταχωρήσεις ακόμη.</td></tr>';
+        return;
+      }
+      const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const checkLabel = { efka_teka: 'ΕΦΚΑ/ΤΕΚΑ', keao: 'ΚΕΑΟ', misth: 'Μισθ.', e9: 'Ε9', kartela_ergodoti: 'Κάρτελα Εργ.' };
+      tbody.innerHTML = rows.map((r) => {
+        const cr = r.checks_run || {};
+        const checksStr = Object.keys(checkLabel)
+          .filter((k) => cr[k])
+          .map((k) => checkLabel[k])
+          .join(', ') || '—';
+        const pdfs = r.pdfs_saved || {};
+        const pdfsStr = Object.entries(pdfs).filter(([,v]) => Number(v) > 0).map(([k,v]) => `${esc(k)}:${v}`).join(', ') || '—';
+        const okBadge = r.ok
+          ? '<span class="text-emerald-600 dark:text-emerald-400">✔ OK</span>'
+          : `<span class="text-red-600 dark:text-red-400">✖ ${r.errors_count || 0} σφάλμα(τα)</span>`;
+        const user = (r.user && (r.user.username || r.user.id)) || '—';
+        const ts = String(r.ts || '').replace('T', ' ').slice(0, 19);
+        return `<tr class="border-b border-gray-100 dark:border-gray-800">
+          <td class="py-1 pr-3 whitespace-nowrap">${esc(ts)}</td>
+          <td class="py-1 pr-3">${esc(r.afm)} ${r.name ? '— ' + esc(r.name) : ''}</td>
+          <td class="py-1 pr-3">${esc(r.year)}</td>
+          <td class="py-1 pr-3">${esc(checksStr)}</td>
+          <td class="py-1 pr-3">${esc(pdfsStr)}</td>
+          <td class="py-1 pr-3">${okBadge}</td>
+          <td class="py-1 pr-3">${esc(user)}</td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="py-2 text-red-600">Σφάλμα: ${String(e.message || e)}</td></tr>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  try { window.toggleBrainRetrievalLog = toggleBrainRetrievalLog; } catch (_) {}
+
   function loadBrainCredToForm(afm) {
     if (!afm) return;
     const stored = E3_BRAIN_CREDS_CACHE.find(c => String((c.company || {}).afm || '').trim() === String(afm).trim());
     if (!stored) { showBrainFlash('Δεν βρέθηκαν αποθηκευμένα credentials για ΑΦΜ ' + afm, 'error'); return; }
     const co = stored.company || {};
+    // Καθάρισε ό,τι ανήκει στον ΠΡΟΗΓΟΥΜΕΝΟ πελάτη (πίνακας E3, «μη
+    // χαρακτηρισμένα», λίστα PDFs) πριν γεμίσει η φόρμα με τον νέο — το ίδιο
+    // cleanup με το dropdown ενεργής ομάδας (onBrainActiveClientSelectChange).
+    const _refreshPdfsForLoadedAfm = _resetBrainClientSwitchState();
     // Navigate to single tab and fill all fields
     showBrainTab('brainTabSingle');
     const afmEl = document.getElementById('brainAfm');
@@ -2839,6 +3005,8 @@
       const isIndividual = !stored.members || !stored.members.length;
       applyBrainSingleLegalType(co.legal_type || '', isIndividual);
     } catch (_) {}
+    // Ανανέωσε αυτόματα τη λίστα αποθηκευμένων PDFs για τον ΝΕΟ πελάτη.
+    try { _refreshPdfsForLoadedAfm(co.afm || afm); } catch (_) {}
     showBrainFlash('Φορτώθηκαν τα credentials για ' + (co.name || co.afm || afm), 'success', 4000);
   }
 
@@ -4374,6 +4542,7 @@
     const runKeaoEl = document.getElementById('brainRunKeao');
     const runMisthEl = document.getElementById('brainRunMisth');
     const runE9El = document.getElementById('brainRunE9');
+    const runTaxCertEl = document.getElementById('brainRunTaxCertificate');
 
     // === Pre-flight: capture checkbox + extractor selection BEFORE any
     // async work so the user-visible "what we are about to run" matches
@@ -4384,6 +4553,7 @@
     const runKeao = !!(runKeaoEl && runKeaoEl.checked);
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
+    const runTaxCertificate = !!(runTaxCertEl && runTaxCertEl.checked);
     // Optional EFKA/TEKA/MISTH/E9/KEAO PDF download toggles.
     const downloadEfkaPdfsEl = document.getElementById('brainDownloadEfkaPdfs');
     const downloadTekaPdfsEl = document.getElementById('brainDownloadTekaPdfs');
@@ -4404,7 +4574,7 @@
     // the user is stuck looking at a spinner with no progress.
     const _earlyExit = () => { try { hideGlobalWaitOverlay(); } catch (_) {} };
 
-    if (!runEfkaTeka && !runKeao && !runMisth && !runE9 && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs && !downloadKeaoPdfs) {
+    if (!runEfkaTeka && !runKeao && !runMisth && !runE9 && !runTaxCertificate && !downloadEfkaPdfs && !downloadTekaPdfs && !downloadMisthPdfs && !downloadE9Pdfs && !downloadKeaoPdfs) {
       // Hide the overlay while the modal is open so it doesn't steal focus.
       try { hideGlobalWaitOverlay(); } catch (_) {}
       let proceedNoChecks = false;
@@ -4578,6 +4748,7 @@
       run_keao: runKeao,
       run_misth: runMisth,
       run_e9: runE9,
+      run_tax_certificate: runTaxCertificate,
       download_efka_pdfs: downloadEfkaPdfs,
       download_teka_pdfs: downloadTekaPdfs,
       download_misth_pdfs: downloadMisthPdfs,
@@ -4751,9 +4922,21 @@
 
     const efkaTotal = checks.efka_teka_total;
     if (efkaTotal !== null && efkaTotal !== undefined) {
+      // Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο, opt-in) — προστίθεται ως
+      // ΠΡΟΣΘΕΤΗ πληροφορία στην ετικέτα (ΔΕΝ αντικαθιστά το value που
+      // τροφοδοτεί τη σύγκριση με myDATA/Excel) γιατί η αναγνώριση ποσού
+      // μέσα στο PDF δεν έχει ακόμη επικυρωθεί σε πραγματικό certificate.
+      let label = 'ΕΦΚΑ/ΤΕΚΑ';
+      const taxCertTotal = checks.tax_certificate_total;
+      if (taxCertTotal !== null && taxCertTotal !== undefined) {
+        const fmtCert = Number(taxCertTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
+        const diff = Math.abs(Number(taxCertTotal) - Number(efkaTotal));
+        const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
+        label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
+      }
       E3_BRAIN_CHECKS.set('585.007', {
         value: Number(efkaTotal),
-        label: 'ΕΦΚΑ/ΤΕΚΑ',
+        label,
         source: 'brain'
       });
       updated = true;
@@ -7400,6 +7583,24 @@
       });
     }
 
+    // Οικονομική Καρτέλα Εργοδότη: αφιερωμένα κουμπιά αποθήκευσης/φόρτωσης
+    // κωδικών Εργοδότη Ι.Κ.Α. (ξεχωριστά από τη γενική «Αποθήκευση Credentials»).
+    const saveIkaEmpBtn = document.getElementById('brainSaveIkaEmpBtn');
+    if (saveIkaEmpBtn && saveIkaEmpBtn.dataset.bound !== '1') {
+      saveIkaEmpBtn.dataset.bound = '1';
+      saveIkaEmpBtn.addEventListener('click', () => { saveBrainIkaEmployerCreds().catch(() => {}); });
+    }
+    const loadIkaEmpBtn = document.getElementById('brainLoadIkaEmpBtn');
+    if (loadIkaEmpBtn && loadIkaEmpBtn.dataset.bound !== '1') {
+      loadIkaEmpBtn.dataset.bound = '1';
+      loadIkaEmpBtn.addEventListener('click', () => { loadBrainIkaEmployerCreds(); });
+    }
+    const retrievalLogBtn = document.getElementById('brainRetrievalLogBtn');
+    if (retrievalLogBtn && retrievalLogBtn.dataset.bound !== '1') {
+      retrievalLogBtn.dataset.bound = '1';
+      retrievalLogBtn.addEventListener('click', () => { toggleBrainRetrievalLog().catch(() => {}); });
+    }
+
     // Year gate: until a valid year is in #brainYearBulk we disable the two
     // source buttons (Επιλογή Excel + Από αποθηκευμένους) so the user can't
     // proceed without picking the year that members + checks will run for.
@@ -7850,6 +8051,7 @@
     e9: 'Ε9/ENFIA',
     keao: 'ΚΕΑΟ',
     kartela_ergodoti: 'Καρτέλα Εργοδότη',
+    tax_certificate: 'Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ',
   };
 
   function _setBrainPdfChipActive(kind) {
@@ -7911,7 +8113,7 @@
     }
     if (statusEl) statusEl.textContent = 'Φόρτωση όλων των PDFs...';
     try {
-      const kinds = ['efka', 'teka', 'misth', 'e9', 'keao', 'kartela_ergodoti'];
+      const kinds = ['efka', 'teka', 'misth', 'e9', 'keao', 'kartela_ergodoti', 'tax_certificate'];
       const responses = await Promise.all(kinds.map((k) =>
         fetch(`/api/e3/brain/${k}_pdfs?afm=${encodeURIComponent(afm)}`)
           .then((r) => r.json()).catch(() => ({ ok: false, files: [] }))

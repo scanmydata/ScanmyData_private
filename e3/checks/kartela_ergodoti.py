@@ -350,12 +350,34 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
                 "error": f"{label}: το payload δεν ξεκινάει με %PDF "
                          f"({len(body_bytes)} bytes, first={body_bytes[:8]!r})"}
 
+    # Filename ΠΕΡΙΛΑΜΒΑΝΕΙ το έτος αναφοράς. Χωρίς αυτό, κάθε ξανα-τρέξιμο (ίδιου
+    # ή διαφορετικού έτους) έφτιαχνε ένα ΝΕΟ αρχείο με αύξοντα «_1», «_2» επίθημα
+    # — δηλαδή η ΙΔΙΑ καρτέλα αποθηκευόταν πολλαπλές φορές αντί να ανανεώνεται.
+    # Τώρα: ίδιο (kind, ΑΦΜ, έτος) => το νέο PDF ΑΝΤΙΚΑΘΙΣΤΑ το παλιό (fresh refresh,
+    # ίδιο path -> write_bytes το αντικαθιστά αυτόματα). Διαφορετικά έτη ΔΕΝ
+    # πειράζονται μεταξύ τους — ο σκοπός του έτους στο filename είναι να
+    # συνυπάρχουν καρτέλες πολλών ετών χωρίς να συγκρούονται.
     afm_token = _safe_name(afm or "unknown")
-    target = out_dir / f"{prefix}_{afm_token}.pdf"
-    c = 1
-    while target.exists():
-        target = out_dir / f"{prefix}_{afm_token}_{c}.pdf"
-        c += 1
+    year_token = _safe_name(year or "unknown")
+    target = out_dir / f"{prefix}_{afm_token}_{year_token}.pdf"
+
+    # Καθάρισε ΜΟΝΟ τα «ορφανά» αρχεία του ΠΑΛΙΟΥ bug (πριν μπει το έτος στο
+    # filename): είτε χωρίς κανένα suffix, είτε με τον παλιό αριθμητικό μετρητή
+    # «_1», «_2», ... (1-3 ψηφία). Ένα 4ψήφιο suffix (π.χ. «_2024») θεωρείται
+    # ΠΑΝΤΑ έγκυρο έτος και ΔΕΝ αγγίζεται — έτσι καρτέλες πολλών ετών συνυπάρχουν.
+    try:
+        old_plain = out_dir / f"{prefix}_{afm_token}.pdf"
+        if old_plain.exists() and old_plain != target:
+            old_plain.unlink()
+        for stale in out_dir.glob(f"{prefix}_{afm_token}_[0-9]*.pdf"):
+            if stale == target:
+                continue
+            suffix = stale.stem.rsplit("_", 1)[-1]
+            if re.fullmatch(r"\d{1,3}", suffix):  # old counter, never a year
+                stale.unlink()
+    except Exception:
+        pass
+
     target.write_bytes(body_bytes)
     logging.info("[%s] Saved PDF → %s (%d bytes)", label, target, len(body_bytes))
     return {"ok": True, "pdf": str(target), "error": None}

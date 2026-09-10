@@ -19332,6 +19332,55 @@ def api_e3_brain_credentials_store_fetch():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/e3/brain/retrieval_log", methods=["GET"])
+@login_required
+def api_e3_brain_retrieval_log():
+    """Επίστρεψε τις τελευταίες γραμμές του log ανάκτησης Ε3 (ημερομηνία/ώρα,
+    ποιοι έλεγχοι έτρεξαν, αποτέλεσμα, PDFs) για την ενεργή ομάδα.
+    ?limit=N (default 50, max 500). ?afm=xxxxxxxxx φιλτράρει ανά πελάτη."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα ανάγνωσης για την ενεργή ομάδα."}), 403
+
+        try:
+            limit = min(max(int(request.args.get("limit") or 50), 1), 500)
+        except Exception:
+            limit = 50
+        afm_filter = "".join(ch for ch in str(request.args.get("afm") or "") if ch.isdigit())
+
+        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+        log_path = os.path.join(group_data_dir, "e3_brain_retrieval_log.jsonl")
+        rows = []
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if afm_filter and str(row.get("afm") or "") != afm_filter:
+                        continue
+                    rows.append(row)
+        rows = rows[-limit:][::-1]  # πιο πρόσφατα πρώτα
+        return jsonify({"ok": True, "entries": rows, "count": len(rows)})
+    except Exception as e:
+        log.exception("api_e3_brain_retrieval_log failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/e3/brain/active_group_clients", methods=["GET"])
 @login_required
 def api_e3_brain_active_group_clients():
@@ -19808,6 +19857,8 @@ def _e3_pdfs_root(kind):
         return "keao_pdfs"
     if k in ("kartela_ergodoti", "ergodoti", "kartela"):
         return "kartela_ergodoti_pdfs"
+    if k in ("tax_certificate", "efka_teka_certificate"):
+        return "tax_certificate_pdfs"
     return "efka_pdfs"
 
 
@@ -20138,6 +20189,31 @@ def api_e3_brain_kartela_ergodoti_pdfs_bulk_delete():
 @login_required
 def api_e3_brain_kartela_ergodoti_pdfs_zip():
     return _e3_pdfs_zip("kartela_ergodoti")
+
+
+# --- Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (PDF, νέο) endpoints ---
+@app.route("/api/e3/brain/tax_certificate_pdfs", methods=["GET"])
+@login_required
+def api_e3_brain_tax_certificate_pdfs_list():
+    return _e3_pdfs_list_kind("tax_certificate")
+
+
+@app.route("/api/e3/brain/tax_certificate_pdfs/file", methods=["GET", "DELETE"])
+@login_required
+def api_e3_brain_tax_certificate_pdfs_file():
+    return _e3_pdfs_serve_file("tax_certificate")
+
+
+@app.route("/api/e3/brain/tax_certificate_pdfs/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_tax_certificate_pdfs_bulk_delete():
+    return _e3_pdfs_bulk_delete("tax_certificate")
+
+
+@app.route("/api/e3/brain/tax_certificate_pdfs/zip", methods=["POST"])
+@login_required
+def api_e3_brain_tax_certificate_pdfs_zip():
+    return _e3_pdfs_zip("tax_certificate")
 
 
 @app.route("/credentials", methods=["GET", "POST"])
