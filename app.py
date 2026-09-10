@@ -18192,6 +18192,28 @@ def api_e3_brain():
     try:
         payload = request.get_json(silent=True) or {}
 
+        # Create the per-group PDF roots before running the brain. This keeps
+        # the storage contract visible even when an extractor is skipped for
+        # missing credentials or fails during remote authentication.
+        try:
+            from admin.auth import get_active_group as _get_active_group
+            _active_group = _get_active_group()
+            _single = payload.get("single_client") if isinstance(payload.get("single_client"), dict) else {}
+            _pdf_afm = "".join(ch for ch in str(_single.get("afm") or "") if ch.isdigit())
+            if _active_group and len(_pdf_afm) == 9:
+                _group_folder = str(getattr(_active_group, "data_folder", "") or "").strip()
+                _roots = []
+                if payload.get("run_efka_teka") or payload.get("run_tax_certificate"):
+                    _roots.append("tax_certificate_pdfs")
+                if payload.get("download_keao_pdfs"):
+                    _roots.append("keao_pdfs")
+                for _root in _roots:
+                    (Path(BASE_DIR) / "data" / _group_folder / _root / _pdf_afm).mkdir(
+                        parents=True, exist_ok=True
+                    )
+        except Exception:
+            log.exception("api_e3_brain: failed to pre-create group PDF directories")
+
         auto_active = bool(payload.get("auto_active_group_clients", True))
         active_clients = payload.get("active_group_clients")
 
@@ -19864,19 +19886,13 @@ def _e3_pdfs_root(kind):
     return "efka_pdfs"
 
 
-def _e3_pdfs_owner_slug():
-    """Stable per-user slug used as the per-owner sub-directory."""
-    uid = getattr(current_user, "id", None) if current_user and getattr(current_user, "is_authenticated", False) else None
-    if uid is None:
-        return "anon"
-    return f"uid_{uid}"
+def _e3_pdfs_resolve(kind, afm, mkdir=False):
+    """Return the absolute directory where PDFs live for (kind, afm).
 
-
-def _e3_pdfs_resolve(kind, afm, owner=None, mkdir=False):
-    """Return the absolute directory where PDFs live for (kind, owner, afm).
-
-    Refuses any path traversal: ``afm`` must be 9 digits, ``owner`` must
-    match ``uid_<int>`` (or ``anon``).
+    Shared per GROUP, not per user — anyone with access to the active
+    group's E3 check sees the same downloaded files, so the same client
+    doesn't get re-scraped/re-downloaded once per teammate. Refuses any
+    path traversal: ``afm`` must be 9 digits.
     """
     from admin.auth import get_active_group as _gag
     grp = _gag()
@@ -19888,11 +19904,8 @@ def _e3_pdfs_resolve(kind, afm, owner=None, mkdir=False):
     afm = (afm or "").strip()
     if not re.fullmatch(r"\d{9}", afm):
         raise ValueError("Μη έγκυρος ΑΦΜ.")
-    owner_slug = (owner or _e3_pdfs_owner_slug()).strip()
-    if not re.fullmatch(r"(anon|uid_\d+)", owner_slug):
-        raise ValueError("Μη έγκυρος owner.")
     root = _e3_pdfs_root(kind)
-    target = os.path.join(BASE_DIR, "data", folder, root, owner_slug, afm)
+    target = os.path.join(BASE_DIR, "data", folder, root, afm)
     target = os.path.abspath(target)
     # Refuse to escape data/<folder>/<root>/
     safe_root = os.path.abspath(os.path.join(BASE_DIR, "data", folder, root))
@@ -19925,9 +19938,8 @@ def _e3_pdfs_list_kind(kind):
     if err:
         return jsonify(err[0]), err[1]
     afm = (request.args.get("afm") or "").strip()
-    owner = (request.args.get("owner") or "").strip() or None
     try:
-        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+        target_dir = _e3_pdfs_resolve(kind, afm, mkdir=False)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     files = []
@@ -19947,8 +19959,7 @@ def _e3_pdfs_list_kind(kind):
                 })
             except OSError:
                 continue
-    return jsonify({"ok": True, "afm": afm, "kind": kind, "files": files,
-                    "owner": owner or _e3_pdfs_owner_slug()})
+    return jsonify({"ok": True, "afm": afm, "kind": kind, "files": files})
 
 
 def _e3_pdfs_serve_file(kind):
@@ -19956,14 +19967,13 @@ def _e3_pdfs_serve_file(kind):
     if err:
         return jsonify(err[0]), err[1]
     afm = (request.args.get("afm") or "").strip()
-    owner = (request.args.get("owner") or "").strip() or None
     name = (request.args.get("name") or "").strip()
     if not name or "/" in name or "\\" in name or ".." in name:
         return jsonify({"ok": False, "error": "Μη έγκυρο όνομα αρχείου."}), 400
     if not name.lower().endswith(".pdf"):
         return jsonify({"ok": False, "error": "Μόνο αρχεία .pdf επιτρέπονται."}), 400
     try:
-        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+        target_dir = _e3_pdfs_resolve(kind, afm, mkdir=False)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     full = os.path.join(target_dir, name)
@@ -19981,18 +19991,17 @@ def _e3_pdfs_serve_file(kind):
 
 
 def _e3_pdfs_bulk_delete(kind):
-    """POST: delete a list of file names under the user's PDF folder."""
+    """POST: delete a list of file names under the group's shared PDF folder."""
     grp, err = _e3_pdfs_require_group_access()
     if err:
         return jsonify(err[0]), err[1]
     payload = request.get_json(silent=True) or {}
     afm = (request.args.get("afm") or payload.get("afm") or "").strip()
-    owner = (request.args.get("owner") or payload.get("owner") or "").strip() or None
     names = payload.get("names") or []
     if not isinstance(names, list) or not names:
         return jsonify({"ok": False, "error": "Δεν δόθηκε λίστα ονομάτων."}), 400
     try:
-        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+        target_dir = _e3_pdfs_resolve(kind, afm, mkdir=False)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     deleted = []
@@ -20023,7 +20032,6 @@ def _e3_pdfs_zip(kind):
     # Names come as repeated form fields `name` (matches the simple
     # <form method=post> approach the UI uses to trigger the download).
     afm = (request.args.get("afm") or request.form.get("afm") or "").strip()
-    owner = (request.args.get("owner") or request.form.get("owner") or "").strip() or None
     names = request.form.getlist("name") or []
     if not names:
         # Fall back to JSON payload for programmatic callers.
@@ -20032,7 +20040,7 @@ def _e3_pdfs_zip(kind):
     if not isinstance(names, list) or not names:
         return jsonify({"ok": False, "error": "Δεν δόθηκε λίστα ονομάτων."}), 400
     try:
-        target_dir = _e3_pdfs_resolve(kind, afm, owner=owner, mkdir=False)
+        target_dir = _e3_pdfs_resolve(kind, afm, mkdir=False)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     buf = _io.BytesIO()

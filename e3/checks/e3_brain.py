@@ -1475,7 +1475,11 @@ def _extract_numeric_candidates_from_rows(rows: List[Dict[str, Any]], year: int)
 
 
 def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
-    """Return ``data/<group>/<kind>_pdfs/<owner>/<afm>`` for the active user.
+    """Return ``data/<group>/<kind>_pdfs/<afm>`` — shared by the whole group.
+
+    Deliberately NOT per-user: any teammate with access to the active
+    group's E3 check sees files a colleague already downloaded, so the
+    same client doesn't get re-scraped/re-downloaded once per person.
 
     Best-effort: returns ``None`` if Flask context / active group cannot be
     resolved (e.g. CLI invocation or unit tests). The extractors will skip
@@ -1489,12 +1493,15 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
         return None
     try:
         from admin.auth import get_active_group
-        from flask_login import current_user
         grp = get_active_group()
-        if not grp:
-            return None
-        folder = str(getattr(grp, "data_folder", "") or "").strip()
+        folder = str(getattr(grp, "data_folder", "") or "").strip() if grp else ""
         if not folder:
+            folder = str(session.get("active_group_folder", "") or "").strip()
+        if not folder:
+            logging.getLogger(__name__).warning(
+                "E3 PDF path unavailable: no active group folder for kind=%s afm=%s",
+                kind, afm,
+            )
             return None
         kind_lower = (kind or "").lower()
         if kind_lower == "efka":
@@ -1513,9 +1520,7 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "tax_certificate_pdfs"
         else:
             return None
-        uid = getattr(current_user, "id", None)
-        owner = f"uid_{uid}" if uid else "anon"
-        target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / owner / afm
+        target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / afm
         target.mkdir(parents=True, exist_ok=True)
         return target
     except Exception:
@@ -1856,13 +1861,24 @@ def _build_targets(
     member_credentials: Dict[str, Dict[str, Any]],
 ) -> List[PersonTarget]:
     if is_individual:
+        afm = _norm_afm(client.get("afm"))
+        member_cred = (
+            member_credentials.get(afm, {})
+            if isinstance(member_credentials, dict) else {}
+        )
         return [
             PersonTarget(
-                afm=_norm_afm(client.get("afm")),
+                afm=afm,
                 full_name=_norm_text(client.get("name")),
-                amka=_norm_text(client.get("amka")),
-                taxisnet_username=_norm_text(client.get("taxisnet_username")),
-                taxisnet_password=_norm_text(client.get("taxisnet_password")),
+                amka=_norm_text(client.get("amka")) or _norm_text(member_cred.get("amka")),
+                taxisnet_username=(
+                    _norm_text(client.get("taxisnet_username"))
+                    or _norm_text(member_cred.get("taxisnet_username"))
+                ),
+                taxisnet_password=(
+                    _norm_text(client.get("taxisnet_password"))
+                    or _norm_text(member_cred.get("taxisnet_password"))
+                ),
             )
         ]
 
@@ -1993,6 +2009,19 @@ def process_client(
         range_start=range_start,
         range_end=range_end,
     )
+    # Business Portal can be unavailable for a valid sole proprietor. In
+    # that case the form's own TAXISnet/AMKA credentials are the reliable
+    # signal; do not silently turn the client into a zero-target company.
+    if (
+        not is_individual
+        and not legal_type
+        and not active_members
+        and _norm_text(client.get("taxisnet_username"))
+        and _norm_text(client.get("taxisnet_password"))
+        and _norm_text(client.get("amka"))
+    ):
+        is_individual = True
+        warnings.append("Business Portal δεν έδωσε νομική μορφή· χρησιμοποιήθηκε η ατομική ροή από TAXISnet/ΑΜΚΑ.")
     company_info_payload = client.get("company_info") if isinstance(client.get("company_info"), dict) else {}
     company_info_members = _extract_company_info_members(company_info_payload)
     member_check = _compare_member_sets(active_members, company_info_members) if company_info_members else {"ok": True, "missing_in_company_info": [], "extra_in_company_info": []}
@@ -2031,6 +2060,13 @@ def process_client(
     if missing_member_credentials:
         warnings.append("Λείπουν κωδικοί TAXISnet/ΑΜΚΑ για ένα ή περισσότερα μέλη.")
 
+    extractor_targets = [
+        t for t in targets
+        if t.taxisnet_username and t.taxisnet_password and t.amka
+    ]
+    if targets and not extractor_targets:
+        warnings.append("Δεν υπάρχει target με πλήρη TAXISnet/ΑΜΚΑ στοιχεία για τους εξωτερικούς ελέγχους.")
+
     efka_teka_total = 0.0
     efka_teka_available = False
     # Counters of how many PDFs the various extractors persisted on disk.
@@ -2041,12 +2077,12 @@ def process_client(
     pdfs_saved = {"efka": 0, "teka": 0, "misth": 0, "e9": 0,
                   "keao": 0, "kartela_ergodoti": 0}
 
-    if _flag_for("efka_teka") and not missing_member_credentials:
+    if _flag_for("efka_teka") and extractor_targets:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
 
         _publish_brain_step(job_id, f"Έλεγχος ΕΦΚΑ/ΤΕΚΑ — {input_name or afm}", percent=15)
-        for t in targets:
+        for t in extractor_targets:
             with tempfile.TemporaryDirectory(prefix=f"e3brain_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
 
@@ -2158,12 +2194,16 @@ def process_client(
     tax_certificate_total = 0.0
     tax_certificate_available = False
     tax_certificate_results: List[Dict[str, Any]] = []
-    if _flag_for("tax_certificate") and not missing_member_credentials:
+    if _flag_for("tax_certificate") and extractor_targets:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
         _publish_brain_step(job_id, f"Φορολογικές Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ — {input_name or afm}", percent=32)
-        for t in targets:
+        for t in extractor_targets:
             cert_pdf_dir = _resolve_pdfs_dir("tax_certificate", t.afm or afm)
+            if cert_pdf_dir is None:
+                warnings.append(
+                    f"Φορολογικές Βεβαιώσεις: δεν βρέθηκε ενεργή ομάδα για αποθήκευση του ΑΦΜ {t.afm or afm}."
+                )
             with tempfile.TemporaryDirectory(prefix=f"e3cert_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
                 target_dir = cert_pdf_dir if cert_pdf_dir is not None else (tmp / "out")
@@ -2378,11 +2418,11 @@ def process_client(
     # the 585.007 row — it never feeds any total.
     keao_mh_misthwton_total = 0.0
     keao_mh_misthwton_available = False
-    if _flag_for("keao") and not missing_member_credentials:
+    if _flag_for("keao") and extractor_targets:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
         _publish_brain_step(job_id, f"Έλεγχος ΚΕΑΟ — {input_name or afm}", percent=35)
-        for t in targets:
+        for t in extractor_targets:
             with tempfile.TemporaryDirectory(prefix=f"e3keao_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
                 keao_pdf_dir = None
