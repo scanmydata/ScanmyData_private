@@ -482,28 +482,39 @@ def _has_no_amo_message(page: Page) -> bool:
 
 
 def _open_credits_tab(page: Page, date_from: str) -> str:
-    """Navigate Κινήσεις Οφειλέτη → Πιστώσεις Οφειλών, fill date, click Εμφάνιση."""
+    """Navigate Κινήσεις Οφειλέτη → Πιστώσεις Οφειλών, fill date, click Εμφάνιση.
+
+    Returns "ok"/"empty" on success paths, or one of several distinct
+    failure reasons (no_amo / no_credits_tab / no_date_box / no_show_btn)
+    instead of a single catch-all "no_amo" — a real live run showed every
+    registry landing here with no way to tell, from the JSON alone, which
+    of these four different things actually happened.
+    """
     page.locator("a").filter(has_text="Κινήσεις Οφειλέτη").first.click()
     page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+    # Same AJAX-timing issue already found on the «Επιλογή» click: this is
+    # a PrimeFaces AJAX submit too, so domcontentloaded can resolve before
+    # the Κινήσεις Οφειλέτη view has actually rendered.
+    page.wait_for_timeout(SHORT_WAIT)
 
     if _has_no_amo_message(page):
         return "no_amo"
 
     credits_tab = page.get_by_role("link", name="Πιστώσεις Οφειλών")
     if credits_tab.count() == 0:
-        return "no_amo"
+        return "no_credits_tab"
     credits_tab.first.click()
     page.wait_for_timeout(SHORT_WAIT)
 
     date_box = page.locator("#dateFrom_input")
     if date_box.count() == 0:
-        return "no_amo"
+        return "no_date_box"
     date_box.first.click()
     date_box.first.fill(date_from)
 
     show_btn = page.get_by_role("button", name="Εμφάνιση")
     if show_btn.count() == 0:
-        return "no_amo"
+        return "no_show_btn"
     show_btn.first.click()
     page.wait_for_timeout(SHORT_WAIT)
 
@@ -660,23 +671,35 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         "totals_all": {"total": 0.0, "main_contrib": 0.0, "extra_fees": 0.0, "surcharges": 0.0},
     }
 
+    # `safe` is derived from the Φορέας name alone, which several
+    # registries share (e.g. three different ΟΠΣ-ΙΚΑ ΑΜΟ under the same
+    # Φορέας text) — the ΑΜΟ is the only thing that's actually unique per
+    # registry, so diagnostic dump tags must include it or later
+    # registries silently overwrite earlier ones' dumps (exactly what
+    # happened on the previous live run: 3 of 4 shared one dump file).
+    diag_tag = f"{safe}_amo{reg['amo']}"
+
     if not _click_select_for_amo(picker, reg["amo"]):
         record["status"] = "select_button_missing"
         return record
 
     if _has_no_amo_message(picker):
-        _dump_diagnostics(picker, output_dir, f"no_amo_select_{safe}")
+        _dump_diagnostics(picker, output_dir, f"no_amo_select_{diag_tag}")
         record["status"] = "no_amo"
         return record
 
     state = _open_credits_tab(picker, date_from)
-    if state == "no_amo":
-        _dump_diagnostics(picker, output_dir, f"no_amo_creditstab_{safe}")
-        record["status"] = "no_amo"
-        return record
     if state == "empty":
-        _dump_diagnostics(picker, output_dir, f"empty_credits_{safe}")
+        _dump_diagnostics(picker, output_dir, f"empty_credits_{diag_tag}")
         record["status"] = "no_credits"
+        return record
+    if state != "ok":
+        # One of: no_amo / no_credits_tab / no_date_box / no_show_btn —
+        # kept as distinct statuses (not folded into "no_amo") so the
+        # JSON alone says which step failed without needing to open the
+        # diagnostics dump first.
+        _dump_diagnostics(picker, output_dir, f"{state}_{diag_tag}")
+        record["status"] = state
         return record
 
     info = _current_page_info(picker) or (1, 1)
