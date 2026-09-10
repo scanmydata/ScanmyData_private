@@ -1378,28 +1378,15 @@
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ΑΜΕ (Αριθμός Μητρώου Εργοδότη)</label>
-            <input id="brainIkaEmpAme" type="text" placeholder="10 ψηφία" maxlength="10"
+            <input id="brainIkaEmpAme" type="text" placeholder="αυτόματα από την καρτέλα ΤΕΚΑ" maxlength="10"
               autocomplete="off"
-              title="Απαιτείται από τη νέα υπηρεσία ΕΦΚΑ όταν ο λογαριασμός TaxisNet έχει πάνω από έναν ρόλο (πρέπει να επιλεγεί ρητά «Εργοδότης Κοινής Επιχείρησης»)."
+              title="Ανακαλύπτεται αυτόματα από το PDF της καρτέλας ΤΕΚΑ στην πρώτη εκτέλεση και συμπληρώνεται εδώ — δεν χρειάζεται να το γράψεις χειροκίνητα."
               class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full" />
           </div>
-          <div class="md:col-span-2 flex flex-wrap items-center gap-2">
-            <button type="button" id="brainSaveIkaEmpBtn"
-                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"
-                    title="Αποθήκευση κωδικών Εργοδότη Ι.Κ.Α. για το τρέχον ΑΦΜ (χωρίς να πειράξει άλλα αποθηκευμένα στοιχεία)">
-              💾 Αποθήκευση κωδικών Εργοδότη
-            </button>
-            <button type="button" id="brainLoadIkaEmpBtn"
-                    class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 px-3 py-1.5 rounded-lg text-sm font-medium transition"
-                    title="Φόρτωση αποθηκευμένων κωδικών Εργοδότη Ι.Κ.Α. για το τρέχον ΑΦΜ">
-              📂 Χρήση αποθηκευμένων
-            </button>
-            <span id="brainIkaEmpStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
-          </div>
           <div class="md:col-span-2 text-xs text-gray-500 dark:text-gray-400">
-            ℹ️ Τα στοιχεία αυτά αποθηκεύονται στο per-client store (μαζί με «Αποθήκευση Credentials Ομάδας»
-            ή ξεχωριστά με το κουμπί «Αποθήκευση κωδικών Εργοδότη» παραπάνω). Όταν συμπληρωθούν, ο έλεγχος
-            τραβάει αυτόματα την Οικονομική Καρτέλα Εργοδότη (ΕΦΚΑ + ΤΕΚΑ) και κρατάει τα PDFs στον per-AFM φάκελο.
+            ℹ️ Τα στοιχεία αυτά αποθηκεύονται μαζί με το «Αποθήκευση Credentials Ομάδας». Όταν συμπληρωθούν,
+            ο έλεγχος τραβάει αυτόματα την Οικονομική Καρτέλα Εργοδότη (ΕΦΚΑ + ΤΕΚΑ) και κρατάει τα PDFs στον
+            per-AFM φάκελο· το ΑΜΕ ανακαλύπτεται από την καρτέλα ΤΕΚΑ και συμπληρώνεται μόνο του.
           </div>
         </div>
       </div>
@@ -2121,63 +2108,10 @@
   }
   try { window.onBrainHasPayrollToggle = onBrainHasPayrollToggle; } catch (_) {}
 
-  // Αποθήκευση/Επιλογή κωδικών Εργοδότη Ι.Κ.Α. (Οικονομική Καρτέλα Εργοδότη).
-  // ΠΡΟΣΟΧΗ: το backend save_credentials κάνει ΠΛΗΡΗ αντικατάσταση της
-  // εγγραφής ανά ΑΦΜ (όχι merge πεδίο-προς-πεδίο) — γι' αυτό η αποθήκευση
-  // ΠΡΕΠΕΙ να στέλνει ΟΛΗ τη φόρμα (μέσω autoSaveBrainCredentialsFromForm),
-  // ποτέ μόνο τα δύο πεδία Ι.Κ.Α., αλλιώς θα σβηνόταν το υπόλοιπο προφίλ.
-  async function saveBrainIkaEmployerCreds() {
-    const statusEl = document.getElementById('brainIkaEmpStatus');
-    const btn = document.getElementById('brainSaveIkaEmpBtn');
-    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
-    if (!afm || afm.length !== 9) {
-      if (statusEl) statusEl.textContent = 'Δώσε πρώτα έγκυρο ΑΦΜ.';
-      showBrainFlash('Δώσε έγκυρο ΑΦΜ 9 ψηφίων πριν την αποθήκευση.', 'error');
-      return;
-    }
-    if (btn) btn.disabled = true;
-    if (statusEl) statusEl.textContent = 'Αποθήκευση...';
-    try {
-      const ok = await autoSaveBrainCredentialsFromForm({ verbose: false });
-      if (ok) {
-        if (statusEl) statusEl.textContent = '✔ Αποθηκεύτηκαν.';
-        showBrainFlash('Αποθηκεύτηκαν οι κωδικοί Εργοδότη Ι.Κ.Α. για ΑΦΜ ' + afm + '.', 'success', 4000);
-      } else {
-        if (statusEl) statusEl.textContent = 'Αποτυχία αποθήκευσης.';
-        showBrainFlash('Αποτυχία αποθήκευσης κωδικών Εργοδότη.', 'error');
-      }
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
-  try { window.saveBrainIkaEmployerCreds = saveBrainIkaEmployerCreds; } catch (_) {}
-
-  function loadBrainIkaEmployerCreds() {
-    const statusEl = document.getElementById('brainIkaEmpStatus');
-    const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
-    if (!afm || afm.length !== 9) {
-      showBrainFlash('Δώσε έγκυρο ΑΦΜ 9 ψηφίων.', 'error');
-      return;
-    }
-    const stored = (E3_BRAIN_CREDS_CACHE || []).find(c => String((c.company || {}).afm || '').trim() === afm);
-    const co = (stored && stored.company) || {};
-    if (!stored || (!co.ika_employer_username && !co.ika_employer_password)) {
-      if (statusEl) statusEl.textContent = 'Δεν βρέθηκαν αποθηκευμένοι κωδικοί Εργοδότη για αυτό το ΑΦΜ.';
-      showBrainFlash('Δεν υπάρχουν αποθηκευμένοι κωδικοί Εργοδότη Ι.Κ.Α. για ΑΦΜ ' + afm + '.', 'warning', 5000);
-      return;
-    }
-    const userEl = document.getElementById('brainIkaEmpUser');
-    const passEl = document.getElementById('brainIkaEmpPass');
-    const ameEl = document.getElementById('brainIkaEmpAme');
-    const chk = document.getElementById('brainHasPayroll');
-    if (userEl) userEl.value = co.ika_employer_username || '';
-    if (passEl) passEl.value = co.ika_employer_password || '';
-    if (ameEl) ameEl.value = co.ika_employer_ame || '';
-    if (chk) { chk.checked = true; try { onBrainHasPayrollToggle(); } catch (_) {} }
-    if (statusEl) statusEl.textContent = '✔ Φορτώθηκαν αποθηκευμένοι κωδικοί.';
-    showBrainFlash('Φορτώθηκαν οι αποθηκευμένοι κωδικοί Εργοδότη Ι.Κ.Α.', 'success', 4000);
-  }
-  try { window.loadBrainIkaEmployerCreds = loadBrainIkaEmployerCreds; } catch (_) {}
+  // Τα κωδικοί Εργοδότη Ι.Κ.Α. (+ ΑΜΕ) αποθηκεύονται/φορτώνονται πλέον ΜΟΝΟ
+  // μέσω του γενικού «Αποθήκευση Credentials Ομάδας» (autoSaveBrainCredentialsFromForm
+  // / saveE3BrainCredentials) και loadBrainCredToForm — όχι ξεχωριστά κουμπιά εδώ,
+  // ώστε να μην υπάρχουν δύο τρόποι να αποθηκευτεί το ίδιο πράγμα.
 
   function updateBrainAmkaVisibility(isIndividual) {
     const amkaWrapper = document.getElementById('brainAmkaWrapper');
@@ -2909,6 +2843,15 @@
     if (btn) btn.disabled = true;
     try {
       const resp = await fetch('/api/e3/brain/retrieval_log?limit=80');
+      const ct = (resp.headers.get('content-type') || '').toLowerCase();
+      if (!ct.includes('application/json')) {
+        // Πιθανό redirect σε σελίδα login (session έληξε) ή σφάλμα server που
+        // επέστρεψε HTML — μην προσπαθήσεις να το κάνεις parse ως JSON
+        // (έβγαζε «Unexpected token '<'»). Δώσε σαφές μήνυμα αντ' αυτού.
+        throw new Error(resp.status === 401 || resp.status === 302
+          ? 'Η σύνδεση έληξε — ανανέωσε τη σελίδα και ξαναπροσπάθησε.'
+          : `Μη αναμενόμενη απάντηση server (HTTP ${resp.status}).`);
+      }
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error((data && data.error) || 'Αποτυχία φόρτωσης log.');
       const rows = Array.isArray(data.entries) ? data.entries : [];
@@ -4858,6 +4801,23 @@
         if (_kinds.length) {
           const parts = _kinds.map(([k, label]) => `${label}: ${_ps[k]}`).join(' · ');
           showBrainFlash(`📎 Αποθηκεύτηκαν PDF — ${parts}`, 'success', 9000);
+        }
+      } catch (_) {}
+      // Το ΑΜΕ (Αριθμός Μητρώου Εργοδότη) ανακαλύπτεται από το PDF της
+      // καρτέλας ΤΕΚΑ κατά την εκτέλεση — συμπλήρωσέ το αυτόματα στη φόρμα
+      // (αν λείπει) και αποθήκευσέ το ήσυχα, ώστε το επόμενο τρέξιμο να το
+      // έχει έτοιμο για το βήμα επιλογής ρόλου της νέας υπηρεσίας ΕΦΚΑ.
+      try {
+        const _kartela = (data.clients && data.clients[0] && data.clients[0].checks && data.clients[0].checks.kartela_ergodoti) || null;
+        const _discoveredAme = _kartela && (
+          (_kartela.summary && _kartela.summary.ame)
+          || (_kartela.summary && _kartela.summary.teka && _kartela.summary.teka.ame)
+        );
+        const ameEl = document.getElementById('brainIkaEmpAme');
+        if (_discoveredAme && ameEl && !ameEl.value.trim()) {
+          ameEl.value = _discoveredAme;
+          try { autoSaveBrainCredentialsFromForm({ verbose: false }).catch(() => {}); } catch (_) {}
+          showBrainFlash(`Βρέθηκε ΑΜΕ ${_discoveredAme} από την καρτέλα ΤΕΚΑ — αποθηκεύτηκε.`, 'info', 5000);
         }
       } catch (_) {}
       _applyBrainChecksToE3Table(data);
@@ -7600,18 +7560,6 @@
       });
     }
 
-    // Οικονομική Καρτέλα Εργοδότη: αφιερωμένα κουμπιά αποθήκευσης/φόρτωσης
-    // κωδικών Εργοδότη Ι.Κ.Α. (ξεχωριστά από τη γενική «Αποθήκευση Credentials»).
-    const saveIkaEmpBtn = document.getElementById('brainSaveIkaEmpBtn');
-    if (saveIkaEmpBtn && saveIkaEmpBtn.dataset.bound !== '1') {
-      saveIkaEmpBtn.dataset.bound = '1';
-      saveIkaEmpBtn.addEventListener('click', () => { saveBrainIkaEmployerCreds().catch(() => {}); });
-    }
-    const loadIkaEmpBtn = document.getElementById('brainLoadIkaEmpBtn');
-    if (loadIkaEmpBtn && loadIkaEmpBtn.dataset.bound !== '1') {
-      loadIkaEmpBtn.dataset.bound = '1';
-      loadIkaEmpBtn.addEventListener('click', () => { loadBrainIkaEmployerCreds(); });
-    }
     const retrievalLogBtn = document.getElementById('brainRetrievalLogBtn');
     if (retrievalLogBtn && retrievalLogBtn.dataset.bound !== '1') {
       retrievalLogBtn.dataset.bound = '1';
