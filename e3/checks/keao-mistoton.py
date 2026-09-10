@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -743,6 +744,19 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
     _stitch_pdf(shot_paths, pdf_path)
     record["pdf"] = str(pdf_path)
     record["rows"] = all_rows
+
+    # The PNGs only exist to get stitched into the PDF above — once that
+    # succeeded, keeping them (and the per-registry "shots" subfolder) is
+    # just dead weight on disk. Only clean up when the PDF actually landed,
+    # so a stitching failure never loses the source screenshots.
+    if pdf_path.exists():
+        try:
+            shutil.rmtree(reg_dir, ignore_errors=True)
+            shots_root = output_dir / "shots"
+            if shots_root.is_dir() and not any(shots_root.iterdir()):
+                shots_root.rmdir()
+        except Exception as exc:
+            logging.warning("[%s] could not clean up screenshot folder: %s", reg["forea"], exc)
 
     for r in all_rows:
         for k in ("total", "main_contrib", "extra_fees", "surcharges"):
