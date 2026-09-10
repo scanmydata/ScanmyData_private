@@ -4943,29 +4943,29 @@
       // τροφοδοτεί τη σύγκριση με myDATA/Excel. Εμφανίζονται ΑΚΟΜΑ ΚΙ ΑΝ
       // το scrape ΕΦΚΑ/ΤΕΚΑ απέτυχε/δεν έτρεξε, ώστε να μη χάνονται
       // σιωπηλά.
+      // Το ΕΦΚΑ/ΤΕΚΑ (585.007) ΕΙΝΑΙ το σύνολο των Φορολογικών Βεβαιώσεων —
+      // η μόνη ουσιαστική «διαφορά» προς αντιπαραβολή είναι αυτή με το
+      // myDATA (ήδη υπολογισμένη από τον υπάρχοντα πίνακα, στήλη col-diff).
+      // Το ✓/διαφορά εδώ αφορά ΜΟΝΟ scrape vs βεβαίωση (δύο ανεξάρτητες
+      // πηγές για ΤΟ ΙΔΙΟ ποσό) — δεν υπάρχει πια «πειραματικό» tag αφού
+      // επιβεβαιώθηκε σε πραγματικά δεδομένα.
       let label = 'ΕΦΚΑ/ΤΕΚΑ';
       if (taxCertTotal !== null && taxCertTotal !== undefined) {
         const fmtCert = Number(taxCertTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
         if (efkaTotal !== null && efkaTotal !== undefined) {
           const diff = Math.abs(Number(taxCertTotal) - Number(efkaTotal));
           const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
-          label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
+          label += ` — Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
         } else {
-          label += ` — 🧪 Φορ. Βεβ. PDF: ${fmtCert} € (το scrape ΕΦΚΑ/ΤΕΚΑ δεν έδωσε ποσό)`;
+          label += ` — Φορ. Βεβ. PDF: ${fmtCert} € (το scrape ΕΦΚΑ/ΤΕΚΑ δεν έδωσε ποσό)`;
         }
       }
       if (keaoMhMisthwtonTotal !== null && keaoMhMisthwtonTotal !== undefined) {
-        // Κύρια εισφορά από τα ΚΕΑΟ Πιστώσεις του μητρώου ΕΦΚΑ Μη Μισθωτών
-        // — ήδη μέσα στη Φορολογική Βεβαίωση, άρα σύγκριση με ΑΥΤΗΝ (όχι
-        // με το efkaTotal, που καλύπτει άλλα μητρώα).
+        // Πληροφοριακό μόνο — τα ΚΕΑΟ Πιστώσεις ΕΦΚΑ Μη Μισθωτών είναι ΜΕΡΟΣ
+        // (όχι το σύνολο) της ετήσιας Φορολογικής Βεβαίωσης, οπότε ΔΕΝ
+        // αναμένεται να ταιριάζουν — δεν εμφανίζουμε «διαφορά»/«ταιριάζει».
         const fmtKeao = Number(keaoMhMisthwtonTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
-        if (taxCertTotal !== null && taxCertTotal !== undefined) {
-          const diff = Math.abs(Number(keaoMhMisthwtonTotal) - Number(taxCertTotal));
-          const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
-          label += ` — 📄 ΚΕΑΟ Πιστώσεις (Μη Μισθ.): ${fmtKeao} €${matchNote}`;
-        } else {
-          label += ` — 📄 ΚΕΑΟ Πιστώσεις (Μη Μισθ.): ${fmtKeao} €`;
-        }
+        label += ` — ΚΕΑΟ Πιστώσεις (Μη Μισθ.): ${fmtKeao} €`;
       }
       E3_BRAIN_CHECKS.set('585.007', {
         value: Number(efkaTotal !== null && efkaTotal !== undefined ? efkaTotal : taxCertTotal),
