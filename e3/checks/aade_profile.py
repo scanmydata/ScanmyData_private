@@ -49,9 +49,19 @@ AADE = "https://www1.aade.gr"
 # Candidate substrings for a "this tag looks like an address field" guess —
 # checked against LOWERCASED tag names. Deliberately broad; _guess_address()
 # is advisory only, the full tag dict is always returned alongside it.
+#
+# Confirmed live (2026-09-10, real ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ registry): AADE
+# compresses "διεύθυνση" to just "dieu" + noun here — NOT "dieuthins" as
+# originally guessed, which is why the first live run returned no address
+# at all. The two real tags seen:
+#   dieyaskhshsdrasthrio = "Διεύθυνση Άσκησης Δραστηριότητας" (business
+#     activity address — the company's registered έδρα, what E3 wants)
+#   dieykatoikias         = "Διεύθυνση Κατοικίας" (owner's home address —
+#     only a sensible fallback for a pure ΙΔΙΩΤΗΣ with no business)
+_ADDRESS_TAG_PRIORITY = ("dieyaskhshsdrasthrio", "dieykatoikias")
 _ADDRESS_TAG_HINTS = (
-    "dieuthins", "dieythins", "odos", "arithmos", "poli", "polh", "tk",
-    "postal", "address", "perioxi", "dimos",
+    "dieyaskhsh", "dieykatoikia", "dieuthins", "dieythins", "odos",
+    "arithmos", "poli", "polh", "tk", "postal", "address", "perioxi", "dimos",
 )
 
 
@@ -140,10 +150,14 @@ def _parse_all_tags(xml: str) -> Dict[str, str]:
 
 
 def _guess_address(tags: Dict[str, str]) -> str:
-    hits = []
-    for key in tags:
-        if any(hint in key for hint in _ADDRESS_TAG_HINTS):
-            hits.append(key)
+    # Confirmed tags first — the business activity address (company's
+    # έδρα) takes priority over the owner's home address.
+    for key in _ADDRESS_TAG_PRIORITY:
+        if tags.get(key):
+            return tags[key]
+    # Unknown shape (e.g. ΝΟΜΙΚΟ ΠΡΟΣΩΠΟ, not yet seen live) — fall back to
+    # the broader fuzzy hint match.
+    hits = [key for key in tags if any(hint in key for hint in _ADDRESS_TAG_HINTS)]
     if not hits:
         return ""
     # Stable order (street-ish first, then number, city, postal) is a nice
