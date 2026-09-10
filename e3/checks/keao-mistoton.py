@@ -125,6 +125,7 @@ UA = (
     "(KHTML, like Gecko) Chrome/120 Safari/537.36"
 )
 SVC = "https://services.e-efka.gov.gr/"
+LAND = SVC + "ssp.commonservices.home/views/secure/index.xhtml"
 # The live link text is "person Ηλεκτρονική Πλατφόρμα Οφειλετών - KEAO" — the
 # leading "person" is a material-icon ligature's text node (present in the
 # raw HTML same as any other text, so it ends up in the extracted link
@@ -266,7 +267,6 @@ def _efka_non_employee_login(http: "_HyperHttp", username: str, password: str, a
     Takes the caller's _HyperHttp instance (not its own) so the caller can
     read back the authenticated cookie jar afterwards — see
     _login_and_open_keao, which hands those cookies to Playwright."""
-    LAND = SVC + "ssp.commonservices.home/views/secure/index.xhtml"
     r = http.follow("GET", LAND)
     act = _decode_html(_form_action_of(r["text"], "social-external-non-employee"))
     if not act:
@@ -360,8 +360,25 @@ def _login_and_open_keao(context: BrowserContext, page: Page, username: str,
         logging.warning("[keao] no ΚΕΑΟ link found — available landing links: %s",
                         list(L["links"].keys()))
         raise RuntimeError("login_failed:NoKeaoLink")
-    page.goto(keao_url, timeout=NAV_TIMEOUT)
+    # referer=LAND mimics actually clicking the link from the home page
+    # (which is what a legitimate session does) rather than a bare
+    # address-bar navigation, in case the WAF also checks that.
+    page.goto(keao_url, timeout=NAV_TIMEOUT, referer=LAND)
     page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+    title = ""
+    try:
+        title = page.title()
+    except Exception:
+        pass
+    if "blocked" in title.lower():
+        # WAF interstitial ("The URL you requested has been blocked") —
+        # fail fast instead of waiting out the full DEFAULT_TIMEOUT for a
+        # table that will never appear.
+        _dump_diagnostics(page, output_dir, "waf_blocked")
+        raise RuntimeError(
+            f"waf_blocked: ο server μπλόκαρε το αίτημα στο {page.url} (τίτλος: {title!r}) — "
+            "δες _diag/waf_blocked.html/.png στον φάκελο εξόδου."
+        )
     try:
         page.wait_for_selector("[id='amoForm:dt-table_data']", timeout=DEFAULT_TIMEOUT)
     except PlaywrightTimeoutError:
@@ -694,6 +711,14 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
         locale="el-GR",
         viewport={"width": 1440, "height": 1000},
         accept_downloads=True,
+        # MUST match the UA used by the HTTP login (module UA constant) —
+        # the WAF in front of e-EFKA appears to bind the session cookies to
+        # a consistent UA/device fingerprint; a mismatch between the UA
+        # that established the session (HTTP) and the UA that then uses
+        # the cookies (browser) trips its "URL blocked" page even though
+        # the cookies themselves are valid. Same class of issue as the
+        # DESKTOP_UA requirement documented for kartela_ergodoti.py.
+        user_agent=UA,
     )
     page = context.new_page()
 
