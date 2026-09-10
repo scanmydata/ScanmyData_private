@@ -465,8 +465,27 @@ def run_extractor(username: str, password: str, afm: str, amka: str,
             url = urljoin(L["SVC"], _decode_html(m.group(1))) if m else urljoin(L["SVC"], ROY_PATH_FALLBACK)
         logging.info("[cert] royalties URL = %s", url)
 
-        summary["efka"] = _get_certificates(http, url, "EFKA", afm, year, pdf_dir)
-        summary["teka"] = _get_certificates(http, url, "TEKA", afm, year, pdf_dir)
+        try:
+            summary["efka"] = _get_certificates(http, url, "EFKA", afm, year, pdf_dir)
+        except requests.RequestException as exc:
+            logging.exception("EFKA certificate request failed: %s", exc)
+            summary["efka"] = {"ok": False, "years_available": [], "year": None,
+                                "pdf": None, "amount": None, "error": f"EFKA request: {exc}"}
+        except Exception as exc:
+            logging.exception("EFKA certificate stage failed: %s", exc)
+            summary["efka"] = {"ok": False, "years_available": [], "year": None,
+                                "pdf": None, "amount": None, "error": f"EFKA stage: {exc}"}
+
+        try:
+            summary["teka"] = _get_certificates(http, url, "TEKA", afm, year, pdf_dir)
+        except requests.RequestException as exc:
+            logging.exception("TEKA certificate request failed: %s", exc)
+            summary["teka"] = {"ok": False, "years_available": [], "year": None,
+                                "pdf": None, "amount": None, "error": f"TEKA request: {exc}"}
+        except Exception as exc:
+            logging.exception("TEKA certificate stage failed: %s", exc)
+            summary["teka"] = {"ok": False, "years_available": [], "year": None,
+                                "pdf": None, "amount": None, "error": f"TEKA stage: {exc}"}
         summary["ok"] = bool(summary["efka"].get("ok") and summary["efka"].get("pdf")) or bool(summary["teka"].get("ok") and summary["teka"].get("pdf"))
     except Exception as exc:
         logging.exception("efka_teka_certificate run failed: %s", exc)

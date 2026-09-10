@@ -4620,9 +4620,11 @@
     const year = fromYear;
     const userVal = String((userEl && userEl.value) || '').trim();
     const passVal = String((passEl && passEl.value) || '').trim();
+    const amkaWrapperEl = document.getElementById('brainAmkaWrapper');
+    const isIndividualForm = amkaWrapperEl && !amkaWrapperEl.classList.contains('hidden');
 
     // If we have detected partners (company) require top-level TAXIS credentials
-    if (Array.isArray(E3_BRAIN_MEMBERS) && E3_BRAIN_MEMBERS.length && (!userVal || !passVal)) {
+    if (!isIndividualForm && Array.isArray(E3_BRAIN_MEMBERS) && E3_BRAIN_MEMBERS.length && (!userVal || !passVal)) {
       brainSetResult('Για να γίνει αντιπαραβολή/έλεγχος σε εταιρεία συμπλήρωσε τους κωδικούς TAXISnet στην φόρμα.');
       showBrainFlash('Συμπλήρωσε κωδικούς TAXISnet για την αντιπαραβολή.', 'error');
       _earlyExit();
@@ -4630,8 +4632,6 @@
     }
 
     // Warn if ατομική and ΑΜΚΑ is missing
-    const amkaWrapperEl = document.getElementById('brainAmkaWrapper');
-    const isIndividualForm = amkaWrapperEl && !amkaWrapperEl.classList.contains('hidden');
     const amkaVal = String((amkaEl && amkaEl.value) || '').trim();
     if (isIndividualForm && !amkaVal) {
       try { hideGlobalWaitOverlay(); } catch (_) {}

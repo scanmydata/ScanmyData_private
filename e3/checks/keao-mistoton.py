@@ -515,6 +515,20 @@ def _open_credits_tab(page: Page, date_from: str) -> str:
     date_box.first.click()
     date_box.first.fill(date_from)
 
+    # The live calendar is a masked JSF widget: the visible input is only a
+    # display field and the server reads the synchronized hidden value. Set
+    # the hidden value without firing its remote-command event, which would
+    # navigate back to the registry picker before «Εμφάνιση» is submitted.
+    date_value = page.locator(
+        "[id='debtorTransForm:dateFromFilter:calendar1_masked_calendar_value']"
+    )
+    if date_value.count():
+        page.evaluate(
+            "([id, value]) => { const el = document.getElementById(id); "
+            "if (el) el.value = value; }",
+            ["debtorTransForm:dateFromFilter:calendar1_masked_calendar_value", date_from],
+        )
+
     show_btn = page.get_by_role("button", name="Εμφάνιση")
     if show_btn.count() == 0:
         return "no_show_btn"
@@ -535,19 +549,30 @@ def _credits_rows(page: Page):
 
 
 def _current_page_info(page: Page):
-    pag = page.locator("[id='debtorTransForm:dt-debit-credit-analysis_paginator_bottom']")
+    pag = page.locator(
+        "[id='debtorTransForm:mainTabView:dt-table-2_paginator_top']"
+    )
     if pag.count() == 0:
         return None
-    return _parse_page_info(pag.first.inner_text(timeout=3000))
+    pages = pag.first.locator("a.ui-paginator-page")
+    if pages.count() == 0:
+        return None
+    current = pag.first.locator("a.ui-paginator-page.ui-state-active")
+    if current.count() == 0:
+        return None
+    label = current.first.get_attribute("aria-label") or ""
+    match = re.search(r"Page\s+(\d+)", label, re.I)
+    return (int(match.group(1)), pages.count()) if match else None
 
 
 def _click_next_page(page: Page, target_page: int) -> bool:
-    nxt = page.locator(
-        "[id='debtorTransForm:dt-debit-credit-analysis_paginator_bottom']"
-    ).get_by_role("link", name="Επόμενη σελίδα")
-    if nxt.count() == 0:
+    pag = page.locator(
+        "[id='debtorTransForm:mainTabView:dt-table-2_paginator_top']"
+    )
+    target = pag.get_by_role("link", name=f"Page {target_page}")
+    if target.count() == 0:
         return False
-    nxt.first.click()
+    target.first.click()
     for _ in range(20):
         info = _current_page_info(page)
         if info and info[0] == target_page:
