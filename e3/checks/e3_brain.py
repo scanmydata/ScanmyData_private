@@ -2335,6 +2335,14 @@ def process_client(
     keao_588_total = 0.0
     keao_available = False
     keao_per_member: List[Dict[str, Any]] = []
+    # ΕΦΚΑ Μη Μισθωτών ΚΕΑΟ Πιστώσεις (κύρια εισφορά) — the script itself
+    # excludes these registries from e3_585_007_year/e3_588_year (their
+    # credits are already reflected in the annual EFKA certificate, see
+    # keao-mistoton.py's EFKA_MH_MISTHWTWN_FOREA), so this stays a SEPARATE
+    # cross-check figure next to tax_certificate_total/efka_teka_total on
+    # the 585.007 row — it never feeds any total.
+    keao_mh_misthwton_total = 0.0
+    keao_mh_misthwton_available = False
     if _flag_for("keao") and not missing_member_credentials:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
@@ -2371,6 +2379,10 @@ def process_client(
                 add_588 = float(k_json.get("e3_588_year") or 0.0)
                 keao_585_007_total += add_585
                 keao_588_total += add_588
+                for r in (k_json.get("registries") or []):
+                    if r.get("is_efka_mh_misthwton") and r.get("status") == "ok":
+                        keao_mh_misthwton_total += float((r.get("totals_year") or {}).get("main_contrib") or 0.0)
+                        keao_mh_misthwton_available = True
                 keao_per_member.append({
                     "afm": t.afm,
                     "name": t.full_name,
@@ -2398,6 +2410,7 @@ def process_client(
 
     keao_585_007_total = round(keao_585_007_total, 2)
     keao_588_total = round(keao_588_total, 2)
+    keao_mh_misthwton_total = round(keao_mh_misthwton_total, 2)
 
     # Fold KEAO main-contribution credits (excluding Ε.Φ.Κ.Α. Μη
     # Μισθωτών) into the 585.007 figure so the existing myDATA / Excel
@@ -3106,6 +3119,10 @@ def process_client(
             "keao_ran": keao_available,
             "keao_585_007_total": keao_585_007_total,
             "keao_588_total": keao_588_total,
+            # ΚΕΑΟ Πιστώσεις ΕΦΚΑ Μη Μισθωτών (κύρια εισφορά) — SEPARATE
+            # cross-check figure, never folded into any total (see comment
+            # at keao_mh_misthwton_total's definition above).
+            "keao_mh_misthwton_total": keao_mh_misthwton_total if keao_mh_misthwton_available else None,
             "mydata_588": mydata_588,
             "excel_588": excel_588,
             "keao_per_member": keao_per_member,

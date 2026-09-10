@@ -67,16 +67,19 @@ SHORT_WAIT = 600
 NO_AMO_TEXT = "Δεν βρέθηκε Αριθμός Μητρώου Οφειλέτη"
 EMPLOYER_TOKEN = "ΕΡΓΟΔΟΤ"  # excludes any «ΕΡΓΟΔΟΤΗΣ» variant
 
-# Ε.Φ.Κ.Α. Μη Μισθωτών credits are already reflected in the annual
-# EFKA certificate, so the e3_brain reconciliation must NOT double-count
-# them. We still process the registry (PDF + per-row table) so the user
-# can audit it — we only flag it out of the 585.007 / 588 aggregates.
-EFKA_MH_MISTHWTWN_TOKENS = ("ΜΗ ΜΙΣΘΩΤ",)  # robust to «ΜΗ ΜΙΣΘΩΤΩΝ» variants
+# This is the only registry requested for PDF extraction. Its credits are
+# already reflected in the annual EFKA certificate, so it is excluded from
+# the e3_brain reconciliation aggregates.
+EFKA_MH_MISTHWTWN_FOREA = (
+    "ΕΝΙΑΙΟΣ ΦΟΡΕΑΣ ΚΟΙΝΩΝΙΚΗΣ ΑΣΦΑΛΙΣΗΣ - "
+    "ΕΝΙΑΙΟΣ ΦΟΡΕΑΣ ΚΟΙΝΩΝΙΚΗΣ ΑΣΦΑΛΙΣΗΣ"
+)
 
 
 def _is_efka_mh_misthwton(forea: str) -> bool:
-    u = (forea or "").upper()
-    return any(tok in u for tok in EFKA_MH_MISTHWTWN_TOKENS)
+    name = (forea or "").strip()
+    name = re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", name, flags=re.IGNORECASE)
+    return name == EFKA_MH_MISTHWTWN_FOREA
 
 
 def _to_float(text: str) -> float:
@@ -506,7 +509,7 @@ def _open_credits_tab(page: Page, date_from: str) -> str:
     credits_tab.first.click()
     page.wait_for_timeout(SHORT_WAIT)
 
-    date_box = page.locator("#dateFrom_input")
+    date_box = page.locator("[id='debtorTransForm:dateFromFilter:calendar1']")
     if date_box.count() == 0:
         return "no_date_box"
     date_box.first.click()
@@ -518,20 +521,21 @@ def _open_credits_tab(page: Page, date_from: str) -> str:
     show_btn.first.click()
     page.wait_for_timeout(SHORT_WAIT)
 
-    grid_sel = "[id='tabView:linesTable2_data']"
-    try:
-        page.wait_for_selector(grid_sel, timeout=12000)
-    except PlaywrightTimeoutError:
-        return "empty"
+    rows = _credits_rows(page)
+    for _ in range(24):
+        if rows.count():
+            return "ok"
+        page.wait_for_timeout(500)
+    return "empty"
 
-    rows = page.locator(f"{grid_sel} tr")
-    if rows.count() == 0:
-        return "empty"
-    return "ok"
+
+def _credits_rows(page: Page):
+    """Locate the visible credits table despite PrimeFaces' generated IDs."""
+    return page.locator("[id$='_data']:visible tr")
 
 
 def _current_page_info(page: Page):
-    pag = page.locator("[id='tabView:linesTable2_paginator_bottom']")
+    pag = page.locator("[id='debtorTransForm:dt-debit-credit-analysis_paginator_bottom']")
     if pag.count() == 0:
         return None
     return _parse_page_info(pag.first.inner_text(timeout=3000))
@@ -539,7 +543,7 @@ def _current_page_info(page: Page):
 
 def _click_next_page(page: Page, target_page: int) -> bool:
     nxt = page.locator(
-        "[id='tabView:linesTable2_paginator_bottom']"
+        "[id='debtorTransForm:dt-debit-credit-analysis_paginator_bottom']"
     ).get_by_role("link", name="Επόμενη σελίδα")
     if nxt.count() == 0:
         return False
@@ -553,29 +557,22 @@ def _click_next_page(page: Page, target_page: int) -> bool:
     return False
 
 
-# JS that returns the smallest wrapper containing both the
-# «Ηλεκτρονική Καρτέλα Οφειλέτη» heading and the credits #tabView —
-# i.e. the card the user wants on the PDF without the sidebar.
+# JS that returns only the card containing the debtor heading and the
+# currently rendered «Πιστώσεις Οφειλών» tab.
 _CARD_JS = r"""
 () => {
-    const tabView = document.querySelector('#tabView');
-    if (!tabView) return null;
     const TITLE = 'Ηλεκτρονική Καρτέλα Οφειλέτη';
+    const creditsTab = document.getElementById('debtorTransForm:mainTabView:tab2');
+    if (!creditsTab) return null;
     let heading = null;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     while (walker.nextNode()) {
         const t = (walker.currentNode.nodeValue || '').trim();
         if (t === TITLE) { heading = walker.currentNode.parentElement; break; }
     }
-    let target = null;
-    if (heading) {
-        let el = heading;
-        while (el && !el.contains(tabView)) el = el.parentElement;
-        target = el;
-    }
-    if (!target) target = tabView.closest('form') || tabView.parentElement;
-    if (target && target.tagName === 'BODY') target = tabView.parentElement;
-    return target;
+    if (!heading) return null;
+    const target = heading.closest('.card.card-w-title');
+    return target && target.contains(creditsTab) ? target : null;
 }
 """
 
@@ -593,16 +590,11 @@ def _screenshot_card(page: Page, out_path: Path) -> Path:
             return out_path
         except Exception as exc:
             logging.warning("card screenshot fell back to #content (%s)", exc)
-    content = page.locator("#content")
-    if content.count():
-        content.first.screenshot(path=str(out_path))
-    else:
-        page.screenshot(path=str(out_path), full_page=True)
-    return out_path
+    raise RuntimeError("debtor_card_not_found: refusing to capture content outside the requested card")
 
 
 def _extract_credit_rows(page: Page) -> list[dict]:
-    rows_loc = page.locator("[id='tabView:linesTable2_data'] tr")
+    rows_loc = _credits_rows(page)
     n = rows_loc.count()
     out = []
     for i in range(n):
@@ -655,7 +647,8 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
                       output_dir: Path) -> dict:
     """Drive one registry through the credits tab and emit a PDF + totals."""
     safe = _safe_filename(reg["forea"], fallback=f"amo_{reg['amo']}")
-    reg_dir = output_dir / "shots" / safe
+    artifact_safe = f"{safe}_amo{reg['amo']}"
+    reg_dir = output_dir / "shots" / artifact_safe
     reg_dir.mkdir(parents=True, exist_ok=True)
 
     record = {
@@ -677,7 +670,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
     # registry, so diagnostic dump tags must include it or later
     # registries silently overwrite earlier ones' dumps (exactly what
     # happened on the previous live run: 3 of 4 shared one dump file).
-    diag_tag = f"{safe}_amo{reg['amo']}"
+    diag_tag = artifact_safe
 
     if not _click_select_for_amo(picker, reg["amo"]):
         record["status"] = "select_button_missing"
@@ -721,7 +714,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
             break
         idx += 1
 
-    pdf_path = output_dir / f"keao_pistwseis_{safe}.pdf"
+    pdf_path = output_dir / f"keao_pistwseis_{artifact_safe}.pdf"
     _stitch_pdf(shot_paths, pdf_path)
     record["pdf"] = str(pdf_path)
     record["rows"] = all_rows
@@ -732,6 +725,10 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         if _row_in_year(r, year):
             for k in ("total", "main_contrib", "extra_fees", "surcharges"):
                 record["totals_year"][k] += r[k]
+
+    for totals in (record["totals_year"], record["totals_all"]):
+        for k in totals:
+            totals[k] = round(totals[k], 2)
 
     record["status"] = "ok"
     return record
@@ -799,8 +796,8 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
             result["status"] = "no_registries"
             return result
 
-        targets = [r for r in all_registries if EMPLOYER_TOKEN not in r["forea"].upper()]
-        logging.info("Found %d registries; %d non-employer to process",
+        targets = [r for r in all_registries if _is_efka_mh_misthwton(r["forea"])]
+        logging.info("Found %d registries; %d requested EFKA registry to process",
                      len(all_registries), len(targets))
 
         for i, reg in enumerate(targets):
