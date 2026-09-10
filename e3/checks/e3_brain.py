@@ -2210,6 +2210,28 @@ def process_client(
                     tax_certificate_results.append({"afm": t.afm, "name": t.full_name, "ok": False, "error": str(exc)})
     tax_certificate_total = round(tax_certificate_total, 2)
 
+    # efka-extractor.py/teka-extractor.py scrape a LEGACY ASP.NET/DevExpress
+    # portal (#ContentPlaceHolder1_..._DXMainTable) that has been retired —
+    # every run now fails at the very first step (a "Συνέχεια στο
+    # TAXISNET" popup that no longer opens, same as the now-fixed
+    # kartela_ergodoti/efka_teka_certificate/keao-mistoton flows before
+    # this). Rather than leave 585.007 silently at 0 whenever that happens,
+    # fall back to the already-proven Φορολογική Βεβαίωση PDF total
+    # (efka_teka_certificate.py, live-confirmed same day) — it represents
+    # the same underlying "Βεβαίωση για φορολογική χρήση" figure the old
+    # scraper was after, just fetched through the portal that's actually
+    # still live. Only used as a fallback (never overrides a successful
+    # scrape) and flagged clearly so it's never mistaken for the primary
+    # source.
+    if not efka_teka_available and tax_certificate_available:
+        efka_teka_total = tax_certificate_total
+        efka_teka_available = True
+        warnings.append(
+            "ΕΦΚΑ/ΤΕΚΑ: το scrape απέτυχε (πιθανώς ο παλιός popup-based portal δεν είναι πλέον "
+            "διαθέσιμος) — χρησιμοποιήθηκε ως fallback το ποσό της Φορολογικής Βεβαίωσης PDF "
+            f"({tax_certificate_total} €). Επιβεβαίωσε χειροκίνητα αν χρειάζεται."
+        )
+
     # ------------------------------------------------------------------
     # «Οικονομική Καρτέλα Εργοδότη» (EFKA + TEKA employer-side).
     #
@@ -2278,8 +2300,21 @@ def process_client(
                     except Exception:
                         pass
                 if proc.returncode != 0:
+                    # summary["ok"] is efka.ok OR teka.ok — a non-zero exit
+                    # means BOTH sides failed (a partial success, e.g. only
+                    # ΤΕΚΑ working, returns 0 and never reaches here). Any
+                    # PDFs still visible in the per-AFM folder afterwards
+                    # are therefore from an EARLIER successful run, not
+                    # this one — PDFs are year-qualified and intentionally
+                    # never deleted across runs so multiple years coexist.
+                    _summ = kartela_ergodoti_result.get("summary") or {}
+                    _efka_err = ((_summ.get("efka") or {}).get("error")) or "—"
+                    _teka_err = ((_summ.get("teka") or {}).get("error")) or "—"
                     warnings.append(
-                        "Οικονομική Καρτέλα Εργοδότη: αποτυχία (δες kartela_ergodoti στο response)."
+                        "Οικονομική Καρτέλα Εργοδότη: αποτυχία και στα δύο (ΕΦΚΑ+ΤΕΚΑ) — "
+                        f"ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}. "
+                        "Τυχόν PDF που βλέπεις στη λίστα είναι από προηγούμενο επιτυχημένο run "
+                        "(δεν διαγράφονται μεταξύ ετών)."
                     )
                 elif kart_pdf_dir is not None:
                     try:
