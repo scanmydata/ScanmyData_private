@@ -2978,6 +2978,8 @@
     setVal('editTaxisUser', c.taxisnet_username || '');
     setVal('editTaxisPass', '');
     setVal('editAmka', c.amka || '');
+    setVal('editIkaEmpUser', c.ika_employer_username || '');
+    setVal('editIkaEmpPass', '');
     setVal('editMydataUser', c.mydata_user || '');
     setVal('editMydataKey', c.mydata_key || '');
 
@@ -3153,6 +3155,23 @@
     document.body.style.overflow = '';
   }
 
+  /**
+   * fetch().json() throws the cryptic "Unexpected token '<', ... is not
+   * valid JSON" whenever the server answers with an HTML page instead of
+   * JSON (session expired -> login-redirect page, a 500 error page, etc.)
+   * — seen twice now on different endpoints. Wrap the parse so callers get
+   * a clear Greek message instead of that raw parser error.
+   */
+  async function _brainParseJsonResponse(resp) {
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('application/json')) {
+      throw new Error(resp.status === 401 || resp.status === 302
+        ? 'Η σύνδεση έληξε — ανανέωσε τη σελίδα και ξαναπροσπάθησε.'
+        : `Μη αναμενόμενη απάντηση server (HTTP ${resp.status}).`);
+    }
+    return resp.json();
+  }
+
   async function saveBrainCredEdit() {
     const afm = document.getElementById('editAfm').value;
     const cred = _E3_BRAIN_EDIT_CRED || E3_BRAIN_CREDS_CACHE.find(c => (c.company || {}).afm === afm);
@@ -3165,6 +3184,10 @@
     const newPass = document.getElementById('editTaxisPass').value;
     if (newPass) c.taxisnet_password = newPass; // empty = keep existing
     c.amka = document.getElementById('editAmka').value;
+    const ikaEmpUserEl = document.getElementById('editIkaEmpUser');
+    if (ikaEmpUserEl) c.ika_employer_username = ikaEmpUserEl.value;
+    const newIkaEmpPass = (document.getElementById('editIkaEmpPass') || {}).value;
+    if (newIkaEmpPass) c.ika_employer_password = newIkaEmpPass; // empty = keep existing
     c.mydata_user = document.getElementById('editMydataUser').value;
     c.mydata_key = document.getElementById('editMydataKey').value;
     const legalInputSave = document.getElementById('editLegalType');
@@ -3194,7 +3217,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshot: cred })
       });
-      const data = await resp.json();
+      const data = await _brainParseJsonResponse(resp);
       if (!data.ok) throw new Error(data.error || 'Σφάλμα αποθήκευσης');
       _closeBrainCredEditModal();
       _E3_BRAIN_EDIT_CRED = null;
@@ -4103,6 +4126,7 @@
 
           // Build brain check indicator for this row if brain data exists
           let brainIndicatorHtml = '';
+          let brainSublabelHtml = '';
           if (rowCode && E3_BRAIN_CHECKS.has(rowCode)) {
             const bc = E3_BRAIN_CHECKS.get(rowCode);
             const brainVal = bc.value;
@@ -4122,6 +4146,15 @@
               `data-b-e3="${e3Val}" data-b-mydata="${mydataVal}" ` +
               `data-b-label="${esc(bc.label)}" ` +
               `title="${esc(bc.label)}: ${brainVal}">${bciSymbol}</span>`;
+            // The label (with the tax-cert/ΚΕΑΟ cross-check amounts) was
+            // previously ONLY visible as a hover tooltip on the small icon
+            // above — easy to miss when the whole point is to SEE the
+            // amounts in the table. Show it as visible small text too.
+            if (bc.label && bc.label.indexOf('—') >= 0) {
+              brainSublabelHtml = `<div class="brain-check-sublabel" ` +
+                `style="font-size:0.72rem;color:#64748b;font-weight:400;margin-top:0.15rem;">` +
+                `${esc(bc.label)}</div>`;
+            }
           }
 
           if (isExpandable) {
@@ -4131,7 +4164,7 @@
             const iconHtml = `<span class="e3-expand-icon" style="transform:rotate(${isOpen ? 90 : 0}deg);display:inline-block">${isOpen ? '&#9660;' : '&#9654;'}</span>`;
             tr.innerHTML = `
               <td class="row-code">${rowCode}</td>
-              <td class="row-description">${iconHtml}${row.description}${brainIndicatorHtml}</td>
+              <td class="row-description">${iconHtml}${row.description}${brainIndicatorHtml}${brainSublabelHtml}</td>
               <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
               <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
               <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
@@ -4139,7 +4172,7 @@
           } else {
             tr.innerHTML = `
               <td class="row-code">${rowCode}</td>
-              <td class="row-description">${row.description || ''}${brainIndicatorHtml}</td>
+              <td class="row-description">${row.description || ''}${brainIndicatorHtml}${brainSublabelHtml}</td>
               <td class="col-e3">${formatNumber(row.e3_value || 0)}</td>
               <td class="col-mydata">${formatNumber(row.mydata_value || 0)}</td>
               <td class="col-diff ${diffClass}">${formatNumber(diffValue)}</td>
@@ -7364,6 +7397,20 @@
                   <div class="brain-cred-field" id="editAmkaWrapper">
                     <label>ΑΜΚΑ</label>
                     <input id="editAmka" name="amka" placeholder="ΑΜΚΑ ατομικής επιχείρησης">
+                  </div>
+                </div>
+                <div class="brain-cred-section-label" style="margin-top:0.4rem;"
+                     title="Κωδικοί Ι.Κ.Α. Εργοδότη — χρησιμοποιούνται για την Καρτέλα Εργοδότη ΤΕΚΑ (kartela_ergodoti.py).">
+                  Ι.Κ.Α. Εργοδότη (Καρτέλα ΤΕΚΑ)
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+                  <div class="brain-cred-field">
+                    <label>Ι.Κ.Α. Εργοδότη username</label>
+                    <input id="editIkaEmpUser" name="ika_employer_username" placeholder="π.χ. ika000XXXXX" autocomplete="off">
+                  </div>
+                  <div class="brain-cred-field">
+                    <label>Ι.Κ.Α. Εργοδότη password</label>
+                    <input id="editIkaEmpPass" name="ika_employer_password" type="password" placeholder="••••••••" autocomplete="new-password">
                   </div>
                 </div>
                 <div class="brain-cred-section-label" style="margin-top:0.4rem;">myDATA</div>
