@@ -7,6 +7,14 @@ of the Λογιστικό Αποτέλεσμα report myDATA cannot supply for t
 being examined (it's a physical stocktake, not a transaction flow), so it's the
 only inventory figure a user ever enters or edits in this app.
 
+A stored value is SINGLE-USE: once a computation has actually consumed it to
+build a report, it's cleared (see clear_closing_inventory) so the next
+computation of that same year asks again instead of silently reusing it —
+the physical count it represents can change between runs (a correction, a
+recount). Already-COMPUTED reports are unaffected: each one's own
+closing_inventory is captured into accounting_result/history_store.py at
+compute time, independent of whatever this store holds afterward.
+
 OPENING inventory is NOT stored here at all: it's always the prior year's
 already-declared myDATA/Ε3 closing stock, re-derived fresh from AADE on every
 computation (see engine.extract_prior_year_closing_inventory) rather than
@@ -96,3 +104,22 @@ def set_closing_inventory(
     rec["computed_at"] = datetime.now().isoformat()
     _write(path, data)
     return rec
+
+
+def clear_closing_inventory(path: str, year: int) -> None:
+    """Deletes a year's closing-stock record once a computation has actually
+    consumed it to build a report — see the module docstring for why: the
+    value is single-use, not a standing answer. Best-effort: a corrupt file
+    is left alone rather than raised here, since the caller has already
+    finished building and saving the report by the time this runs, and
+    resolve_or_flag_closing_inventory degrading to needs_user_input=True on
+    the same corruption is a safe-enough fallback for the next computation."""
+    try:
+        data = _read(path)
+    except InventoryStoreCorruptError:
+        return
+    years = data.get("years")
+    if not isinstance(years, dict) or str(year) not in years:
+        return
+    del years[str(year)]
+    _write(path, data)

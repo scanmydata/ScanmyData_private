@@ -18405,6 +18405,14 @@ def api_accounting_result_compute():
             mode="single", report=report,
         )
 
+        # The closing-stock value is single-use — this report's own copy is
+        # already durably captured above via history_store, so clear it from
+        # the live store now rather than letting the next computation of
+        # this same year silently reuse a stocktake figure that may no
+        # longer be current.
+        if has_inventory:
+            ar_inventory.clear_closing_inventory(path, year)
+
         return jsonify({
             "ok": True,
             "needs_inventory_input": False,
@@ -18628,6 +18636,13 @@ def api_accounting_result_bulk_compute():
                     _ar_computed_by(), report.get("final_net_profit"), report.get("taxable_result"),
                     mode="bulk", report=report,
                 )
+
+                # Single-use closing stock (see inventory_store module docstring):
+                # this report's own copy is already durably captured above, so
+                # clear it now rather than letting a later computation of this
+                # same year silently reuse a stocktake figure that may have changed.
+                if has_inventory:
+                    ar_inventory.clear_closing_inventory(path, year)
 
                 results.append({
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
