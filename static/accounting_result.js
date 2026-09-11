@@ -1800,6 +1800,28 @@ async function saveSavedEdit() {
 // classList.remove('hidden') alone can no longer undo it (inline always
 // wins), so the button silently stops reopening it on the very next click —
 // exactly the "works once, not the second time" bug this was meant to fix.
+//
+// This local handler is not actually what was corrupting arBulkRunsModal
+// (or arManualInvModal / arDepPickModal, which never had a backdrop
+// handler here at all): modal_utils.js installs its OWN global backdrop/
+// Escape dismiss listener on `document` in the CAPTURE phase, which runs
+// BEFORE this one. It looks for a recognized close control inside the
+// modal (`[data-modal-close]` etc.) and, when it can't find one — which
+// was the case for every close/cancel button on this page — falls back to
+// forcibly hiding the element itself: `el.style.display = 'none'` AND
+// `el.classList.remove('flex')`. That second part permanently strips the
+// Tailwind class these modals rely on for centering, and the inline style
+// it sets can never be undone by a later `classList.remove('hidden')`
+// here — so the very next time the modal is needed (the next company in a
+// bulk loop, or the next click of the button) it either renders pinned to
+// the top-left (flex gone) or doesn't render at all (inline display:none
+// still winning), i.e. it looks "lost". The actual fix is on the
+// close/cancel buttons themselves (`data-modal-close` in
+// templates/accounting_result.html) so the global handler finds and
+// clicks the real close control — running this file's own cleanup (and,
+// for arManualInvModal/arDepPickModal, resolving the pending Promise with
+// null instead of leaving the caller awaiting forever) — instead of ever
+// reaching its destructive fallback.
 function _arBindBackdropClose(modalId, useInlineStyle) {
   const modal = document.getElementById(modalId);
   if (!modal) return;
