@@ -180,6 +180,26 @@ DEPRECIATION_E3_CODE = "587"
 # year's closing inventory at all.
 INVENTORY_CLOSING_CODES = {"104", "204", "209", "304", "309", "315"}
 
+# Which internal STOCK_CODES row each Ε3 closing-stock code's declared AMOUNT
+# feeds — see e3/e3_field_map.py for the authoritative Ε3 labels:
+#   104 Εμπορεύματα λήξης                                  -> 20 ΕΜΠΟΡΕΥΜΑΤΑ
+#   204 Αποθέματα λήξης πρώτων υλών και υλικών (Παραγωγική) -> 24 ΠΡΩΤΕΣ ΥΛΕΣ
+#   304 Αποθέματα λήξης πρώτων υλών (Αγροτική)               -> 24 ΠΡΩΤΕΣ ΥΛΕΣ
+#   209 Προϊόντα και παραγωγή σε εξέλιξη λήξης               -> 21 ΠΡΟΙΟΝΤΑ
+#   309 Παραγωγή σε εξέλιξη λήξης (Αγροτική)                 -> 23 ΠΑΡ. ΣΕ ΕΞΕΛ.
+#   315 Αποθέματα τέλους ζώων - φυτών                        -> 27 ΒΙΟΛ.ΠΕΡ.ΣΤΟΙΧ.
+# 204/304 and 209 are themselves single combined AADE totals (Ε3 doesn't
+# split "πρώτες ύλες" from "υλικά", or "προϊόντα" from "παραγωγή σε εξέλιξη",
+# any further) so neither do we — 204/304 both land on 24 (mirroring
+# _STOCK_PURCHASE_TO_GLS, which already funnels the matching purchase codes
+# 202/302 into the same 24), and 209 lands on 21. A company only ever
+# declares ONE of the three activity groups (commercial/production/
+# agricultural) these six codes span, so in practice at most two of these
+# targets are ever populated for a given company.
+_INVENTORY_CLOSING_CODE_TO_STOCK = {
+    "104": "20", "204": "24", "304": "24", "209": "21", "309": "23", "315": "27",
+}
+
 
 def _digits(s: Any) -> str:
     return "".join(ch for ch in str(s or "") if ch.isdigit())
@@ -461,6 +481,27 @@ def company_tracks_inventory(classified_entries: List[dict]) -> bool:
         if code in INVENTORY_CLOSING_CODES and abs(_fnum(row.get("amount"))) > 0.005:
             return True
     return False
+
+
+def extract_prior_year_closing_inventory(classified_entries: List[dict]) -> Dict[str, float]:
+    """The ACTUAL closing-stock amounts the accountant already declared to
+    AADE for the prior year (same `classified_entries` company_tracks_inventory
+    reads), mapped to this report's internal stock codes via
+    _INVENTORY_CLOSING_CODE_TO_STOCK. This is the ONLY source for a year's
+    OPENING inventory — it is by definition the same figure as last year's
+    closing stock, so it is re-derived from myDATA on every computation
+    rather than ever being entered, edited, or persisted here. The one
+    inventory figure a user can actually touch in this app is the CURRENT
+    (under-examination) year's own closing stock — see
+    inventory_store.set_closing_inventory."""
+    totals: Dict[str, float] = {}
+    for row in classified_entries:
+        code = str(row.get("code") or "").strip()
+        stock_code = _INVENTORY_CLOSING_CODE_TO_STOCK.get(code)
+        if not stock_code:
+            continue
+        totals[stock_code] = round(totals.get(stock_code, 0.0) + _fnum(row.get("amount")), 2)
+    return totals
 
 
 def depreciation_entries_from(classified_entries: List[dict]) -> List[Dict[str, Any]]:

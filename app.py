@@ -18365,7 +18365,11 @@ def api_accounting_result_compute():
         depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
 
         if has_inventory:
-            closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+            # Opening is always last year's ALREADY-DECLARED myDATA closing
+            # stock, re-derived fresh here — never stored/edited, see
+            # engine.extract_prior_year_closing_inventory.
+            opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
+            closing, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
             if needs_input:
                 return jsonify({
                     "ok": True,
@@ -18428,20 +18432,29 @@ def api_accounting_result_inventory_resolve():
         vat = str(cred.get("vat") or "").strip()
 
         from accounting_result import inventory_store as ar_inventory
+        from accounting_result import engine as ar_engine
         from accounting_result.engine import STOCK_CODES
         path = _ar_store_path(vat)
-        opening = ar_inventory.get_opening_inventory(path, year)
-        base = {c: float(opening.get(c, 0.0)) for c in STOCK_CODES}
 
         if method == "manual":
             raw_values = payload.get("value") if isinstance(payload.get("value"), dict) else {}
             values = {c: float(raw_values.get(c, 0.0) or 0.0) for c in STOCK_CODES}
-        elif method == "pct10_up":
-            values = {c: round(v * 1.10, 2) for c, v in base.items()}
-        elif method == "pct10_down":
-            values = {c: round(v * 0.90, 2) for c, v in base.items()}
-        else:  # same_as_opening
-            values = base
+            opening = {}
+        else:
+            # +10%/-10%/same-as-opening are all relative to the ACTUAL
+            # myDATA-declared prior-year closing stock, fetched fresh here
+            # (never stored/edited) — see engine.extract_prior_year_closing_inventory.
+            aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+            aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+            prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
+            opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
+            base = {c: float(opening.get(c, 0.0)) for c in STOCK_CODES}
+            if method == "pct10_up":
+                values = {c: round(v * 1.10, 2) for c, v in base.items()}
+            elif method == "pct10_down":
+                values = {c: round(v * 0.90, 2) for c, v in base.items()}
+            else:  # same_as_opening
+                values = base
 
         rec = ar_inventory.set_closing_inventory(
             path, year, values, method,
@@ -18490,7 +18503,8 @@ def api_accounting_result_inventory_bulk_status():
                 continue
 
             path = _ar_store_path(vat)
-            closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+            opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
+            closing, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
             rows.append({
                 "name": name, "vat": vat,
                 "opening_inventory": opening,
@@ -18585,7 +18599,8 @@ def api_accounting_result_bulk_compute():
 
             path = _ar_store_path(vat)
             if has_inventory:
-                closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+                opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
+                closing, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
                 if needs_input:
                     results.append({
                         "credential_name": name, "ok": True, "needs_inventory_input": True,
