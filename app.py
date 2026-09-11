@@ -18326,12 +18326,6 @@ def _ar_year_from_date(date_str: str) -> int:
     return d.year if d else datetime.datetime.now().year
 
 
-def _ar_starts_at_year_begin(date_str: str) -> bool:
-    from accounting_result.engine import parse_date as _ar_parse_date
-    d = _ar_parse_date(date_str)
-    return bool(d and d.month == 1 and d.day == 1)
-
-
 @app.route("/api/accounting_result/compute", methods=["POST"])
 def api_accounting_result_compute():
     try:
@@ -18369,27 +18363,6 @@ def api_accounting_result_compute():
                 "depreciation_entries": dep_entries,
             }), 200
         depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
-
-        # A report starting 01/01 is the first computation of a new fiscal
-        # year for this company — the carried-forward opening inventory
-        # (last year's closing, auto-seeded) has never actually been shown
-        # to the accountant for review. Surface it every time a period
-        # starting at the year boundary is computed, rather than silently
-        # trusting whatever is on file — a stored value only skips this
-        # once the CURRENT request has already confirmed it (round-tripped
-        # via opening_inventory_confirmed below).
-        opening_confirmed = payload.get("opening_inventory_confirmed") if isinstance(payload.get("opening_inventory_confirmed"), dict) else None
-        if has_inventory and _ar_starts_at_year_begin(date_from):
-            if opening_confirmed is None:
-                return jsonify({
-                    "ok": True,
-                    "needs_opening_confirmation": True,
-                    "credential_name": credential_name,
-                    "vat": vat,
-                    "year": year,
-                    "opening_inventory": ar_inventory.get_opening_inventory(path, year),
-                }), 200
-            ar_inventory.set_opening_inventory(path, year, opening_confirmed)
 
         if has_inventory:
             closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
@@ -18480,41 +18453,15 @@ def api_accounting_result_inventory_resolve():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/accounting_result/inventory/resolve_opening", methods=["POST"])
-def api_accounting_result_inventory_resolve_opening():
-    try:
-        payload = request.get_json(silent=True) or {}
-        credential_name, cred = _ar_resolve_credential(payload)
-        year = payload.get("year")
-        if not cred or not year:
-            return jsonify({"ok": False, "error": "Λείπει credential ή έτος"}), 400
-        year = int(year)
-        vat = str(cred.get("vat") or "").strip()
-
-        from accounting_result import inventory_store as ar_inventory
-        from accounting_result.engine import STOCK_CODES
-        path = _ar_store_path(vat)
-        raw_values = payload.get("value") if isinstance(payload.get("value"), dict) else {}
-        values = {c: float(raw_values.get(c, 0.0) or 0.0) for c in STOCK_CODES}
-
-        rec = ar_inventory.set_opening_inventory(path, year, values)
-        return jsonify({"ok": True, "opening_inventory": rec["opening_inventory"]}), 200
-    except Exception as e:
-        log.exception("api_accounting_result_inventory_resolve_opening failed")
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 @app.route("/api/accounting_result/inventory/bulk_status", methods=["POST"])
 def api_accounting_result_inventory_bulk_status():
     try:
         payload = request.get_json(silent=True) or {}
         names = payload.get("credential_names") or []
         year = payload.get("year")
-        date_from = str(payload.get("date_from") or "").strip()
         if not isinstance(names, list) or not names or not year:
             return jsonify({"ok": False, "error": "Λείπουν credential_names ή έτος"}), 400
         year = int(year)
-        starts_at_year_begin = _ar_starts_at_year_begin(date_from) if date_from else False
 
         from accounting_result import inventory_store as ar_inventory
         from accounting_result import engine as ar_engine
@@ -18522,13 +18469,13 @@ def api_accounting_result_inventory_bulk_status():
         for name in names:
             cred = get_cred_by_name(str(name))
             if not cred:
-                rows.append({"name": name, "vat": "", "opening_inventory": {}, "closing_inventory_known": False, "inventory_applicable": False, "needs_opening_confirmation": False, "error": "Άγνωστο credential"})
+                rows.append({"name": name, "vat": "", "opening_inventory": {}, "closing_inventory_known": False, "inventory_applicable": False, "error": "Άγνωστο credential"})
                 continue
             vat = str(cred.get("vat") or "").strip()
             aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
             aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
             if not vat or not aade_user or not aade_key:
-                rows.append({"name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True, "inventory_applicable": False, "needs_opening_confirmation": False, "error": "Λείπουν στοιχεία AADE"})
+                rows.append({"name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True, "inventory_applicable": False, "error": "Λείπουν στοιχεία AADE"})
                 continue
 
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
@@ -18538,8 +18485,7 @@ def api_accounting_result_inventory_bulk_status():
             if not has_inventory:
                 rows.append({
                     "name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True,
-                    "inventory_applicable": False, "needs_opening_confirmation": False,
-                    "depreciation_ambiguous": len(dep_entries) > 1,
+                    "inventory_applicable": False, "depreciation_ambiguous": len(dep_entries) > 1,
                 })
                 continue
 
@@ -18550,7 +18496,6 @@ def api_accounting_result_inventory_bulk_status():
                 "opening_inventory": opening,
                 "closing_inventory_known": not needs_input,
                 "inventory_applicable": True,
-                "needs_opening_confirmation": starts_at_year_begin,
                 "depreciation_ambiguous": len(dep_entries) > 1,
             })
         return jsonify({"ok": True, "rows": rows}), 200

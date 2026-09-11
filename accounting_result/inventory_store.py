@@ -69,31 +69,11 @@ def get_year_record(path: str, year: int) -> Optional[Dict[str, Any]]:
 
 
 def get_opening_inventory(path: str, year: int) -> Dict[str, float]:
-    """Returns this year's explicitly-confirmed opening inventory if one has
-    been set (see set_opening_inventory), otherwise falls back to year-1's
-    closing inventory, or {} if neither is known."""
-    rec = get_year_record(path, year)
-    if rec and isinstance(rec.get("opening_inventory"), dict) and rec["opening_inventory"]:
-        return {k: float(v) for k, v in rec["opening_inventory"].items()}
+    """Returns year-1's closing inventory, or {} if unknown."""
     prev = get_year_record(path, year - 1)
     if prev and isinstance(prev.get("closing_inventory"), dict):
         return {k: float(v) for k, v in prev["closing_inventory"].items()}
     return {}
-
-
-def set_opening_inventory(path: str, year: int, values: Dict[str, float]) -> Dict[str, Any]:
-    """Explicitly confirms/overrides this year's opening inventory (the
-    accountant reviewing/correcting the carried-forward figure at the start
-    of a new fiscal year, rather than the report silently trusting whatever
-    was auto-seeded from last year's closing). Raises InventoryStoreCorruptError
-    rather than write if the existing file can't be read — see _read."""
-    data = _read(path)
-    years = data.setdefault("years", {})
-    rec = years.setdefault(str(year), {})
-    rec["opening_inventory"] = {k: round(float(v), 2) for k, v in (values or {}).items()}
-    rec["opening_confirmed_at"] = datetime.now().isoformat()
-    _write(path, data)
-    return rec
 
 
 def resolve_or_flag_closing_inventory(path: str, year: int) -> Tuple[Optional[Dict[str, float]], Dict[str, float], bool]:

@@ -571,21 +571,6 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
   return !!resp.ok;
 }
 
-// A report starting 01/01 is the first computation of a new fiscal year —
-// review the carried-forward opening inventory (last year's closing,
-// auto-seeded) instead of silently trusting it, since it was never
-// actually shown to the accountant before. Reuses the same manual-entry
-// grid as the closing popup, just pre-filled with the current best guess
-// so confirming an already-correct value is a single click.
-async function resolveOpeningForCompany(name, vat, year, currentOpening) {
-  const values = await showManualInventoryModal(`Επιβεβαίωση αποθέματος έναρξης — ${name} (${year})`, currentOpening);
-  if (!values) return null;
-  const resp = await postJson('/api/accounting_result/inventory/resolve_opening', {
-    credential_name: name, year, value: values,
-  });
-  return resp.ok ? values : null;
-}
-
 // ---------------- Depreciation disambiguation popup ----------------
 
 function showDepreciationPickModal(entries) {
@@ -685,23 +670,6 @@ async function computeSingle() {
         return;
       }
       body.depreciation_selection = sel;
-      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
-      resp = await postJson('/api/accounting_result/compute', body);
-      if (!resp.ok) {
-        statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
-        showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
-        return;
-      }
-    }
-
-    if (resp.needs_opening_confirmation) {
-      hideArOverlay();
-      const confirmed = await resolveOpeningForCompany(name, resp.vat, resp.year, resp.opening_inventory);
-      if (!confirmed) {
-        statusEl.textContent = 'Ακυρώθηκε.';
-        return;
-      }
-      body.opening_inventory_confirmed = confirmed;
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
@@ -1341,41 +1309,6 @@ async function runBulk() {
   const depreciationAmbiguousNames = (statusResp.rows || [])
     .filter((r) => r.depreciation_ambiguous)
     .map((r) => r.name);
-
-  // A batch starting 01/01 is the first computation of a new fiscal year for
-  // every company in it — same reasoning as the single-mode gate: review the
-  // carried-forward opening inventory instead of silently trusting it.
-  const openingFlagged = (statusResp.rows || []).filter((r) => r.inventory_applicable && r.needs_opening_confirmation && !r.error);
-  if (openingFlagged.length) {
-    const openingChoice = await showModalChoice(
-      `Επιβεβαίωση αποθέματος έναρξης (${openingFlagged.length} εταιρίες)`,
-      'Η περίοδος ξεκινάει από 01/01 — επιβεβαιώστε το απόθεμα έναρξης πριν τον υπολογισμό.',
-      [
-        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
-        { key: 'as_is', label: 'Χρήση αποθηκευμένου ως έχει (όλες)' },
-      ]
-    );
-    if (!openingChoice) {
-      statusEl.textContent = 'Ακυρώθηκε.';
-      return;
-    }
-    if (openingChoice === 'manual') {
-      for (const row of openingFlagged) {
-        statusEl.textContent = `Απόθεμα έναρξης — ${row.name}...`;
-        const confirmed = await resolveOpeningForCompany(row.name, row.vat, year, row.opening_inventory);
-        if (!confirmed) {
-          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
-          return;
-        }
-      }
-    } else {
-      for (const row of openingFlagged) {
-        await postJson('/api/accounting_result/inventory/resolve_opening', {
-          credential_name: row.name, year, value: row.opening_inventory,
-        });
-      }
-    }
-  }
 
   // Only companies myDATA shows as actually tracking inventory (a prior-year
   // closing stock was previously declared) are ever asked about it.
