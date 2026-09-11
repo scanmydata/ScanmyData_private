@@ -208,7 +208,12 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
     seen_entries = set()
 
     while True:
-        resp = requests.get(_URL_REQUEST_E3, params=params, headers=headers)
+        # Explicit timeout: without one, requests waits forever on a hung/slow
+        # AADE response, and the eventual failure is a gateway-level HTML
+        # error page (the hosting platform's own timeout) instead of a clean
+        # error Flask can catch and turn into JSON — the browser then tries
+        # to JSON-parse that HTML and fails with a confusing SyntaxError.
+        resp = requests.get(_URL_REQUEST_E3, params=params, headers=headers, timeout=60)
         if debug:
             print(f"[RequestE3Info] Status: {resp.status_code}")
 

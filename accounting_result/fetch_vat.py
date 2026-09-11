@@ -104,7 +104,10 @@ def fetch_vat_totals(
     seen_marks = set()
 
     while True:
-        resp = requests.get(_URL_REQUEST_VAT, params=params, headers=headers)
+        # See fetch_e3.py's fetch_e3_entries for why this needs an explicit
+        # timeout: without one, a hung/slow AADE response surfaces as a raw
+        # HTML gateway-timeout page instead of a JSON error Flask can catch.
+        resp = requests.get(_URL_REQUEST_VAT, params=params, headers=headers, timeout=60)
         if debug:
             print(f"[RequestVatInfo] Status: {resp.status_code}")
         if resp.status_code != 200 or not resp.content:

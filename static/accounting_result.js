@@ -105,6 +105,21 @@ async function postJson(url, body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     });
+    // A non-JSON body here (almost always HTML) means something outside
+    // Flask's own error handling intervened — a hosting-platform gateway
+    // timeout page, or a redirect to the login page because the session
+    // expired mid-request — not an error this app ever returns itself.
+    // res.json() would still throw on that, but with a raw
+    // "Unexpected token '<'..." message that's meaningless to the
+    // accountant using this page, so detect it up front and say what
+    // actually likely happened instead.
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      if (res.status === 401 || res.status === 403 || /\/login/i.test(res.url)) {
+        return { ok: false, error: 'Η σύνδεσή σας έληξε — κάντε ανανέωση της σελίδας και ξανασυνδεθείτε.' };
+      }
+      return { ok: false, error: `Ο διακομιστής δεν απάντησε σωστά (HTTP ${res.status}) — πιθανό timeout στην επικοινωνία με το myDATA. Δοκιμάστε ξανά.` };
+    }
     return await res.json();
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -1275,6 +1290,14 @@ async function deleteBulkRun(batchId, onDone) {
     if (!data.ok) { showArFlash(data.error || 'Αποτυχία διαγραφής.', 'error'); return; }
     showArFlash('Η μαζική κατάσταση διαγράφηκε.', 'success', 3500);
     if (typeof onDone === 'function') onDone();
+    // deleteIndividual also removed each company's own history entry
+    // server-side — refresh the Ατομικός tab's history list for whichever
+    // client is currently selected there too, so it doesn't keep showing a
+    // now-deleted result until the page is reloaded.
+    if (deleteIndividual) {
+      const singleSel = document.getElementById('arSingleCredential');
+      if (singleSel && singleSel.value) loadSingleHistory(singleSel.value);
+    }
   } catch (e) {
     showArFlash(String(e), 'error');
   }
