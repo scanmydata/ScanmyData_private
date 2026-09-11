@@ -2241,9 +2241,14 @@
     // προφιλ καταλληλα ή αν δεν υπαρχει να κρυβεται το section").
     try {
       const stored = E3_BRAIN_CREDS_CACHE.find(c => String((c.company || {}).afm || '').trim() === clientAfm);
-      if (stored) {
-        const isIndividual = !stored.members || !stored.members.length;
-        const legalType = (stored.company && stored.company.legal_type) || client.legal_type || '';
+      const legalType = stored ? ((stored.company && stored.company.legal_type) || client.legal_type || '') : '';
+      const hasMembersStored = !!(stored && stored.members && stored.members.length);
+      // Same rule as the badge fix elsewhere: no members AND no stored
+      // legal_type isn't evidence of ατομική, it's just "never checked" —
+      // extend the existing "hide the section when nothing to show" rule
+      // to that case too instead of guessing.
+      if (stored && (legalType || hasMembersStored)) {
+        const isIndividual = legalType ? legalType.toLowerCase().indexOf('ατομικ') >= 0 : false;
         applyBrainSingleLegalType(legalType, isIndividual);
       } else {
         clearBrainSingleTypeHint();
@@ -2970,8 +2975,16 @@
     // Surface the legal-type pill (Ατομική / Εταιρία) so the user sees
     // the same visual cue as in the «Αποθηκευμένα» table.
     try {
-      const isIndividual = !stored.members || !stored.members.length;
-      applyBrainSingleLegalType(co.legal_type || '', isIndividual);
+      const legalTypeLoaded = co.legal_type || '';
+      const hasMembersLoaded = !!stored.members && stored.members.length > 0;
+      // No members AND no stored legal_type isn't evidence of ατομική — it
+      // usually means «🔍 Λήψη» hasn't run for this company yet.
+      if (legalTypeLoaded || hasMembersLoaded) {
+        const isIndividual = legalTypeLoaded ? legalTypeLoaded.toLowerCase().indexOf('ατομικ') >= 0 : false;
+        applyBrainSingleLegalType(legalTypeLoaded, isIndividual);
+      } else {
+        clearBrainSingleTypeHint();
+      }
     } catch (_) {}
     // Ανανέωσε αυτόματα τη λίστα αποθηκευμένων PDFs για τον ΝΕΟ πελάτη.
     try { _refreshPdfsForLoadedAfm(co.afm || afm); } catch (_) {}
@@ -2998,32 +3011,44 @@
     setVal('editMydataUser', c.mydata_user || '');
     setVal('editMydataKey', c.mydata_key || '');
 
-    // Νομική μορφή — same convention as the saved-credentials list
-    // (members empty = ατομική). Render a pill that mirrors the
-    // styling of the chip in the «Αποθηκευμένα» table.
+    // Νομική μορφή — three states, not two. A company with no legal_type
+    // AND no members isn't necessarily ατομική — it may just never have had
+    // «🔍 Λήψη» (address/members check) run at all. Defaulting that to
+    // "Ατομική" wasn't just a display glitch: saveBrainCredEdit() persists
+    // whatever's in this hidden input, so an unchecked company could get
+    // permanently mislabeled the moment someone opened and saved this
+    // modal without touching anything else. Only a real stored legal_type
+    // or actual members on file resolve confidently now; render a pill that
+    // mirrors the styling of the chip in the «Αποθηκευμένα» table.
     const legalInput = document.getElementById('editLegalType');
     const legalPill = document.getElementById('editLegalTypePill');
     const storedType = c.legal_type || '';
-    const isIndividualResolved = storedType
-      ? storedType.toLowerCase().indexOf('ατομικ') >= 0
-      : isIndividual;
-    const pillLabel = isIndividualResolved ? 'Ατομική' : 'Εταιρία';
-    if (legalInput) legalInput.value = pillLabel;
+    const hasMembersOnFile = Array.isArray(cred.members) && cred.members.length > 0;
+    const legalResolution = storedType
+      ? (storedType.toLowerCase().indexOf('ατομικ') >= 0 ? 'individual' : 'company')
+      : (hasMembersOnFile ? 'company' : 'unknown');
+    const isIndividualResolved = legalResolution === 'individual';
+    const pillLabel = legalResolution === 'individual' ? 'Ατομική' : (legalResolution === 'company' ? 'Εταιρία' : '—');
+    if (legalInput) legalInput.value = storedType;
     if (legalPill) {
       legalPill.textContent = pillLabel;
-      if (isIndividualResolved) {
+      if (legalResolution === 'individual') {
         legalPill.style.background = '#dbeafe';
         legalPill.style.color = '#1d4ed8';
         legalPill.style.borderColor = '#93c5fd';
-      } else {
+      } else if (legalResolution === 'company') {
         legalPill.style.background = '#f0fdf4';
         legalPill.style.color = '#166534';
         legalPill.style.borderColor = '#86efac';
+      } else {
+        legalPill.style.background = '#f1f5f9';
+        legalPill.style.color = '#64748b';
+        legalPill.style.borderColor = '#cbd5e1';
       }
     }
 
     const amkaWrapper = document.getElementById('editAmkaWrapper');
-    if (amkaWrapper) amkaWrapper.style.display = isIndividual ? '' : 'none';
+    if (amkaWrapper) amkaWrapper.style.display = legalResolution === 'company' ? 'none' : '';
 
     // === Επεξεργασία μελών εταιρίας ===
     // Για εταιρίες, φέρνουμε τα members του snapshot στο modal για inline
@@ -7385,8 +7410,14 @@
     try {
       showGlobalWaitOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
       const oneClient = clients.length === 1 ? clients[0] : null;
-      const fname = 'E3_Brain_' + (oneClient ? (oneClient.afm || oneClient.name || 'Πελάτης') : 'Μαζικό') +
-        '_' + now.toISOString().slice(0, 10);
+      // "Έλεγχος Ε3 -από έως- επωνυμία-αφμ" — period read from whichever of
+      // the bulk/single date fields actually has a value (this function
+      // serves both call paths), falling back to today if neither is set.
+      const periodFrom = (document.getElementById('brainDateFrom') || {}).value || (document.getElementById('e3DateFrom') || {}).value || '';
+      const periodTo = (document.getElementById('brainDateTo') || {}).value || (document.getElementById('e3DateTo') || {}).value || '';
+      const periodPart = (periodFrom && periodTo) ? (periodFrom + '-' + periodTo) : now.toISOString().slice(0, 10);
+      const whoPart = oneClient ? ((oneClient.name || 'Πελάτης') + '-' + (oneClient.afm || '')) : 'Μαζικό';
+      const fname = 'Έλεγχος_Ε3_' + periodPart + '_' + whoPart;
       await _exportE3HtmlAsPdf('<style>' + css + '</style>' + bodyHtml, fname, 'portrait');
     } catch (e) {
       try { await showModalAlert('Αποτυχία PDF', 'Η δημιουργία PDF απέτυχε: ' + (e && e.message || e)); } catch (_) {}
@@ -7416,10 +7447,20 @@
       </thead><tbody>`;
     for (const cred of E3_BRAIN_CREDS_CACHE) {
       const c = cred.company || {};
-      const isInd = !cred.members || cred.members.length === 0;
-      const typeBadge = isInd
+      // No members AND no stored legal_type doesn't mean ατομική — it
+      // usually means «🔍 Λήψη» has just never run for this company yet.
+      // Show unresolved instead of guessing (same fix as editBrainCred's
+      // own pill, and accounting_result.js's copy of this same table).
+      const storedTypeRow = String(c.legal_type || '');
+      const hasMembersRow = !!cred.members && cred.members.length > 0;
+      const typeResolutionRow = storedTypeRow
+        ? (storedTypeRow.toLowerCase().indexOf('ατομικ') >= 0 ? 'individual' : 'company')
+        : (hasMembersRow ? 'company' : 'unknown');
+      const typeBadge = typeResolutionRow === 'individual'
         ? `<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Ατομική</span>`
-        : `<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>`;
+        : typeResolutionRow === 'company'
+        ? `<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>`
+        : `<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">—</span>`;
       const afm = String(c.afm || '').replace(/['"<>&]/g, '');
       html += `<tr style="transition:background 0.1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">` +
         `<td class="border border-gray-200 px-3 py-2 font-mono">${afm}</td>` +

@@ -1972,21 +1972,27 @@
       transition: opacity 0.15s ease;
     }
     @keyframes pageShellFadeIn {
-      from { opacity: 0; transform: translateY(5px); }
-      to   { opacity: 1; transform: translateY(0px); }
+      from { opacity: 0; }
+      to   { opacity: 1; }
     }
     #appShell.page-entering {
-      /* No `forwards` fill-mode: with it, the element is left holding the
-         keyframe's final `transform: translateY(0px)` value after the
-         animation ends — and per spec ANY non-`none` transform (even an
-         identity translate) turns the element into the containing block for
-         `position: fixed` descendants, trapping every full-screen modal
-         opened later (anywhere in {% block content %}) inside #appShell's
-         box instead of the real viewport, so it renders under the sticky
-         header instead of over it. Without `forwards`, #appShell reverts to
-         its un-animated computed style (transform: none) the instant the
-         0.22s animation ends, which is visually identical here since that's
-         already the same as the keyframe's `to` state. */
+      /* No `transform` in the keyframe (a translateY slide was here before):
+         per spec ANY non-`none` transform on #appShell — even mid-animation,
+         not just a `forwards`-retained end value — turns it into the
+         containing block for every `position: fixed` descendant, trapping
+         full-screen modals opened anywhere in {% block content %} inside
+         #appShell's own box instead of the real viewport (confirmed live,
+         repeatedly: a modal rendering stuck top-left under the sticky
+         header). Moving those modals to be direct children of <body> at
+         runtime (see moveModalsToBody() in accounting_result.js /
+         e3_check.html) was the original workaround, but it depends on that
+         JS running at exactly the right time relative to base_08.js's
+         partial-nav script pipeline, which turned out to be unreliable in
+         practice. Dropping the transform here removes the containing-block
+         problem at its source instead, so position:fixed always resolves
+         against the true viewport regardless of any of that timing — the
+         opacity-only fade is a fully acceptable trade for that
+         reliability. */
       animation: pageShellFadeIn 0.22s ease;
     }
 

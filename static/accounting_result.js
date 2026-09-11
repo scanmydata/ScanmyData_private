@@ -63,9 +63,17 @@ function showArOverlay(title, message) {
   if (AR_BULK_RUNNING) {
     const statusEl = document.getElementById('arBulkStatus');
     if (statusEl && message) statusEl.textContent = String(message);
-    if (message) showArFlash(String(message), 'warning', 20000);
+    if (message) showArFlash(String(message), 'warning', 0);
     return;
   }
+  // Defensive re-move: the DOMContentLoaded-time moveModalsToBody() call can
+  // lose the race against a fast click or a slow multi-script partial-nav
+  // load (base_08.js sequentially awaits every <script> on the page before
+  // firing the queued DOMContentLoaded), leaving this modal still nested
+  // inside #appShell — and thus vulnerable to the page-entering transform —
+  // right when it's about to be shown. Calling this again here is a no-op
+  // once already moved, so it's cheap insurance on every open.
+  moveModalsToBody();
   const overlay = document.getElementById('waitOverlay');
   const titleEl = document.getElementById('waitOverlayTitle');
   const msgEl = document.getElementById('waitOverlayMsg');
@@ -218,7 +226,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     </table>
 
     ${r.vat_applicable !== false && r.vat_period_from && r.vat_period_to ? `
-    <div style="font-size:0.75rem;color:#6b7280;margin-top:6px;">ΦΠΑ περιόδου ${escapeHtml(ddmmyyyy(r.vat_period_from))} – ${escapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
+    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${escapeHtml(ddmmyyyy(r.vat_period_from))} – ${escapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
     <table class="ar-report-table" style="margin-top:4px;">
       <tbody>
         <tr>
@@ -267,7 +275,12 @@ function periodSuffix(from, to) {
   return f && t ? `${f}_${t}` : '';
 }
 
-let __arHtml2PdfPromise = null;
+// var, not let/const — base_08.js's partial-nav re-runs this whole file as a
+// fresh <script src> on every navigation into this page (it only rewrites
+// let/const->var for INLINE scripts, not external ones like this file), and
+// a top-level let/const throws "already declared" the second time, aborting
+// the entire script and leaving the page's buttons unwired.
+var __arHtml2PdfPromise = null;
 function ensureHtml2Pdf() {
   if (window.html2pdf) return Promise.resolve();
   if (!__arHtml2PdfPromise) {
@@ -282,7 +295,7 @@ function ensureHtml2Pdf() {
   return __arHtml2PdfPromise;
 }
 
-let __arJsZipPromise = null;
+var __arJsZipPromise = null;
 function ensureJsZip() {
   if (window.JSZip) return Promise.resolve();
   if (!__arJsZipPromise) {
@@ -485,6 +498,7 @@ function buildConsolidatedTableHtml(companies) {
 // ---------------- Inventory resolution popups ----------------
 
 function showManualInventoryModal(title, opening) {
+  moveModalsToBody(); // see showArOverlay for why this defensive call is needed
   return new Promise((resolve) => {
     const modal = document.getElementById('arManualInvModal');
     document.getElementById('arManualInvTitle').textContent = title;
@@ -557,9 +571,25 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
   return !!resp.ok;
 }
 
+// A report starting 01/01 is the first computation of a new fiscal year —
+// review the carried-forward opening inventory (last year's closing,
+// auto-seeded) instead of silently trusting it, since it was never
+// actually shown to the accountant before. Reuses the same manual-entry
+// grid as the closing popup, just pre-filled with the current best guess
+// so confirming an already-correct value is a single click.
+async function resolveOpeningForCompany(name, vat, year, currentOpening) {
+  const values = await showManualInventoryModal(`Επιβεβαίωση αποθέματος έναρξης — ${name} (${year})`, currentOpening);
+  if (!values) return null;
+  const resp = await postJson('/api/accounting_result/inventory/resolve_opening', {
+    credential_name: name, year, value: values,
+  });
+  return resp.ok ? values : null;
+}
+
 // ---------------- Depreciation disambiguation popup ----------------
 
 function showDepreciationPickModal(entries) {
+  moveModalsToBody(); // see showArOverlay for why this defensive call is needed
   return new Promise((resolve) => {
     const modal = document.getElementById('arDepPickModal');
     const fields = document.getElementById('arDepPickFields');
@@ -655,6 +685,23 @@ async function computeSingle() {
         return;
       }
       body.depreciation_selection = sel;
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      resp = await postJson('/api/accounting_result/compute', body);
+      if (!resp.ok) {
+        statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
+        showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
+        return;
+      }
+    }
+
+    if (resp.needs_opening_confirmation) {
+      hideArOverlay();
+      const confirmed = await resolveOpeningForCompany(name, resp.vat, resp.year, resp.opening_inventory);
+      if (!confirmed) {
+        statusEl.textContent = 'Ακυρώθηκε.';
+        return;
+      }
+      body.opening_inventory_confirmed = confirmed;
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
@@ -769,12 +816,22 @@ async function loadSingleHistory(name) {
       btn.addEventListener('click', () => openHistoryEntry(btn.dataset.vat, btn.dataset.id, btn.dataset.name));
     });
     container.querySelectorAll('.ar-history-delete-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        showArConfirmFlash('Διαγραφή αυτού του αποθηκευμένου αποτελέσματος;', async () => {
-          btn.disabled = true;
-          const resp = await deleteHistoryEntry(btn.dataset.vat, btn.dataset.id, () => loadSingleHistory(name));
-          if (!resp.ok) { btn.disabled = false; showArFlash(resp.error || 'Αποτυχία διαγραφής.', 'error'); }
-        });
+      btn.addEventListener('click', async () => {
+        // Same ⚠️-styled centered dialog as the bulk-run delete, for
+        // consistency — every "are you sure you want to delete a saved
+        // result" prompt on this page now looks the same.
+        let proceed = false;
+        try {
+          proceed = await showModalConfirm(
+            'Διαγραφή αποτελέσματος',
+            'Διαγραφή αυτού του αποθηκευμένου αποτελέσματος;',
+            'Διαγραφή', 'Άκυρο',
+          );
+        } catch (_) { proceed = false; }
+        if (!proceed) return;
+        btn.disabled = true;
+        const resp = await deleteHistoryEntry(btn.dataset.vat, btn.dataset.id, () => loadSingleHistory(name));
+        if (!resp.ok) { btn.disabled = false; showArFlash(resp.error || 'Αποτυχία διαγραφής.', 'error'); }
       });
     });
     wrap.classList.remove('hidden');
@@ -815,7 +872,7 @@ async function uploadSingleExcel(file) {
 // jQuery + DataTables are already vendored/loaded globally (base.html), same
 // library already used elsewhere in the app (e.g. epsilon_preview.html).
 
-const AR_DT_LANG = {
+var AR_DT_LANG = {
   search: '🔎 Αναζήτηση:',
   lengthMenu: 'Εμφάνιση _MENU_ εταιριών',
   info: '_START_–_END_ από _TOTAL_',
@@ -945,19 +1002,27 @@ function showArFlash(message, type, ttl) {
   const kind = (type === 'error' || type === 'danger') ? 'error' : (type === 'warning' ? 'warning' : 'success');
   const container = _arEnsureFlashContainer();
   const id = 'arBulkFlash';
-  let el = document.getElementById(id);
-  if (!el) {
-    el = document.createElement('div');
-    el.id = id;
-    container.prepend(el);
-  }
+  // Always remove and recreate rather than reusing an existing element.
+  // base_01.js runs a GLOBAL MutationObserver on every .flash-banner
+  // element that independently schedules its OWN removal after
+  // data-ttl ms (default 6000, see AUTO_TTL there) the moment the element
+  // is FIRST added to the DOM — it never re-evaluates on later attribute
+  // changes. So reusing the same element across calls with different ttl
+  // values would leave a stale removal timer from whichever call first
+  // created it, regardless of what this function does. Recreating the
+  // node on every call guarantees the observer always sees a fresh
+  // insertion with the correct data-ttl already set.
+  const existing = document.getElementById(id);
+  if (existing) { clearTimeout(existing.__arFlashTimer); existing.remove(); }
+  const el = document.createElement('div');
+  el.id = id;
+  if (ttl === 0) el.setAttribute('data-ttl', '0');
   const cls = kind === 'error' ? 'flash-error' : (kind === 'warning' ? 'flash-warning' : 'flash-success');
   el.className = 'flash-banner ' + cls;
   el.style.display = 'flex';
   el.style.alignItems = 'center';
   el.style.justifyContent = 'space-between';
   el.style.gap = '0.5rem';
-  el.innerHTML = '';
   const textNode = document.createElement('span');
   textNode.textContent = message;
   textNode.style.cssText = 'flex:1 1 auto;font-size:13px;';
@@ -968,17 +1033,29 @@ function showArFlash(message, type, ttl) {
   closeBtn.style.cssText = 'background:transparent;border:0;cursor:pointer;font-size:18px;line-height:1;opacity:.75;';
   closeBtn.addEventListener('click', () => { clearTimeout(el.__arFlashTimer); el.remove(); });
   el.append(textNode, closeBtn);
+  container.prepend(el);
 
   const statusEl = document.getElementById('arBulkStatus');
   if (statusEl) statusEl.textContent = message;
 
-  clearTimeout(el.__arFlashTimer);
-  el.__arFlashTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, ttl || 6000);
+  // ttl === 0 means "stays until explicitly replaced or closed" — used for
+  // in-progress status messages whose real duration isn't known upfront
+  // (a fixed timeout there just makes the flash vanish while the operation
+  // is still running, looking like it silently died).
+  if (ttl !== 0) {
+    el.__arFlashTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, ttl || 6000);
+  }
 }
 
 // The completion flash's "jump straight to the results" links need their own
 // small custom banner in the same top-right slot as showArFlash.
 function showArResultsFlash(message, kind, opts) {
+  // A final flash means any in-progress status flash (showArOverlay's
+  // ttl:0 "Έλεγχος αποθεμάτων λήξης"-style messages, left up deliberately
+  // since their real duration isn't known upfront) is now stale — clear it
+  // so it doesn't sit there stacked above the actual result.
+  const staleProgress = document.getElementById('arBulkFlash');
+  if (staleProgress) { clearTimeout(staleProgress.__arFlashTimer); staleProgress.remove(); }
   const container = _arEnsureFlashContainer();
   const id = (opts && opts.flashId) || 'arBulkResultsFlash';
   let el = document.getElementById(id);
@@ -1033,48 +1110,6 @@ function showArResultsFlash(message, kind, opts) {
   el.__arFlashTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, 15000);
 }
 
-// A browser confirm() blocks the tab and looks nothing like the rest of the
-// page — the accountant asked for the delete confirmation to be the same
-// flash style as everything else here. No auto-dismiss timer: it waits for
-// an explicit choice instead of silently disappearing mid-decision.
-function showArConfirmFlash(message, onConfirm, opts) {
-  opts = opts || {};
-  const container = _arEnsureFlashContainer();
-  const id = opts.flashId || 'arConfirmFlash';
-  let el = document.getElementById(id);
-  if (!el) {
-    el = document.createElement('div');
-    el.id = id;
-    container.prepend(el);
-  }
-  el.className = 'flash-banner flash-warning';
-  el.style.display = 'flex';
-  el.style.flexDirection = 'column';
-  el.style.gap = '0.5rem';
-  el.style.pointerEvents = 'auto';
-  el.innerHTML = '';
-  clearTimeout(el.__arFlashTimer);
-
-  const textNode = document.createElement('div');
-  textNode.textContent = message;
-  textNode.style.cssText = 'font-size:13px;';
-  el.appendChild(textNode);
-
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:0.4rem;justify-content:flex-end;';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.type = 'button';
-  cancelBtn.textContent = opts.cancelLabel || 'Άκυρο';
-  cancelBtn.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid rgba(0,0,0,.15);background:rgba(255,255,255,.5);color:inherit;cursor:pointer;font-weight:600;';
-  cancelBtn.addEventListener('click', () => { el.remove(); if (typeof opts.onCancel === 'function') opts.onCancel(); });
-  const confirmBtn = document.createElement('button');
-  confirmBtn.type = 'button';
-  confirmBtn.textContent = opts.confirmLabel || 'Διαγραφή';
-  confirmBtn.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:6px;border:none;background:#dc2626;color:#fff;cursor:pointer;font-weight:700;';
-  confirmBtn.addEventListener('click', () => { el.remove(); onConfirm(); });
-  row.append(cancelBtn, confirmBtn);
-  el.appendChild(row);
-}
 
 // Prevent the selection from changing while a bulk run is in flight.
 function setBulkTableLocked(locked) {
@@ -1135,7 +1170,7 @@ function renderBulkCompaniesSummary(companies) {
 // and a detail view for the currently-open batch, toggled in place rather
 // than bouncing the user back out to the main Μαζικός tab.
 
-let AR_OPEN_BATCH = null; // { batch, companies } for whichever run is open in the modal
+var AR_OPEN_BATCH = null; // { batch, companies } for whichever run is open in the modal
 
 function _arBatchTimestamp(iso) {
   if (!iso) return '';
@@ -1151,11 +1186,13 @@ function showBulkRunsListView() {
 }
 
 async function showBulkRunsModal() {
+  moveModalsToBody(); // see showArOverlay for why this defensive call is needed
   const modal = document.getElementById('arBulkRunsModal');
   const listEl = document.getElementById('arBulkRunsList');
   if (!modal || !listEl) return;
   showBulkRunsListView();
   modal.classList.remove('hidden');
+  modal.style.display = ''; // defensive: clear any stray inline style so the Tailwind class governs display again
   listEl.innerHTML = '<div class="text-sm text-gray-500 p-2">Φόρτωση...</div>';
   try {
     const res = await fetch('/api/accounting_result/bulk_runs');
@@ -1293,16 +1330,52 @@ async function runBulk() {
   try {
   const year = yearFromDMY(to);
   showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος αποθεμάτων λήξης - η διαδικασία μπορεί να διαρκέσει.');
-  const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year });
+  const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from });
   hideArOverlay();
   if (!statusResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
+    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα ελέγχου αποθεμάτων λήξης — ' + (statusResp.error || ''), 'error');
     return;
   }
 
   const depreciationAmbiguousNames = (statusResp.rows || [])
     .filter((r) => r.depreciation_ambiguous)
     .map((r) => r.name);
+
+  // A batch starting 01/01 is the first computation of a new fiscal year for
+  // every company in it — same reasoning as the single-mode gate: review the
+  // carried-forward opening inventory instead of silently trusting it.
+  const openingFlagged = (statusResp.rows || []).filter((r) => r.inventory_applicable && r.needs_opening_confirmation && !r.error);
+  if (openingFlagged.length) {
+    const openingChoice = await showModalChoice(
+      `Επιβεβαίωση αποθέματος έναρξης (${openingFlagged.length} εταιρίες)`,
+      'Η περίοδος ξεκινάει από 01/01 — επιβεβαιώστε το απόθεμα έναρξης πριν τον υπολογισμό.',
+      [
+        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
+        { key: 'as_is', label: 'Χρήση αποθηκευμένου ως έχει (όλες)' },
+      ]
+    );
+    if (!openingChoice) {
+      statusEl.textContent = 'Ακυρώθηκε.';
+      return;
+    }
+    if (openingChoice === 'manual') {
+      for (const row of openingFlagged) {
+        statusEl.textContent = `Απόθεμα έναρξης — ${row.name}...`;
+        const confirmed = await resolveOpeningForCompany(row.name, row.vat, year, row.opening_inventory);
+        if (!confirmed) {
+          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
+          return;
+        }
+      }
+    } else {
+      for (const row of openingFlagged) {
+        await postJson('/api/accounting_result/inventory/resolve_opening', {
+          credential_name: row.name, year, value: row.opening_inventory,
+        });
+      }
+    }
+  }
 
   // Only companies myDATA shows as actually tracking inventory (a prior-year
   // closing stock was previously declared) are ever asked about it.
@@ -1391,6 +1464,15 @@ async function runBulk() {
       consolidated: () => document.getElementById('arBulkConsolidatedPdfBtn').click(),
     } : null,
   );
+  } catch (err) {
+    // Without this, any unexpected exception anywhere above (e.g. a
+    // network hiccup mid-flow) unwinds as a silent unhandled promise
+    // rejection — the overlay/flash from the in-progress step stays
+    // stuck or vanishes with no popup and no error shown, which looks
+    // exactly like "the check got lost" with no explanation.
+    hideArOverlay();
+    statusEl.textContent = 'Σφάλμα: ' + (err && err.message ? err.message : String(err));
+    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): μη αναμενόμενο σφάλμα — ' + (err && err.message ? err.message : String(err)), 'error');
   } finally {
     AR_BULK_RUNNING = false;
     setBulkTableLocked(false);
@@ -1418,10 +1500,20 @@ function renderSavedTable(companies) {
   const trs = companies.map((entry) => {
     const c = entry.company || {};
     const afm = String(c.afm || '').replace(/['"<>&]/g, '');
-    const isInd = !entry.members || !entry.members.length;
-    const typeBadge = isInd
+    // Same three-state resolution as the edit modal's pill: no members AND
+    // no stored legal_type doesn't mean individual, it usually means «🔍
+    // Λήψη» has just never run for this company — show unresolved instead
+    // of guessing.
+    const storedTypeTbl = c.legal_type || '';
+    const hasMembersTbl = Array.isArray(entry.members) && entry.members.length > 0;
+    const typeResolutionTbl = storedTypeTbl
+      ? (storedTypeTbl.toLowerCase().indexOf('ατομικ') >= 0 ? 'individual' : 'company')
+      : (hasMembersTbl ? 'company' : 'unknown');
+    const typeBadge = typeResolutionTbl === 'individual'
       ? '<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Ατομική</span>'
-      : '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>';
+      : typeResolutionTbl === 'company'
+      ? '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>'
+      : '<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">—</span>';
     const credName = afmToCredentialName(afm);
     const actionCell = credName
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
@@ -1571,6 +1663,7 @@ async function loadSavedClients() {
 // editing a company's TAXISnet login here shouldn't have to go find it on
 // the other page instead.
 function openSavedEditModal(afm) {
+  moveModalsToBody(); // see showArOverlay for why this defensive call is needed
   const entry = (window.__arSavedCompanies || []).find((e) => String((e.company || {}).afm || '') === String(afm));
   if (!entry) return;
   const c = entry.company || {};
@@ -1586,31 +1679,61 @@ function openSavedEditModal(afm) {
   document.getElementById('arEditIkaEmpUser').value = c.ika_employer_username || '';
   document.getElementById('arEditIkaEmpPass').value = '';
 
+  // Νομική μορφή pill — three states, not two: a company with no legal_type
+  // AND no members isn't necessarily an individual, it may simply never
+  // have had an address/members check ("🔍 Λήψη") run at all — defaulting
+  // that to "Ατομική" was actively misleading. Only "Εταιρία" (real members
+  // on file) and an explicit stored legal_type resolve confidently; anything
+  // else stays "—" (άγνωστο) rather than guessing.
   const members = Array.isArray(entry.members) ? entry.members : [];
   const hasMembers = members.length > 0;
-  document.getElementById('arEditAmkaWrap').classList.toggle('hidden', hasMembers);
+  const storedType = c.legal_type || '';
+  const resolution = storedType
+    ? (storedType.toLowerCase().indexOf('ατομικ') >= 0 ? 'individual' : 'company')
+    : (hasMembers ? 'company' : 'unknown');
+  const pillLabel = resolution === 'individual' ? 'Ατομική' : (resolution === 'company' ? 'Εταιρία' : '—');
+  const pill = document.getElementById('arEditLegalTypePill');
+  pill.textContent = pillLabel;
+  if (resolution === 'individual') {
+    pill.style.background = '#dbeafe'; pill.style.color = '#1d4ed8'; pill.style.borderColor = '#93c5fd';
+  } else if (resolution === 'company') {
+    pill.style.background = '#f0fdf4'; pill.style.color = '#166534'; pill.style.borderColor = '#86efac';
+  } else {
+    pill.style.background = '#f1f5f9'; pill.style.color = '#64748b'; pill.style.borderColor = '#cbd5e1';
+  }
+  document.getElementById('arEditLegalType').value = storedType;
+
+  // Show the ΑΜΚΑ field unless we're confident this is a company (real
+  // members on file) — an unknown-type row still gets the field, since it
+  // might turn out to be an individual once checked.
+  document.getElementById('arEditAmkaWrap').classList.toggle('hidden', resolution === 'company');
   const membersWrap = document.getElementById('arEditMembersWrap');
   const membersList = document.getElementById('arEditMembersList');
-  membersWrap.classList.toggle('hidden', !hasMembers);
+  membersWrap.style.display = hasMembers ? '' : 'none';
   membersList.innerHTML = hasMembers ? members.map((m, i) => {
     const mname = escapeHtml(String(m.full_name || m.name || '').trim() || '—');
     const mafm = escapeHtml(String(m.afm || '').trim() || '—');
     const mrole = escapeHtml(String(m.role || '').trim());
-    return `<div class="border rounded p-2 bg-gray-50" data-member-row="${i}">
-      <div class="flex justify-between text-xs text-gray-500 mb-1">
+    return `<div class="ar-edit-member-row" data-member-row="${i}">
+      <div style="display:flex;justify-content:space-between;font-size:.72rem;color:#475569;margin-bottom:.3rem;">
         <span><strong>${mname}</strong> · ΑΦΜ ${mafm}</span>
-        <span>${mrole}</span>
+        <span style="opacity:.75;">${mrole}</span>
       </div>
-      <div class="grid grid-cols-3 gap-1">
-        <input data-member-i="${i}" data-field="taxisnet_username" value="${escapeHtml(m.taxisnet_username || '')}" placeholder="TAXIS user" class="border rounded px-1.5 py-1 text-xs">
-        <input data-member-i="${i}" data-field="taxisnet_password" type="password" placeholder="TAXIS pass (κενό=διατήρηση)" class="border rounded px-1.5 py-1 text-xs">
-        <input data-member-i="${i}" data-field="amka" value="${escapeHtml(m.amka || '')}" placeholder="ΑΜΚΑ" class="border rounded px-1.5 py-1 text-xs">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem;">
+        <input data-member-i="${i}" data-field="taxisnet_username" value="${escapeHtml(m.taxisnet_username || '')}" placeholder="TAXIS user">
+        <input data-member-i="${i}" data-field="taxisnet_password" type="password" placeholder="TAXIS pass (κενό=διατήρηση)">
+        <input data-member-i="${i}" data-field="amka" value="${escapeHtml(m.amka || '')}" placeholder="ΑΜΚΑ">
       </div>
     </div>`;
   }).join('') : '';
 
   window.__arSavedEditEntry = entry;
-  document.getElementById('arSavedEditModal').classList.remove('hidden');
+  // style.display, not classList('hidden') — .brain-cred-modal-overlay's own
+  // display:flex is a plain CSS rule (not a Tailwind utility), and it loads
+  // after tailwind.css in the cascade, so at equal (single-class) specificity
+  // it silently wins over .hidden's display:none, leaving the modal visible
+  // even with the 'hidden' class present. Inline style always wins regardless.
+  document.getElementById('arSavedEditModal').style.display = 'flex';
 }
 
 async function saveSavedEdit() {
@@ -1651,7 +1774,7 @@ async function saveSavedEdit() {
   try {
     const resp = await postJson('/api/e3/brain/credentials_store/update', { snapshot: entry });
     if (!resp.ok) { showArFlash(resp.error || 'Σφάλμα αποθήκευσης.', 'error'); return; }
-    document.getElementById('arSavedEditModal').classList.add('hidden');
+    document.getElementById('arSavedEditModal').style.display = 'none';
     showArFlash('Τα στοιχεία αποθηκεύτηκαν.', 'success', 3500);
     loadSavedClients();
   } finally {
@@ -1664,21 +1787,39 @@ async function saveSavedEdit() {
 // showModalConfirm/showModalChoice already use (checking e.target === modal
 // so clicks that merely bubble up from something inside the panel don't
 // falsely trigger it).
-function _arBindBackdropClose(modalId) {
+//
+// `useInlineStyle` picks which mechanism this modal actually needs:
+//  - arBulkRunsModal relies on Tailwind's hidden/flex utilities, toggled
+//    purely via classList — that's already sufficient and correct there.
+//  - arSavedEditModal's display:flex comes from this page's own
+//    .brain-cred-modal-overlay rule (not a Tailwind utility); it loads
+//    after tailwind.css so at equal specificity it silently wins over
+//    .hidden, so THIS one needs style.display instead.
+// Setting BOTH unconditionally was tried and is wrong: once a backdrop
+// click sets inline style:none on arBulkRunsModal, showBulkRunsModal()'s
+// classList.remove('hidden') alone can no longer undo it (inline always
+// wins), so the button silently stops reopening it on the very next click —
+// exactly the "works once, not the second time" bug this was meant to fix.
+function _arBindBackdropClose(modalId, useInlineStyle) {
   const modal = document.getElementById(modalId);
   if (!modal) return;
   modal.addEventListener('mousedown', (e) => {
-    if (e.target === modal) modal.classList.add('hidden');
+    if (e.target !== modal) return;
+    if (useInlineStyle) {
+      modal.style.display = 'none';
+    } else {
+      modal.classList.add('hidden');
+    }
   });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('arSavedRefreshBtn').addEventListener('click', loadSavedClients);
-  document.getElementById('arSavedEditClose').addEventListener('click', () => document.getElementById('arSavedEditModal').classList.add('hidden'));
-  document.getElementById('arSavedEditCancel').addEventListener('click', () => document.getElementById('arSavedEditModal').classList.add('hidden'));
-  document.getElementById('arSavedEditSave').addEventListener('click', saveSavedEdit);
-  _arBindBackdropClose('arSavedEditModal');
-  _arBindBackdropClose('arBulkRunsModal');
+  document.getElementById('arSavedEditClose').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
+  document.getElementById('arSavedEditCancel').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
+  document.getElementById('arSavedEditForm').addEventListener('submit', (e) => { e.preventDefault(); saveSavedEdit(); });
+  _arBindBackdropClose('arSavedEditModal', true);
+  _arBindBackdropClose('arBulkRunsModal', false);
 
   document.getElementById('arSavedImportExcelInput').addEventListener('change', async (e) => {
     const inp = e.target;
@@ -1735,10 +1876,70 @@ function showArTab(which) {
 // modal to be a direct child of <body> sidesteps this unconditionally
 // (mirrors the `appendTo: document.body` fix already used for flatpickr).
 function moveModalsToBody() {
-  ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay'].forEach((id) => {
+  // arBulkRunsModal/arSavedEditModal added here for the same reason as the
+  // others: they're position:fixed but live inside {% block content %}
+  // (i.e. inside #appShell). Historically this was ALSO this file's fix for
+  // #appShell's page-entering transition making #appShell a containing
+  // block for position:fixed descendants during partial-nav — that part is
+  // now fixed at the source (the transform was dropped from the
+  // #appShell.page-entering keyframe in app.css), so position:fixed on
+  // these modals resolves against the true viewport regardless of DOM
+  // nesting. This function now exists only for DOM tidiness (avoid
+  // accumulating duplicate-id copies of these modals in memory across many
+  // partial-nav visits — the server re-renders a fresh copy of each of
+  // these ids inside #appShell's content on every visit), not for
+  // positioning correctness, so it no longer needs to be airtight about
+  // exactly when it runs.
+  ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'].forEach((id) => {
+    const matches = document.querySelectorAll('#' + id);
+    if (matches.length > 1) {
+      // Keep only the element document.getElementById(id) would itself
+      // return (matches[0], first in document order) — every caller in
+      // this file that looks this id up uses getElementById, so that's the
+      // instance actually in use; remove only the extra duplicates left
+      // behind by earlier partial-nav visits. Never remove matches[0] here
+      // — doing so previously produced a worse bug than the duplicates
+      // themselves (the modal vanishing from the DOM entirely on some
+      // navigations).
+      for (let i = 1; i < matches.length; i++) matches[i].remove();
+    }
     const el = document.getElementById(id);
     if (el && el.parentElement !== document.body) document.body.appendChild(el);
   });
+}
+
+// Belt-and-braces: call it synchronously right now (the modal HTML is
+// already in the DOM by the time this script tag itself runs, whether on a
+// real first load or during partial-nav — runPageScripts() always sets
+// #appShell's innerHTML before executing any script), AND install a
+// MutationObserver below as the actually-reliable mechanism. Relying only
+// on document.addEventListener('DOMContentLoaded', …) turned out to be
+// flaky on partial-nav (confirmed live, repeatedly: the queued callback
+// sometimes silently never fires), and even this synchronous call alone
+// was ALSO observed to sometimes not take effect — the exact reason wasn't
+// pinned down, but a MutationObserver reacting to the actual DOM insertion
+// (same pattern base_01.js already uses for .flash-banner) has no
+// script-execution-order dependency to get wrong in the first place.
+moveModalsToBody();
+
+if (!window.__arModalObserverInstalled) {
+  window.__arModalObserverInstalled = true;
+  const AR_MOVE_MODAL_IDS = ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'];
+  const arModalObserver = new MutationObserver((muts) => {
+    for (const m of muts) {
+      if (!m.addedNodes || !m.addedNodes.length) continue;
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        const isMatch = n.id && AR_MOVE_MODAL_IDS.indexOf(n.id) !== -1;
+        const hasMatch = !isMatch && n.querySelector && AR_MOVE_MODAL_IDS.some((id) => n.querySelector('#' + id));
+        if (isMatch || hasMatch) {
+          if (typeof moveModalsToBody === 'function') moveModalsToBody();
+          return;
+        }
+      }
+    }
+  });
+  arModalObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1777,10 +1978,10 @@ document.addEventListener('DOMContentLoaded', () => {
     exportHtmlAsPdf(buildReportSectionHtml(s.name, s.vat, s.from, s.to, s.report), 'Λογιστικό_Αποτέλεσμα_' + s.name + '_' + periodSuffix(s.from, s.to), 'portrait', true);
   });
 
-  document.getElementById('arExcelHintBtn').addEventListener('click', () => document.getElementById('arExcelHintModal').classList.remove('hidden'));
+  document.getElementById('arExcelHintBtn').addEventListener('click', () => { moveModalsToBody(); document.getElementById('arExcelHintModal').classList.remove('hidden'); });
   document.getElementById('arExcelHintClose').addEventListener('click', () => document.getElementById('arExcelHintModal').classList.add('hidden'));
 
-  document.getElementById('arSavedExcelHintBtn').addEventListener('click', () => document.getElementById('arSavedExcelHintModal').classList.remove('hidden'));
+  document.getElementById('arSavedExcelHintBtn').addEventListener('click', () => { moveModalsToBody(); document.getElementById('arSavedExcelHintModal').classList.remove('hidden'); });
   document.getElementById('arSavedExcelHintClose').addEventListener('click', () => document.getElementById('arSavedExcelHintModal').classList.add('hidden'));
 
   document.getElementById('arBulkRunBtn').addEventListener('click', runBulk);

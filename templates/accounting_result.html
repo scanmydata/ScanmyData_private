@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}ScanmyData - Λογιστικό Αποτέλεσμα{% endblock %}
-{% block head_extra %}
+{% block content %}
+<!-- This page's CSS lives here in the content block, not head_extra, on
+     purpose: base_08.js's partial-nav only swaps #appShell's innerHTML
+     (the content block), never <head> — a style block in head_extra simply
+     never applies after navigating here via a partial nav from an allowed
+     page. Same reason e3_check.html keeps its own <style> in its content
+     block instead of head_extra. -->
 <style>
   .brain-tab-button {
     background: #e0f2fe; color: #0c4a6e; border: 1px solid #7dd3fc;
@@ -126,12 +132,70 @@
   [data-theme="dark"] #waitOverlayTitle { color: #f3f4f6 !important; }
   [data-theme="dark"] #waitOverlayMsg { color: #cbd5e1 !important; }
 
-  /* Grid/flex tracks default to a min-width based on an input's intrinsic
-     content size (same bug hit in e3_check.html's own credentials edit
-     modal) — without min-width:0 a text input inside a grid column can
-     force the whole modal wider than its own max-width, stretching it
-     across most of the viewport instead of the input just shrinking. */
-  #arSavedEditModal input { min-width: 0; box-sizing: border-box; }
+  /* Credentials-edit modal — copied verbatim from e3_check.html's own
+     .brain-cred-* rules (same class names) so the two pages' edit dialogs
+     for the SAME shared credentials store look identical, not just share a
+     field set. Includes e3_check's own min-width:0 fix for the same
+     grid-overflow bug (a text input's intrinsic content size can force the
+     whole modal wider than its max-width). */
+  .brain-cred-modal-overlay {
+    position: fixed; inset: 0; z-index: 100150; background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center; padding: 1rem;
+  }
+  .brain-cred-modal-card {
+    background: #fff; border-radius: 0.75rem; min-width: 340px; max-width: 520px;
+    width: 100%; max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.22); overflow: hidden;
+  }
+  .brain-cred-modal-card form { display: flex; flex-direction: column; min-height: 0; }
+  .brain-cred-modal-card input { min-width: 0; box-sizing: border-box; }
+  [data-theme="dark"] .brain-cred-modal-card { background: #1e293b; border: 1px solid #334155; }
+  .brain-cred-modal-header {
+    background: #0ea5e9; color: #fff; padding: 0.85rem 1.2rem; font-size: 1rem;
+    font-weight: 700; display: flex; align-items: center; gap: 0.5rem;
+  }
+  .brain-cred-modal-body {
+    padding: 1.25rem 1.4rem; display: flex; flex-direction: column; gap: 0.65rem;
+    overflow-y: auto; min-height: 0;
+  }
+  .brain-cred-field { display: flex; flex-direction: column; gap: 0.2rem; }
+  .brain-cred-field label {
+    font-size: 0.78rem; font-weight: 600; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  [data-theme="dark"] .brain-cred-field label { color: #94a3b8; }
+  .brain-cred-field input {
+    padding: 0.42rem 0.65rem; border: 1px solid #d1d5db; border-radius: 0.375rem;
+    font-size: 0.88rem; background: #f8fafc; color: #0f172a; width: 100%;
+  }
+  [data-theme="dark"] .brain-cred-field input { background: #0f172a; color: #f1f5f9; border-color: #334155; }
+  .brain-cred-field input:read-only { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+  [data-theme="dark"] .brain-cred-field input:read-only { background: #1e293b; color: #475569; }
+  .brain-cred-section-label {
+    font-size: 0.73rem; font-weight: 700; color: #0ea5e9; text-transform: uppercase;
+    letter-spacing: 0.06em; border-bottom: 1px solid #e0f2fe; padding-bottom: 0.2rem; margin-top: 0.2rem;
+  }
+  [data-theme="dark"] .brain-cred-section-label { color: #38bdf8; border-bottom-color: #0c4a6e; }
+  .brain-cred-modal-footer {
+    padding: 0.85rem 1.4rem; display: flex; gap: 0.6rem; justify-content: flex-end;
+    border-top: 1px solid #e5e7eb; background: #f8fafc;
+  }
+  [data-theme="dark"] .brain-cred-modal-footer { background: #0f172a; border-top-color: #1e293b; }
+  .brain-cred-btn {
+    padding: 0.45rem 1rem; border-radius: 0.375rem; color: #fff; border: none;
+    cursor: pointer; font-weight: 600; font-size: 0.875rem;
+  }
+  .brain-cred-btn-secondary { background: #6b7280; }
+  .brain-cred-btn-secondary:hover { background: #4b5563; }
+  .brain-cred-btn-primary { background: #059669; }
+  .brain-cred-btn-primary:hover { background: #047857; }
+  .ar-edit-member-row {
+    border: 1px solid #e2e8f0; border-radius: 0.375rem; padding: 0.45rem 0.6rem; background: #f8fafc;
+  }
+  [data-theme="dark"] .ar-edit-member-row { background: #0f172a; border-color: #334155; }
+  .ar-edit-member-row input {
+    padding: 0.32rem 0.5rem; border: 1px solid #d1d5db; border-radius: 0.3rem; font-size: 0.78rem;
+  }
 
   /* Page-owned flash container — the app-wide #flashContainer/showStandardFetchFlash
      helpers in base_06.js are wrapped in a private IIFE and never reach window,
@@ -159,8 +223,6 @@
   }
   #arFlashContainer .flash-banner { pointer-events: auto; }
 </style>
-{% endblock %}
-{% block content %}
 <div class="content-wrap">
   <h1 class="text-2xl font-bold mb-2">🧮 Λογιστικό Αποτέλεσμα</h1>
   <p class="text-sm text-gray-600 mb-4">
@@ -379,67 +441,84 @@
   </div>
 </div>
 
-<!-- Edit saved client (same shared store as Έλεγχος Ε3's «Αποθηκευμένα») -->
-<div id="arSavedEditModal" class="hidden fixed inset-0 flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);z-index:100150;">
-  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5 max-h-[85vh] overflow-y-auto">
-    <div class="flex justify-between items-center mb-3">
-      <h3 class="text-lg font-semibold">✏️ Επεξεργασία στοιχείων</h3>
-      <button id="arSavedEditClose" type="button" class="text-2xl text-gray-500 hover:text-gray-700">&times;</button>
+<!-- Edit saved client (same shared store as Έλεγχος Ε3's «Αποθηκευμένα») —
+     .brain-cred-* classes, same as e3_check.html's own credentials-edit
+     modal, so the two look identical for the same underlying data. -->
+<div id="arSavedEditModal" class="brain-cred-modal-overlay" style="display:none;">
+  <div class="brain-cred-modal-card">
+    <div class="brain-cred-modal-header">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      Επεξεργασία Credentials
+      <button id="arSavedEditClose" type="button" class="ml-auto text-xl leading-none opacity-90 hover:opacity-100" style="background:transparent;border:none;color:inherit;cursor:pointer;">&times;</button>
     </div>
-    <div class="grid grid-cols-2 gap-3 text-sm mb-3">
-      <div class="col-span-2">
-        <label class="block text-xs text-gray-600 mb-1">ΑΦΜ</label>
-        <input id="arEditAfm" type="text" class="border rounded px-2 py-1 w-full ar-mono" readonly>
+    <form id="arSavedEditForm">
+      <div class="brain-cred-modal-body">
+        <div class="brain-cred-section-label">Στοιχεία Επιχείρησης</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+          <div class="brain-cred-field" style="grid-column:1/-1;">
+            <label>ΑΦΜ</label>
+            <input id="arEditAfm" type="text" readonly>
+          </div>
+          <div class="brain-cred-field" style="grid-column:1/-1;">
+            <label>Επωνυμία</label>
+            <input id="arEditName" type="text" placeholder="Επωνυμία">
+          </div>
+          <div class="brain-cred-field" style="grid-column:1/-1;">
+            <label>Διεύθυνση έδρας</label>
+            <input id="arEditAddress" type="text" placeholder="π.χ. ΕΡΜΟΥ 12, ΘΕΣΣΑΛΟΝΙΚΗ">
+          </div>
+          <div class="brain-cred-field" style="grid-column:1/-1;">
+            <label>Νομική μορφή</label>
+            <div style="display:flex;align-items:center;gap:0.5rem;">
+              <span id="arEditLegalTypePill" style="display:inline-flex;align-items:center;border-radius:9999px;padding:0.25rem 0.75rem;font-size:0.78rem;font-weight:700;border:1px solid transparent;">—</span>
+              <input type="hidden" id="arEditLegalType" value="">
+            </div>
+          </div>
+          <div class="brain-cred-field">
+            <label>TAXISnet username</label>
+            <input id="arEditTaxisUser" type="text" placeholder="username" autocomplete="off">
+          </div>
+          <div class="brain-cred-field">
+            <label>TAXISnet password</label>
+            <input id="arEditTaxisPass" type="password" placeholder="••••••••" autocomplete="new-password">
+          </div>
+          <div class="brain-cred-field" id="arEditAmkaWrap">
+            <label>ΑΜΚΑ</label>
+            <input id="arEditAmka" type="text" placeholder="ΑΜΚΑ ατομικής επιχείρησης">
+          </div>
+        </div>
+        <div class="brain-cred-section-label" style="margin-top:0.4rem;">Ι.Κ.Α. Εργοδότη (Καρτέλα ΤΕΚΑ)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+          <div class="brain-cred-field">
+            <label>Ι.Κ.Α. Εργοδότη username</label>
+            <input id="arEditIkaEmpUser" type="text" placeholder="π.χ. ika000XXXXX" autocomplete="off">
+          </div>
+          <div class="brain-cred-field">
+            <label>Ι.Κ.Α. Εργοδότη password</label>
+            <input id="arEditIkaEmpPass" type="password" placeholder="••••••••" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="brain-cred-section-label" style="margin-top:0.4rem;">myDATA</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+          <div class="brain-cred-field">
+            <label>myDATA user</label>
+            <input id="arEditMydataUser" type="text" placeholder="user" autocomplete="off">
+          </div>
+          <div class="brain-cred-field">
+            <label>myDATA subscription key</label>
+            <input id="arEditMydataKey" type="password" placeholder="key" autocomplete="new-password">
+          </div>
+        </div>
+        <div id="arEditMembersWrap" style="display:none;">
+          <div class="brain-cred-section-label" style="margin-top:0.6rem;">Μέλη εταιρίας</div>
+          <div id="arEditMembersList" style="display:flex;flex-direction:column;gap:0.45rem;"></div>
+        </div>
       </div>
-      <div class="col-span-2">
-        <label class="block text-xs text-gray-600 mb-1">Επωνυμία</label>
-        <input id="arEditName" type="text" class="border rounded px-2 py-1 w-full">
+      <div class="brain-cred-modal-footer">
+        <button type="button" id="arSavedEditCancel" class="brain-cred-btn brain-cred-btn-secondary">Άκυρο</button>
+        <button type="submit" id="arSavedEditSave" class="brain-cred-btn brain-cred-btn-primary">Αποθήκευση</button>
       </div>
-      <div class="col-span-2">
-        <label class="block text-xs text-gray-600 mb-1">Διεύθυνση</label>
-        <input id="arEditAddress" type="text" class="border rounded px-2 py-1 w-full">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">TAXISnet username</label>
-        <input id="arEditTaxisUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">TAXISnet password</label>
-        <input id="arEditTaxisPass" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
-      </div>
-      <div id="arEditAmkaWrap">
-        <label class="block text-xs text-gray-600 mb-1">ΑΜΚΑ</label>
-        <input id="arEditAmka" type="text" class="border rounded px-2 py-1 w-full">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">Νομική μορφή</label>
-        <input id="arEditLegalType" type="text" class="border rounded px-2 py-1 w-full">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">myDATA user</label>
-        <input id="arEditMydataUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">myDATA key</label>
-        <input id="arEditMydataKey" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">Ι.Κ.Α. Εργοδότη username</label>
-        <input id="arEditIkaEmpUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">Ι.Κ.Α. Εργοδότη password</label>
-        <input id="arEditIkaEmpPass" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
-      </div>
-    </div>
-    <div id="arEditMembersWrap" class="hidden mb-3">
-      <div class="text-xs font-semibold text-sky-600 uppercase tracking-wide border-b border-sky-100 pb-1 mb-2">Μέλη εταιρίας</div>
-      <div id="arEditMembersList" class="flex flex-col gap-2"></div>
-    </div>
-    <div class="flex justify-end gap-2">
-      <button id="arSavedEditCancel" type="button" class="px-3 py-1.5 rounded border text-sm">Άκυρο</button>
-      <button id="arSavedEditSave" type="button" class="px-3 py-1.5 rounded bg-sky-600 text-white text-sm hover:bg-sky-700">Αποθήκευση</button>
-    </div>
+    </form>
   </div>
 </div>
 

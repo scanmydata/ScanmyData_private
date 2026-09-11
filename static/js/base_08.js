@@ -256,7 +256,7 @@
     })();
     
     (function(){
-      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/e3_check', '/terms', '/privacy']);
+      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/e3_check', '/terms', '/privacy', '/accounting_result']);
       let navInFlight = null;
       let pageCaptureTimer = null;
 
@@ -1516,6 +1516,16 @@
           shell.classList.remove('page-entering');
           shell.removeEventListener('animationend', _onEnd);
         }, { once: true });
+        // Safety net: if animationend never fires (backgrounded/hidden tab
+        // during the transition can pause a CSS animation indefinitely
+        // rather than letting it finish), #appShell is left holding a
+        // non-none transform forever. Per spec that turns it into the
+        // containing block for EVERY position:fixed modal in {% block
+        // content %} on the page — not just this one — so instead of
+        // centering on the viewport they render wherever #appShell happens
+        // to sit, which is what a stuck page-entering class looks like from
+        // the outside. 400ms comfortably clears the 220ms animation.
+        setTimeout(() => { shell.classList.remove('page-entering'); }, 400);
 
         if (!options.replaceState) {
           history.pushState({ partialNav: true }, '', url.toString());
