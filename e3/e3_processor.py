@@ -160,6 +160,73 @@ def _enrich_totals(e3_totals: dict) -> tuple:
 # Δημόσια API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def extract_account_leaf_rows(excel_path: str) -> dict:
+    """
+    Επεξεργάζεται ένα αρχείο Excel ισοζυγίου (ίδια μορφή με process_excel_file)
+    αλλά επιστρέφει ΚΑΘΕ leaf-λογαριασμό με μη μηδενικό ποσό, ανεξάρτητα από το αν
+    έχει οριζόμενο κωδικό Ε3 — χρησιμοποιείται από το "Λογιστικό Αποτέλεσμα" για να
+    αντικαταστήσει (override) τα αυτόματα υπολογισμένα από myDATA ποσά ανά λογαριασμό.
+
+    Returns:
+        Dict με ok, is_closed_balance_sheet, leaf_rows: [{account, description, amount, side}]
+    """
+    df = _load_dataframe(excel_path)
+    if df is None:
+        return {
+            "ok": False,
+            "error": (
+                "Δεν βρέθηκαν οι στήλες Κωδικός / Υπόλοιπο. "
+                "Βεβαιωθείτε ότι το αρχείο είναι ισοζύγιο (Γ κατηγορίας)."
+            ),
+        }
+
+    df, missing = _normalise_columns(df)
+    if missing:
+        return {
+            "ok": False,
+            "error": (
+                f"Λείπουν στήλες: {missing}. "
+                "Αναμένονται: Κωδικός, Χρέωση, Πίστωση, Υπόλοιπο, Πεδίο Ε3."
+            ),
+        }
+
+    is_closed = _detect_closed_balance(df)
+
+    leaf_df = df[df["code"].str.contains("-")].copy()
+    if len(leaf_df) == 0:
+        leaf_df = df.copy()
+
+    rows = []
+    for _, row in leaf_df.iterrows():
+        first_char = row["code"][0] if row["code"] else ""
+        try:
+            account_group = int(first_char)
+        except ValueError:
+            account_group = 0
+
+        if is_closed:
+            if account_group == 6:
+                amount, side = abs(row["debit"]), "debit"
+            elif account_group == 7:
+                amount, side = abs(row["credit"]), "credit"
+            else:
+                amount, side = abs(row["balance"]), "balance"
+        else:
+            amount, side = abs(row["balance"]), "balance"
+
+        if amount == 0:
+            continue
+
+        rows.append({
+            "account": row["code"],
+            "description": str(row.get("desc", "")).strip() if "desc" in row else "",
+            "amount": round(float(amount), 2),
+            "side": side,
+        })
+
+    return {"ok": True, "is_closed_balance_sheet": is_closed, "leaf_rows": rows}
+
+
 def process_excel_file(excel_path: str) -> dict:
     """
     Επεξεργάζεται ένα αρχείο Excel ισοζυγίου και εξάγει τα ποσά Ε3.

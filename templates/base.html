@@ -88,6 +88,7 @@
               <a href="{{ url_for('fetch') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='fetch' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">📥 Λήψη Παραστατικών</a>
               <a href="{{ url_for('search') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='search' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">🔍 Αναζήτηση MARK</a>
               <a href="{{ url_for('e3_check') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='e3_check' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">📋 Έλεγχος E3</a>
+              <a href="{{ url_for('accounting_result_page') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='accounting_result' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 text-gray-700{% endif %}">🧮 Λογιστικό Αποτέλεσμα</a>
               <a href="{{ url_for('credentials') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if active_page=='credentials' %}bg-sky-600 text-white{% else %}bg-white border hover:bg-gray-100 {{ 'text-gray-900' if _e3_active else 'text-gray-700' }}{% endif %}">🔐 Credentials</a>
               {% if current_user.is_admin or current_user.id == ADMIN_USER_ID %}
                 <a href="{{ url_for('admin_dashboard') }}" class="px-3 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700">⚙️ Admin</a>
@@ -196,6 +197,7 @@
             <a href="{{ url_for('fetch') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📥 Λήψη Παραστατικών</a>
             <a href="{{ url_for('search') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🔍 Αναζήτηση</a>
             <a href="{{ url_for('e3_check') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📋 Έλεγχος E3</a>
+            <a href="{{ url_for('accounting_result_page') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🧮 Λογιστικό Αποτέλεσμα</a>
             <a href="{{ url_for('credentials') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🔐 Credentials</a>
           </div>
         </div>

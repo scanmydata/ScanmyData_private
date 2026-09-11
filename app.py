@@ -13165,6 +13165,7 @@ def api_scrape_receipt():
                         group=grp_name, scraper_source=str(scraped.get("source") or "") or None,
                     )
                     try:
+                        _rq_active = get_active_credential_from_session() or {}
                         scrape_review.add_to_review_queue(
                             get_group_base_dir(), url=url, mark=str(mark or ""),
                             missing_fields=missing,
@@ -13173,6 +13174,8 @@ def api_scrape_receipt():
                                 "issue_date": issue_date, "total_amount": total_amount,
                                 "progressive_aa": progressive_aa,
                             },
+                            customer_vat=str(_rq_active.get("vat") or ""),
+                            customer_name=str(_rq_active.get("name") or ""),
                         )
                     except Exception:
                         log.exception("api_scrape_receipt: add_to_review_queue failed")
@@ -13213,10 +13216,22 @@ def api_receipt_review_list():
     Receipts from the active group that scraped with missing fields and still
     need manual completion. The frontend uses this to warn (not block) before
     the bridge/εξοδολόγιο is exported.
+
+    Scoped to the currently active customer (each entry was tagged with the
+    customer that was active at scrape time) so one customer's incomplete
+    receipt doesn't show as a warning for every other customer in the group.
+    Legacy entries queued before that tagging existed have no customer on
+    file and stay visible regardless of which customer is active, rather
+    than becoming permanently invisible.
     """
     try:
         import scrape_review
-        items = scrape_review.list_review_queue(get_group_base_dir())
+        active_vat = ""
+        try:
+            active_vat = str((get_active_credential_from_session() or {}).get("vat") or "").strip()
+        except Exception:
+            active_vat = ""
+        items = scrape_review.list_review_queue(get_group_base_dir(), customer_vat=active_vat)
         return jsonify({"ok": True, "count": len(items), "items": items})
     except Exception as e:
         log.exception("api_receipt_review_list failed")
@@ -18011,6 +18026,26 @@ def e3_check():
     )
 
 
+@app.route("/accounting_result", methods=["GET"])
+def accounting_result_page():
+    """Λογιστικό Αποτέλεσμα: myDATA-based ΕΓΛΣ P&L, single or bulk, PDF export."""
+    creds = sorted(load_credentials(), key=lambda c: str((c or {}).get("name") or "").lower())
+    active_cred = get_active_credential_from_session()
+    active_name = active_cred.get("name") if active_cred else None
+    credentials_min = [
+        {"name": c.get("name"), "vat": str(c.get("vat") or "").strip()}
+        for c in creds if isinstance(c, dict) and c.get("name")
+    ]
+
+    return safe_render(
+        "accounting_result.html",
+        credentials=creds,
+        credentials_min=credentials_min,
+        active_credential=active_name,
+        active_page="accounting_result",
+    )
+
+
 @app.route("/api/e3/fetch", methods=["POST"])
 def api_e3_fetch():
     """Fetch E3 data from myDATA for a given credential and period."""
@@ -18169,6 +18204,705 @@ def api_e3_upload_excel():
         return jsonify(normalize_bools(result)), 200
     except Exception as e:
         log.exception("api_e3_upload_excel failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ---------------- Λογιστικό Αποτέλεσμα (accounting_result) ----------------
+
+def _ar_store_path(vat: str) -> str:
+    return group_path("accounting_result", f"{secure_filename(str(vat))}.json")
+
+
+def _ar_history_path(vat: str) -> str:
+    return group_path("accounting_result", "history", f"{secure_filename(str(vat))}.json")
+
+
+def _ar_bulk_runs_path() -> str:
+    return group_path("accounting_result", "bulk_runs.json")
+
+
+_AR_INVENTORY_METHOD_LABELS = {
+    "manual": "χειροκίνητη καταχώρηση",
+    "pct10_up": "+10% επί του αποθέματος έναρξης",
+    "pct10_down": "-10% επί του αποθέματος έναρξης",
+    "same_as_opening": "ίσο με το απόθεμα έναρξης",
+}
+
+
+def _ar_inventory_method_label(path: str, year: int, has_inventory: bool) -> Optional[str]:
+    """Human-readable label of HOW the closing inventory was determined, for
+    the PDF footnote — None when the company doesn't track inventory at all."""
+    if not has_inventory:
+        return None
+    try:
+        from accounting_result import inventory_store as ar_inventory
+        rec = ar_inventory.get_year_record(path, year) or {}
+        method = str(rec.get("method") or "").strip()
+        return _AR_INVENTORY_METHOD_LABELS.get(method, method or "άγνωστη μέθοδος")
+    except Exception:
+        return None
+
+
+def _ar_vat_applicable(path: str) -> bool:
+    """True unless a company has been EXPLICITLY marked as not ΦΠΑ-subject
+    (accounting_result/vat_profile_store.py) — an unknown/never-checked
+    profile defaults to True, i.e. the same behavior as before this
+    feature existed (the ΦΠΑ block always showed)."""
+    try:
+        from accounting_result import vat_profile_store as ar_vat_profile
+        profile = vat_profile_store_get(path)
+        subject = profile.get("vat_subject")
+        return subject is not False
+    except Exception:
+        return True
+
+
+def vat_profile_store_get(path: str):
+    from accounting_result import vat_profile_store as ar_vat_profile
+    return ar_vat_profile.get_vat_profile(path)
+
+
+def _ar_vat_period_type(path: str) -> str:
+    """"monthly" | "quarterly" | "" (unknown — engine.compute_vat_declaration_period
+    falls back to monthly in that case)."""
+    try:
+        return str(vat_profile_store_get(path).get("vat_period_type") or "")
+    except Exception:
+        return ""
+
+
+_AR_BOOKS_CATEGORY_TO_PERIOD = {
+    "Β": "quarterly",
+    "Γ": "monthly",
+}
+
+
+def _ar_lookup_taxis_creds(vat: str):
+    """(taxis_user, taxis_pass) for `vat` from the group's shared
+    e3_company_credentials_store.json (same store the Έλεγχος Ε3 page's own
+    «Αποθηκευμένα» tab manages) — (None, None) when not found/no creds on file."""
+    try:
+        path = group_path("e3_company_credentials_store.json")
+        if not os.path.exists(path):
+            return None, None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for entry in (data.get("companies") or []):
+            company = (entry or {}).get("company") or {}
+            if str(company.get("afm") or "").strip() == str(vat or "").strip():
+                u = str(company.get("taxisnet_username") or "").strip()
+                p = str(company.get("taxisnet_password") or "").strip()
+                return (u or None), (p or None)
+    except Exception:
+        log.exception("_ar_lookup_taxis_creds failed for vat=%s", vat)
+    return None, None
+
+
+def _ar_computed_by() -> str:
+    try:
+        from flask_login import current_user
+        if current_user and current_user.is_authenticated:
+            return str(getattr(current_user, "username", None) or getattr(current_user, "email", None) or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _ar_load_epsilon_and_raw(vat: str):
+    epsilon_records = load_epsilon_cache_for_vat(vat)
+    raw_invoices = json_read(get_customer_docs_file(vat), default=[])
+    return epsilon_records, raw_invoices
+
+
+def _ar_resolve_credential(payload: dict):
+    credential_name = str(payload.get("credential_name") or payload.get("credential") or "").strip()
+    cred = get_cred_by_name(credential_name)
+    return credential_name, cred
+
+
+def _ar_year_from_date(date_str: str) -> int:
+    from accounting_result.engine import parse_date as _ar_parse_date
+    d = _ar_parse_date(date_str)
+    return d.year if d else datetime.datetime.now().year
+
+
+@app.route("/api/accounting_result/compute", methods=["POST"])
+def api_accounting_result_compute():
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        if not cred or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπει credential ή περίοδος"}), 400
+
+        vat = str(cred.get("vat") or "").strip()
+        aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+        aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+        if not vat or not aade_user or not aade_key:
+            return jsonify({"ok": False, "error": "Λείπουν στοιχεία AADE για το credential"}), 400
+
+        year = _ar_year_from_date(date_to)
+
+        from accounting_result import inventory_store as ar_inventory
+        from accounting_result import engine as ar_engine
+        path = _ar_store_path(vat)
+
+        prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
+        has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+        dep_entries = ar_engine.depreciation_entries_from(prior_entries)
+
+        depreciation_selection = payload.get("depreciation_selection") if isinstance(payload.get("depreciation_selection"), dict) else None
+        if len(dep_entries) > 1 and not depreciation_selection:
+            return jsonify({
+                "ok": True,
+                "needs_depreciation_input": True,
+                "credential_name": credential_name,
+                "vat": vat,
+                "year": year,
+                "depreciation_entries": dep_entries,
+            }), 200
+        depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
+
+        if has_inventory:
+            closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+            if needs_input:
+                return jsonify({
+                    "ok": True,
+                    "needs_inventory_input": True,
+                    "credential_name": credential_name,
+                    "vat": vat,
+                    "year": year,
+                    "opening_inventory": opening,
+                }), 200
+        else:
+            closing, opening = {}, {}
+
+        excel_group_totals = payload.get("excel_group_totals") if isinstance(payload.get("excel_group_totals"), dict) else None
+
+        epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
+        settings = load_settings() or {}
+
+        report = ar_engine.build_report(
+            vat, date_from, date_to, cred, settings,
+            epsilon_records, raw_invoices, aade_user, aade_key,
+            opening, closing,
+            depreciation_amount=depreciation_amount,
+            excel_group_totals=excel_group_totals,
+            vat_applicable=_ar_vat_applicable(path),
+            vat_period_type=_ar_vat_period_type(path),
+        )
+        report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+
+        from accounting_result import history_store as ar_history
+        ar_history.append_entry(
+            _ar_history_path(vat), credential_name, vat, date_from, date_to,
+            _ar_computed_by(), report.get("final_net_profit"), report.get("taxable_result"),
+            mode="single", report=report,
+        )
+
+        return jsonify({
+            "ok": True,
+            "needs_inventory_input": False,
+            "needs_depreciation_input": False,
+            "credential_name": credential_name,
+            "vat": vat,
+            "year": year,
+            "report": report,
+        }), 200
+    except Exception as e:
+        log.exception("api_accounting_result_compute failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/inventory/resolve", methods=["POST"])
+def api_accounting_result_inventory_resolve():
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        method = str(payload.get("method") or "").strip()
+        if not cred or not year or method not in ("manual", "pct10_up", "pct10_down", "same_as_opening"):
+            return jsonify({"ok": False, "error": "Λείπει credential, έτος ή έγκυρη μέθοδος"}), 400
+        year = int(year)
+        vat = str(cred.get("vat") or "").strip()
+
+        from accounting_result import inventory_store as ar_inventory
+        from accounting_result.engine import STOCK_CODES
+        path = _ar_store_path(vat)
+        opening = ar_inventory.get_opening_inventory(path, year)
+        base = {c: float(opening.get(c, 0.0)) for c in STOCK_CODES}
+
+        if method == "manual":
+            raw_values = payload.get("value") if isinstance(payload.get("value"), dict) else {}
+            values = {c: float(raw_values.get(c, 0.0) or 0.0) for c in STOCK_CODES}
+        elif method == "pct10_up":
+            values = {c: round(v * 1.10, 2) for c, v in base.items()}
+        elif method == "pct10_down":
+            values = {c: round(v * 0.90, 2) for c, v in base.items()}
+        else:  # same_as_opening
+            values = base
+
+        rec = ar_inventory.set_closing_inventory(
+            path, year, values, method,
+            period_from=payload.get("date_from"), period_to=payload.get("date_to"),
+        )
+        return jsonify({"ok": True, "closing_inventory": rec["closing_inventory"], "opening_inventory": opening}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_inventory_resolve failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/inventory/bulk_status", methods=["POST"])
+def api_accounting_result_inventory_bulk_status():
+    try:
+        payload = request.get_json(silent=True) or {}
+        names = payload.get("credential_names") or []
+        year = payload.get("year")
+        if not isinstance(names, list) or not names or not year:
+            return jsonify({"ok": False, "error": "Λείπουν credential_names ή έτος"}), 400
+        year = int(year)
+
+        from accounting_result import inventory_store as ar_inventory
+        from accounting_result import engine as ar_engine
+        rows = []
+        for name in names:
+            cred = get_cred_by_name(str(name))
+            if not cred:
+                rows.append({"name": name, "vat": "", "opening_inventory": {}, "closing_inventory_known": False, "inventory_applicable": False, "error": "Άγνωστο credential"})
+                continue
+            vat = str(cred.get("vat") or "").strip()
+            aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+            aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+            if not vat or not aade_user or not aade_key:
+                rows.append({"name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True, "inventory_applicable": False, "error": "Λείπουν στοιχεία AADE"})
+                continue
+
+            prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
+            has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+            dep_entries = ar_engine.depreciation_entries_from(prior_entries)
+
+            if not has_inventory:
+                rows.append({
+                    "name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True,
+                    "inventory_applicable": False, "depreciation_ambiguous": len(dep_entries) > 1,
+                })
+                continue
+
+            path = _ar_store_path(vat)
+            closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+            rows.append({
+                "name": name, "vat": vat,
+                "opening_inventory": opening,
+                "closing_inventory_known": not needs_input,
+                "inventory_applicable": True,
+                "depreciation_ambiguous": len(dep_entries) > 1,
+            })
+        return jsonify({"ok": True, "rows": rows}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_inventory_bulk_status failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/upload_excel", methods=["POST"])
+def api_accounting_result_upload_excel():
+    try:
+        if "excel_file" not in request.files:
+            return jsonify({"ok": False, "error": "No file provided"}), 400
+        file = request.files["excel_file"]
+        if file.filename == "":
+            return jsonify({"ok": False, "error": "No file selected"}), 400
+        if not file.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "Only Excel files are allowed"}), 400
+
+        temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
+        file.save(temp_path)
+        try:
+            from accounting_result.excel_merge import parse_accounting_result_excel
+            result = parse_accounting_result_excel(temp_path)
+        finally:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+        if not result.get("ok"):
+            return jsonify(result), 400
+        return jsonify(result), 200
+    except Exception as e:
+        log.exception("api_accounting_result_upload_excel failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_compute", methods=["POST"])
+def api_accounting_result_bulk_compute():
+    try:
+        payload = request.get_json(silent=True) or {}
+        names = payload.get("credential_names") or []
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        job_id = str(payload.get("job_id") or "").strip()
+        if not isinstance(names, list) or not names or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπουν credential_names ή περίοδος"}), 400
+
+        year = _ar_year_from_date(date_to)
+
+        from accounting_result import inventory_store as ar_inventory
+        from accounting_result import engine as ar_engine
+        from accounting_result import job_registry as ar_jobs
+        settings = load_settings() or {}
+
+        total = len(names)
+        aborted = False
+        results = []
+        for idx, name in enumerate(names):
+            if job_id and ar_jobs.is_abort_requested(job_id):
+                aborted = True
+                break
+            ar_jobs.publish_progress(
+                job_id, f"{name} ({idx + 1}/{total})",
+                percent=round((idx) / total * 100) if total else None,
+                current=idx + 1, total=total,
+            )
+            cred = get_cred_by_name(str(name))
+            if not cred:
+                results.append({"credential_name": name, "ok": False, "error": "Άγνωστο credential"})
+                continue
+            vat = str(cred.get("vat") or "").strip()
+            aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+            aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+            if not vat or not aade_user or not aade_key:
+                results.append({"credential_name": name, "ok": False, "error": "Λείπουν στοιχεία AADE"})
+                continue
+
+            prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
+            has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+            dep_entries = ar_engine.depreciation_entries_from(prior_entries)
+            # Bulk runs default depreciation to "sum every prior-year entry" rather
+            # than blocking the whole batch on a per-company pick — the per-mark
+            # disambiguation popup is available in Ατομικός mode.
+            depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to)
+
+            path = _ar_store_path(vat)
+            if has_inventory:
+                closing, opening, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
+                if needs_input:
+                    results.append({
+                        "credential_name": name, "ok": True, "needs_inventory_input": True,
+                        "vat": vat, "year": year, "opening_inventory": opening,
+                    })
+                    continue
+            else:
+                closing, opening = {}, {}
+
+            try:
+                epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
+                report = ar_engine.build_report(
+                    vat, date_from, date_to, cred, settings,
+                    epsilon_records, raw_invoices, aade_user, aade_key,
+                    opening, closing,
+                    depreciation_amount=depreciation_amount,
+                    vat_applicable=_ar_vat_applicable(path),
+                    vat_period_type=_ar_vat_period_type(path),
+                )
+                report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+
+                from accounting_result import history_store as ar_history
+                hist_entry = ar_history.append_entry(
+                    _ar_history_path(vat), name, vat, date_from, date_to,
+                    _ar_computed_by(), report.get("final_net_profit"), report.get("taxable_result"),
+                    mode="bulk", report=report,
+                )
+
+                results.append({
+                    "credential_name": name, "ok": True, "needs_inventory_input": False,
+                    "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
+                })
+            except Exception as e:
+                log.exception("accounting_result bulk_compute failed for %s", name)
+                results.append({"credential_name": name, "ok": False, "error": str(e)})
+
+        if job_id:
+            ar_jobs.clear_progress(job_id)
+            ar_jobs.clear_abort(job_id)
+
+        # Retained index of the whole run ("folder of saved bulk runs") —
+        # the per-company results already live in each company's own
+        # history (mode="bulk", never individually deletable), but there
+        # was no way to find "the bulk run from <date>" again as a group.
+        from accounting_result import history_store as ar_history
+        ar_history.append_bulk_batch(
+            _ar_bulk_runs_path(), date_from, date_to, _ar_computed_by(),
+            companies=[{
+                "credential_name": r.get("credential_name"),
+                "vat": r.get("vat"),
+                "entry_id": r.get("entry_id"),
+                "ok": bool(r.get("ok")) and not r.get("needs_inventory_input"),
+                "error": r.get("error"),
+            } for r in results],
+            aborted=aborted,
+        )
+
+        return jsonify({"ok": True, "results": results, "aborted": aborted}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_bulk_compute failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_progress/<job_id>", methods=["GET"])
+def api_accounting_result_bulk_progress(job_id):
+    try:
+        from accounting_result import job_registry as ar_jobs
+        return jsonify({"ok": True, "progress": ar_jobs.get_progress(job_id)}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_abort/<job_id>", methods=["POST"])
+def api_accounting_result_bulk_abort(job_id):
+    try:
+        from accounting_result import job_registry as ar_jobs
+        ar_jobs.request_abort(job_id)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_runs", methods=["GET"])
+def api_accounting_result_bulk_runs():
+    """Index of past Μαζικός runs («φάκελος αποθηκευμένων μαζικών») — the
+    per-company results are never individually deletable (history_store.
+    delete_entry refuses mode="bulk"), so this is how the accountant finds
+    a past run again without remembering which company/date to search."""
+    try:
+        from accounting_result import history_store as ar_history
+        batches = ar_history.get_bulk_batches(_ar_bulk_runs_path(), limit=30)
+        return jsonify({"ok": True, "batches": batches}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_bulk_runs failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_runs/<batch_id>", methods=["GET"])
+def api_accounting_result_bulk_run_open(batch_id):
+    """Reopen one past bulk run: resolves each company's saved entry_id back
+    to its full report snapshot so the frontend can rebuild the same
+    ZIP/Συγκεντρωτικό export it would have offered right after the run."""
+    try:
+        from accounting_result import history_store as ar_history
+        batch = ar_history.get_bulk_batch(_ar_bulk_runs_path(), batch_id)
+        if not batch:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε αυτή η μαζική κατάσταση."}), 404
+
+        companies = []
+        for c in (batch.get("companies") or []):
+            if not c.get("ok") or not c.get("entry_id"):
+                continue
+            vat = str(c.get("vat") or "")
+            entry = ar_history.get_entry(_ar_history_path(vat), str(c.get("entry_id")))
+            if not entry or not entry.get("report"):
+                continue
+            companies.append({
+                "name": c.get("credential_name"), "vat": vat,
+                "from": entry.get("date_from"), "to": entry.get("date_to"),
+                "report": entry.get("report"),
+            })
+        return jsonify({"ok": True, "batch": batch, "companies": companies}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_bulk_run_open failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_runs/<batch_id>", methods=["DELETE"])
+def api_accounting_result_bulk_run_delete(batch_id):
+    """Delete one bulk-run "folder" entry. `delete_individual` (JSON body)
+    additionally force-deletes each referenced company's own per-company
+    history entry — the only sanctioned way those mode="bulk" entries ever
+    get removed, since history_store.delete_entry() otherwise refuses them
+    and the per-company Ατομικός history view has no delete option for
+    them at all. Without delete_individual, only the batch index entry
+    goes away — the per-company results stay, just no longer grouped."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        delete_individual = bool(payload.get("delete_individual"))
+
+        from accounting_result import history_store as ar_history
+        path = _ar_bulk_runs_path()
+        batch = ar_history.get_bulk_batch(path, batch_id)
+        if not batch:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε αυτή η μαζική κατάσταση."}), 404
+
+        if delete_individual:
+            for c in (batch.get("companies") or []):
+                if not c.get("entry_id"):
+                    continue
+                vat = str(c.get("vat") or "")
+                ar_history.force_delete_entry(_ar_history_path(vat), str(c.get("entry_id")))
+
+        ar_history.delete_bulk_batch(path, batch_id)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_bulk_run_delete failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/history", methods=["GET"])
+def api_accounting_result_history():
+    try:
+        credential_name = str(request.args.get("credential_name") or "").strip()
+        vat = str(request.args.get("vat") or "").strip()
+        if not vat:
+            cred = get_cred_by_name(credential_name)
+            if not cred:
+                return jsonify({"ok": False, "error": "Άγνωστο credential"}), 404
+            vat = str(cred.get("vat") or "").strip()
+
+        from accounting_result import history_store as ar_history
+        entries = ar_history.get_history(_ar_history_path(vat), limit=20)
+        return jsonify({"ok": True, "vat": vat, "history": entries}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_history failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/history/<entry_id>", methods=["GET"])
+def api_accounting_result_history_entry(entry_id):
+    """Re-open a past computation from its saved snapshot — no AADE re-fetch."""
+    try:
+        vat = str(request.args.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+
+        from accounting_result import history_store as ar_history
+        entry = ar_history.get_entry(_ar_history_path(vat), entry_id)
+        if not entry or not entry.get("report"):
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε αποθηκευμένο αποτέλεσμα"}), 404
+        return jsonify({"ok": True, "entry": entry}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_history_entry failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/history/<entry_id>", methods=["DELETE"])
+def api_accounting_result_history_entry_delete(entry_id):
+    """Delete one history entry — refused for mode="bulk" entries, which
+    stay retained/retrievable (see history_store.delete_entry's docstring)."""
+    try:
+        vat = str(request.args.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+
+        from accounting_result import history_store as ar_history
+        deleted = ar_history.delete_entry(_ar_history_path(vat), entry_id)
+        if not deleted:
+            return jsonify({
+                "ok": False,
+                "error": "Τα αποτελέσματα μαζικού υπολογισμού διατηρούνται και δεν διαγράφονται εδώ, ή η εγγραφή δεν βρέθηκε.",
+            }), 400
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_history_entry_delete failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/vat_profile", methods=["GET"])
+def api_accounting_result_vat_profile_get():
+    try:
+        vat = str(request.args.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+        profile = vat_profile_store_get(_ar_store_path(vat))
+        return jsonify({"ok": True, "vat": vat, "profile": profile}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_vat_profile_get failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/vat_profile/set", methods=["POST"])
+def api_accounting_result_vat_profile_set():
+    """Manual override — e.g. the accountant already knows this company is
+    not ΦΠΑ-subject and doesn't need/have TAXISnet creds on file for the
+    auto-detect endpoint below."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        vat = str(payload.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+        raw_subject = payload.get("vat_subject")
+        vat_subject = None if raw_subject is None else bool(raw_subject)
+
+        from accounting_result import vat_profile_store as ar_vat_profile
+        profile = ar_vat_profile.set_vat_profile(
+            _ar_store_path(vat), vat_subject,
+            books_category=str(payload.get("books_category") or ""),
+            vat_period_type=str(payload.get("vat_period_type") or ""),
+            source="manual",
+        )
+        return jsonify({"ok": True, "vat": vat, "profile": profile}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_vat_profile_set failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/vat_profile/detect", methods=["POST"])
+def api_accounting_result_vat_profile_detect():
+    """Auto-detect ΦΠΑ υπαγωγή / κατηγορία βιβλίων from the ΑΑΔΕ Μητρώο,
+    reusing the same TAXISnet-login fetch already used for the address-
+    retrieval fallback elsewhere (e3/checks/aade_profile.py) — needs the
+    company's TAXISnet creds on file in the shared e3_company_credentials_store.json
+    (typically populated by the «Αποθηκευμένα» tab's Excel import)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        vat = str(payload.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+
+        taxis_user, taxis_pass = _ar_lookup_taxis_creds(vat)
+        if not taxis_user or not taxis_pass:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ στα αποθηκευμένα credentials."}), 400
+
+        from e3.checks.aade_profile import fetch_company_profile
+        try:
+            result = fetch_company_profile(taxis_user, taxis_pass, vat)
+        except requests.exceptions.Timeout:
+            return jsonify({
+                "ok": False,
+                "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
+            }), 504
+        if not isinstance(result, dict) or not result.get("ok"):
+            reason = (isinstance(result, dict) and result.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο."
+            return jsonify({"ok": False, "error": str(reason)}), 400
+
+        all_tags = result.get("all_tags") or {}
+        ypagwgh = str(all_tags.get("ypagwghfpa") or "").strip().upper()
+        vat_subject = True if ypagwgh == "NAI" else (False if ypagwgh == "OXI" else None)
+        books_category_raw = str(all_tags.get("kathgoriabibliwn") or "").strip()
+        books_category = "Γ" if books_category_raw.upper().startswith("Γ") else ("Β" if books_category_raw.upper().startswith("Β") else "")
+        # ΑΑΔΕ's own κατηγορία βιβλίων text states the ΦΠΑ period directly
+        # (e.g. "Β-ΑΠΛΟΓΡΑΦΙΚΑ ΜΕ ΜΗΝΙΑΙΑ ΠΕΡΙΟΔΟ ΦΠΑ") — a real case confirmed
+        # a Β category company on MONTHLY VAT, contradicting the naive
+        # "Β=quarterly, Γ=monthly" assumption below. Read the actual text
+        # first and only fall back to the category-letter default when it
+        # doesn't say either way. Check ΤΡΙΜΗΝ before ΜΗΝΙΑ — "ΤΡΙΜΗΝΙΑΙΑ"
+        # itself contains the substring "ΜΗΝΙΑ".
+        raw_upper = books_category_raw.upper()
+        if "ΤΡΙΜΗΝ" in raw_upper:
+            vat_period_type = "quarterly"
+        elif "ΜΗΝΙΑ" in raw_upper:
+            vat_period_type = "monthly"
+        else:
+            vat_period_type = _AR_BOOKS_CATEGORY_TO_PERIOD.get(books_category, "")
+
+        from accounting_result import vat_profile_store as ar_vat_profile
+        profile = ar_vat_profile.set_vat_profile(
+            _ar_store_path(vat), vat_subject,
+            books_category=books_category_raw,
+            vat_period_type=vat_period_type,
+            source="aade_profile",
+        )
+        return jsonify({"ok": True, "vat": vat, "profile": profile}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_vat_profile_detect failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -19165,6 +19899,51 @@ def api_e3_brain_upload_preview():
                 pass
 
 
+def _credentials_store_file_path(grp) -> str:
+    group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
+    os.makedirs(group_data_dir, exist_ok=True)
+    return os.path.join(group_data_dir, "e3_company_credentials_store.json")
+
+
+def _read_credentials_store_or_refuse(file_path: str):
+    """Read e3_company_credentials_store.json, returning (data, error).
+    `data` is None when the file doesn't exist yet (a genuinely empty store —
+    fine to start fresh) — but if the file EXISTS and fails to parse, `error`
+    is set instead of silently handing back an empty {"companies": []}. Every
+    write endpoint below used to swallow the parse error and fall through to
+    an empty base, which meant one transient corruption (e.g. a write race —
+    see _write_credentials_store_atomic) would silently wipe every company on
+    the very next save. Refusing to write over unreadable data at least stops
+    the bleeding; the corrupted bytes are left on disk for manual recovery."""
+    if not os.path.exists(file_path):
+        return {"companies": []}, None
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            loaded = {"companies": []}
+        if not isinstance(loaded.get("companies"), list):
+            loaded["companies"] = []
+        return loaded, None
+    except Exception as e:
+        log.error("e3_company_credentials_store.json failed to parse at %s: %s", file_path, e)
+        return None, (
+            "Το αρχείο αποθηκευμένων credentials φαίνεται κατεστραμμένο και δεν άγγιξα τα δεδομένα — "
+            "ενημέρωσε τον διαχειριστή πριν ξαναδοκιμάσεις."
+        )
+
+
+def _write_credentials_store_atomic(file_path: str, data: dict) -> None:
+    """Atomic replace (temp file + os.replace) so a crash or a second
+    request writing concurrently can never leave the file half-written —
+    the exact race that corrupted this file in production (two overlapping
+    plain `open(path, 'w')` writers interleaved their output)."""
+    tmp_path = file_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, file_path)
+
+
 @app.route("/api/e3/brain/save_credentials", methods=["POST"])
 @login_required
 def api_e3_brain_save_credentials():
@@ -19208,11 +19987,10 @@ def api_e3_brain_save_credentials():
             return jsonify({"ok": False, "error": "Δεν υπάρχουν snapshots για αποθήκευση."}), 400
 
         # Strict group scope: write only inside current active group's data folder.
-        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
-        if not os.path.isdir(group_data_dir):
-            os.makedirs(group_data_dir, exist_ok=True)
-
-        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        file_path = _credentials_store_file_path(grp)
+        loaded, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return jsonify({"ok": False, "error": read_error}), 409
 
         existing = {
             "group": {
@@ -19229,17 +20007,9 @@ def api_e3_brain_save_credentials():
             },
             "companies": [],
         }
-
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    existing.update(loaded)
-                    if not isinstance(existing.get("companies"), list):
-                        existing["companies"] = []
-            except Exception:
-                pass
+        existing.update(loaded)
+        if not isinstance(existing.get("companies"), list):
+            existing["companies"] = []
 
         by_afm = {}
         for item in existing.get("companies", []):
@@ -19342,8 +20112,7 @@ def api_e3_brain_save_credentials():
         }
         existing["companies"] = sorted(by_afm.values(), key=lambda x: str((x.get("company") or {}).get("afm") or ""))
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
+        _write_credentials_store_atomic(file_path, existing)
 
         try:
             from admin.auth import _append_group_log
@@ -19542,21 +20311,10 @@ def api_e3_brain_credentials_store_update():
         cafm = str(company.get("afm") or "").strip()
         if not cafm:
             return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ εταιρίας."}), 400
-        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
-        if not os.path.isdir(group_data_dir):
-            os.makedirs(group_data_dir, exist_ok=True)
-        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
-        existing = {"companies": []}
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    existing.update(loaded)
-                    if not isinstance(existing.get("companies"), list):
-                        existing["companies"] = []
-            except Exception:
-                pass
+        file_path = _credentials_store_file_path(grp)
+        existing, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return jsonify({"ok": False, "error": read_error}), 409
         by_afm = {}
         for item in existing.get("companies", []):
             if not isinstance(item, dict):
@@ -19574,8 +20332,7 @@ def api_e3_brain_credentials_store_update():
             "email": getattr(current_user, "email", None),
             "role": role,
         }
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
+        _write_credentials_store_atomic(file_path, existing)
         return jsonify({"ok": True, "afm": cafm})
     except Exception as e:
         log.exception("api_e3_brain_credentials_store_update failed")
@@ -19603,13 +20360,13 @@ def api_e3_brain_credentials_store_delete():
         afm = str(payload.get("afm") or "").strip()
         if not afm:
             return jsonify({"ok": False, "error": "Λείπει το ΑΦΜ προς διαγραφή."}), 400
-        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
-        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        file_path = _credentials_store_file_path(grp)
         if not os.path.exists(file_path):
             return jsonify({"ok": True, "deleted": False})
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        companies = data.get("companies", []) if isinstance(data, dict) else []
+        data, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return jsonify({"ok": False, "error": read_error}), 409
+        companies = data.get("companies", [])
         new_companies = [item for item in companies if str((item.get("company") or {}).get("afm") or "").strip() != afm]
         if len(new_companies) == len(companies):
             return jsonify({"ok": True, "deleted": False})
@@ -19621,8 +20378,7 @@ def api_e3_brain_credentials_store_delete():
             "email": getattr(current_user, "email", None),
             "role": role,
         }
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _write_credentials_store_atomic(file_path, data)
         return jsonify({"ok": True, "deleted": True})
     except Exception as e:
         log.exception("api_e3_brain_credentials_store_delete failed")
@@ -19738,20 +20494,12 @@ def api_e3_brain_credentials_store_import_excel():
         if not col_map.get("afm"):
             return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ."}), 400
 
-        group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
-        os.makedirs(group_data_dir, exist_ok=True)
-        file_path = os.path.join(group_data_dir, "e3_company_credentials_store.json")
+        file_path = _credentials_store_file_path(grp)
         existing: Dict[str, Any] = {"companies": []}
         if not replace_existing and os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    existing.update(loaded)
-                    if not isinstance(existing.get("companies"), list):
-                        existing["companies"] = []
-            except Exception:
-                pass
+            existing, read_error = _read_credentials_store_or_refuse(file_path)
+            if read_error:
+                return jsonify({"ok": False, "error": read_error}), 409
         by_afm: Dict[str, Dict[str, Any]] = {}
         for item in existing.get("companies", []):
             if isinstance(item, dict):
@@ -19837,8 +20585,7 @@ def api_e3_brain_credentials_store_import_excel():
             "role": role,
             "via": "excel_import",
         }
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
+        _write_credentials_store_atomic(file_path, existing)
         return jsonify({
             "ok": True,
             "sheet": chosen_sheet,

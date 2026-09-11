@@ -948,9 +948,18 @@
     min-width: 340px;
     max-width: 520px;
     width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
     box-shadow: 0 16px 48px rgba(0,0,0,0.22);
     overflow: hidden;
   }
+  .brain-cred-modal-card form { display: flex; flex-direction: column; min-height: 0; }
+  /* Grid/flex tracks default to a min-width based on an input's intrinsic
+     content size, which for a 3-column member row can exceed the card's own
+     520px cap — the card (or the whole viewport) then stretches to fit
+     instead of the input just shrinking. min-width: 0 overrides that. */
+  .brain-cred-modal-card input { min-width: 0; box-sizing: border-box; }
   [data-theme="dark"] .brain-cred-modal-card {
     background: #1e293b;
     border: 1px solid #334155;
@@ -970,6 +979,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
+    overflow-y: auto;
+    min-height: 0;
   }
   .brain-cred-field {
     display: flex;
@@ -1555,7 +1566,7 @@
           </button>
           <button id="brainExcelHintBtn" type="button" aria-label="Πώς εξάγω τους κωδικούς σε Excel;"
                   title="Πώς εξάγω τους κωδικούς σε Excel;"
-                  class="w-7 h-7 inline-flex items-center justify-center rounded-full border border-sky-400 text-sky-600 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-900/40 font-bold text-sm leading-none">i</button>
+                  class="w-5 h-5 rounded-full bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200">i</button>
         </div>
         <button id="brainBulkFromActiveBtn" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition">
           📥 Από αποθηκευμένους πελάτες ομάδας
@@ -6935,6 +6946,81 @@
     });
   }
 
+  // Real client-side PDF download (html2pdf.js, self-hosted) — same verified
+  // technique as the Λογιστικό Αποτέλεσμα page (static/accounting_result.js),
+  // replacing the old window.open()+document.write()+window.print() popup
+  // pattern that was unreliable (popup-blocker dependent, no real file saved).
+  // Two things confirmed by isolated testing there and reused verbatim:
+  //  1) the export container must be a plain static, normal-flow element —
+  //     html2canvas measures ANY position:fixed/absolute element as zero
+  //     height in this bundled version, regardless of coordinates/z-index;
+  //  2) html2canvas.width/height must be set explicitly from the container's
+  //     real scrollWidth/scrollHeight — html2pdf.js otherwise silently caps
+  //     the capture at ~794px logical width, cropping wide tables.
+  let __e3Html2PdfPromise = null;
+  function _ensureE3Html2Pdf() {
+    if (window.html2pdf) return Promise.resolve();
+    if (!__e3Html2PdfPromise) {
+      __e3Html2PdfPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/static/vendor/html2pdf.bundle.min.js';
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Αποτυχία φόρτωσης βιβλιοθήκης PDF'));
+        document.head.appendChild(s);
+      });
+    }
+    return __e3Html2PdfPromise;
+  }
+
+  function _safeFilenameE3(s) {
+    return String(s || 'E3_Brain').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, '_').slice(0, 150);
+  }
+
+  async function _exportE3HtmlAsPdf(innerHtml, filename, orientation) {
+    await _ensureE3Html2Pdf();
+    const container = document.createElement('div');
+    container.style.width = orientation === 'landscape' ? '1500px' : '1000px';
+    container.style.background = '#fff';
+    container.style.color = '#111';
+    container.style.padding = '10px';
+    container.innerHTML = innerHtml;
+    document.body.appendChild(container);
+    try {
+      // Same cold-start fix as accounting_result.js's buildPdfBlob(): a
+      // single-company or first-of-session html2canvas call needs longer
+      // than 50ms to settle (fonts/layout), and this report can be long
+      // enough that a too-early capture truncates it mid-table.
+      try { await document.fonts.ready; } catch (_) {}
+      await new Promise((r) => setTimeout(r, 250));
+      const capturedWidth = container.scrollWidth;
+      const capturedHeight = container.scrollHeight;
+      await window.html2pdf().from(container).set({
+        margin: 8,
+        filename: _safeFilenameE3(filename) + '.pdf',
+        image: { type: 'jpeg', quality: 0.98 },
+        // scrollX/scrollY: 0 is required whenever the page itself is
+        // scrolled when export runs (this page is long — the bulk results
+        // the user is exporting are usually below the fold). Without it
+        // html2canvas offsets the capture by the current scroll position,
+        // so the container's real content shifts down inside a canvas
+        // that's still sized for the *unshifted* height — the result is a
+        // blank leading page and the tail of the report silently clipped
+        // off the end (confirmed via a real exported PDF: page 1 blank,
+        // content starting mid-page-2, last table cut off mid-row).
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth, height: capturedHeight, scrollX: 0, scrollY: 0 },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: orientation || 'portrait' },
+        // 'css' mode's page-break-inside:avoid detection (used by
+        // .client-block below) is what produced a blank leading page and
+        // mis-cropped columns on a real multi-client export — plain height-
+        // based slicing ('legacy' only) is less "smart" (a table row can
+        // split across a page) but doesn't have that failure mode.
+        pagebreak: { mode: ['legacy'] },
+      }).save();
+    } finally {
+      document.body.removeChild(container);
+    }
+  }
+
   async function _brainBulkExportToPdf(brainData) {
     const clients = (brainData && Array.isArray(brainData.clients)) ? brainData.clients : [];
     const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)))
@@ -7283,11 +7369,7 @@
       @media print { .print-btn { display: none; } body { padding: 12px; } }
     `;
 
-    const html =
-      '<!doctype html><html lang="el"><head><meta charset="utf-8">' +
-      '<title>Πίνακας αντιπαραβολής E3 Brain</title><style>' + css + '</style></head>' +
-      '<body>' +
-      '<button class="print-btn" onclick="window.print()">🖨 Αποθήκευση/Εκτύπωση PDF</button>' +
+    const bodyHtml =
       '<h1>Πίνακας αντιπαραβολής E3 Brain</h1>' +
       '<div class="header-info">Δημιουργήθηκε: ' + esc(stamp) +
         ' · Πελάτες: ' + clients.length +
@@ -7298,17 +7380,19 @@
         '<th>ΑΦΜ</th><th>Επωνυμία</th><th>Κατάσταση</th>' +
         '<th>ΕΦΚΑ/ΤΕΚΑ</th><th>Μισθωτήρια</th><th>Ε9</th><th>myDATA</th>' +
       '</tr></thead><tbody>' + summaryRows + '</tbody></table>' +
-      '<h2>Αναλυτικά αποτελέσματα ανά εταιρία</h2>' + detailBlocks +
-      '</body></html>';
+      '<h2>Αναλυτικά αποτελέσματα ανά εταιρία</h2>' + detailBlocks;
 
-    const w = window.open('', '_blank');
-    if (!w) {
-      try { await showModalAlert('Αποτυχία popup', 'Το popup απέτυχε. Επίτρεψε popups στον browser και ξαναπροσπάθησε.'); } catch (_) {}
-      return;
+    try {
+      showGlobalWaitOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
+      const oneClient = clients.length === 1 ? clients[0] : null;
+      const fname = 'E3_Brain_' + (oneClient ? (oneClient.afm || oneClient.name || 'Πελάτης') : 'Μαζικό') +
+        '_' + now.toISOString().slice(0, 10);
+      await _exportE3HtmlAsPdf('<style>' + css + '</style>' + bodyHtml, fname, 'portrait');
+    } catch (e) {
+      try { await showModalAlert('Αποτυχία PDF', 'Η δημιουργία PDF απέτυχε: ' + (e && e.message || e)); } catch (_) {}
+    } finally {
+      try { hideGlobalWaitOverlay(); } catch (_) {}
     }
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
   }
 
   function renderBrainCredsList() {
@@ -8667,6 +8751,22 @@
     // failure mode the user reported after multiple partial-nav
     // client switches.
     try { ensureE3DatePickerReady(); } catch (e) { console.warn('[E3] datepicker init failed', e); }
+    // Defensive fix for a page-wide stacking bug: #appShell can end up
+    // holding a non-`none` transform (see static/app.css .page-entering
+    // comment), which per spec makes it the containing block for every
+    // position:fixed descendant — so a modal declared statically in the
+    // page body renders relative to #appShell's box instead of the real
+    // viewport, and can look like it doesn't cover the sticky header/
+    // navmenu. Moving each modal to be a direct child of <body> sidesteps
+    // this unconditionally (every OTHER modal on this page is already
+    // created via document.createElement + document.body.appendChild,
+    // which is naturally immune — these two are the only static exceptions).
+    try {
+      ['brainExcelHintModal', 'brainAmkaAutoFetchModal'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el && el.parentElement !== document.body) document.body.appendChild(el);
+      });
+    } catch (e) { console.warn('[E3] modal body-move failed', e); }
     try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); }
     catch (e) { console.warn('[E3] tab bindings failed', e); }
     try {

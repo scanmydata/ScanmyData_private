@@ -293,6 +293,7 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
                         "classification_type": _safe_strip(cls_type).upper(),
                         "classification_category": _safe_strip(category).upper(),
                         "amount": round(amount, 2),
+                        "invoice_type": invoice_type_str,
                     }
                 )
 

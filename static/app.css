@@ -1976,6 +1976,102 @@
       to   { opacity: 1; transform: translateY(0px); }
     }
     #appShell.page-entering {
-      animation: pageShellFadeIn 0.22s ease forwards;
+      /* No `forwards` fill-mode: with it, the element is left holding the
+         keyframe's final `transform: translateY(0px)` value after the
+         animation ends — and per spec ANY non-`none` transform (even an
+         identity translate) turns the element into the containing block for
+         `position: fixed` descendants, trapping every full-screen modal
+         opened later (anywhere in {% block content %}) inside #appShell's
+         box instead of the real viewport, so it renders under the sticky
+         header instead of over it. Without `forwards`, #appShell reverts to
+         its un-animated computed style (transform: none) the instant the
+         0.22s animation ends, which is visually identical here since that's
+         already the same as the keyframe's `to` state. */
+      animation: pageShellFadeIn 0.22s ease;
+    }
+
+    /* ── Flatpickr dark-mode theme ──────────────────────────────────────
+       The vendored flatpickr-4.6.13.min.css only ships its default light
+       theme. Used on /fetch, /e3_check and /accounting_result (self-hosted
+       flatpickr + Greek locale, dateFormat d/m/Y); the popup calendar is
+       appended to <body>, outside any page-scoped dark-mode input overrides,
+       so without this it stays hard-coded white/light regardless of theme. */
+    [data-theme="dark"] .flatpickr-calendar {
+      background: #1f2937;
+      border-color: #374151;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    }
+    [data-theme="dark"] .flatpickr-calendar.arrowTop:before,
+    [data-theme="dark"] .flatpickr-calendar.arrowTop:after {
+      border-bottom-color: #1f2937;
+    }
+    [data-theme="dark"] .flatpickr-calendar.arrowBottom:before,
+    [data-theme="dark"] .flatpickr-calendar.arrowBottom:after {
+      border-top-color: #1f2937;
+    }
+    [data-theme="dark"] .flatpickr-months,
+    [data-theme="dark"] .flatpickr-month,
+    [data-theme="dark"] .flatpickr-current-month,
+    [data-theme="dark"] .flatpickr-weekdays {
+      background: #111827;
+      color: #f8fafc;
+      fill: #f8fafc;
+    }
+    [data-theme="dark"] .flatpickr-current-month input.cur-year {
+      background: transparent;
+      color: #f8fafc;
+    }
+    [data-theme="dark"] .flatpickr-current-month .flatpickr-monthDropdown-months {
+      background: #111827;
+      color: #f8fafc;
+    }
+    [data-theme="dark"] .flatpickr-current-month .flatpickr-monthDropdown-months option {
+      background: #1f2937;
+      color: #f8fafc;
+    }
+    [data-theme="dark"] .flatpickr-prev-month svg,
+    [data-theme="dark"] .flatpickr-next-month svg {
+      fill: #d1d5db;
+    }
+    [data-theme="dark"] .flatpickr-prev-month:hover svg,
+    [data-theme="dark"] .flatpickr-next-month:hover svg {
+      fill: #60a5fa;
+    }
+    [data-theme="dark"] .flatpickr-weekday {
+      background: #111827;
+      color: #9ca3af;
+    }
+    [data-theme="dark"] .flatpickr-day {
+      color: #e5e7eb;
+    }
+    [data-theme="dark"] .flatpickr-day.prevMonthDay,
+    [data-theme="dark"] .flatpickr-day.nextMonthDay {
+      color: #4b5563;
+    }
+    [data-theme="dark"] .flatpickr-day:hover {
+      background: #374151;
+      border-color: #374151;
+    }
+    [data-theme="dark"] .flatpickr-day.today {
+      border-color: #60a5fa;
+    }
+    [data-theme="dark"] .flatpickr-day.selected,
+    [data-theme="dark"] .flatpickr-day.selected:hover {
+      background: #0ea5e9;
+      border-color: #0ea5e9;
+      color: #fff;
+    }
+    [data-theme="dark"] .flatpickr-day.flatpickr-disabled,
+    [data-theme="dark"] .flatpickr-day.flatpickr-disabled:hover {
+      color: #374151;
+    }
+    [data-theme="dark"] .numInputWrapper:hover {
+      background: #1f2937;
+    }
+    [data-theme="dark"] .numInputWrapper span.arrowUp:after {
+      border-bottom-color: #9ca3af;
+    }
+    [data-theme="dark"] .numInputWrapper span.arrowDown:after {
+      border-top-color: #9ca3af;
     }
   

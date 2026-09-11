@@ -196,6 +196,108 @@
     })();
 
     // ============================================================================
+    // Cross-page Λογιστικό Αποτέλεσμα (accounting_result) Μαζικός «Διακοπή»
+    // banner — same shape/slot as the E3 Bulk one right above, just pointed
+    // at its own sessionStorage key + progress/abort endpoints so the two
+    // bulk jobs never collide.
+    // ============================================================================
+    (function () {
+      var BANNER_ID = 'arBulkProgressFlash';
+      function readActive() {
+        try {
+          var raw = sessionStorage.getItem('arBulkActiveJob');
+          if (!raw) return null;
+          var obj = JSON.parse(raw);
+          if (obj && obj.jobId) return obj;
+        } catch (_) {}
+        return null;
+      }
+      function clearActive() {
+        try { sessionStorage.removeItem('arBulkActiveJob'); } catch (_) {}
+      }
+      function removeBanner() {
+        var el = document.getElementById(BANNER_ID);
+        if (el) try { el.remove(); } catch (_) {}
+      }
+      function renderBanner(active, text) {
+        var container = (typeof ensureFlashContainer === 'function') ? ensureFlashContainer() : null;
+        if (!container) container = document.getElementById('flashContainer') || document.body;
+        var el = document.getElementById(BANNER_ID);
+        if (!el) {
+          el = document.createElement('div');
+          el.id = BANNER_ID;
+          el.className = 'flash-banner flash-info';
+          el.setAttribute('data-flash', '');
+          el.setAttribute('data-ttl', '0'); // sticky — do not auto-dismiss
+          el.style.display = 'flex';
+          el.style.alignItems = 'center';
+          el.style.gap = '0.5rem';
+          el.style.pointerEvents = 'auto';
+          container.prepend(el);
+        }
+        el.innerHTML = '';
+        var textSpan = document.createElement('span');
+        textSpan.style.flex = '1 1 auto';
+        textSpan.style.lineHeight = '1.3';
+        textSpan.style.fontSize = '13px';
+        textSpan.textContent = text || ('Λογιστικό Αποτέλεσμα — εκτέλεση σε εξέλιξη' + (active.total ? ' για ' + active.total + ' εταιρίες' : '') + '…');
+        el.appendChild(textSpan);
+        var abortBtn = document.createElement('button');
+        abortBtn.type = 'button';
+        abortBtn.textContent = 'Διακοπή';
+        abortBtn.title = 'Διακοπή μετά την τρέχουσα εταιρία';
+        abortBtn.style.background = '#dc2626';
+        abortBtn.style.color = '#fff';
+        abortBtn.style.border = 'none';
+        abortBtn.style.borderRadius = '6px';
+        abortBtn.style.padding = '4px 10px';
+        abortBtn.style.fontSize = '12px';
+        abortBtn.style.fontWeight = '600';
+        abortBtn.style.cursor = 'pointer';
+        abortBtn.addEventListener('click', function () {
+          textSpan.textContent = 'Αίτημα διακοπής στάλθηκε. Θα ολοκληρωθεί η τρέχουσα εταιρία…';
+          abortBtn.disabled = true;
+          abortBtn.style.opacity = '0.6';
+          fetch('/api/accounting_result/bulk_abort/' + encodeURIComponent(active.jobId), { method: 'POST' }).catch(function(){});
+        });
+        el.appendChild(abortBtn);
+      }
+      var pollTimer = null;
+      var consecutiveEmpty = 0;
+      function poll() {
+        var active = readActive();
+        if (!active) { removeBanner(); return; }
+        renderBanner(active, document.getElementById(BANNER_ID) ? null : ('Λογιστικό Αποτέλεσμα — εκτέλεση σε εξέλιξη' + (active.total ? ' για ' + active.total + ' εταιρίες' : '') + '…'));
+        fetch('/api/accounting_result/bulk_progress/' + encodeURIComponent(active.jobId), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var p = data && data.progress;
+            if (p && p.label) {
+              consecutiveEmpty = 0;
+              var pct = (typeof p.percent === 'number') ? ' (' + p.percent + '%)' : '';
+              renderBanner(active, 'Λογιστικό Αποτέλεσμα — ' + p.label + pct);
+            } else {
+              // After ~5 empty polls (15s) + run started >30s ago, assume the
+              // job finished (the originating tab clears sessionStorage on
+              // success; this is the fallback for that tab being closed mid-run).
+              consecutiveEmpty++;
+              if (consecutiveEmpty > 5 && (Date.now() - (active.startedAt || 0)) > 30000) {
+                clearActive();
+                removeBanner();
+              }
+            }
+          })
+          .catch(function () { /* network blip — leave banner up */ });
+      }
+      function start() {
+        if (pollTimer) return;
+        pollTimer = setInterval(poll, 3000);
+        poll();
+      }
+      try { start(); } catch (_) {}
+    })();
+
+    // ============================================================================
     // COOKIE CONSENT MANAGEMENT (GDPR)
     // ============================================================================
     (function() {

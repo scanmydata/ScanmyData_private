@@ -70,7 +70,7 @@ class _HyperHttp:
     other e3/checks pure-HTTP scripts this session (efka_teka_certificate.py,
     keao-mistoton.py) — see those for the fuller rationale."""
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 60.0):
         self.jar: Dict[str, Dict[str, str]] = {}
         self.timeout = timeout
 

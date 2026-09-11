@@ -1,0 +1,602 @@
+{% extends "base.html" %}
+{% block title %}ScanmyData - Λογιστικό Αποτέλεσμα{% endblock %}
+{% block head_extra %}
+<style>
+  .brain-tab-button {
+    background: #e0f2fe; color: #0c4a6e; border: 1px solid #7dd3fc;
+    border-radius: 0.75rem; padding: 0.6rem 1rem; font-weight: 600;
+  }
+  .brain-tab-button.active { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+  [data-theme="dark"] .brain-tab-button { background: #0f172a; color: #bfdbfe; border-color: #3b82f6; }
+  [data-theme="dark"] .brain-tab-button.active { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+  .brain-tab-panel.hidden { display: none !important; }
+
+  .ar-report-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  .ar-report-table td, .ar-report-table th { border: 1px solid #d1d5db; padding: 3px 6px; }
+  .ar-report-table .ar-num { text-align: right; white-space: nowrap; }
+  .ar-report-table .ar-label { white-space: nowrap; }
+  .ar-report-table .ar-total-row td { font-weight: 700; background: #f1f5f9; }
+  .ar-report-section { margin-bottom: 1.5rem; page-break-inside: avoid; }
+  .ar-report-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem; }
+  .ar-report-header .ar-company-block { font-weight: 700; font-size: 1rem; }
+  .ar-report-header .ar-company-block .ar-vat { font-weight: 600; color: #475569; }
+  .ar-report-title { text-align: center; font-size: 1.25rem; font-weight: 700; margin: 0.25rem 0; }
+  .ar-report-period { text-align: center; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.75rem; }
+  .ar-warning-box { border: 2px solid #f59e0b; padding: 6px 10px; font-weight: 600; font-size: 0.8rem; margin: 8px 0; }
+  [data-theme="dark"] .ar-report-table td, [data-theme="dark"] .ar-report-table th { border-color: #4b5563; }
+  [data-theme="dark"] .ar-report-table .ar-total-row td { background: #1f2937; }
+  [data-theme="dark"] .ar-report-header .ar-company-block .ar-vat { color: #94a3b8; }
+
+  .ar-consolidated-table { border-collapse: collapse; width: 100%; font-size: 0.72rem; }
+  .ar-consolidated-table th, .ar-consolidated-table td { border: 1px solid #d1d5db; padding: 3px 5px; white-space: nowrap; }
+  .ar-consolidated-table th { font-weight: 700; background: #f8fafc; }
+  .ar-consolidated-table .ar-num { text-align: right; }
+  [data-theme="dark"] .ar-consolidated-table th { background: #1f2937; }
+  [data-theme="dark"] .ar-consolidated-table th, [data-theme="dark"] .ar-consolidated-table td { border-color: #4b5563; }
+
+  .ar-history-table { border-collapse: collapse; width: 100%; font-size: 0.78rem; margin-top: 0.5rem; }
+  .ar-history-table th, .ar-history-table td { border: 1px solid #e5e7eb; padding: 3px 6px; }
+  .ar-history-table th { background: #f8fafc; font-weight: 600; text-align: left; }
+  [data-theme="dark"] .ar-history-table th { background: #1f2937; }
+  [data-theme="dark"] .ar-history-table th, [data-theme="dark"] .ar-history-table td { border-color: #4b5563; }
+
+  .ar-bulk-company-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .ar-bulk-dl-btn { font-size: 0.72rem; padding: 2px 8px; border-radius: 6px; background: #0ea5e9; color: #fff; border: none; cursor: pointer; }
+
+  .ar-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .ar-bulk-table, .ar-saved-table, .ar-bulk-summary-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  .ar-bulk-table th, .ar-bulk-table td, .ar-saved-table th, .ar-saved-table td,
+  .ar-bulk-summary-table th, .ar-bulk-summary-table td { border: 1px solid #e5e7eb; padding: 5px 8px; text-align: left; }
+  .ar-bulk-table th:first-child, .ar-bulk-table td:first-child { padding-left: 2px; padding-right: 2px; text-align: center; }
+  .ar-bulk-table thead tr, .ar-saved-table thead tr, .ar-bulk-summary-table thead tr { background: #f1f5f9; }
+  .ar-bulk-table th, .ar-saved-table th, .ar-bulk-summary-table th { font-weight: 600; }
+  .ar-bulk-table tbody tr:hover, .ar-saved-table tbody tr:hover, .ar-bulk-summary-table tbody tr:hover { background: #f8fafc; }
+  [data-theme="dark"] .ar-bulk-table thead tr, [data-theme="dark"] .ar-saved-table thead tr, [data-theme="dark"] .ar-bulk-summary-table thead tr { background: #1f2937; }
+  [data-theme="dark"] .ar-bulk-table th, [data-theme="dark"] .ar-bulk-table td,
+  [data-theme="dark"] .ar-saved-table th, [data-theme="dark"] .ar-saved-table td,
+  [data-theme="dark"] .ar-bulk-summary-table th, [data-theme="dark"] .ar-bulk-summary-table td { border-color: #4b5563; }
+  [data-theme="dark"] .ar-bulk-table tbody tr:hover, [data-theme="dark"] .ar-saved-table tbody tr:hover { background: #111827; }
+
+  .ar-bulk-name, .ar-bulk-vat { cursor: pointer; }
+  .ar-col-resizer {
+    position: absolute; top: 0; right: 0; width: 6px; height: 100%;
+    cursor: col-resize; user-select: none; touch-action: none;
+  }
+  .ar-col-resizer:hover, .ar-col-resizer:active { background: rgba(14, 165, 233, 0.35); }
+
+  [data-theme="dark"] #arSingleFrom,
+  [data-theme="dark"] #arSingleTo,
+  [data-theme="dark"] #arBulkFrom,
+  [data-theme="dark"] #arBulkTo,
+  [data-theme="dark"] #arSingleCredential {
+    background-color: #1f2937 !important;
+    color: #f8fafc !important;
+    border-color: #374151 !important;
+  }
+  [data-theme="dark"] #arSingleFrom::placeholder,
+  [data-theme="dark"] #arSingleTo::placeholder,
+  [data-theme="dark"] #arBulkFrom::placeholder,
+  [data-theme="dark"] #arBulkTo::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+  }
+
+  /* Same wait-overlay as the E3-check page (#waitOverlay there), copied
+     verbatim so the two pages look and behave identically. */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #waitOverlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999999 !important;
+    display: none;
+    pointer-events: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #waitOverlay[aria-hidden="false"] {
+    display: flex !important;
+    pointer-events: all;
+  }
+  #waitOverlay > div {
+    background: #fff;
+    padding: 1.5rem;
+    border-radius: 0.75rem;
+    text-align: center;
+    min-width: 300px;
+    max-width: 90vw;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    z-index: 1000000;
+  }
+  #waitOverlay .spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3b82f6;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 0.8rem auto;
+  }
+  [data-theme="dark"] #waitOverlay > div {
+    background: #111827;
+    border: 1px solid #374151;
+  }
+  [data-theme="dark"] #waitOverlayTitle { color: #f3f4f6 !important; }
+  [data-theme="dark"] #waitOverlayMsg { color: #cbd5e1 !important; }
+
+  /* Grid/flex tracks default to a min-width based on an input's intrinsic
+     content size (same bug hit in e3_check.html's own credentials edit
+     modal) — without min-width:0 a text input inside a grid column can
+     force the whole modal wider than its own max-width, stretching it
+     across most of the viewport instead of the input just shrinking. */
+  #arSavedEditModal input { min-width: 0; box-sizing: border-box; }
+
+  /* Page-owned flash container — the app-wide #flashContainer/showStandardFetchFlash
+     helpers in base_06.js are wrapped in a private IIFE and never reach window,
+     so this page keeps its own fixed top-right stack with identical styling
+     instead of depending on globals that don't actually exist. */
+  #arFlashContainer {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 10rem);
+    right: 1rem;
+    z-index: 100120;
+    width: min(92vw, 380px);
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    pointer-events: none;
+  }
+  @media (max-width: 768px) {
+    #arFlashContainer {
+      top: calc(env(safe-area-inset-top, 0px) + 9rem);
+      right: 0.75rem;
+      left: 0.75rem;
+      width: auto;
+    }
+  }
+  #arFlashContainer .flash-banner { pointer-events: auto; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="content-wrap">
+  <h1 class="text-2xl font-bold mb-2">🧮 Λογιστικό Αποτέλεσμα</h1>
+  <p class="text-sm text-gray-600 mb-4">
+    Υπολογισμός και εξαγωγή σε PDF του λογιστικού/φορολογητέου αποτελέσματος ανά εταιρία, βάσει των
+    χαρακτηρισμών myDATA (Αγορές/Δαπάνες από τους χαρακτηρισμούς, Πωλήσεις από την επίσημη ταξινόμηση Ε3,
+    αποσβέσεις από το προηγούμενο έτος, απόθεμα λήξης με χειροκίνητη ή αυτόματη συμπλήρωση).
+  </p>
+
+  <div class="brain-tabs flex gap-2 mb-4">
+    <button id="arTabSingleBtn" type="button" class="brain-tab-button active">Ατομικός</button>
+    <button id="arTabBulkBtn" type="button" class="brain-tab-button">Μαζικός</button>
+    <button id="arTabSavedBtn" type="button" class="brain-tab-button">Αποθηκευμένα</button>
+  </div>
+
+  <!-- ===================== ΑΤΟΜΙΚΟΣ ===================== -->
+  <div id="arTabSingle" class="brain-tab-panel">
+    <div class="bg-white border rounded-lg p-4 mb-4 flex flex-wrap items-end gap-3">
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Εταιρία</label>
+        <select id="arSingleCredential" class="border rounded px-2 py-1 text-sm min-w-[220px]">
+          <option value="">— Επιλέξτε —</option>
+          {% for c in credentials %}
+            <option value="{{ c.name }}" {% if c.name == active_credential %}selected{% endif %}>{{ c.name }} ({{ c.vat }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Από</label>
+        <input id="arSingleFrom" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Έως</label>
+        <input id="arSingleTo" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
+      </div>
+
+      <div class="flex items-center gap-1">
+        <label class="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-md text-sm cursor-pointer" title="Ισοζύγιο Excel (προαιρετικό) — αντικαθιστά τα ποσά myDATA για τους αντίστοιχους κωδικούς">
+          📎 Ισοζύγιο
+          <input id="arSingleExcelFile" type="file" accept=".xlsx,.xls" class="hidden">
+        </label>
+        <button id="arExcelHintBtn" type="button" aria-label="Ποια μορφή Excel υποστηρίζεται;"
+                class="w-5 h-5 rounded-full bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200">i</button>
+      </div>
+
+      <button id="arSingleComputeBtn" type="button" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Υπολογισμός</button>
+      <button id="arSinglePdfBtn" type="button" class="hidden px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">⬇ Λήψη PDF</button>
+    </div>
+
+    <div id="arSingleExcelNote" class="hidden text-xs text-emerald-700 mb-2"></div>
+    <div id="arSingleStatus" class="text-sm text-gray-600 mb-2"></div>
+    <div id="arSingleReportContainer"></div>
+
+    <div id="arSingleHistoryWrap" class="hidden mt-4">
+      <h3 class="text-sm font-semibold text-gray-700 mb-1">Ιστορικό υπολογισμών</h3>
+      <div id="arSingleHistoryContainer"></div>
+    </div>
+  </div>
+
+  <!-- ===================== ΜΑΖΙΚΟΣ ===================== -->
+  <div id="arTabBulk" class="brain-tab-panel hidden">
+    <div class="bg-white border rounded-lg p-4 mb-4">
+      <div class="flex flex-wrap items-end gap-3 mb-3">
+        <div>
+          <label class="block text-xs text-gray-600 mb-1">Από</label>
+          <input id="arBulkFrom" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-600 mb-1">Έως</label>
+          <input id="arBulkTo" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
+        </div>
+        <button id="arBulkRunBtn" type="button" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Έλεγχος &amp; Εξαγωγή</button>
+        <button id="arBulkPdfBtn" type="button" disabled class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">⬇ Λήψη ZIP (PDF ανά εταιρία)</button>
+        <button id="arBulkConsolidatedPdfBtn" type="button" disabled class="px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">⬇ Συγκεντρωτικό PDF</button>
+        <button id="arBulkRunsBtn" type="button" title="Αποθηκευμένες μαζικές καταστάσεις" class="px-4 py-2 rounded-md text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200">📁 Αποθηκευμένα μαζικά</button>
+      </div>
+      <div class="flex items-center gap-2 mb-2">
+        <button id="arBulkSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Επιλογή όλων</button>
+        <button id="arBulkSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Καμία επιλογή</button>
+      </div>
+      <div id="arBulkCredentialList" class="border rounded overflow-x-auto">
+        <table class="ar-bulk-table w-full text-sm">
+          <thead>
+            <tr>
+              <th style="width:1.1rem;"><input type="checkbox" disabled></th>
+              <th>Επωνυμία</th>
+              <th>ΑΦΜ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in credentials %}
+              <tr>
+                <td><input type="checkbox" class="ar-bulk-cb" value="{{ c.name }}"></td>
+                <td class="ar-bulk-name" title="Διπλό κλικ για επιλογή/αποεπιλογή">{{ c.name }}</td>
+                <td class="ar-mono ar-bulk-vat" title="Διπλό κλικ για επιλογή/αποεπιλογή">{{ c.vat }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="arBulkStatus" class="text-sm text-gray-600 mb-2"></div>
+    <div id="arBulkReportContainer"></div>
+  </div>
+
+  <!-- ===================== ΑΠΟΘΗΚΕΥΜΕΝΑ ===================== -->
+  <!-- Ίδια λίστα/αποθήκη με το tab «Αποθηκευμένα» του Ελέγχου Ε3
+       (/api/e3/brain/credentials_store — κοινή ανά ομάδα), ώστε πελάτες
+       που προστίθενται εδώ ή εκεί να εμφανίζονται και στις δύο σελίδες. -->
+  <div id="arTabSaved" class="brain-tab-panel hidden">
+    <div class="bg-white border rounded-lg p-4 mb-4 flex flex-wrap items-center gap-3">
+      <button id="arSavedRefreshBtn" type="button" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Ανανέωση/Προβολή</button>
+      <label class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm font-medium cursor-pointer">
+        📤 Εισαγωγή από Excel
+        <input id="arSavedImportExcelInput" type="file" accept=".xls,.xlsx" class="hidden">
+      </label>
+      <button id="arSavedExcelHintBtn" type="button" aria-label="Ποια μορφή Excel υποστηρίζεται;"
+              class="w-5 h-5 rounded-full bg-sky-100 text-sky-700 text-xs font-bold hover:bg-sky-200">i</button>
+      <label class="inline-flex items-center gap-1.5 text-xs text-gray-600">
+        <input id="arSavedImportExcelReplace" type="checkbox" class="rounded">
+        Αντικατάσταση υπαρχόντων
+      </label>
+      <span id="arSavedImportExcelStatus" class="text-sm"></span>
+      <button id="arSavedBulkBtn" type="button" class="ml-auto px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700">Μαζικός υπολογισμός όλων →</button>
+    </div>
+    <div id="arSavedStatus" class="text-sm text-gray-600 mb-2"></div>
+    <div id="arSavedListContainer" class="bg-white border rounded-lg overflow-x-auto"></div>
+  </div>
+</div>
+
+<!-- Excel format hint modal -->
+<div id="arExcelHintModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
+  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">Μορφή αρχείου Ισοζυγίου</h3>
+      <button id="arExcelHintClose" type="button" class="text-2xl text-gray-500 hover:text-gray-700">&times;</button>
+    </div>
+    <p class="text-sm text-gray-700 mb-2">
+      Χρησιμοποιήστε την ίδια μορφή Excel ισοζυγίου που ήδη υποστηρίζεται στον <strong>Έλεγχο Ε3</strong>
+      (εξαγωγή από Γ' κατηγορίας λογιστικό πρόγραμμα): στήλες <strong>Κωδικός</strong>, <strong>Περιγραφή</strong>,
+      <strong>Χρέωση</strong>, <strong>Πίστωση</strong>, <strong>Υπόλοιπο</strong> και <strong>Πεδίο Ε3</strong>.
+    </p>
+    <p class="text-sm text-gray-700 mb-2">
+      Κάθε λογαριασμός που υπάρχει στο αρχείο <strong>αντικαθιστά</strong> (δεν προστίθεται στο) το ποσό που
+      υπολόγισε αυτόματα η εφαρμογή από τους χαρακτηρισμούς myDATA για τον αντίστοιχο 2-ψήφιο κωδικό ομάδας
+      (π.χ. 20, 60, 66, 70).
+    </p>
+    <p class="text-xs text-gray-500">🔒 Διαβάζονται μόνο οι λογιστικοί κωδικοί/ποσά — τίποτα άλλο από το αρχείο δεν αποστέλλεται πουθενά.</p>
+  </div>
+</div>
+
+<!-- Excel format hint modal for the Αποθηκευμένα "Εισαγωγή από Excel" (same
+     format/endpoint as the Έλεγχο Ε3 page's own hint — content mirrored from
+     there, but the closing note is corrected for this page: unlike Ε3's own
+     Excel-ισοζύγιο upload, THIS import intentionally also brings in
+     TAXISnet/ΑΜΚΑ, since Λογιστικό Αποτέλεσμα needs those too. -->
+<div id="arSavedExcelHintModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
+  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5 max-h-[85vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">📊 Εξαγωγή κωδικών σε Excel</h3>
+      <button id="arSavedExcelHintClose" type="button" class="text-2xl text-gray-500 hover:text-gray-700">&times;</button>
+    </div>
+    <p class="text-sm text-gray-700 mb-3">
+      Η εφαρμογή αναγνωρίζει μόνη της και τις δύο μορφές. Βγάλτε το αρχείο από το πρόγραμμά σας
+      και μετά πατήστε «📤 Εισαγωγή από Excel».
+    </p>
+    <div class="mb-3">
+      <div class="font-semibold text-gray-900 mb-1">Hyper / Extra Λογιστική</div>
+      <ol class="list-decimal list-inside space-y-1 text-sm text-gray-700">
+        <li>Παράμετροι → Εταιρεία → <strong>Εκτύπωση Κωδικών Υπηρεσιών μέσω Internet</strong></li>
+        <li>Η εκτύπωση είναι διεταιρική: περιλαμβάνει τους κωδικούς σύνδεσης για κάθε εταιρεία.</li>
+        <li>Στην προεπισκόπηση, πατήστε <strong>Εξαγωγή</strong> και επιλέξτε <strong>Excel</strong>· αποθηκεύστε το αρχείο <strong>.xlsx</strong>.</li>
+      </ol>
+    </div>
+    <div class="mb-3">
+      <div class="font-semibold text-gray-900 mb-1">TaxSystem</div>
+      <ol class="list-decimal list-inside space-y-1 text-sm text-gray-700">
+        <li>Κεντρικό Μενού → Εκτυπώσεις → <strong>Κωδικοί e-Υπηρεσιών</strong></li>
+        <li>Πατήστε <strong>Επιλογή Όλων</strong></li>
+        <li>Πατήστε <strong>Εξαγωγή σε Excel</strong></li>
+      </ol>
+    </div>
+    <p class="text-xs text-gray-500 border-t pt-2">
+      ℹ️ Εδώ εισάγονται όλα τα διαθέσιμα πεδία του αρχείου (ΑΦΜ, Επωνυμία, myDATA, <strong>TAXISnet, ΑΜΚΑ</strong> κ.λπ.) στην
+      κοινή αποθήκη πελατών της ομάδας — τα ίδια στοιχεία που χρησιμοποιεί και ο Έλεγχος Ε3, καθώς εδώ χρειαζόμαστε
+      συγκεκριμένα και τους κωδικούς TAXISnet/ΙΚΑ, όχι μόνο τους κωδικούς myDATA.
+    </p>
+  </div>
+</div>
+
+<!-- Past bulk runs («φάκελος αποθηκευμένων μαζικών») — everything about bulk
+     history (view/download individually or in aggregate, delete) happens
+     inside this one popup instead of bouncing the user back to the main tab. -->
+<div id="arBulkRunsModal" class="hidden fixed inset-0 flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);z-index:100150;">
+  <div class="bg-white rounded-lg shadow-lg max-w-3xl w-full p-5 max-h-[85vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">📁 Αποθηκευμένες μαζικές καταστάσεις</h3>
+      <button id="arBulkRunsClose" type="button" class="text-2xl text-gray-500 hover:text-gray-700">&times;</button>
+    </div>
+
+    <div id="arBulkRunsListView">
+      <p class="text-xs text-gray-500 mb-2">Οι μαζικές καταστάσεις διατηρούνται πάντα εδώ — τα αποτελέσματα ανά εταιρία δεν διαγράφονται μεμονωμένα από το ιστορικό της κάθε εταιρίας.</p>
+      <div id="arBulkRunsList"></div>
+    </div>
+
+    <div id="arBulkRunsDetailView" class="hidden">
+      <button id="arBulkRunsBackBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 mb-2">← Πίσω στη λίστα</button>
+      <div id="arBulkRunsDetailStatus" class="text-sm text-gray-600 mb-2"></div>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <button id="arBulkRunsDetailZipBtn" type="button" class="px-3 py-1.5 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">⬇ Λήψη ZIP (PDF ανά εταιρία)</button>
+        <button id="arBulkRunsDetailConsolidatedBtn" type="button" class="px-3 py-1.5 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700">⬇ Συγκεντρωτικό PDF</button>
+        <button id="arBulkRunsDetailDeleteBtn" type="button" class="px-3 py-1.5 rounded-md text-sm font-medium bg-red-50 text-red-600 border border-red-300 hover:bg-red-100">🗑 Διαγραφή</button>
+      </div>
+      <div id="arBulkRunsDetailContainer"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit saved client (same shared store as Έλεγχος Ε3's «Αποθηκευμένα») -->
+<div id="arSavedEditModal" class="hidden fixed inset-0 flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);z-index:100150;">
+  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5 max-h-[85vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">✏️ Επεξεργασία στοιχείων</h3>
+      <button id="arSavedEditClose" type="button" class="text-2xl text-gray-500 hover:text-gray-700">&times;</button>
+    </div>
+    <div class="grid grid-cols-2 gap-3 text-sm mb-3">
+      <div class="col-span-2">
+        <label class="block text-xs text-gray-600 mb-1">ΑΦΜ</label>
+        <input id="arEditAfm" type="text" class="border rounded px-2 py-1 w-full ar-mono" readonly>
+      </div>
+      <div class="col-span-2">
+        <label class="block text-xs text-gray-600 mb-1">Επωνυμία</label>
+        <input id="arEditName" type="text" class="border rounded px-2 py-1 w-full">
+      </div>
+      <div class="col-span-2">
+        <label class="block text-xs text-gray-600 mb-1">Διεύθυνση</label>
+        <input id="arEditAddress" type="text" class="border rounded px-2 py-1 w-full">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">TAXISnet username</label>
+        <input id="arEditTaxisUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">TAXISnet password</label>
+        <input id="arEditTaxisPass" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
+      </div>
+      <div id="arEditAmkaWrap">
+        <label class="block text-xs text-gray-600 mb-1">ΑΜΚΑ</label>
+        <input id="arEditAmka" type="text" class="border rounded px-2 py-1 w-full">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Νομική μορφή</label>
+        <input id="arEditLegalType" type="text" class="border rounded px-2 py-1 w-full">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">myDATA user</label>
+        <input id="arEditMydataUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">myDATA key</label>
+        <input id="arEditMydataKey" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Ι.Κ.Α. Εργοδότη username</label>
+        <input id="arEditIkaEmpUser" type="text" class="border rounded px-2 py-1 w-full" autocomplete="off">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Ι.Κ.Α. Εργοδότη password</label>
+        <input id="arEditIkaEmpPass" type="password" class="border rounded px-2 py-1 w-full" autocomplete="new-password" placeholder="(αμετάβλητο αν κενό)">
+      </div>
+    </div>
+    <div id="arEditMembersWrap" class="hidden mb-3">
+      <div class="text-xs font-semibold text-sky-600 uppercase tracking-wide border-b border-sky-100 pb-1 mb-2">Μέλη εταιρίας</div>
+      <div id="arEditMembersList" class="flex flex-col gap-2"></div>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button id="arSavedEditCancel" type="button" class="px-3 py-1.5 rounded border text-sm">Άκυρο</button>
+      <button id="arSavedEditSave" type="button" class="px-3 py-1.5 rounded bg-sky-600 text-white text-sm hover:bg-sky-700">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual per-account inventory entry modal -->
+<div id="arManualInvModal" class="hidden fixed inset-0 z-[10050] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
+  <div class="bg-white rounded-lg shadow-lg max-w-md w-full p-5">
+    <h3 id="arManualInvTitle" class="text-lg font-semibold mb-3">Απόθεμα λήξης</h3>
+    <div id="arManualInvFields" class="grid grid-cols-2 gap-2 mb-4 text-sm"></div>
+    <div class="flex justify-end gap-2">
+      <button id="arManualInvCancel" type="button" class="px-3 py-2 rounded border text-sm">Άκυρο</button>
+      <button id="arManualInvSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pick-specific-depreciation-entries modal -->
+<div id="arDepPickModal" class="hidden fixed inset-0 z-[10050] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
+  <div class="bg-white rounded-lg shadow-lg max-w-md w-full p-5">
+    <h3 class="text-lg font-semibold mb-3">Επιλογή εγγραφών αποσβέσεων</h3>
+    <div id="arDepPickFields" class="max-h-64 overflow-y-auto mb-4 text-sm"></div>
+    <div class="flex justify-end gap-2">
+      <button id="arDepPickCancel" type="button" class="px-3 py-2 rounded border text-sm">Άκυρο</button>
+      <button id="arDepPickSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Συνέχεια</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wait overlay: same markup/ids as the E3-check page's #waitOverlay -->
+<div id="waitOverlay" aria-hidden="true">
+  <div>
+    <div class="spinner" aria-hidden="true"></div>
+    <div id="waitOverlayTitle" class="text-lg font-semibold text-gray-800">Λήψη δεδομένων από myDATA...</div>
+    <div id="waitOverlayMsg" class="text-sm text-gray-600">Παρακαλώ περιμένετε - η διαδικασία μπορεί να διαρκέσει.</div>
+  </div>
+</div>
+
+<script>
+window.AR_ACCOUNTANT_NAME = {{ (current_user.username if current_user.is_authenticated else "") | tojson }};
+window.AR_CREDENTIALS = {{ credentials_min | tojson }};
+window.AR_STOCK_CODES = ["20","21","23","24","25","26","27","28"];
+window.AR_STOCK_LABELS = {
+  "20": "ΕΜΠΟΡΕΥΜΑΤΑ", "21": "ΠΡΟΙΟΝΤΑ", "23": "ΠΑΡ. ΣΕ ΕΞΕΛ.", "24": "ΠΡΩΤΕΣ ΥΛΕΣ",
+  "25": "ΑΝΑΛ. ΠΑΡ.", "26": "ΑΝΤΑΛ. ΠΑΓΙΩΝ", "27": "ΒΙΟΛ.ΠΕΡ.ΣΤΟΙΧ.", "28": "ΕΙΔΗ ΣΥΣΚΕΥΑΣΙΑΣ"
+};
+</script>
+<script src="{{ url_for('static', filename='accounting_result.js') }}"></script>
+<script>
+(function () {
+  // Same flatpickr wiring as the E3-check page (self-hosted assets, Greek
+  // locale, dd/mm/yyyy), applied to this page's own date fields so the
+  // widget looks and behaves identically everywhere in the app.
+  function ensureArDatePickerReady() {
+    const inputs = ['arSingleFrom', 'arSingleTo', 'arBulkFrom', 'arBulkTo']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    if (!inputs.length) return;
+
+    function applyMask(input) {
+      if (!input || input.dataset.arMaskBound === '1') return;
+      input.dataset.arMaskBound = '1';
+      input.addEventListener('input', function () {
+        const digits = String(input.value || '').replace(/\D/g, '').slice(0, 8);
+        const dd = digits.slice(0, 2);
+        const mm = digits.slice(2, 4);
+        const yyyy = digits.slice(4, 8);
+        let out = dd;
+        if (digits.length > 2) out += '/' + mm;
+        if (digits.length > 4) out += '/' + yyyy;
+        if (input.value !== out) input.value = out;
+      });
+    }
+
+    function loadScriptOnce(src) {
+      return new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[src="' + src + '"]');
+        if (existing) {
+          if (existing.dataset.loaded === '1') { resolve(); return; }
+          existing.addEventListener('load', () => resolve(), { once: true });
+          existing.addEventListener('error', () => reject(new Error('Failed loading ' + src)), { once: true });
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = false;
+        s.onload = () => { s.dataset.loaded = '1'; resolve(); };
+        s.onerror = () => reject(new Error('Failed loading ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    function ensureCss() {
+      const href = '/static/vendor/flatpickr-4.6.13.min.css';
+      let link = document.querySelector('link[rel="stylesheet"][data-flatpickr="1"]');
+      if (link) {
+        if (link.dataset.loaded === '1') return Promise.resolve();
+        return new Promise((res) => {
+          link.addEventListener('load', res, { once: true });
+          link.addEventListener('error', res, { once: true });
+        });
+      }
+      return new Promise((res) => {
+        link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.dataset.flatpickr = '1';
+        link.addEventListener('load', () => { link.dataset.loaded = '1'; res(); }, { once: true });
+        link.addEventListener('error', () => res(), { once: true });
+        document.head.appendChild(link);
+      });
+    }
+
+    async function ensureFlatpickrReady() {
+      await ensureCss();
+      if (typeof window.flatpickr === 'function') return;
+      if (!window.__arFlatpickrReadyPromise) {
+        window.__arFlatpickrReadyPromise = (async function () {
+          await loadScriptOnce('/static/vendor/flatpickr-4.6.13.min.js');
+          await loadScriptOnce('/static/vendor/flatpickr-gr-4.6.13.js');
+        })();
+      }
+      try { await window.__arFlatpickrReadyPromise; }
+      catch (e) { console.warn('Λογιστικό Αποτέλεσμα: could not load flatpickr assets', e); }
+    }
+
+    function initFlatpickr() {
+      if (typeof window.flatpickr !== 'function') return;
+      try {
+        inputs.forEach((input) => { if (input && input._flatpickr) input._flatpickr.destroy(); });
+      } catch (_) {}
+      try {
+        const useGr = !!(window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
+        inputs.forEach((input) => {
+          window.flatpickr(input, Object.assign({
+            dateFormat: 'd/m/Y',
+            allowInput: true,
+            appendTo: document.body,
+            position: 'auto',
+          }, useGr ? { locale: 'gr' } : {}));
+        });
+      } catch (e) { console.warn('Λογιστικό Αποτέλεσμα: flatpickr init failed', e); }
+    }
+
+    inputs.forEach(applyMask);
+    ensureFlatpickrReady().then(initFlatpickr);
+    setTimeout(initFlatpickr, 80);
+    setTimeout(initFlatpickr, 240);
+  }
+
+  (window.__runOnPageReady || function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    } else {
+      fn();
+    }
+  })(function () {
+    try { ensureArDatePickerReady(); } catch (e) { console.warn('[Λογιστικό Αποτέλεσμα] datepicker init failed', e); }
+  });
+})();
+</script>
+{% endblock %}

@@ -3258,6 +3258,19 @@ input[type="checkbox"].rc-switch {
       existing.addEventListener('mouseenter', function(){ showPanel(true); });
       existing.addEventListener('mouseleave', function(){ if (!existing.__pinned) showPanel(false); });
       existing.addEventListener('click', function(ev){
+        var dismissBtn = ev.target && ev.target.closest && ev.target.closest('.receiptReviewDismiss');
+        if (dismissBtn){
+          ev.stopPropagation();
+          var key = dismissBtn.dataset.key;
+          if (!key) return;
+          dismissBtn.disabled = true;
+          fetch('/api/receipt_review/resolve', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: key }),
+          }).then(function(){ refresh(); }).catch(function(){ dismissBtn.disabled = false; });
+          return;
+        }
         if (ev.target && ev.target.closest && ev.target.closest('#receiptReviewChip')){
           existing.__pinned = !existing.__pinned;
           showPanel(existing.__pinned);
@@ -3267,7 +3280,12 @@ input[type="checkbox"].rc-switch {
     var lines = reviewQueue.slice(0, 20).map(function(r){
       var miss = (r.missing_labels && r.missing_labels.length) ? (' — λείπει: ' + r.missing_labels.join(', ')) : '';
       var ident = r.mark || r.url || r.key || '';
-      return '<li style="margin:2px 0;word-break:break-all;">' + escapeHtmlLocal(ident) + escapeHtmlLocal(miss) + '</li>';
+      var who = r.customer_name ? (' <em>(' + escapeHtmlLocal(r.customer_name) + ')</em>')
+        : (!r.customer_vat ? ' <em style="opacity:.7;">(άγνωστος πελάτης — παλαιά εγγραφή)</em>' : '');
+      var dismissBtn = '<button type="button" class="receiptReviewDismiss" data-key="' + escapeHtmlLocal(r.key || ident) + '" '
+        + 'title="Αφαίρεση από τη λίστα" style="margin-left:6px;border:none;background:none;color:#92400e;cursor:pointer;font-weight:700;">✕</button>';
+      return '<li style="margin:2px 0;word-break:break-all;display:flex;align-items:baseline;justify-content:space-between;gap:6px;">'
+        + '<span>' + escapeHtmlLocal(ident) + escapeHtmlLocal(miss) + who + '</span>' + dismissBtn + '</li>';
     }).join('');
     var more = reviewQueue.length > 20 ? ('<div style="margin-top:4px;">…και ' + (reviewQueue.length - 20) + ' ακόμη</div>') : '';
     var chipStyle = 'cursor:pointer;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:9999px;'
