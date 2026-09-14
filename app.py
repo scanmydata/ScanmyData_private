@@ -18029,7 +18029,42 @@ def e3_check():
 @app.route("/accounting_result", methods=["GET"])
 def accounting_result_page():
     """Λογιστικό Αποτέλεσμα: myDATA-based ΕΓΛΣ P&L, single or bulk, PDF export."""
-    creds = sorted(load_credentials(), key=lambda c: str((c or {}).get("name") or "").lower())
+    creds = list(load_credentials())
+
+    # Same idea as Έλεγχος Ε3's active_group_clients merge: a company that
+    # only exists in the Excel-imported e3_company_credentials_store.json
+    # (the «Αποθηκευμένα» tab) and was never separately registered as a
+    # full myDATA credential here is otherwise invisible to Ατομικός/
+    # Μαζικός and misleadingly flagged "χωρίς myDATA" in Αποθηκευμένα even
+    # once its mydata_user/mydata_key were correctly imported. Merge in
+    # any such company that has BOTH fields (nothing usable to compute
+    # with otherwise), skipping AFMs already covered here and skipping a
+    # name collision with an existing credential rather than risking an
+    # ambiguous duplicate identifier.
+    try:
+        known_afms = {str(c.get("vat") or "").strip() for c in creds if isinstance(c, dict)}
+        known_names = {str(c.get("name") or "").strip().lower() for c in creds if isinstance(c, dict)}
+        store_path = group_path("e3_company_credentials_store.json")
+        if os.path.exists(store_path):
+            with open(store_path, "r", encoding="utf-8") as f:
+                store_data = json.load(f)
+            for entry in (store_data.get("companies") or []):
+                co = (entry or {}).get("company") or {}
+                afm = str(co.get("afm") or "").strip()
+                name = str(co.get("name") or "").strip()
+                mydata_user = str(co.get("mydata_user") or "").strip()
+                mydata_key = str(co.get("mydata_key") or "").strip()
+                if not (afm and name and mydata_user and mydata_key):
+                    continue
+                if afm in known_afms or name.lower() in known_names:
+                    continue
+                known_afms.add(afm)
+                known_names.add(name.lower())
+                creds.append({"name": name, "vat": afm, "user": mydata_user, "key": mydata_key})
+    except Exception:
+        log.exception("accounting_result_page: credentials_store merge failed")
+
+    creds = sorted(creds, key=lambda c: str((c or {}).get("name") or "").lower())
     active_cred = get_active_credential_from_session()
     active_name = active_cred.get("name") if active_cred else None
     credentials_min = [
@@ -18314,9 +18349,43 @@ def _ar_load_epsilon_and_raw(vat: str):
     return epsilon_records, raw_invoices
 
 
+def _ar_credential_from_store_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Build a credentials.json-compatible dict ({name, vat, user, key})
+    from a credentials_store (Excel-imported e3_company_credentials_store.json)
+    company entry, matched by name — the fallback half of the merge in
+    accounting_result_page() below, used when a dropdown selection isn't
+    (also) a real credentials.json entry."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    try:
+        path = group_path("e3_company_credentials_store.json")
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for entry in (data.get("companies") or []):
+            co = (entry or {}).get("company") or {}
+            if str(co.get("name") or "").strip().lower() != name.lower():
+                continue
+            mydata_user = str(co.get("mydata_user") or "").strip()
+            mydata_key = str(co.get("mydata_key") or "").strip()
+            if not mydata_user or not mydata_key:
+                return None
+            return {
+                "name": str(co.get("name") or "").strip(),
+                "vat": str(co.get("afm") or "").strip(),
+                "user": mydata_user,
+                "key": mydata_key,
+            }
+    except Exception:
+        log.exception("_ar_credential_from_store_by_name failed for name=%s", name)
+    return None
+
+
 def _ar_resolve_credential(payload: dict):
     credential_name = str(payload.get("credential_name") or payload.get("credential") or "").strip()
-    cred = get_cred_by_name(credential_name)
+    cred = get_cred_by_name(credential_name) or _ar_credential_from_store_by_name(credential_name)
     return credential_name, cred
 
 
@@ -18488,7 +18557,7 @@ def api_accounting_result_inventory_bulk_status():
         from accounting_result import engine as ar_engine
         rows = []
         for name in names:
-            cred = get_cred_by_name(str(name))
+            cred = get_cred_by_name(str(name)) or _ar_credential_from_store_by_name(str(name))
             if not cred:
                 rows.append({"name": name, "vat": "", "opening_inventory": {}, "closing_inventory_known": False, "inventory_applicable": False, "error": "Άγνωστο credential"})
                 continue
@@ -18586,7 +18655,7 @@ def api_accounting_result_bulk_compute():
                 percent=round((idx) / total * 100) if total else None,
                 current=idx + 1, total=total,
             )
-            cred = get_cred_by_name(str(name))
+            cred = get_cred_by_name(str(name)) or _ar_credential_from_store_by_name(str(name))
             if not cred:
                 results.append({"credential_name": name, "ok": False, "error": "Άγνωστο credential"})
                 continue
@@ -18782,7 +18851,7 @@ def api_accounting_result_history():
         credential_name = str(request.args.get("credential_name") or "").strip()
         vat = str(request.args.get("vat") or "").strip()
         if not vat:
-            cred = get_cred_by_name(credential_name)
+            cred = get_cred_by_name(credential_name) or _ar_credential_from_store_by_name(credential_name)
             if not cred:
                 return jsonify({"ok": False, "error": "Άγνωστο credential"}), 404
             vat = str(cred.get("vat") or "").strip()

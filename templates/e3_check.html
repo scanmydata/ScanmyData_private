@@ -2045,7 +2045,11 @@
       String(a.name || a.afm || '').localeCompare(String(b.name || b.afm || ''), 'el'));
     sortedClients.forEach((client) => {
       const afm = String(client.afm || '').trim();
-      const label = `${afm || '---'} — ${client.name || 'Άγνωστη εταιρεία'}`;
+      // Name FIRST, ΑΦΜ in parens — not just cosmetic: browsers jump a
+      // <select> to the first option whose visible TEXT starts with the
+      // letter just typed, so with the ΑΦΜ leading (all digits) typing a
+      // letter never matched anything.
+      const label = `${client.name || 'Άγνωστη εταιρεία'} (${afm || '---'})`;
       const option = document.createElement('option');
       option.value = afm;
       option.textContent = label;
