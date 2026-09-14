@@ -1648,7 +1648,6 @@
           Αντικατάσταση υπαρχόντων
         </label>
         <span class="text-sm text-gray-500 dark:text-gray-400">Προβολή αποθηκευμένων credentials ομάδας</span>
-        <span id="brainImportExcelStatus" class="text-sm"></span>
       </div>
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <button id="brainCredsSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Επιλογή όλων</button>
@@ -3919,9 +3918,7 @@
       const inp = event.target && event.target.id === 'brainImportExcelInput' ? event.target : null;
       if (!inp || !inp.files || !inp.files.length) return;
       const file = inp.files[0];
-      const statusEl = document.getElementById('brainImportExcelStatus');
       const replaceEl = document.getElementById('brainImportExcelReplace');
-      if (statusEl) { statusEl.textContent = '⌛ Ανάγνωση...'; statusEl.style.color = '#6b7280'; }
       try {
         const fd = new FormData();
         fd.append('file', file, file.name);
@@ -3929,18 +3926,13 @@
         const resp = await fetch('/api/e3/brain/credentials_store/import_excel', { method: 'POST', body: fd });
         const data = await resp.json();
         if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-        if (statusEl) {
-          statusEl.textContent = `✓ ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι, ${data.skipped || 0} χωρίς ΑΦΜ (sheet: ${data.sheet || '—'})`;
-          statusEl.style.color = '#16a34a';
-        }
         if (typeof fetchE3BrainCredentials === 'function') {
           fetchE3BrainCredentials({ verbose: false }).catch(() => {});
         }
         if (typeof showBrainFlash === 'function') {
-          showBrainFlash(`Εισαγωγή Excel: ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι.`, 'success', 6500);
+          showBrainFlash(`Εισαγωγή Excel: ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι, ${data.skipped || 0} χωρίς ΑΦΜ (sheet: ${data.sheet || '—'}).`, 'success', 6500);
         }
       } catch (err) {
-        if (statusEl) { statusEl.textContent = `✗ ${err.message || err}`; statusEl.style.color = '#dc2626'; }
         if (typeof showBrainFlash === 'function') showBrainFlash(`Αποτυχία Excel import: ${err.message || err}`, 'error', 7000);
       } finally {
         // Reset the input so re-selecting the same file fires change again.

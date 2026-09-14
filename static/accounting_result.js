@@ -1699,7 +1699,14 @@ function openSavedEditModal(afm) {
   document.getElementById('arEditAmka').value = c.amka || '';
   document.getElementById('arEditLegalType').value = c.legal_type || '';
   document.getElementById('arEditMydataUser').value = c.mydata_user || '';
-  document.getElementById('arEditMydataKey').value = '';
+  // Unlike the TAXISnet/ΙΚΑ *passwords* below, the myDATA subscription key
+  // isn't a login secret the accountant types once and forgets — it's an
+  // API key they need to visually verify an Excel import actually captured
+  // (exactly like mydata_user, right above). Leaving it force-blanked here
+  // made every import look like it silently failed to find it, even when
+  // the backend had it correctly stored — same field e3_check.html's own
+  // copy of this modal already shows in plain text.
+  document.getElementById('arEditMydataKey').value = c.mydata_key || '';
   document.getElementById('arEditIkaEmpUser').value = c.ika_employer_username || '';
   document.getElementById('arEditIkaEmpPass').value = '';
 
@@ -1772,8 +1779,11 @@ async function saveSavedEdit() {
   c.amka = document.getElementById('arEditAmka').value;
   c.legal_type = document.getElementById('arEditLegalType').value;
   c.mydata_user = document.getElementById('arEditMydataUser').value;
-  const newMydataKey = document.getElementById('arEditMydataKey').value;
-  if (newMydataKey) c.mydata_key = newMydataKey; // empty = keep existing
+  // Not a "keep existing unless typed" field like the passwords above —
+  // the field now starts pre-filled with the real stored key (see
+  // openSavedEditModal), so save it as-is; clearing it here is a
+  // deliberate removal, same as the mydata_user field right above.
+  c.mydata_key = document.getElementById('arEditMydataKey').value;
   c.ika_employer_username = document.getElementById('arEditIkaEmpUser').value;
   const newIkaEmpPass = document.getElementById('arEditIkaEmpPass').value;
   if (newIkaEmpPass) c.ika_employer_password = newIkaEmpPass; // empty = keep existing
@@ -1879,10 +1889,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const inp = e.target;
     if (!inp.files || !inp.files.length) return;
     const file = inp.files[0];
-    const statusEl = document.getElementById('arSavedImportExcelStatus');
     const replaceEl = document.getElementById('arSavedImportExcelReplace');
-    statusEl.textContent = '⌛ Ανάγνωση...';
-    statusEl.style.color = '#6b7280';
     try {
       const fd = new FormData();
       fd.append('file', file, file.name);
@@ -1890,12 +1897,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const resp = await fetch('/api/e3/brain/credentials_store/import_excel', { method: 'POST', body: fd });
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-      statusEl.textContent = `✓ ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι, ${data.skipped || 0} χωρίς ΑΦΜ`;
-      statusEl.style.color = '#16a34a';
+      showArFlash(`Εισαγωγή Excel: ${data.imported || 0} νέοι, ${data.updated || 0} ενημερωμένοι, ${data.skipped || 0} χωρίς ΑΦΜ.`, 'success', 6500);
       loadSavedClients();
     } catch (err) {
-      statusEl.textContent = '✗ ' + (err.message || err);
-      statusEl.style.color = '#dc2626';
+      showArFlash('Αποτυχία Excel import: ' + (err.message || err), 'error', 7000);
     } finally {
       inp.value = '';
     }
