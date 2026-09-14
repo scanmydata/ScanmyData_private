@@ -1554,9 +1554,8 @@ async function fillSavedHistoryCells(container) {
 
 async function bulkDeleteSavedClients() {
   const afms = Array.from(document.querySelectorAll('.ar-saved-cb:checked')).map((cb) => cb.value);
-  const statusEl = document.getElementById('arSavedBulkStatus');
   if (!afms.length) {
-    if (statusEl) statusEl.textContent = 'Δεν έχεις επιλέξει καμία εταιρία.';
+    showArFlash('Δεν έχεις επιλέξει καμία εταιρία.', 'warning', 4000);
     return;
   }
   let ok = false;
@@ -1564,13 +1563,18 @@ async function bulkDeleteSavedClients() {
     ok = await showModalConfirm('Διαγραφή επιλεγμένων', `Διαγραφή credentials για ${afms.length} εταιρίες;`, 'Διαγραφή', 'Άκυρο');
   } catch (_) { ok = false; }
   if (!ok) return;
-  if (statusEl) statusEl.textContent = '⌛ Διαγραφή...';
   const resp = await postJson('/api/e3/brain/credentials_store/bulk_delete', { afms });
   if (!resp.ok) {
-    if (statusEl) statusEl.textContent = '✗ ' + (resp.error || '');
+    showArFlash('Σφάλμα διαγραφής: ' + (resp.error || ''), 'error');
     return;
   }
-  if (statusEl) statusEl.textContent = `✓ Διαγράφηκαν ${resp.deleted || 0}.`;
+  const protectedList = resp.protected || [];
+  let msg = `Διαγράφηκαν ${resp.deleted || 0} εταιρίες.`;
+  if (protectedList.length) {
+    const names = protectedList.map((p) => p.name || p.afm).join(', ');
+    msg += ` Δεν διαγράφηκαν ${protectedList.length} (βρίσκονται στα credentials μας): ${names}.`;
+  }
+  showArFlash(msg, protectedList.length ? 'warning' : 'success', protectedList.length ? 9000 : 5000);
   loadSavedClients();
 }
 

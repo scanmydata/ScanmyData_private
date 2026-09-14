@@ -18981,17 +18981,27 @@ def api_accounting_result_vat_profile_bulk_detect():
         afms = payload.get("afms")
         job_id = str(payload.get("job_id") or "").strip()
 
+        # Also used to label progress by company NAME instead of bare AFM
+        # (every AFM this job runs against comes from the shared store, so
+        # a name lookup is always available here regardless of whether the
+        # caller passed an explicit `afms` subset or not).
+        names_by_afm: Dict[str, str] = {}
+        default_afms: List[str] = []
+        path = group_path("e3_company_credentials_store.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                store_data = json.load(f)
+            for entry in (store_data.get("companies") or []):
+                co = (entry or {}).get("company") or {}
+                a = str(co.get("afm") or "").strip()
+                if not a:
+                    continue
+                names_by_afm[a] = str(co.get("name") or "").strip()
+                if co.get("taxisnet_username") and co.get("taxisnet_password"):
+                    default_afms.append(a)
+
         if not isinstance(afms, list) or not afms:
-            path = group_path("e3_company_credentials_store.json")
-            afms = []
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    store_data = json.load(f)
-                for entry in (store_data.get("companies") or []):
-                    co = (entry or {}).get("company") or {}
-                    a = str(co.get("afm") or "").strip()
-                    if a and co.get("taxisnet_username") and co.get("taxisnet_password"):
-                        afms.append(a)
+            afms = default_afms
         afms = [str(a).strip() for a in afms if str(a or "").strip()]
 
         from accounting_result import job_registry as ar_jobs
@@ -19002,8 +19012,9 @@ def api_accounting_result_vat_profile_bulk_detect():
             if job_id and ar_jobs.is_abort_requested(job_id):
                 aborted = True
                 break
+            label = names_by_afm.get(afm) or afm
             ar_jobs.publish_progress(
-                job_id, f"{afm} ({idx + 1}/{total})",
+                job_id, f"{label} ({idx + 1}/{total})",
                 percent=round(idx / total * 100) if total else None,
                 current=idx + 1, total=total,
             )
@@ -20568,17 +20579,45 @@ def api_e3_brain_credentials_store_bulk_delete():
         afms = payload.get("afms")
         if not isinstance(afms, list) or not afms:
             return jsonify({"ok": False, "error": "Λείπουν τα ΑΦΜ προς διαγραφή."}), 400
-        target_afms = {str(a).strip() for a in afms if str(a or "").strip()}
-        if not target_afms:
+        requested_afms = {str(a).strip() for a in afms if str(a or "").strip()}
+        if not requested_afms:
             return jsonify({"ok": False, "error": "Λείπουν τα ΑΦΜ προς διαγραφή."}), 400
 
         file_path = _credentials_store_file_path(grp)
         if not os.path.exists(file_path):
-            return jsonify({"ok": True, "deleted": 0})
+            return jsonify({"ok": True, "deleted": 0, "protected": []})
         data, read_error = _read_credentials_store_or_refuse(file_path)
         if read_error:
             return jsonify({"ok": False, "error": read_error}), 409
         companies = data.get("companies", [])
+
+        # Never let a bulk-delete here (Αποθηκευμένα/e3_company_credentials_store.json,
+        # the Excel-imported roster) also remove a company that is registered
+        # in the app's own real myDATA credentials (credentials.json,
+        # load_credentials()) — that's the store actual computations read
+        # from, and deleting its Αποθηκευμένα row here doesn't affect it
+        # anyway (they're two separate stores), so silently "succeeding" on
+        # those would misleadingly suggest the company was fully removed.
+        # Skip them and report which ones, by name, instead.
+        creds = load_credentials() or []
+        real_afms = {str(c.get("vat") or c.get("afm") or "").strip() for c in creds if isinstance(c, dict)}
+        real_afms.discard("")
+        protected_afms = requested_afms & real_afms
+        target_afms = requested_afms - protected_afms
+
+        protected = [
+            {
+                "afm": afm,
+                "name": next(
+                    (str((item.get("company") or {}).get("name") or "").strip()
+                     for item in companies
+                     if str((item.get("company") or {}).get("afm") or "").strip() == afm),
+                    "",
+                ) or afm,
+            }
+            for afm in protected_afms
+        ]
+
         new_companies = [
             item for item in companies
             if str((item.get("company") or {}).get("afm") or "").strip() not in target_afms
@@ -20595,7 +20634,7 @@ def api_e3_brain_credentials_store_bulk_delete():
                 "via": "bulk_delete",
             }
             _write_credentials_store_atomic(file_path, data)
-        return jsonify({"ok": True, "deleted": deleted})
+        return jsonify({"ok": True, "deleted": deleted, "protected": protected})
     except Exception as e:
         log.exception("api_e3_brain_credentials_store_bulk_delete failed")
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -20887,17 +20926,24 @@ def api_e3_brain_credentials_store_import_excel():
                 or prev_company.get("ika_employer_password")
                 or prev_company.get("has_payroll")
             )
+            # Existing data wins over the import, field by field — a
+            # (re-)import only FILLS IN whatever is currently missing in
+            # our store, it never overwrites a field we already have (e.g.
+            # a manually-corrected password, or a value from a different,
+            # more complete export). Same-AFM matches across files/imports
+            # accumulate this way rather than the last import silently
+            # clobbering good data with a blank or stale one.
             new_company = {
                 "afm": afm,
-                "name": display_name or prev_company.get("name") or "",
-                "legal_type": legal_type or prev_company.get("legal_type") or "",
-                "amka": amka or prev_company.get("amka") or "",
-                "taxisnet_username": tu or prev_company.get("taxisnet_username") or "",
-                "taxisnet_password": tp or prev_company.get("taxisnet_password") or "",
-                "mydata_user": mu or prev_company.get("mydata_user") or "",
-                "mydata_key": mk or prev_company.get("mydata_key") or "",
-                "ika_employer_username": iku or prev_company.get("ika_employer_username") or "",
-                "ika_employer_password": ikp or prev_company.get("ika_employer_password") or "",
+                "name": prev_company.get("name") or display_name or "",
+                "legal_type": prev_company.get("legal_type") or legal_type or "",
+                "amka": prev_company.get("amka") or amka or "",
+                "taxisnet_username": prev_company.get("taxisnet_username") or tu or "",
+                "taxisnet_password": prev_company.get("taxisnet_password") or tp or "",
+                "mydata_user": prev_company.get("mydata_user") or mu or "",
+                "mydata_key": prev_company.get("mydata_key") or mk or "",
+                "ika_employer_username": prev_company.get("ika_employer_username") or iku or "",
+                "ika_employer_password": prev_company.get("ika_employer_password") or ikp or "",
                 "has_payroll": has_payroll,
                 "address": prev_company.get("address") or "",
                 "branch_addresses": prev_company.get("branch_addresses") or [],
@@ -22629,4 +22675,12 @@ except Exception:
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
     debug_flag = True
-    app.run(host="0.0.0.0", port=port, debug=debug_flag, use_reloader=True)
+    # threaded=True: without it Werkzeug's dev server handles one request at
+    # a time, so a long-running bulk job (Ε3 bulk, Λογιστικό Αποτέλεσμα
+    # bulk_compute/vat_profile bulk_detect) blocks EVERY other request on
+    # the server for its whole duration — including a full page reload and
+    # the cross-page progress-flash's own polling requests, which is why a
+    # reload during a bulk run looked like the progress banner "gave up"
+    # (the poll requests were queued behind the bulk POST, not actually
+    # failing) instead of continuing to show live progress.
+    app.run(host="0.0.0.0", port=port, debug=debug_flag, use_reloader=True, threaded=True)

@@ -1654,7 +1654,6 @@
         <button id="brainCredsSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Επιλογή όλων</button>
         <button id="brainCredsSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Καμία επιλογή</button>
         <button id="brainCredsBulkDeleteBtn" type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950">🗑 Διαγραφή επιλεγμένων</button>
-        <span id="brainCredsBulkStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
       </div>
       <div id="brainCredsList" class="overflow-x-auto w-full max-w-full"></div>
 
@@ -7479,9 +7478,8 @@
 
   async function bulkDeleteBrainCreds() {
     const afms = getSelectedBrainCredAfms();
-    const statusEl = document.getElementById('brainCredsBulkStatus');
     if (!afms.length) {
-      if (statusEl) statusEl.textContent = 'Δεν έχεις επιλέξει καμία εταιρία.';
+      showBrainFlash('Δεν έχεις επιλέξει καμία εταιρία.', 'warning', 4000);
       return;
     }
     let ok = false;
@@ -7489,7 +7487,6 @@
       ok = await showModalConfirm('Διαγραφή επιλεγμένων', `Διαγραφή credentials για ${afms.length} εταιρίες;`, 'Διαγραφή', 'Άκυρο');
     } catch (_) { ok = false; }
     if (!ok) return;
-    if (statusEl) statusEl.textContent = '⌛ Διαγραφή...';
     try {
       const resp = await fetch('/api/e3/brain/credentials_store/bulk_delete', {
         method: 'POST',
@@ -7500,10 +7497,16 @@
       if (!data.ok) throw new Error(data.error || 'Σφάλμα μαζικής διαγραφής');
       const afmSet = new Set(afms);
       E3_BRAIN_CREDS_CACHE = E3_BRAIN_CREDS_CACHE.filter(c => !afmSet.has((c.company || {}).afm));
-      if (statusEl) statusEl.textContent = `✓ Διαγράφηκαν ${data.deleted || 0}.`;
+      const protectedList = data.protected || [];
+      let msg = `Διαγράφηκαν ${data.deleted || 0} εταιρίες.`;
+      if (protectedList.length) {
+        const names = protectedList.map((p) => p.name || p.afm).join(', ');
+        msg += ` Δεν διαγράφηκαν ${protectedList.length} (βρίσκονται στα credentials μας): ${names}.`;
+      }
+      showBrainFlash(msg, protectedList.length ? 'warning' : 'success', protectedList.length ? 9000 : 5000);
       renderBrainCredsList();
     } catch (e) {
-      if (statusEl) statusEl.textContent = '✗ ' + (e.message || String(e));
+      showBrainFlash(e.message || String(e), 'error');
     }
   }
 
