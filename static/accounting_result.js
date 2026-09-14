@@ -935,6 +935,13 @@ function initSavedDataTable() {
   $table.DataTable({
     order: [[2, 'asc']],
     pageLength: 25,
+    // Remembers the user's page-length (and sort/search/page) choice in
+    // localStorage, keyed by this page's URL — survives both a table
+    // rebuild after a delete/import (this function runs again from
+    // scratch each time) and a real full/partial page reload.
+    // stateDuration:-1 means it never expires on its own.
+    stateSave: true,
+    stateDuration: -1,
     columnDefs: [{ orderable: false, searchable: false, targets: [0, 3, 4, 6] }],
     language: AR_DT_LANG,
   });
@@ -1695,20 +1702,18 @@ function openSavedEditModal(afm) {
   document.getElementById('arEditName').value = c.name || '';
   document.getElementById('arEditAddress').value = c.address || '';
   document.getElementById('arEditTaxisUser').value = c.taxisnet_username || '';
-  document.getElementById('arEditTaxisPass').value = '';
+  // Every stored credential field is shown in full, never force-blanked —
+  // this is the group's own private vault, not a login form, and hiding
+  // a value here just makes every import/edit look like it silently lost
+  // that field (that's exactly what happened with mydata_key before this
+  // was made consistent across all of them).
+  document.getElementById('arEditTaxisPass').value = c.taxisnet_password || '';
   document.getElementById('arEditAmka').value = c.amka || '';
   document.getElementById('arEditLegalType').value = c.legal_type || '';
   document.getElementById('arEditMydataUser').value = c.mydata_user || '';
-  // Unlike the TAXISnet/ΙΚΑ *passwords* below, the myDATA subscription key
-  // isn't a login secret the accountant types once and forgets — it's an
-  // API key they need to visually verify an Excel import actually captured
-  // (exactly like mydata_user, right above). Leaving it force-blanked here
-  // made every import look like it silently failed to find it, even when
-  // the backend had it correctly stored — same field e3_check.html's own
-  // copy of this modal already shows in plain text.
   document.getElementById('arEditMydataKey').value = c.mydata_key || '';
   document.getElementById('arEditIkaEmpUser').value = c.ika_employer_username || '';
-  document.getElementById('arEditIkaEmpPass').value = '';
+  document.getElementById('arEditIkaEmpPass').value = c.ika_employer_password || '';
 
   // Νομική μορφή pill — three states, not two: a company with no legal_type
   // AND no members isn't necessarily an individual, it may simply never
@@ -1752,7 +1757,7 @@ function openSavedEditModal(afm) {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem;">
         <input data-member-i="${i}" data-field="taxisnet_username" value="${escapeHtml(m.taxisnet_username || '')}" placeholder="TAXIS user">
-        <input data-member-i="${i}" data-field="taxisnet_password" type="password" placeholder="TAXIS pass (κενό=διατήρηση)">
+        <input data-member-i="${i}" data-field="taxisnet_password" value="${escapeHtml(m.taxisnet_password || '')}" placeholder="TAXIS pass">
         <input data-member-i="${i}" data-field="amka" value="${escapeHtml(m.amka || '')}" placeholder="ΑΜΚΑ">
       </div>
     </div>`;
@@ -1774,31 +1779,23 @@ async function saveSavedEdit() {
   c.name = document.getElementById('arEditName').value;
   c.address = document.getElementById('arEditAddress').value;
   c.taxisnet_username = document.getElementById('arEditTaxisUser').value;
-  const newTaxisPass = document.getElementById('arEditTaxisPass').value;
-  if (newTaxisPass) c.taxisnet_password = newTaxisPass; // empty = keep existing
+  // Every field here now starts pre-filled with its real stored value (see
+  // openSavedEditModal) — none of them are "keep existing unless typed"
+  // write-only secrets anymore, so save each one as-is; clearing a field
+  // here is a deliberate removal.
+  c.taxisnet_password = document.getElementById('arEditTaxisPass').value;
   c.amka = document.getElementById('arEditAmka').value;
   c.legal_type = document.getElementById('arEditLegalType').value;
   c.mydata_user = document.getElementById('arEditMydataUser').value;
-  // Not a "keep existing unless typed" field like the passwords above —
-  // the field now starts pre-filled with the real stored key (see
-  // openSavedEditModal), so save it as-is; clearing it here is a
-  // deliberate removal, same as the mydata_user field right above.
   c.mydata_key = document.getElementById('arEditMydataKey').value;
   c.ika_employer_username = document.getElementById('arEditIkaEmpUser').value;
-  const newIkaEmpPass = document.getElementById('arEditIkaEmpPass').value;
-  if (newIkaEmpPass) c.ika_employer_password = newIkaEmpPass; // empty = keep existing
+  c.ika_employer_password = document.getElementById('arEditIkaEmpPass').value;
   delete entry._synthetic;
 
   if (Array.isArray(entry.members) && entry.members.length) {
     entry.members.forEach((m, i) => {
       document.querySelectorAll('input[data-member-i="' + i + '"]').forEach((el) => {
-        const field = el.dataset.field;
-        const v = String(el.value || '').trim();
-        if (field === 'taxisnet_password') {
-          if (v) m.taxisnet_password = v;
-          return;
-        }
-        m[field] = v;
+        m[el.dataset.field] = String(el.value || '').trim();
       });
     });
   }

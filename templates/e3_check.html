@@ -3010,10 +3010,12 @@
     setVal('editName', c.name || '');
     setVal('editAddress', c.address || '');
     setVal('editTaxisUser', c.taxisnet_username || '');
-    setVal('editTaxisPass', '');
+    // Every stored credential field is shown in full, never force-blanked —
+    // this is the group's own private vault, not a login form.
+    setVal('editTaxisPass', c.taxisnet_password || '');
     setVal('editAmka', c.amka || '');
     setVal('editIkaEmpUser', c.ika_employer_username || '');
-    setVal('editIkaEmpPass', '');
+    setVal('editIkaEmpPass', c.ika_employer_password || '');
     setVal('editMydataUser', c.mydata_user || '');
     setVal('editMydataKey', c.mydata_key || '');
 
@@ -3071,6 +3073,7 @@
           const mname = String(m.full_name || m.name || '').trim();
           const mrole = String(m.role || '').trim();
           const mu = String(m.taxisnet_username || '').replace(/"/g, '&quot;');
+          const mp = String(m.taxisnet_password || '').replace(/"/g, '&quot;');
           const ma = String(m.amka || '').replace(/"/g, '&quot;');
           return (
             '<div class="brain-cred-field" data-edit-member-row="' + i + '"' +
@@ -3081,7 +3084,7 @@
               '</div>' +
               '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem;">' +
                 '<input data-edit-member-i="' + i + '" data-field="taxisnet_username" value="' + mu + '" placeholder="TAXIS user" />' +
-                '<input data-edit-member-i="' + i + '" data-field="taxisnet_password" type="password" placeholder="TAXIS pass (κενό=διατήρηση)" />' +
+                '<input data-edit-member-i="' + i + '" data-field="taxisnet_password" value="' + mp + '" placeholder="TAXIS pass" />' +
                 '<input data-edit-member-i="' + i + '" data-field="amka" value="' + ma + '" placeholder="ΑΜΚΑ" />' +
               '</div>' +
             '</div>'
@@ -3226,14 +3229,17 @@
     c.name = document.getElementById('editName').value;
     const addrEl_save = document.getElementById('editAddress');
     if (addrEl_save) c.address = addrEl_save.value;
+    // Every field here starts pre-filled with its real stored value (see
+    // editBrainCred) — none of them are "keep existing unless typed"
+    // write-only secrets, so save each one as-is; clearing a field here is
+    // a deliberate removal.
     c.taxisnet_username = document.getElementById('editTaxisUser').value;
-    const newPass = document.getElementById('editTaxisPass').value;
-    if (newPass) c.taxisnet_password = newPass; // empty = keep existing
+    c.taxisnet_password = document.getElementById('editTaxisPass').value;
     c.amka = document.getElementById('editAmka').value;
     const ikaEmpUserEl = document.getElementById('editIkaEmpUser');
     if (ikaEmpUserEl) c.ika_employer_username = ikaEmpUserEl.value;
-    const newIkaEmpPass = (document.getElementById('editIkaEmpPass') || {}).value;
-    if (newIkaEmpPass) c.ika_employer_password = newIkaEmpPass; // empty = keep existing
+    const ikaEmpPassEl = document.getElementById('editIkaEmpPass');
+    if (ikaEmpPassEl) c.ika_employer_password = ikaEmpPassEl.value;
     c.mydata_user = document.getElementById('editMydataUser').value;
     c.mydata_key = document.getElementById('editMydataKey').value;
     const legalInputSave = document.getElementById('editLegalType');
@@ -3241,19 +3247,14 @@
 
     // Persist edits made on the inline member inputs back into
     // cred.members so the /update endpoint receives the new TAXIS/ΑΜΚΑ
-    // values. Empty password fields keep the previously stored password.
+    // values.
     if (Array.isArray(cred.members) && cred.members.length) {
       cred.members.forEach((m, i) => {
         const inputs = document.querySelectorAll('input[data-edit-member-i="' + i + '"]');
         inputs.forEach((el) => {
           const field = el.dataset.field;
           if (!field) return;
-          const v = String(el.value || '').trim();
-          if (field === 'taxisnet_password') {
-            if (v) m.taxisnet_password = v;
-            return;
-          }
-          m[field] = v;
+          m[field] = String(el.value || '').trim();
         });
       });
     }
@@ -7459,6 +7460,13 @@
     $table.DataTable({
       order: [[2, 'asc']],
       pageLength: 25,
+      // Remembers the user's page-length (and sort/search/page) choice in
+      // localStorage, keyed by this page's URL — survives both a table
+      // rebuild after a delete/import (this function runs again from
+      // scratch each time) and a real full/partial page reload.
+      // stateDuration:-1 means it never expires on its own.
+      stateSave: true,
+      stateDuration: -1,
       columnDefs: [{ orderable: false, searchable: false, targets: [0, 6] }],
       language: E3_CRED_DT_LANG,
     });
@@ -7600,7 +7608,7 @@
                   </div>
                   <div class="brain-cred-field">
                     <label>TAXISnet password</label>
-                    <input id="editTaxisPass" name="taxisnet_password" type="password" placeholder="••••••••" autocomplete="new-password">
+                    <input id="editTaxisPass" name="taxisnet_password" type="text" placeholder="password" autocomplete="off">
                   </div>
                   <div class="brain-cred-field" id="editAmkaWrapper">
                     <label>ΑΜΚΑ</label>
@@ -7618,7 +7626,7 @@
                   </div>
                   <div class="brain-cred-field">
                     <label>Ι.Κ.Α. Εργοδότη password</label>
-                    <input id="editIkaEmpPass" name="ika_employer_password" type="password" placeholder="••••••••" autocomplete="new-password">
+                    <input id="editIkaEmpPass" name="ika_employer_password" type="text" placeholder="password" autocomplete="off">
                   </div>
                 </div>
                 <div class="brain-cred-section-label" style="margin-top:0.4rem;">myDATA</div>
