@@ -20472,6 +20472,96 @@ def _legal_type_from_kind(kind: str) -> str:
     return ""
 
 
+def _sanitize_xlsx_stylesheet(raw: bytes) -> Optional[bytes]:
+    """Best-effort repair for .xlsx files whose xl/styles.xml carries invalid
+    aRGB color values (seen from some accounting-software exports, e.g.
+    rgb="FF00FF"/rgb="0" instead of the required 8-hex-digit aRGB string).
+    openpyxl - and therefore pandas.read_excel - refuses to open such files
+    outright with "could not read stylesheet". We only touch styles.xml
+    (never the sheet data) by coercing every rgb="..." value to 8 hex
+    digits, since styling is irrelevant to the data we extract. Returns
+    None when the upload isn't a zip or has no styles.xml to patch.
+    """
+    try:
+        src = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        return None
+    if "xl/styles.xml" not in src.namelist():
+        return None
+
+    def _fix_rgb(m: "re.Match") -> bytes:
+        hexval = re.sub(rb"[^0-9A-Fa-f]", b"", m.group(1))
+        if len(hexval) == 8:
+            return b'rgb="' + hexval + b'"'
+        return b'rgb="FF000000"'
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "xl/styles.xml":
+                data = re.sub(rb'rgb="([0-9A-Fa-f]*)"', _fix_rgb, data)
+            dst.writestr(item, data)
+    return out.getvalue()
+
+
+def _parse_kodikoi_internet_report(ws) -> list:
+    """Parse the "Κωδικοί Υπηρεσιών μέσω Internet" pivot-style export
+    (Παράμετροι -> Εταιρεία -> Εκτύπωση Κωδικών Υπηρεσιών μέσω Internet).
+
+    Unlike the flat Κωδικοί_Υπόχρεων.xlsx export (one row per ΑΦΜ with a
+    fixed column per field), this report has no header row at all: each
+    company is a block starting with a single cell in column A holding
+    "<seq> <name> <afm>" (every other column empty on that row), followed
+    by one row per registered service with the service name in column B
+    and its username/password in columns E and G. Blocks are found
+    structurally rather than by column header.
+    """
+    afm_re = re.compile(r"(\d{9})\s*$")
+    companies: list = []
+    current: Optional[Dict[str, str]] = None
+
+    def _s(v) -> str:
+        if isinstance(v, str):
+            return v.strip()
+        return str(v).strip() if v not in (None, "") else ""
+
+    for row in ws.iter_rows(values_only=True):
+        col_a = _s(row[0] if len(row) > 0 else None)
+        col_b = _s(row[1] if len(row) > 1 else None)
+        rest_has_content = any(_s(v) for v in (row[1:] if len(row) > 1 else ()))
+        if col_a and not rest_has_content:
+            m = afm_re.search(col_a)
+            if m:
+                if current:
+                    companies.append(current)
+                name = re.sub(r"^\d+\s+", "", col_a[: m.start()]).strip()
+                current = {
+                    "afm": m.group(1), "name": name, "first_name": "", "kind": "",
+                    "amka": "", "taxis_username": "", "taxis_password": "",
+                    "mydata_user": "", "mydata_key": "",
+                    "ika_employer_user": "", "ika_employer_pass": "", "doy": "",
+                }
+                continue
+        if current is None or not col_b:
+            continue
+        label = col_b.lower()
+        user = _s(row[4] if len(row) > 4 else None)
+        pwd = _s(row[6] if len(row) > 6 else None)
+        if "taxis" in label:
+            current["taxis_username"] = current["taxis_username"] or user
+            current["taxis_password"] = current["taxis_password"] or pwd
+        elif "mydata" in label:
+            current["mydata_user"] = current["mydata_user"] or user
+            current["mydata_key"] = current["mydata_key"] or pwd
+        elif "εργοδ" in label and ("ι.κ.α" in label or "ικα" in label or "εφκα" in label):
+            current["ika_employer_user"] = current["ika_employer_user"] or user
+            current["ika_employer_pass"] = current["ika_employer_pass"] or pwd
+    if current:
+        companies.append(current)
+    return companies
+
+
 @app.route("/api/e3/brain/credentials_store/import_excel", methods=["POST"])
 @login_required
 def api_e3_brain_credentials_store_import_excel():
@@ -20507,11 +20597,29 @@ def api_e3_brain_credentials_store_import_excel():
             return jsonify({"ok": False, "error": "Δεν δόθηκε αρχείο Excel."}), 400
         replace_existing = str(request.form.get("replace") or "").strip().lower() in {"1", "true", "yes", "on"}
 
+        raw_bytes = upload.read()
+
         import pandas as pd
+
+        def _open_excel(data: bytes):
+            return pd.ExcelFile(io.BytesIO(data))
+
+        used_bytes = raw_bytes
         try:
-            xl = pd.ExcelFile(upload)
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"Αδυναμία ανοίγματος Excel: {exc}"}), 400
+            xl = _open_excel(used_bytes)
+        except Exception:
+            # Some accounting-software xlsx exports carry invalid aRGB
+            # color values in xl/styles.xml (e.g. rgb="0"/rgb="FF00FF"
+            # instead of 8 hex digits); openpyxl refuses those outright.
+            # Retry once against a style-sanitized copy before giving up.
+            fixed = _sanitize_xlsx_stylesheet(raw_bytes)
+            if fixed is None:
+                return jsonify({"ok": False, "error": "Αδυναμία ανοίγματος Excel: μη έγκυρο αρχείο."}), 400
+            try:
+                used_bytes = fixed
+                xl = _open_excel(used_bytes)
+            except Exception as exc2:
+                return jsonify({"ok": False, "error": f"Αδυναμία ανοίγματος Excel: {exc2}"}), 400
 
         chosen_sheet = None
         for sh in xl.sheet_names:
@@ -20523,18 +20631,42 @@ def api_e3_brain_credentials_store_import_excel():
             if _pick_excel_col(headers, _EXCEL_COL_ALIASES["afm"]):
                 chosen_sheet = sh
                 break
-        if not chosen_sheet:
-            return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ σε κανένα φύλλο."}), 400
 
-        df = pd.read_excel(xl, sheet_name=chosen_sheet, dtype=str)
-        df = df.fillna("")
-        headers = {str(c): str(c).strip().lower() for c in df.columns}
-
+        norm_rows: List[Dict[str, str]] = []
         col_map: Dict[str, Optional[str]] = {}
-        for key, aliases in _EXCEL_COL_ALIASES.items():
-            col_map[key] = _pick_excel_col(headers, aliases)
-        if not col_map.get("afm"):
-            return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ."}), 400
+        report_format = "flat"
+        if chosen_sheet:
+            df = pd.read_excel(xl, sheet_name=chosen_sheet, dtype=str)
+            df = df.fillna("")
+            headers = {str(c): str(c).strip().lower() for c in df.columns}
+            for key, aliases in _EXCEL_COL_ALIASES.items():
+                col_map[key] = _pick_excel_col(headers, aliases)
+
+            def _cell(row, key: str) -> str:
+                col = col_map.get(key)
+                if not col:
+                    return ""
+                return str(row.get(col, "") or "").strip()
+
+            for _, row in df.iterrows():
+                norm_rows.append({k: _cell(row, k) for k in _EXCEL_COL_ALIASES})
+        else:
+            # No sheet has a recognizable ΑΦΜ *column* - this may still be
+            # the pivot-style "Κωδικοί Υπηρεσιών μέσω Internet" report
+            # (Παράμετροι -> Εταιρεία -> Εκτύπωση Κωδικών Υπηρεσιών μέσω
+            # Internet), which has no header row / no ΑΦΜ column at all.
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(io.BytesIO(used_bytes), data_only=True, read_only=True)
+            except Exception as exc:
+                return jsonify({"ok": False, "error": f"Αδυναμία ανοίγματος Excel: {exc}"}), 400
+            report_rows = _parse_kodikoi_internet_report(wb.worksheets[0])
+            if not report_rows:
+                return jsonify({"ok": False, "error": "Δεν βρέθηκε στήλη ΑΦΜ σε κανένα φύλλο."}), 400
+            chosen_sheet = wb.worksheets[0].title
+            report_format = "kodikoi_internet_report"
+            for r in report_rows:
+                norm_rows.append({k: r.get(k, "") for k in _EXCEL_COL_ALIASES})
 
         file_path = _credentials_store_file_path(grp)
         existing: Dict[str, Any] = {"companies": []}
@@ -20549,33 +20681,27 @@ def api_e3_brain_credentials_store_import_excel():
                 if a:
                     by_afm[a] = item
 
-        def _cell(row, key: str) -> str:
-            col = col_map.get(key)
-            if not col:
-                return ""
-            return str(row.get(col, "") or "").strip()
-
         imported = 0
         updated = 0
         skipped = 0
-        for _, row in df.iterrows():
-            raw_afm = re.sub(r"\D+", "", _cell(row, "afm"))
+        for row in norm_rows:
+            raw_afm = re.sub(r"\D+", "", row.get("afm") or "")
             if not raw_afm or len(raw_afm) < 9:
                 skipped += 1
                 continue
             # Pad 8-digit ΑΦΜs (Excel-stripped leading zero) to 9 digits.
             afm = raw_afm.zfill(9)[-9:]
-            name = _cell(row, "name")
-            first = _cell(row, "first_name")
+            name = row.get("name") or ""
+            first = row.get("first_name") or ""
             display_name = (f"{name} {first}".strip() if first else name) or afm
-            kind = _cell(row, "kind")
-            amka = _cell(row, "amka")
-            tu = _cell(row, "taxis_username")
-            tp = _cell(row, "taxis_password")
-            mu = _cell(row, "mydata_user")
-            mk = _cell(row, "mydata_key")
-            iku = _cell(row, "ika_employer_user")
-            ikp = _cell(row, "ika_employer_pass")
+            kind = row.get("kind") or ""
+            amka = row.get("amka") or ""
+            tu = row.get("taxis_username") or ""
+            tp = row.get("taxis_password") or ""
+            mu = row.get("mydata_user") or ""
+            mk = row.get("mydata_key") or ""
+            iku = row.get("ika_employer_user") or ""
+            ikp = row.get("ika_employer_pass") or ""
             legal_type = _legal_type_from_kind(kind)
 
             prev = by_afm.get(afm) or {}
@@ -20631,6 +20757,7 @@ def api_e3_brain_credentials_store_import_excel():
         return jsonify({
             "ok": True,
             "sheet": chosen_sheet,
+            "format": report_format,
             "imported": imported,
             "updated": updated,
             "skipped": skipped,
