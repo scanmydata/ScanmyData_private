@@ -18417,6 +18417,13 @@ def api_accounting_result_compute():
         from accounting_result import engine as ar_engine
         path = _ar_store_path(vat)
 
+        # ΦΠΑ first, then the rest of the computation - see
+        # _ar_ensure_vat_profile_checked's docstring. A no-op (returns
+        # None) on every request after the first for this company, or on
+        # this same request's retry once needs_depreciation_input/
+        # needs_inventory_input is resolved.
+        vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+
         prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
         has_inventory = ar_engine.company_tracks_inventory(prior_entries)
         dep_entries = ar_engine.depreciation_entries_from(prior_entries)
@@ -18430,6 +18437,7 @@ def api_accounting_result_compute():
                 "vat": vat,
                 "year": year,
                 "depreciation_entries": dep_entries,
+                "vat_auto_check": vat_auto_check,
             }), 200
         depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
 
@@ -18447,6 +18455,7 @@ def api_accounting_result_compute():
                     "vat": vat,
                     "year": year,
                     "opening_inventory": opening,
+                    "vat_auto_check": vat_auto_check,
                 }), 200
         else:
             closing, opening = {}, {}
@@ -18490,6 +18499,7 @@ def api_accounting_result_compute():
             "vat": vat,
             "year": year,
             "report": report,
+            "vat_auto_check": vat_auto_check,
         }), 200
     except Exception as e:
         log.exception("api_accounting_result_compute failed")
@@ -18666,6 +18676,11 @@ def api_accounting_result_bulk_compute():
                 results.append({"credential_name": name, "ok": False, "error": "Λείπουν στοιχεία AADE"})
                 continue
 
+            path = _ar_store_path(vat)
+            # ΦΠΑ first, then the rest of THIS company's computation - see
+            # _ar_ensure_vat_profile_checked's docstring.
+            vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
             has_inventory = ar_engine.company_tracks_inventory(prior_entries)
             dep_entries = ar_engine.depreciation_entries_from(prior_entries)
@@ -18674,7 +18689,6 @@ def api_accounting_result_bulk_compute():
             # disambiguation popup is available in Ατομικός mode.
             depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to)
 
-            path = _ar_store_path(vat)
             if has_inventory:
                 opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
                 closing, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
@@ -18682,6 +18696,7 @@ def api_accounting_result_bulk_compute():
                     results.append({
                         "credential_name": name, "ok": True, "needs_inventory_input": True,
                         "vat": vat, "year": year, "opening_inventory": opening,
+                        "vat_auto_check": vat_auto_check,
                     })
                     continue
             else:
@@ -18716,6 +18731,7 @@ def api_accounting_result_bulk_compute():
                 results.append({
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
                     "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
+                    "vat_auto_check": vat_auto_check,
                 })
             except Exception as e:
                 log.exception("accounting_result bulk_compute failed for %s", name)
@@ -19012,6 +19028,35 @@ def _ar_detect_vat_profile_for_afm(vat: str):
     except Exception as e:
         log.exception("_ar_detect_vat_profile_for_afm failed for vat=%s", vat)
         return False, {"error": str(e)}, 500
+
+
+def _ar_ensure_vat_profile_checked(vat: str) -> Optional[Dict[str, Any]]:
+    """Run the ΦΠΑ auto-detect for `vat` if - and only if - it has NEVER
+    been checked at all (no vat_profile on file yet, not even an explicit
+    "unknown"/cleared one - see vat_profile_store.set_vat_profile). A
+    Μαζικός/Ατομικός computation shouldn't silently fall back to the
+    ΦΠΑ-applicable/monthly defaults for a company nobody ever looked at;
+    it should look it up itself, once, the first time that company is
+    computed - same ΑΑΔΕ Μητρώο lookup as the manual "🔍" button in
+    Αποθηκευμένα, just triggered automatically here instead of requiring
+    that manual step first.
+
+    Returns None when nothing happened (a profile already existed, so the
+    normal defaults/stored values apply unchanged). Otherwise returns
+    {"ok": bool, "vat_subject": Optional[bool], "error": Optional[str]}
+    describing the just-attempted detection, for the caller to surface in
+    a flash message.
+    """
+    try:
+        path = _ar_store_path(vat)
+        if vat_profile_store_get(path):
+            return None
+    except Exception:
+        return None
+    ok, body, _status = _ar_detect_vat_profile_for_afm(vat)
+    if ok:
+        return {"ok": True, "vat_subject": (body.get("profile") or {}).get("vat_subject"), "error": None}
+    return {"ok": False, "vat_subject": None, "error": body.get("error")}
 
 
 @app.route("/api/accounting_result/vat_profile/detect", methods=["POST"])

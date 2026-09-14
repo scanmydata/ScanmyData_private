@@ -676,6 +676,8 @@ async function computeSingle() {
       showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
       return;
     }
+    const vatAutoMsg = vatAutoCheckFlashMessage(resp.vat_auto_check, name);
+    if (vatAutoMsg) showArFlash(vatAutoMsg, resp.vat_auto_check.ok ? 'success' : 'warning', 7000);
 
     if (resp.needs_depreciation_input) {
       hideArOverlay();
@@ -1418,6 +1420,15 @@ async function runBulk() {
   if (depreciationAmbiguousNames.length) {
     statusMsg += ` Σημείωση: βρέθηκαν πολλαπλές εγγραφές αποσβέσεων και αθροίστηκαν αυτόματα (χωρίς επιλογή) για: ${depreciationAmbiguousNames.join(', ')}.`;
   }
+  // Each company's first-ever computation runs its own ΦΠΑ auto-check
+  // before anything else (see vatAutoCheckFlashMessage) — aggregated
+  // here rather than one flash per company in a batch of many.
+  const vatChecks = (bulkResp.results || []).map((r) => r.vat_auto_check).filter(Boolean);
+  if (vatChecks.length) {
+    const vatOk = vatChecks.filter((c) => c.ok).length;
+    const vatFail = vatChecks.length - vatOk;
+    statusMsg += ` Αυτόματος έλεγχος ΦΠΑ (πρώτη φορά): ${vatOk} επιτυχείς${vatFail ? `, ${vatFail} απέτυχαν` : ''}.`;
+  }
   statusEl.textContent = statusMsg;
   showArResultsFlash(
     'Λογιστικό Αποτέλεσμα (Μαζικός): ' + statusMsg,
@@ -1507,6 +1518,21 @@ function vatProfileLabel(profile) {
   if (profile.vat_subject === false) return '❌ Όχι ΦΠΑ';
   const period = profile.vat_period_type === 'monthly' ? 'μηνιαίο' : (profile.vat_period_type === 'quarterly' ? '3μηνο' : '');
   return '✓ ΦΠΑ' + (period ? ' (' + period + ')' : '');
+}
+
+// A compute response's `vat_auto_check` is non-null exactly once — the
+// first time a company is ever computed, /compute and /bulk_compute run
+// the ΦΠΑ ΑΑΔΕ-Μητρώο lookup themselves before anything else (see
+// _ar_ensure_vat_profile_checked in app.py) instead of silently falling
+// back to the ΦΠΑ-applicable/monthly defaults for a company nobody ever
+// checked. Every later response for that company gets `null` here (a
+// profile already exists) — this only ever fires once per company.
+function vatAutoCheckFlashMessage(check, label) {
+  if (!check) return null;
+  if (check.ok) {
+    return `ΦΠΑ (${label}): πρώτος αυτόματος έλεγχος — ${vatProfileLabel({ vat_subject: check.vat_subject })}.`;
+  }
+  return `ΦΠΑ (${label}): ο αυτόματος έλεγχος απέτυχε — ${check.error || 'σφάλμα'} (κάνε τον χειροκίνητα από τα Αποθηκευμένα).`;
 }
 
 async function fillSavedVatCells(container) {
