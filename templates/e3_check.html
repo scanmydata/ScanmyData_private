@@ -1650,6 +1650,12 @@
         <span class="text-sm text-gray-500 dark:text-gray-400">Προβολή αποθηκευμένων credentials ομάδας</span>
         <span id="brainImportExcelStatus" class="text-sm"></span>
       </div>
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <button id="brainCredsSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Επιλογή όλων</button>
+        <button id="brainCredsSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Καμία επιλογή</button>
+        <button id="brainCredsBulkDeleteBtn" type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950">🗑 Διαγραφή επιλεγμένων</button>
+        <span id="brainCredsBulkStatus" class="text-xs text-gray-500 dark:text-gray-400"></span>
+      </div>
       <div id="brainCredsList" class="overflow-x-auto w-full max-w-full"></div>
 
       <!-- Log ανακτήσεων: ημερομηνία/ώρα, ποιοι έλεγχοι έτρεξαν, αποτέλεσμα — ανά (client, run). -->
@@ -2037,7 +2043,9 @@
     if (!select) return;
     const currentAfm = select.options[select.selectedIndex] ? select.options[select.selectedIndex].value : '';
     select.innerHTML = '<option value="">-- Επίλεξε πελάτη --</option>';
-    E3_BRAIN_ACTIVE_CLIENTS.forEach((client) => {
+    const sortedClients = E3_BRAIN_ACTIVE_CLIENTS.slice().sort((a, b) =>
+      String(a.name || a.afm || '').localeCompare(String(b.name || b.afm || ''), 'el'));
+    sortedClients.forEach((client) => {
       const afm = String(client.afm || '').trim();
       const label = `${afm || '---'} — ${client.name || 'Άγνωστη εταιρεία'}`;
       const option = document.createElement('option');
@@ -3836,7 +3844,8 @@
         '#brainTabSingleBtn, #brainTabBulkBtn, #brainTabSavedBtn, ' +
         '#brainRunSingleBtn, #brainSaveCredentialsBtn, ' +
         '#brainBulkFromActiveBtn, #brainRunSelectedBulkBtn, ' +
-        '#brainFetchAddressBtn, #brainFetchCredsBtn'
+        '#brainFetchAddressBtn, #brainFetchCredsBtn, ' +
+        '#brainCredsSelectAllBtn, #brainCredsSelectNoneBtn, #brainCredsBulkDeleteBtn'
       );
       if (!button) return;
       // Guard against double-firing if the per-element handler is
@@ -3889,6 +3898,15 @@
             if (typeof fetchE3BrainCredentials === 'function') {
               fetchE3BrainCredentials({ verbose: true }).catch(() => {});
             }
+            break;
+          case 'brainCredsSelectAllBtn':
+            document.querySelectorAll('.e3-cred-cb').forEach((cb) => { cb.checked = true; });
+            break;
+          case 'brainCredsSelectNoneBtn':
+            document.querySelectorAll('.e3-cred-cb').forEach((cb) => { cb.checked = false; });
+            break;
+          case 'brainCredsBulkDeleteBtn':
+            if (typeof bulkDeleteBrainCreds === 'function') bulkDeleteBrainCreds();
             break;
         }
       } catch (e) {
@@ -7426,6 +7444,69 @@
     }
   }
 
+  // Same jQuery DataTables plugin as Λογιστικό Αποτέλεσμα's own «Αποθηκευμένα»
+  // table (initSavedDataTable in static/accounting_result.js) — jQuery +
+  // DataTables are already loaded globally in base.html, so this table just
+  // needs its own class + the same init call. Column 0 (checkbox) is left
+  // out of sorting/search like the accounting_result table's own checkbox
+  // column.
+  const E3_CRED_DT_LANG = {
+    search: '🔎 Αναζήτηση:',
+    lengthMenu: 'Εμφάνιση _MENU_ εταιριών',
+    info: '_START_–_END_ από _TOTAL_',
+    infoEmpty: '0 εταιρίες',
+    infoFiltered: '(φιλτραρισμένο από _MAX_)',
+    zeroRecords: 'Δεν βρέθηκαν εταιρίες.',
+    paginate: { previous: '‹', next: '›' },
+  };
+  function initBrainCredsDataTable() {
+    if (typeof window.jQuery === 'undefined' || !window.jQuery.fn.DataTable) return;
+    const $ = window.jQuery;
+    const $table = $('.e3-cred-table');
+    if (!$table.length) return;
+    if ($.fn.DataTable.isDataTable($table)) $table.DataTable().destroy();
+    $table.DataTable({
+      order: [[2, 'asc']],
+      pageLength: 25,
+      columnDefs: [{ orderable: false, searchable: false, targets: [0, 6] }],
+      language: E3_CRED_DT_LANG,
+    });
+  }
+
+  function getSelectedBrainCredAfms() {
+    return Array.from(document.querySelectorAll('.e3-cred-cb:checked')).map((cb) => cb.value);
+  }
+
+  async function bulkDeleteBrainCreds() {
+    const afms = getSelectedBrainCredAfms();
+    const statusEl = document.getElementById('brainCredsBulkStatus');
+    if (!afms.length) {
+      if (statusEl) statusEl.textContent = 'Δεν έχεις επιλέξει καμία εταιρία.';
+      return;
+    }
+    let ok = false;
+    try {
+      ok = await showModalConfirm('Διαγραφή επιλεγμένων', `Διαγραφή credentials για ${afms.length} εταιρίες;`, 'Διαγραφή', 'Άκυρο');
+    } catch (_) { ok = false; }
+    if (!ok) return;
+    if (statusEl) statusEl.textContent = '⌛ Διαγραφή...';
+    try {
+      const resp = await fetch('/api/e3/brain/credentials_store/bulk_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ afms }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || 'Σφάλμα μαζικής διαγραφής');
+      const afmSet = new Set(afms);
+      E3_BRAIN_CREDS_CACHE = E3_BRAIN_CREDS_CACHE.filter(c => !afmSet.has((c.company || {}).afm));
+      if (statusEl) statusEl.textContent = `✓ Διαγράφηκαν ${data.deleted || 0}.`;
+      renderBrainCredsList();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '✗ ' + (e.message || String(e));
+    }
+  }
+
   function renderBrainCredsList() {
     const listDiv = document.getElementById('brainCredsList');
     if (!listDiv) return;
@@ -7434,9 +7515,10 @@
       renderBrainActiveClientSelect();
       return;
     }
-    let html = `<table class="min-w-full text-xs border-collapse">
+    let html = `<table class="e3-cred-table min-w-full text-xs border-collapse">
       <thead>
         <tr style="background:#f1f5f9;">
+          <th class="border border-gray-200 px-3 py-2" style="width:1.5rem;"><input type="checkbox" disabled></th>
           <th class="border border-gray-200 px-3 py-2 text-left font-semibold">ΑΦΜ</th>
           <th class="border border-gray-200 px-3 py-2 text-left font-semibold">Επωνυμία</th>
           <th class="border border-gray-200 px-3 py-2 text-left font-semibold">Τύπος</th>
@@ -7463,6 +7545,7 @@
         : `<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">—</span>`;
       const afm = String(c.afm || '').replace(/['"<>&]/g, '');
       html += `<tr style="transition:background 0.1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">` +
+        `<td class="border border-gray-200 px-3 py-2"><input type="checkbox" class="e3-cred-cb" value="${afm}"></td>` +
         `<td class="border border-gray-200 px-3 py-2 font-mono">${afm}</td>` +
         `<td class="border border-gray-200 px-3 py-2 font-medium">${String(c.name || '').replace(/</g,'&lt;')}</td>` +
         `<td class="border border-gray-200 px-3 py-2">${typeBadge}</td>` +
@@ -7480,6 +7563,7 @@
     html += '</tbody></table>';
     listDiv.innerHTML = html;
     renderBrainActiveClientSelect();
+    initBrainCredsDataTable();
 
     if (!document.getElementById('brainCredEditModal')) {
       const modal = document.createElement('div');

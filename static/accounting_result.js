@@ -933,9 +933,9 @@ function initSavedDataTable() {
   if (!$table.length) return;
   if ($.fn.DataTable.isDataTable($table)) $table.DataTable().destroy();
   $table.DataTable({
-    order: [[1, 'asc']],
+    order: [[2, 'asc']],
     pageLength: 25,
-    columnDefs: [{ orderable: false, searchable: false, targets: [2, 3, 5] }],
+    columnDefs: [{ orderable: false, searchable: false, targets: [0, 3, 4, 6] }],
     language: AR_DT_LANG,
   });
 }
@@ -1475,6 +1475,7 @@ function renderSavedTable(companies) {
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
       : `<span class="text-xs text-gray-400" title="Δεν βρέθηκαν πλήρη myDATA credentials για αυτό το ΑΦΜ στη σελίδα Credentials.">— χωρίς myDATA</span>`;
     return `<tr>
+      <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
       <td>${escapeHtml(c.name || '')}</td>
       <td>${typeBadge}</td>
@@ -1490,7 +1491,7 @@ function renderSavedTable(companies) {
     </tr>`;
   }).join('');
   return `<table class="ar-saved-table"><thead><tr>
-    <th>ΑΦΜ</th><th>Επωνυμία</th><th>Τύπος</th><th>ΦΠΑ</th><th>Τελευταίος υπολογισμός</th><th>Ενέργειες</th>
+    <th><input type="checkbox" disabled></th><th>ΑΦΜ</th><th>Επωνυμία</th><th>Τύπος</th><th>ΦΠΑ</th><th>Τελευταίος υπολογισμός</th><th>Ενέργειες</th>
   </tr></thead><tbody>${trs}</tbody></table>`;
 }
 
@@ -1549,6 +1550,69 @@ async function fillSavedHistoryCells(container) {
       cell.textContent = '—';
     }
   }));
+}
+
+async function bulkDeleteSavedClients() {
+  const afms = Array.from(document.querySelectorAll('.ar-saved-cb:checked')).map((cb) => cb.value);
+  const statusEl = document.getElementById('arSavedBulkStatus');
+  if (!afms.length) {
+    if (statusEl) statusEl.textContent = 'Δεν έχεις επιλέξει καμία εταιρία.';
+    return;
+  }
+  let ok = false;
+  try {
+    ok = await showModalConfirm('Διαγραφή επιλεγμένων', `Διαγραφή credentials για ${afms.length} εταιρίες;`, 'Διαγραφή', 'Άκυρο');
+  } catch (_) { ok = false; }
+  if (!ok) return;
+  if (statusEl) statusEl.textContent = '⌛ Διαγραφή...';
+  const resp = await postJson('/api/e3/brain/credentials_store/bulk_delete', { afms });
+  if (!resp.ok) {
+    if (statusEl) statusEl.textContent = '✗ ' + (resp.error || '');
+    return;
+  }
+  if (statusEl) statusEl.textContent = `✓ Διαγράφηκαν ${resp.deleted || 0}.`;
+  loadSavedClients();
+}
+
+// Same sticky flash+progress+«Διακοπή» pattern as the Μαζικός υπολογισμός
+// job above (startBulkCrossPageBanner/stopBulkCrossPageBanner + the
+// cross-page banner in base_01.js) — reused as-is rather than duplicated,
+// since job_registry is generic (keyed only by job_id, no notion of "which
+// kind of bulk job") and /api/accounting_result/bulk_progress|bulk_abort
+// already just forward to it.
+async function runVatBulkDetect() {
+  const statusEl = document.getElementById('arSavedBulkStatus');
+  const selected = Array.from(document.querySelectorAll('.ar-saved-cb:checked')).map((cb) => cb.value);
+  const afms = selected.length
+    ? selected
+    : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean);
+  if (!afms.length) {
+    if (statusEl) statusEl.textContent = 'Δεν υπάρχουν αποθηκευμένες εταιρίες.';
+    return;
+  }
+  const jobId = 'ar-vat-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  if (statusEl) statusEl.textContent = '';
+  startBulkCrossPageBanner(jobId, afms.length);
+  let resp;
+  try {
+    resp = await postJson('/api/accounting_result/vat_profile/bulk_detect', { afms, job_id: jobId });
+  } finally {
+    stopBulkCrossPageBanner();
+  }
+  if (!resp.ok) {
+    if (statusEl) statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
+    showArFlash('Μαζική αναζήτηση ΦΠΑ: σφάλμα — ' + (resp.error || ''), 'error');
+    return;
+  }
+  const results = resp.results || [];
+  const okCount = results.filter((r) => r.ok).length;
+  const errCount = results.length - okCount;
+  const msg = resp.aborted
+    ? `Διακόπηκε από τον χρήστη μετά από ${results.length} εταιρίες.`
+    : `Ολοκληρώθηκε (${okCount} επιτυχίες${errCount ? ', ' + errCount + ' σφάλματα' : ''}).`;
+  if (statusEl) statusEl.textContent = msg;
+  showArFlash('Μαζική αναζήτηση ΦΠΑ: ' + msg, resp.aborted || errCount ? 'warning' : 'success', 6000);
+  loadSavedClients();
 }
 
 async function loadSavedClients() {
@@ -1793,6 +1857,14 @@ function _arBindBackdropClose(modalId, useInlineStyle) {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('arSavedRefreshBtn').addEventListener('click', loadSavedClients);
+  document.getElementById('arSavedSelectAllBtn').addEventListener('click', () => {
+    document.querySelectorAll('.ar-saved-cb').forEach((cb) => { cb.checked = true; });
+  });
+  document.getElementById('arSavedSelectNoneBtn').addEventListener('click', () => {
+    document.querySelectorAll('.ar-saved-cb').forEach((cb) => { cb.checked = false; });
+  });
+  document.getElementById('arSavedBulkDeleteBtn').addEventListener('click', bulkDeleteSavedClients);
+  document.getElementById('arSavedVatBulkDetectBtn').addEventListener('click', runVatBulkDetect);
   document.getElementById('arSavedEditClose').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
   document.getElementById('arSavedEditCancel').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
   document.getElementById('arSavedEditForm').addEventListener('submit', (e) => { e.preventDefault(); saveSavedEdit(); });

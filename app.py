@@ -18874,36 +18874,33 @@ def api_accounting_result_vat_profile_set():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/accounting_result/vat_profile/detect", methods=["POST"])
-def api_accounting_result_vat_profile_detect():
-    """Auto-detect ΦΠΑ υπαγωγή / κατηγορία βιβλίων from the ΑΑΔΕ Μητρώο,
-    reusing the same TAXISnet-login fetch already used for the address-
-    retrieval fallback elsewhere (e3/checks/aade_profile.py) — needs the
-    company's TAXISnet creds on file in the shared e3_company_credentials_store.json
-    (typically populated by the «Αποθηκευμένα» tab's Excel import)."""
+def _ar_detect_vat_profile_for_afm(vat: str):
+    """Core of the single ΦΠΑ auto-detect endpoint, factored out so the bulk
+    endpoint can loop over many AFMs without duplicating the ΑΑΔΕ-tag
+    interpretation logic. Returns (ok, payload, http_status): payload is
+    ``{"profile": ...}`` on success or ``{"error": ...}`` on failure.
+    """
+    vat = str(vat or "").strip()
+    if not vat:
+        return False, {"error": "Λείπει vat"}, 400
+
+    taxis_user, taxis_pass = _ar_lookup_taxis_creds(vat)
+    if not taxis_user or not taxis_pass:
+        return False, {"error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ στα αποθηκευμένα credentials."}, 400
+
+    from e3.checks.aade_profile import fetch_company_profile
     try:
-        payload = request.get_json(silent=True) or {}
-        vat = str(payload.get("vat") or "").strip()
-        if not vat:
-            return jsonify({"ok": False, "error": "Λείπει vat"}), 400
+        result = fetch_company_profile(taxis_user, taxis_pass, vat)
+    except requests.exceptions.Timeout:
+        return False, {
+            "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
+        }, 504
+    if not isinstance(result, dict) or not result.get("ok"):
+        reason = (isinstance(result, dict) and result.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο."
+        return False, {"error": str(reason)}, 400
 
-        taxis_user, taxis_pass = _ar_lookup_taxis_creds(vat)
-        if not taxis_user or not taxis_pass:
-            return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ στα αποθηκευμένα credentials."}), 400
-
-        from e3.checks.aade_profile import fetch_company_profile
-        try:
-            result = fetch_company_profile(taxis_user, taxis_pass, vat)
-        except requests.exceptions.Timeout:
-            return jsonify({
-                "ok": False,
-                "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
-            }), 504
-        if not isinstance(result, dict) or not result.get("ok"):
-            reason = (isinstance(result, dict) and result.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο."
-            return jsonify({"ok": False, "error": str(reason)}), 400
-
-        all_tags = result.get("all_tags") or {}
+    all_tags = result.get("all_tags") or {}
+    try:
         ypagwgh = str(all_tags.get("ypagwghfpa") or "").strip().upper()
         vat_subject = True if ypagwgh == "NAI" else (False if ypagwgh == "OXI" else None)
         # The raw ΝΑΙ/ΟΧΙ flag alone is misleading: a company can carry
@@ -18942,9 +18939,87 @@ def api_accounting_result_vat_profile_detect():
             vat_period_type=vat_period_type,
             source="aade_profile",
         )
-        return jsonify({"ok": True, "vat": vat, "profile": profile}), 200
+        return True, {"profile": profile}, 200
+    except Exception as e:
+        log.exception("_ar_detect_vat_profile_for_afm failed for vat=%s", vat)
+        return False, {"error": str(e)}, 500
+
+
+@app.route("/api/accounting_result/vat_profile/detect", methods=["POST"])
+def api_accounting_result_vat_profile_detect():
+    """Auto-detect ΦΠΑ υπαγωγή / κατηγορία βιβλίων from the ΑΑΔΕ Μητρώο,
+    reusing the same TAXISnet-login fetch already used for the address-
+    retrieval fallback elsewhere (e3/checks/aade_profile.py) — needs the
+    company's TAXISnet creds on file in the shared e3_company_credentials_store.json
+    (typically populated by the «Αποθηκευμένα» tab's Excel import)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        vat = str(payload.get("vat") or "").strip()
+        ok, body, status = _ar_detect_vat_profile_for_afm(vat)
+        body = dict(body)
+        body["ok"] = ok
+        if ok:
+            body["vat"] = vat
+        return jsonify(body), status
     except Exception as e:
         log.exception("api_accounting_result_vat_profile_detect failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/vat_profile/bulk_detect", methods=["POST"])
+def api_accounting_result_vat_profile_bulk_detect():
+    """Bulk ΦΠΑ auto-detect across many AFMs, one ΑΑΔΕ Μητρώο login per
+    company — same mechanics as /bulk_compute (job_registry progress
+    publishing + between-company abort check, polled/stopped via the
+    already-generic /api/accounting_result/bulk_progress|bulk_abort
+    endpoints, so no new progress/abort routes are needed). ``afms``
+    selects which saved companies to run; omitted/empty means every saved
+    company that currently has TAXISnet creds on file.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        afms = payload.get("afms")
+        job_id = str(payload.get("job_id") or "").strip()
+
+        if not isinstance(afms, list) or not afms:
+            path = group_path("e3_company_credentials_store.json")
+            afms = []
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    store_data = json.load(f)
+                for entry in (store_data.get("companies") or []):
+                    co = (entry or {}).get("company") or {}
+                    a = str(co.get("afm") or "").strip()
+                    if a and co.get("taxisnet_username") and co.get("taxisnet_password"):
+                        afms.append(a)
+        afms = [str(a).strip() for a in afms if str(a or "").strip()]
+
+        from accounting_result import job_registry as ar_jobs
+        total = len(afms)
+        aborted = False
+        results = []
+        for idx, afm in enumerate(afms):
+            if job_id and ar_jobs.is_abort_requested(job_id):
+                aborted = True
+                break
+            ar_jobs.publish_progress(
+                job_id, f"{afm} ({idx + 1}/{total})",
+                percent=round(idx / total * 100) if total else None,
+                current=idx + 1, total=total,
+            )
+            ok, body, _status = _ar_detect_vat_profile_for_afm(afm)
+            if ok:
+                results.append({"vat": afm, "ok": True, "profile": body.get("profile")})
+            else:
+                results.append({"vat": afm, "ok": False, "error": body.get("error")})
+
+        if job_id:
+            ar_jobs.clear_progress(job_id)
+            ar_jobs.clear_abort(job_id)
+
+        return jsonify({"ok": True, "results": results, "aborted": aborted, "total": total}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_vat_profile_bulk_detect failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -20321,7 +20396,50 @@ def api_e3_brain_active_group_clients():
                 "address": str(c.get("address") or "").strip(),
                 "legal_type": str(c.get("legal_type") or "").strip(),
             })
+        seen_afms = {c["afm"] for c in clients}
 
+        # Also include companies that only exist in the Excel-imported
+        # e3_company_credentials_store.json (the «Αποθηκευμένα» tab) — those
+        # never get a row in load_credentials()'s own list, so without this
+        # merge an Excel-imported client was saved but invisible in
+        # «Ατομικός έλεγχος»'s dropdown.
+        try:
+            store_path = _credentials_store_file_path(grp)
+            if os.path.exists(store_path):
+                store_data, store_err = _read_credentials_store_or_refuse(store_path)
+                if not store_err:
+                    for item in (store_data.get("companies") or []):
+                        if not isinstance(item, dict):
+                            continue
+                        co = item.get("company") or {}
+                        afm = str(co.get("afm") or "").strip()
+                        if not afm or afm in seen_afms:
+                            continue
+                        seen_afms.add(afm)
+                        iku = str(co.get("ika_employer_username") or "").strip()
+                        ikp = str(co.get("ika_employer_password") or "").strip()
+                        mydata_user = str(co.get("mydata_user") or "").strip()
+                        mydata_key = str(co.get("mydata_key") or "").strip()
+                        clients.append({
+                            "afm": afm,
+                            "name": str(co.get("name") or "").strip(),
+                            "taxisnet_username": str(co.get("taxisnet_username") or "").strip(),
+                            "taxisnet_password": str(co.get("taxisnet_password") or "").strip(),
+                            "amka": str(co.get("amka") or "").strip(),
+                            "mydata_user": mydata_user,
+                            "mydata_key": mydata_key,
+                            "user": mydata_user,
+                            "key": mydata_key,
+                            "ika_employer_username": iku,
+                            "ika_employer_password": ikp,
+                            "has_payroll": bool(co.get("has_payroll") or iku or ikp),
+                            "address": str(co.get("address") or "").strip(),
+                            "legal_type": str(co.get("legal_type") or "").strip(),
+                        })
+        except Exception:
+            log.exception("api_e3_brain_active_group_clients: credentials_store merge failed")
+
+        clients.sort(key=lambda c: (c.get("name") or c.get("afm") or "").strip().lower())
         return jsonify({"ok": True, "message": "Πελάτες ενεργής ομάδας φορτώθηκαν.", "clients": clients}), 200
     except Exception as e:
         log.exception("api_e3_brain_active_group_clients failed")
@@ -20424,6 +20542,62 @@ def api_e3_brain_credentials_store_delete():
         return jsonify({"ok": True, "deleted": True})
     except Exception as e:
         log.exception("api_e3_brain_credentials_store_delete failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/e3/brain/credentials_store/bulk_delete", methods=["POST"])
+@login_required
+def api_e3_brain_credentials_store_bulk_delete():
+    """Delete several company credentials records at once by AFM — the
+    checkbox-driven bulk-delete used by both the Ε3 «Αποθηκευμένα» tab and
+    Λογιστικό Αποτέλεσμα's saved-clients table (same shared store)."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        role = None
+        try:
+            role = current_user.role_for_group(grp)
+        except Exception:
+            role = None
+        is_allowed = bool(getattr(current_user, "is_admin", False)) or role in {"admin", "member"}
+        if not is_allowed:
+            return jsonify({"ok": False, "error": "Δεν έχεις δικαίωμα διαγραφής για την ενεργή ομάδα."}), 403
+        payload = request.get_json(silent=True) or {}
+        afms = payload.get("afms")
+        if not isinstance(afms, list) or not afms:
+            return jsonify({"ok": False, "error": "Λείπουν τα ΑΦΜ προς διαγραφή."}), 400
+        target_afms = {str(a).strip() for a in afms if str(a or "").strip()}
+        if not target_afms:
+            return jsonify({"ok": False, "error": "Λείπουν τα ΑΦΜ προς διαγραφή."}), 400
+
+        file_path = _credentials_store_file_path(grp)
+        if not os.path.exists(file_path):
+            return jsonify({"ok": True, "deleted": 0})
+        data, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return jsonify({"ok": False, "error": read_error}), 409
+        companies = data.get("companies", [])
+        new_companies = [
+            item for item in companies
+            if str((item.get("company") or {}).get("afm") or "").strip() not in target_afms
+        ]
+        deleted = len(companies) - len(new_companies)
+        if deleted:
+            data["companies"] = new_companies
+            data["updated_at"] = datetime.datetime.utcnow().isoformat()
+            data["updated_by"] = {
+                "user_id": getattr(current_user, "id", None),
+                "username": getattr(current_user, "username", None),
+                "email": getattr(current_user, "email", None),
+                "role": role,
+                "via": "bulk_delete",
+            }
+            _write_credentials_store_atomic(file_path, data)
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as e:
+        log.exception("api_e3_brain_credentials_store_bulk_delete failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 _EXCEL_COL_ALIASES = {
