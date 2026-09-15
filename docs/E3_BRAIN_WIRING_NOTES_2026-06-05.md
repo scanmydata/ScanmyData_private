@@ -4,10 +4,6 @@ This note documents the misth (μισθωτήρια) / Ε9-ΕΝΦΙΑ wiring cha
 2026-06-05, plus the UI rules around the analytic table, the αποθηκευμένα PDF
 panel, and the bulk vs ατομικό PDF retention split.
 
-Test creds used while diagnosing:
-- misth (ΒΑΨΙΜΟ, ΑΦΜ 802576637, ΠΑΡΑΔΕΙΣΟΥ 16 ΒΑΡΗ): `802576637 / Tv802576!`
-- Ε9/ΕΝΦΙΑ (ΛΟΥΓΑΡΗ ΣΠΥΡΟ, ΑΦΜ 036209456, Ν ΜΑΝΔΗΛΑΡΑ 27 ΗΛΙΟΥΠΟΛΗ):
-  `WW726502U828 / LOUG11`
 
 ---
 
