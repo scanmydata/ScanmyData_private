@@ -176,7 +176,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     (r.inventory_method_label
       ? ` Απόθεμα λήξης: ${escapeHtml(r.inventory_method_label)}.`
       : '') +
-    `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to));
+    `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to), r.legal_kind);
 
   return `
   <div class="ar-report-section">
@@ -780,15 +780,20 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
 // ---------------- ΕΦΚΑ Μη-Μισθωτών exception ----------------
 
 const AR_EFKA_EXCEPTION_OPTIONS = [
-  { key: 'sole_prop_also_employed', label: 'Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός' },
-  { key: 'company_partners_exempt', label: 'Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις' },
+  { key: 'sole_prop_also_employed', label: 'Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός', legalKind: 'sole_proprietor' },
+  { key: 'company_partners_exempt', label: 'Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις', legalKind: 'legal_entity' },
 ];
 
-async function resolveEfkaSelfEmployedException(name, year) {
+async function resolveEfkaSelfEmployedException(name, year, legalKind) {
+  // Only offer the one reason that actually matches this company's known
+  // type (from the ΑΑΔΕ Μητρώο auto-detect — see report.legal_kind) instead
+  // of always showing both; when it's not known yet, fall back to both
+  // rather than guessing.
+  const options = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !legalKind || o.legalKind === legalKind);
   const choice = await showModalChoice(
     `Εξαίρεση ΕΦΚΑ Μη-Μισθωτών — ${name} (${year})`,
     'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
-    AR_EFKA_EXCEPTION_OPTIONS,
+    options.length ? options : AR_EFKA_EXCEPTION_OPTIONS,
   );
   if (!choice) return false;
   const resp = await postJson('/api/accounting_result/efka_self_employed/resolve', {
@@ -800,11 +805,11 @@ async function resolveEfkaSelfEmployedException(name, year) {
 
 // ---------------- Report notes (payroll / ΕΦΚΑ Μη-Μισθωτών / αχαρακτήριστα) ----------------
 
-function renderReportNotesHtml(notes, name, year) {
+function renderReportNotesHtml(notes, name, year, legalKind) {
   if (!notes || !notes.length) return '';
   const items = notes.map((n) => {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
-      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση</button>`
+      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση</button>`
       : '';
     return `<li>${escapeHtml(n.message)}${exceptionBtn}</li>`;
   }).join('');
@@ -814,7 +819,7 @@ function renderReportNotesHtml(notes, name, year) {
 function bindReportNoteButtons(container) {
   container.querySelectorAll('.ar-efka-exception-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year);
+      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year, btn.dataset.legalKind || null);
     });
   });
 }

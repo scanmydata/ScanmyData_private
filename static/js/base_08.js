@@ -1311,64 +1311,75 @@
           return _origDocAEL(type, listener, options);
         };
 
+        // Partial-nav script transform: converts top-level `let`/`const`
+        // declarations to `var` so a script re-executing in the SAME global
+        // scope (this same page visited again via partial nav) doesn't
+        // raise "Identifier '…' has already been declared" — a SyntaxError
+        // that kills the WHOLE script silently and leaves the page half-
+        // bound (symptom: tabs, dropdowns, buttons and forms stop
+        // responding after a partial reload). Does NOT strip "stray HTML
+        // lines" anymore — a previous heuristic tried to detect template
+        // literals so it could spare HTML lines living inside backticks
+        // (e.g. ``tr.innerHTML = ` <td>…</td> `;``), but mis-handled regex
+        // literals inside `${ … }` interpolations (e.g.
+        // ``${String(val).replace(/"/g,'&quot;')}``) and ended up deleting
+        // 100+ legitimate template-literal HTML lines from e3_check.html.
+        function transformScriptText(raw) {
+          const lines = raw.split('\n');
+          const out = [];
+          for (const line of lines) {
+            out.push(line.replace(/^(\s*)(let|const)(\s+)/, '$1var$3'));
+          }
+          return out.join('\n');
+        }
+
         async function executeScripts(scripts, mode) {
           try { if (typeof cleanupStraySvgTextNodes === 'function') cleanupStraySvgTextNodes(); } catch (_) {}
           for (const oldScript of scripts) {
-            await new Promise((resolve, reject) => {
-              const script = document.createElement('script');
-              for (const attr of oldScript.attributes) {
-                script.setAttribute(attr.name, attr.value);
-              }
+            const script = document.createElement('script');
+            for (const attr of oldScript.attributes) {
+              script.setAttribute(attr.name, attr.value);
+            }
 
-              if (oldScript.src) {
+            let inlined = false;
+            if (oldScript.src) {
+              // Same-origin external per-page script (e.g.
+              // accounting_result.js, loaded via <script src> INSIDE the
+              // swapped #appShell content, not base.html's permanent head)
+              // — fetch its text and inline it through the SAME
+              // let/const->var transform inline scripts already get,
+              // instead of just cloning the <script src> tag. A file with
+              // top-level const/let (e.g. accounting_result.js's
+              // AR_MONTH_LABELS) throws that same "already declared"
+              // SyntaxError on its second execution, since re-appending a
+              // <script src> re-executes it in the same global scope —
+              // this was the actual cause of Λογιστικό Αποτέλεσμα's
+              // buttons/history going dead after a partial-nav revisit.
+              // Cross-origin/CDN scripts (or any fetch failure) fall back
+              // to the old src-clone behavior below.
+              try {
+                const resp = await fetch(oldScript.src, { credentials: 'same-origin' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const raw = await resp.text();
+                script.removeAttribute('src');
+                script.textContent = transformScriptText(raw);
+                inlined = true;
+              } catch (e) {
+                console.warn('[partial-nav] external script fetch/transform failed, falling back to <script src>', oldScript.src, e);
+              }
+            } else {
+              try {
+                script.textContent = transformScriptText(String(oldScript.textContent || ''));
+              } catch (e) {
+                console.warn('[partial-nav] script sanitization failed, falling back to raw content', e);
+                try { script.textContent = String(oldScript.textContent || ''); } catch (_) { script.textContent = ''; }
+              }
+            }
+
+            await new Promise((resolve, reject) => {
+              if (!inlined && oldScript.src) {
                 script.onload = () => resolve();
                 script.onerror = () => reject(new Error('Failed loading script: ' + oldScript.src));
-              } else {
-                try {
-                  const raw = String(oldScript.textContent || '');
-                  // Partial-nav script transform. We do TWO things to the
-                  // script body so it can be re-executed safely after the
-                  // shell DOM was replaced:
-                  //
-                  //  1. Convert top-level `let`/`const` declarations to
-                  //     `var` so re-execution doesn't raise the
-                  //     "Identifier '…' has already been declared"
-                  //     SyntaxError that kills the whole script (and
-                  //     leaves the page half-bound — symptom: tabs,
-                  //     dropdowns and credential-edit form on
-                  //     e3_check.html stop responding after a partial
-                  //     reload).
-                  //
-                  //  2. NOT strip "stray HTML lines" anymore. The
-                  //     previous heuristic tried to detect when we were
-                  //     inside a template literal so it could spare the
-                  //     HTML lines that legitimately live inside
-                  //     backticks (e.g. ``tr.innerHTML = ` <td>…</td>
-                  //     `;``). That heuristic mis-handled regex
-                  //     literals inside `${ … }` interpolations — e.g.
-                  //     ``${String(val).replace(/"/g,'&quot;')}`` — and
-                  //     once it saw the `"` inside `/"/g` it flipped
-                  //     into a "double-quoted string" state that never
-                  //     closed, so every subsequent template-literal
-                  //     HTML line got stripped. The result was 100+
-                  //     template-literal HTML lines being deleted from
-                  //     e3_check.html on partial nav, breaking
-                  //     credential rendering, branch inputs, etc. Any
-                  //     truly stray HTML in a `<script>` block was
-                  //     always a source-page bug and should be fixed
-                  //     there.
-                  const lines = raw.split('\n');
-                  const out = [];
-                  for (const line of lines) {
-                    out.push(line.replace(/^(\s*)(let|const)(\s+)/, '$1var$3'));
-                  }
-                  const content = out.join('\n');
-
-                  script.textContent = content;
-                } catch (e) {
-                  console.warn('[partial-nav] script sanitization failed, falling back to raw content', e);
-                  try { script.textContent = String(oldScript.textContent || ''); } catch (_) { script.textContent = ''; }
-                }
               }
 
               // Try to replace; if that fails, append as fallback.
@@ -1390,7 +1401,7 @@
                 }
               }
 
-              if (!oldScript.src) resolve();
+              if (inlined || !oldScript.src) resolve();
             });
           }
         }

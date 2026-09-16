@@ -18017,36 +18017,20 @@ def delete_invoices():
 
 # ============= E3 Check Routes =============
 
-@app.route("/e3_check", methods=["GET", "POST"])
-def e3_check():
-    """Display E3 check page for comparing myDATA data with accounting entries."""
-    creds = load_credentials()
-    active_cred = get_active_credential_from_session()
-    active_name = active_cred.get("name") if active_cred else None
-    
-    return safe_render(
-        "e3_check.html",
-        credentials=creds,
-        active_credential=active_name,
-        active_page="e3_check"
-    )
-
-
-@app.route("/accounting_result", methods=["GET"])
-def accounting_result_page():
-    """Λογιστικό Αποτέλεσμα: myDATA-based ΕΓΛΣ P&L, single or bulk, PDF export."""
+def _load_credentials_with_excel_store_merge() -> List[Dict[str, Any]]:
+    """The full myDATA credentials list PLUS any company that only exists in
+    the Excel-imported e3_company_credentials_store.json (the «Αποθηκευμένα»
+    tab) and was never separately registered as a full myDATA credential —
+    otherwise such a company is invisible to both Έλεγχος Ε3 and Λογιστικό
+    Αποτέλεσμα, and misleadingly flagged "χωρίς myDATA" in Αποθηκευμένα even
+    once its mydata_user/mydata_key were correctly imported. Merges in any
+    such company that has BOTH fields (nothing usable to compute with
+    otherwise), skipping AFMs already covered and skipping a name collision
+    with an existing credential rather than risking an ambiguous duplicate
+    identifier. Both pages must use this SAME helper — they used to each
+    have their own copy, with only Λογιστικό Αποτέλεσμα doing the merge,
+    which is why the two pages' company dropdowns used to disagree."""
     creds = list(load_credentials())
-
-    # Same idea as Έλεγχος Ε3's active_group_clients merge: a company that
-    # only exists in the Excel-imported e3_company_credentials_store.json
-    # (the «Αποθηκευμένα» tab) and was never separately registered as a
-    # full myDATA credential here is otherwise invisible to Ατομικός/
-    # Μαζικός and misleadingly flagged "χωρίς myDATA" in Αποθηκευμένα even
-    # once its mydata_user/mydata_key were correctly imported. Merge in
-    # any such company that has BOTH fields (nothing usable to compute
-    # with otherwise), skipping AFMs already covered here and skipping a
-    # name collision with an existing credential rather than risking an
-    # ambiguous duplicate identifier.
     try:
         known_afms = {str(c.get("vat") or "").strip() for c in creds if isinstance(c, dict)}
         known_names = {str(c.get("name") or "").strip().lower() for c in creds if isinstance(c, dict)}
@@ -18068,9 +18052,30 @@ def accounting_result_page():
                 known_names.add(name.lower())
                 creds.append({"name": name, "vat": afm, "user": mydata_user, "key": mydata_key})
     except Exception:
-        log.exception("accounting_result_page: credentials_store merge failed")
+        log.exception("_load_credentials_with_excel_store_merge: merge failed")
 
-    creds = sorted(creds, key=lambda c: str((c or {}).get("name") or "").lower())
+    return sorted(creds, key=lambda c: str((c or {}).get("name") or "").lower())
+
+
+@app.route("/e3_check", methods=["GET", "POST"])
+def e3_check():
+    """Display E3 check page for comparing myDATA data with accounting entries."""
+    creds = _load_credentials_with_excel_store_merge()
+    active_cred = get_active_credential_from_session()
+    active_name = active_cred.get("name") if active_cred else None
+
+    return safe_render(
+        "e3_check.html",
+        credentials=creds,
+        active_credential=active_name,
+        active_page="e3_check"
+    )
+
+
+@app.route("/accounting_result", methods=["GET"])
+def accounting_result_page():
+    """Λογιστικό Αποτέλεσμα: myDATA-based ΕΓΛΣ P&L, single or bulk, PDF export."""
+    creds = _load_credentials_with_excel_store_merge()
     active_cred = get_active_credential_from_session()
     active_name = active_cred.get("name") if active_cred else None
     credentials_min = [
@@ -18578,6 +18583,11 @@ def api_accounting_result_compute():
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
         report["notes"] = report_notes
+        # "sole_proprietor" | "legal_entity" | None — from the ΑΑΔΕ Μητρώο
+        # auto-detect that already ran for this company (see
+        # _ar_ensure_vat_profile_checked); lets the frontend's ΕΦΚΑ
+        # Μη-Μισθωτών exception modal show only the one reason that applies.
+        report["legal_kind"] = vat_profile_store_get(path).get("legal_kind")
 
         from accounting_result import history_store as ar_history
         ar_history.append_entry(
@@ -19241,12 +19251,23 @@ def _ar_detect_vat_profile_for_afm(vat: str):
         else:
             vat_period_type = _AR_BOOKS_CATEGORY_TO_PERIOD.get(books_category, "")
 
+        # ΑΑΔΕ Μητρώο's own "kind" (fetch_company_profile in aade_profile.py
+        # already distinguishes ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ/ΙΔΙΩΤΗΣ, i.e. a natural
+        # person, from ΝΟΜΙΚΟ ΠΡΟΣΩΠΟ, a registered company — reused here so
+        # the ΕΦΚΑ Μη-Μισθωτών exception modal can show just the one button
+        # that actually applies instead of both every time.
+        kind = str(result.get("kind") or "")
+        legal_kind = "sole_proprietor" if kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ") else (
+            "legal_entity" if kind == "ΝΟΜΙΚΟ ΠΡΟΣΩΠΟ" else None
+        )
+
         from accounting_result import vat_profile_store as ar_vat_profile
         profile = ar_vat_profile.set_vat_profile(
             _ar_store_path(vat), vat_subject,
             books_category=books_category_raw,
             vat_period_type=vat_period_type,
             source="aade_profile",
+            legal_kind=legal_kind,
         )
         return True, {"profile": profile}, 200
     except Exception as e:
