@@ -18312,6 +18312,19 @@ _AR_BOOKS_CATEGORY_TO_PERIOD = {
 }
 
 
+def _ar_books_category_letter(raw: Optional[str]) -> str:
+    """Normalizes a raw κατηγορία βιβλίων string (either the ΑΑΔΕ Μητρώο's
+    own free text, e.g. "Γ-ΔΙΠΛΟΓΡΑΦΙΚΑ" / "Β-ΑΠΛΟΓΡΑΦΙΚΑ ΜΕ ΜΗΝΙΑΙΑ ΠΕΡΙΟΔΟ
+    ΦΠΑ", or credentials.json's own "Β"/"Γ"/"B"/"G" book_category field) down
+    to a bare "Β"/"Γ", or "" when unrecognized/empty."""
+    raw_upper = str(raw or "").strip().upper()
+    if raw_upper.startswith("Γ") or raw_upper.startswith("G"):
+        return "Γ"
+    if raw_upper.startswith("Β") or raw_upper.startswith("B"):
+        return "Β"
+    return ""
+
+
 def _ar_lookup_taxis_creds(vat: str):
     """(taxis_user, taxis_pass) for `vat` from the group's shared
     e3_company_credentials_store.json (same store the Έλεγχος Ε3 page's own
@@ -18423,9 +18436,22 @@ def api_accounting_result_compute():
         # this same request's retry once needs_depreciation_input/
         # needs_inventory_input is resolved.
         vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+        # Compares the just-(re)detected ΑΑΔΕ κατηγορία βιβλίων against this
+        # company's own credentials.json setting — see the function's
+        # docstring for why a stale local setting matters.
+        books_category_mismatch = _ar_check_books_category_mismatch(cred, path)
 
         prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
-        has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+        # Fetched once, up front, so both the απογραφή-λήξης turnover check
+        # below AND build_report's own sales/expense totals reuse the exact
+        # same AADE pull for this date_from..date_to instead of hitting it
+        # twice for the same period.
+        current_period_entries = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
+        book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
+        inventory_obligation = ar_engine.determine_inventory_obligation(
+            prior_entries, current_period_entries[0], book_category_for_inventory,
+        )
+        has_inventory = inventory_obligation["required"]
         dep_entries = ar_engine.depreciation_entries_from(prior_entries)
 
         depreciation_selection = payload.get("depreciation_selection") if isinstance(payload.get("depreciation_selection"), dict) else None
@@ -18438,8 +18464,29 @@ def api_accounting_result_compute():
                 "year": year,
                 "depreciation_entries": dep_entries,
                 "vat_auto_check": vat_auto_check,
+                "books_category_mismatch": books_category_mismatch,
+                "inventory_obligation": inventory_obligation,
             }), 200
         depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
+
+        # Payroll monthly-completeness — blocks exactly like the inventory
+        # check below (same user-facing pattern, deliberately): the
+        # accountant must pick manual monthly totals or "skip" before the
+        # computation proceeds, UNLESS a resolution for this company/year is
+        # already on file (see _ar_payroll_resolution).
+        payroll_res = _ar_payroll_resolution(path, year, current_period_entries[0], date_from, date_to)
+        if payroll_res["needs_input"]:
+            return jsonify({
+                "ok": True,
+                "needs_payroll_input": True,
+                "credential_name": credential_name,
+                "vat": vat,
+                "year": year,
+                "payroll_check": payroll_res["payroll_check"],
+                "vat_auto_check": vat_auto_check,
+                "books_category_mismatch": books_category_mismatch,
+                "inventory_obligation": inventory_obligation,
+            }), 200
 
         if has_inventory:
             # Opening is always last year's ALREADY-DECLARED myDATA closing
@@ -18456,6 +18503,8 @@ def api_accounting_result_compute():
                     "year": year,
                     "opening_inventory": opening,
                     "vat_auto_check": vat_auto_check,
+                    "books_category_mismatch": books_category_mismatch,
+                    "inventory_obligation": inventory_obligation,
                 }), 200
         else:
             closing, opening = {}, {}
@@ -18473,8 +18522,26 @@ def api_accounting_result_compute():
             excel_group_totals=excel_group_totals,
             vat_applicable=_ar_vat_applicable(path),
             vat_period_type=_ar_vat_period_type(path),
+            current_period_entries=current_period_entries,
+            payroll_manual_addition=payroll_res["payroll_manual_addition"],
         )
         report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+
+        # Non-blocking compliance notes — computed once every blocking gate
+        # above has cleared, so a mid-resolution retry (depreciation/payroll/
+        # inventory) doesn't pay for the extra last-quarter AADE call more
+        # than once.
+        report_notes = []
+        payroll_note = _ar_payroll_note(payroll_res)
+        if payroll_note:
+            report_notes.append(payroll_note)
+        efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
+        if efka_note:
+            report_notes.append(efka_note)
+        uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
+        if uncharacterized_note:
+            report_notes.append(uncharacterized_note)
+        report["notes"] = report_notes
 
         from accounting_result import history_store as ar_history
         ar_history.append_entry(
@@ -18495,11 +18562,14 @@ def api_accounting_result_compute():
             "ok": True,
             "needs_inventory_input": False,
             "needs_depreciation_input": False,
+            "needs_payroll_input": False,
             "credential_name": credential_name,
             "vat": vat,
             "year": year,
             "report": report,
             "vat_auto_check": vat_auto_check,
+            "books_category_mismatch": books_category_mismatch,
+            "inventory_obligation": inventory_obligation,
         }), 200
     except Exception as e:
         log.exception("api_accounting_result_compute failed")
@@ -18559,6 +18629,8 @@ def api_accounting_result_inventory_bulk_status():
         payload = request.get_json(silent=True) or {}
         names = payload.get("credential_names") or []
         year = payload.get("year")
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
         if not isinstance(names, list) or not names or not year:
             return jsonify({"ok": False, "error": "Λείπουν credential_names ή έτος"}), 400
         year = int(year)
@@ -18578,18 +18650,35 @@ def api_accounting_result_inventory_bulk_status():
                 rows.append({"name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True, "inventory_applicable": False, "error": "Λείπουν στοιχεία AADE"})
                 continue
 
+            path = _ar_store_path(vat)
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
-            has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+            # Same 150.000€ turnover trigger as the actual bulk_compute run
+            # (see determine_inventory_obligation) — pre-flagged here too so
+            # the upfront "Λείπει απόθεμα λήξης" modal already includes a
+            # company newly obligated by THIS period's turnover, not just
+            # one that already declared a closing stock last year.
+            current_entries = []
+            if date_from and date_to:
+                current_entries, _u, _um = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
+            book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
+            obligation = ar_engine.determine_inventory_obligation(prior_entries, current_entries, book_category_for_inventory)
+            has_inventory = obligation["required"]
             dep_entries = ar_engine.depreciation_entries_from(prior_entries)
+            # Same payroll monthly-completeness gate bulk_compute itself
+            # enforces (see _ar_payroll_resolution) — pre-flagged here too,
+            # independent of the inventory check above, so the upfront modal
+            # already covers it instead of surprising the user mid-batch.
+            payroll_res = _ar_payroll_resolution(path, year, current_entries, date_from, date_to)
 
             if not has_inventory:
                 rows.append({
                     "name": name, "vat": vat, "opening_inventory": {}, "closing_inventory_known": True,
                     "inventory_applicable": False, "depreciation_ambiguous": len(dep_entries) > 1,
+                    "payroll_needs_input": payroll_res["needs_input"],
+                    "payroll_check": payroll_res["payroll_check"],
                 })
                 continue
 
-            path = _ar_store_path(vat)
             opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
             closing, needs_input = ar_inventory.resolve_or_flag_closing_inventory(path, year)
             rows.append({
@@ -18598,6 +18687,9 @@ def api_accounting_result_inventory_bulk_status():
                 "closing_inventory_known": not needs_input,
                 "inventory_applicable": True,
                 "depreciation_ambiguous": len(dep_entries) > 1,
+                "inventory_obligation_reason": obligation["reason"],
+                "payroll_needs_input": payroll_res["needs_input"],
+                "payroll_check": payroll_res["payroll_check"],
             })
         return jsonify({"ok": True, "rows": rows}), 200
     except Exception as e:
@@ -18680,9 +18772,33 @@ def api_accounting_result_bulk_compute():
             # ΦΠΑ first, then the rest of THIS company's computation - see
             # _ar_ensure_vat_profile_checked's docstring.
             vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+            books_category_mismatch = _ar_check_books_category_mismatch(cred, path)
 
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
-            has_inventory = ar_engine.company_tracks_inventory(prior_entries)
+            # Fetched once, reused by build_report below — see the single-
+            # compute route's identical comment.
+            current_period_entries = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
+            book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
+            inventory_obligation = ar_engine.determine_inventory_obligation(
+                prior_entries, current_period_entries[0], book_category_for_inventory,
+            )
+            has_inventory = inventory_obligation["required"]
+            # Same blocking pattern as the inventory check just below - the
+            # bulk pre-flight (/inventory/bulk_status) already tries to
+            # resolve this for every flagged company before bulk_compute
+            # ever runs (see runBulk() in accounting_result.js), so this is
+            # normally a no-op; it only fires if that pre-flight step was
+            # skipped/cancelled for this particular company.
+            payroll_res = _ar_payroll_resolution(path, year, current_period_entries[0], date_from, date_to)
+            if payroll_res["needs_input"]:
+                results.append({
+                    "credential_name": name, "ok": True, "needs_payroll_input": True,
+                    "vat": vat, "year": year, "payroll_check": payroll_res["payroll_check"],
+                    "vat_auto_check": vat_auto_check,
+                    "books_category_mismatch": books_category_mismatch,
+                    "inventory_obligation": inventory_obligation,
+                })
+                continue
             dep_entries = ar_engine.depreciation_entries_from(prior_entries)
             # Bulk runs default depreciation to "sum every prior-year entry" rather
             # than blocking the whole batch on a per-company pick — the per-mark
@@ -18697,6 +18813,8 @@ def api_accounting_result_bulk_compute():
                         "credential_name": name, "ok": True, "needs_inventory_input": True,
                         "vat": vat, "year": year, "opening_inventory": opening,
                         "vat_auto_check": vat_auto_check,
+                        "books_category_mismatch": books_category_mismatch,
+                        "inventory_obligation": inventory_obligation,
                     })
                     continue
             else:
@@ -18711,8 +18829,22 @@ def api_accounting_result_bulk_compute():
                     depreciation_amount=depreciation_amount,
                     vat_applicable=_ar_vat_applicable(path),
                     vat_period_type=_ar_vat_period_type(path),
+                    current_period_entries=current_period_entries,
+                    payroll_manual_addition=payroll_res["payroll_manual_addition"],
                 )
                 report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+
+                report_notes = []
+                payroll_note = _ar_payroll_note(payroll_res)
+                if payroll_note:
+                    report_notes.append(payroll_note)
+                efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
+                if efka_note:
+                    report_notes.append(efka_note)
+                uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
+                if uncharacterized_note:
+                    report_notes.append(uncharacterized_note)
+                report["notes"] = report_notes
 
                 from accounting_result import history_store as ar_history
                 hist_entry = ar_history.append_entry(
@@ -18732,6 +18864,9 @@ def api_accounting_result_bulk_compute():
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
                     "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
                     "vat_auto_check": vat_auto_check,
+                    "books_category_mismatch": books_category_mismatch,
+                    "inventory_obligation": inventory_obligation,
+                    "notes": report_notes,
                 })
             except Exception as e:
                 log.exception("accounting_result bulk_compute failed for %s", name)
@@ -19001,7 +19136,7 @@ def _ar_detect_vat_profile_for_afm(vat: str):
         if "ΑΠΑΛΛΑΣΣΟΜΕΝ" in regime_text or "ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ" in regime_text:
             vat_subject = False
         books_category_raw = str(all_tags.get("kathgoriabibliwn") or "").strip()
-        books_category = "Γ" if books_category_raw.upper().startswith("Γ") else ("Β" if books_category_raw.upper().startswith("Β") else "")
+        books_category = _ar_books_category_letter(books_category_raw)
         # ΑΑΔΕ's own κατηγορία βιβλίων text states the ΦΠΑ period directly
         # (e.g. "Β-ΑΠΛΟΓΡΑΦΙΚΑ ΜΕ ΜΗΝΙΑΙΑ ΠΕΡΙΟΔΟ ΦΠΑ") — a real case confirmed
         # a Β category company on MONTHLY VAT, contradicting the naive
@@ -19059,6 +19194,179 @@ def _ar_ensure_vat_profile_checked(vat: str) -> Optional[Dict[str, Any]]:
     return {"ok": False, "vat_subject": None, "error": body.get("error")}
 
 
+def _ar_resolve_book_category_for_inventory_check(cred: Optional[Dict[str, Any]], path: str) -> str:
+    """Which κατηγορία βιβλίων gates the 150.000€ απογραφή-λήξης turnover
+    rule (accounting_result.engine.determine_inventory_obligation) for this
+    company. Prefers the ΑΑΔΕ Μητρώο's own value (kept fresh by
+    _ar_ensure_vat_profile_checked, called right before this on every
+    compute) since it's the authoritative, up-to-date source the user asked
+    this rule be driven by - same pull already used for the ΦΠΑ check.
+    Falls back to whatever's configured on the company's own credentials.json
+    entry only when the ΑΑΔΕ value isn't known yet (e.g. the detect call
+    itself just failed)."""
+    aade_category = _ar_books_category_letter(vat_profile_store_get(path).get("books_category"))
+    if aade_category:
+        return aade_category
+    return _ar_books_category_letter((cred or {}).get("book_category"))
+
+
+def _ar_check_books_category_mismatch(cred: Optional[Dict[str, Any]], path: str) -> Optional[Dict[str, Any]]:
+    """Compares the κατηγορία βιβλίων the ΑΑΔΕ Μητρώο pull last found
+    (accounting_result/vat_profile_store.py, populated by the same
+    ΦΠΑ/Μητρώο auto-detect as _ar_ensure_vat_profile_checked) against what's
+    actually configured on this company's own credentials.json entry - the
+    setting that drives the Γ-κατηγορίας chart-of-accounts logic elsewhere
+    in the app (see g_category_helpers.is_g_category_active). A stale/wrong
+    local setting silently mis-selects that logic without this check.
+
+    Returns None when there's nothing to compare (no credentials.json entry
+    at all for this company - e.g. an Excel-imported-only credential with no
+    book_category to check against - or the ΑΑΔΕ category has never been
+    detected yet) or when the two already agree. Otherwise returns
+    {"credential_name", "aade_category", "aade_category_raw", "our_category"}
+    for the caller to surface as a flash warning pointing at the Credentials
+    page (templates/credentials_list.html, edited via credentials_edit.html)."""
+    our_category = _ar_books_category_letter((cred or {}).get("book_category"))
+    if not our_category:
+        return None
+    profile = vat_profile_store_get(path)
+    aade_category_raw = str(profile.get("books_category") or "").strip()
+    aade_category = _ar_books_category_letter(aade_category_raw)
+    if not aade_category or aade_category == our_category:
+        return None
+    return {
+        "credential_name": (cred or {}).get("name") or "",
+        "aade_category": aade_category,
+        "aade_category_raw": aade_category_raw,
+        "our_category": our_category,
+    }
+
+
+def _ar_payroll_resolution(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
+    """Whether this company/year needs the accountant to resolve a payroll
+    (μισθοδοσία, Ε3 code 581) monthly-completeness shortfall before
+    computing — mirrors the existing needs_inventory_input flow exactly, per
+    the user's own instruction to make this work "like the inventory check".
+
+    Returns {"needs_input": bool, "payroll_manual_addition": float,
+    "payroll_check": {...check_monthly_completeness result...}}. A prior
+    "skip" resolution (see compliance_notes_store.set_payroll_check) makes
+    needs_input False with a zero addition every time from then on for this
+    company/year; a prior "manual" resolution makes needs_input False and
+    sums its stored monthly_totals into payroll_manual_addition, which the
+    caller passes straight into engine.build_report."""
+    from accounting_result import engine as ar_engine
+    from accounting_result import compliance_notes_store as ar_compliance
+
+    check = ar_engine.check_monthly_completeness(current_entries, date_from, date_to, ar_engine.PAYROLL_E3_CODE)
+    if not check["shortfall"]:
+        return {"needs_input": False, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": None}
+
+    resolution = ar_compliance.get_payroll_check(path, year)
+    if not resolution:
+        return {"needs_input": True, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": None}
+    if resolution.get("resolution") == "manual":
+        addition = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
+        return {"needs_input": False, "payroll_manual_addition": round(addition, 2), "payroll_check": check, "resolution": "manual"}
+    # resolution == "skip"
+    return {"needs_input": False, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": "skip"}
+
+
+def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Standing note describing a payroll monthly-completeness shortfall
+    that was found for this company/year — shown regardless of how it was
+    resolved (manual/skip), so a later reviewer of the report can see it was
+    flagged and how it was handled, not just a one-time flash they may have
+    missed. None when there was no shortfall at all."""
+    check = payroll_res["payroll_check"]
+    if not check["shortfall"]:
+        return None
+    resolution = payroll_res.get("resolution")
+    if resolution == "manual":
+        detail = f"συμπληρώθηκε χειροκίνητα (+{payroll_res['payroll_manual_addition']:.2f}€)"
+    elif resolution == "skip":
+        detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. διακοπή μισθοδοσίας εντός του έτους)"
+    else:
+        detail = "εκκρεμεί επιβεβαίωση"
+    return {
+        "type": "payroll_shortfall",
+        "message": (
+            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
+            f"μισθοδοσίας (κωδ. 581) στην περίοδο — {detail}."
+        ),
+    }
+
+
+def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
+    """Non-blocking counterpart of _ar_payroll_resolution for ΕΦΚΑ
+    Μη-Μισθωτών (Ε3 code 585/007): unlike payroll, a shortfall here never
+    blocks the computation — it's surfaced as a standing note in the
+    report's Σημειώσεις ("may still owe it — check ΚΕΑΟ") every time, unless
+    the accountant has saved an exception reason for this company/year (see
+    compliance_notes_store.set_efka_self_employed_check) — e.g. a sole
+    proprietorship whose owner is also employed elsewhere, or a company
+    whose partners are exempt because their own ΕΦΚΑ is tracked under their
+    personal sole proprietorships. Returns None when there's nothing to
+    note (no shortfall, or an exception is on file)."""
+    from accounting_result import engine as ar_engine
+    from accounting_result import compliance_notes_store as ar_compliance
+
+    check = ar_engine.check_monthly_completeness(
+        current_entries, date_from, date_to, ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+    )
+    if not check["shortfall"]:
+        return None
+    if ar_compliance.get_efka_self_employed_check(path, year).get("reason"):
+        return None
+    return {
+        "type": "efka_self_employed_shortfall",
+        "message": (
+            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές "
+            "ΕΦΚΑ Μη-Μισθωτών στην περίοδο — πιθανόν να υπάρχει ακόμα οφειλή, έλεγξε το ΚΕΑΟ της επιχείρησης "
+            "(ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη)."
+        ),
+    }
+
+
+def _ar_last_quarter_uncharacterized_note(vat: str, date_from: str, date_to: str, aade_user: str, aade_key: str) -> Optional[Dict[str, Any]]:
+    """Αχαρακτήριστα παραστατικά άνω του 25% (by distinct MARK count, i.e.
+    "τα περισσότερα παραστατικά") within just the LAST 3 calendar months of
+    the period (engine.last_quarter_window) — an accountant needs to know
+    when the most RECENT quarter specifically has gone unclassified, not
+    just that the whole-period average looks fine. One extra AADE call per
+    computation, scoped to that trailing window only. Returns None when the
+    window can't be computed, has no documents at all, or the ratio is at
+    or under 25%."""
+    from accounting_result import engine as ar_engine
+
+    window = ar_engine.last_quarter_window(date_from, date_to)
+    if not window:
+        return None
+    w_from, w_to = window
+    classified_entries, _unclassified_total, unclassified_marks = ar_engine.fetch_and_split_e3_entries(
+        w_from, w_to, aade_user, aade_key,
+    )
+    unclassified_count = len({m.get("mark") for m in unclassified_marks if m.get("mark")})
+    # "τα περισσότερα παραστατικά" is about distinct MARKS, not rows —
+    # classified_entries already excludes unclassified marks, so this is
+    # just the classified side's own distinct mark set.
+    classified_marks = {str(row.get("invoice_mark") or "").strip() for row in classified_entries if row.get("invoice_mark")}
+    total_count = unclassified_count + len(classified_marks)
+    if total_count == 0:
+        return None
+    ratio = unclassified_count / total_count
+    if ratio <= 0.25:
+        return None
+    return {
+        "type": "uncharacterized_last_quarter",
+        "message": (
+            f"Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο "
+            f"({ar_engine.to_ddmmyyyy(w_from)}–{ar_engine.to_ddmmyyyy(w_to)}, {round(ratio * 100)}%) — "
+            "πρέπει να παραδοθούν στον λογιστή για χαρακτηρισμό/καταχώρηση."
+        ),
+    }
+
+
 @app.route("/api/accounting_result/vat_profile/detect", methods=["POST"])
 def api_accounting_result_vat_profile_detect():
     """Auto-detect ΦΠΑ υπαγωγή / κατηγορία βιβλίων from the ΑΑΔΕ Μητρώο,
@@ -19077,6 +19385,63 @@ def api_accounting_result_vat_profile_detect():
         return jsonify(body), status
     except Exception as e:
         log.exception("api_accounting_result_vat_profile_detect failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/payroll/resolve", methods=["POST"])
+def api_accounting_result_payroll_resolve():
+    """Saves how the accountant resolved a payroll (μισθοδοσία) monthly-
+    completeness shortfall for one company/year (see _ar_payroll_resolution)
+    - either "skip" (proceed as-is; this company genuinely had no payroll
+    for some months of that year) or "manual" (their keyed-in totals for
+    the missing months, ADDED on top of myDATA's own code-581 total on
+    every future compute of that year, see engine.build_report's
+    payroll_manual_addition)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        resolution = str(payload.get("resolution") or "").strip()
+        if not cred or not year or resolution not in ("manual", "skip"):
+            return jsonify({"ok": False, "error": "Λείπει credential, έτος ή έγκυρη επιλογή"}), 400
+        year = int(year)
+        vat = str(cred.get("vat") or "").strip()
+        monthly_totals = payload.get("monthly_totals") if isinstance(payload.get("monthly_totals"), dict) else {}
+        if resolution == "manual" and not monthly_totals:
+            return jsonify({"ok": False, "error": "Λείπουν τα μηνιαία σύνολα"}), 400
+
+        from accounting_result import compliance_notes_store as ar_compliance
+        rec = ar_compliance.set_payroll_check(_ar_store_path(vat), year, resolution, monthly_totals)
+        return jsonify({"ok": True, "payroll_check": rec}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_payroll_resolve failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/efka_self_employed/resolve", methods=["POST"])
+def api_accounting_result_efka_self_employed_resolve():
+    """Saves (or clears, with an empty reason) an exception reason for the
+    ΕΦΚΑ Μη-Μισθωτών monthly-completeness note (see
+    _ar_efka_self_employed_note) - silences the standing note for this
+    company/year going forward. `reason`: "sole_prop_also_employed" |
+    "company_partners_exempt" | "" (clears back to pending)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        reason = str(payload.get("reason") or "").strip()
+        if not cred or not year:
+            return jsonify({"ok": False, "error": "Λείπει credential ή έτος"}), 400
+        if reason and reason not in ("sole_prop_also_employed", "company_partners_exempt"):
+            return jsonify({"ok": False, "error": "Μη έγκυρη αιτιολογία εξαίρεσης"}), 400
+        year = int(year)
+        vat = str(cred.get("vat") or "").strip()
+
+        from accounting_result import compliance_notes_store as ar_compliance
+        rec = ar_compliance.set_efka_self_employed_check(_ar_store_path(vat), year, reason)
+        return jsonify({"ok": True, "efka_self_employed_check": rec}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_efka_self_employed_resolve failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 

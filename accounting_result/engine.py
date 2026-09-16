@@ -76,8 +76,8 @@ v1 known gaps (left blank/omitted rather than guessed):
     εκροών − εισροών. ΠΙΣΤ.ΥΠΟΛ.ΠΡΟΗΓ.ΠΕΡ. and ΠΛΗΡΩΜΕΣ ΣΤΟ ΔΗΜΟΣΙΟ still have
     no myDATA source and stay None ("—" in the UI).
   - ΖΗΜΙΕΣ ΠΡΟΗΓΟΥΜΕΝΟΥ ΕΤΟΥΣ: not derivable from myDATA, always 0.
-  - Run-rate "υποχρέωση απογραφής" warning box: no confirmed legal threshold
-    found in the codebase, not implemented.
+  - Run-rate "υποχρέωση απογραφής" warning box: now implemented — see
+    INVENTORY_TURNOVER_THRESHOLD_EUR / determine_inventory_obligation below.
 """
 from __future__ import annotations
 
@@ -173,6 +173,14 @@ _OPEX_585_SUBCODE_TO_GLS = {
     "016": "64", "017": "64",                          # misc / 7% ΕΛΚΕ
 }
 DEPRECIATION_E3_CODE = "587"
+
+# Ε3 codes whose myDATA submissions are typically one-per-calendar-month
+# (a μισθοδοτική κατάσταση / ΕΦΚΑ Μη-Μισθωτών payment declaration), used by
+# check_monthly_completeness below as a "does this look like a missing
+# month" proxy.
+PAYROLL_E3_CODE = "581"
+EFKA_SELF_EMPLOYED_E3_CODE = "585"
+EFKA_SELF_EMPLOYED_E3_SUBCODE = "007"
 
 # Ε3 "closing stock" info codes (table Δ2/Δ3/Δ4) — only present in a company's
 # official myDATA E3 classification when the accountant has actually declared
@@ -483,6 +491,138 @@ def company_tracks_inventory(classified_entries: List[dict]) -> bool:
     return False
 
 
+# Ν.4308/2014: a Β/Γ-κατηγορίας books company that sells goods/products is
+# obligated to declare a closing stock (απογραφή λήξης) once its turnover
+# from those sales crosses this threshold within the fiscal year — even if
+# it was exempt in a PRIOR year with lower turnover. company_tracks_inventory
+# above only ever catches a company that already declared one (backward-
+# looking); this threshold is the forward-looking trigger for a company
+# that never needed one before but has crossed it THIS year.
+INVENTORY_TURNOVER_THRESHOLD_EUR = 150000.0
+_INVENTORY_OBLIGATION_BOOK_CATEGORIES = ("Β", "Γ", "B", "G")
+
+
+def goods_products_revenue(classified_entries: List[dict]) -> float:
+    """Πωλήσεις Εμπορευμάτων (70) + Πωλήσεις Προϊόντων (71) for the given
+    entries — the two GLS sales groups the 150.000€ turnover threshold is
+    checked against (see determine_inventory_obligation)."""
+    sales = build_sales_groups(classified_entries)
+    return round(sales.get("70", 0.0) + sales.get("71", 0.0), 2)
+
+
+def determine_inventory_obligation(
+    prior_entries: List[dict],
+    current_entries: List[dict],
+    book_category: str,
+) -> Dict[str, Any]:
+    """Whether the company must declare a closing stock (απογραφή λήξης) for
+    the period under examination. Two independent triggers, checked in
+    order:
+      1. company_tracks_inventory(prior_entries) — it already declared one
+         last year, so it keeps declaring one (once tracked, always tracked).
+      2. For a Β/Γ-κατηγορίας company that DIDN'T trigger (1): its own
+         Πωλήσεις Εμπορευμάτων+Προϊόντων within THIS period (current_entries,
+         i.e. the report's own date_from..date_to, which is how the rest of
+         this module already scopes "the χρήση under examination") exceeds
+         INVENTORY_TURNOVER_THRESHOLD_EUR — a company can be exempt one year
+         and obligated the next purely on turnover, so this is re-evaluated
+         on every computation rather than cached anywhere.
+    Returns {"required": bool, "reason": "declared_prior_year" |
+    "turnover_threshold" | None, "goods_products_revenue": float | None,
+    "threshold": float}. `goods_products_revenue` is only populated when
+    trigger 2 was actually evaluated (trigger 1 already settles it without
+    needing the current period's revenue)."""
+    if company_tracks_inventory(prior_entries):
+        return {
+            "required": True,
+            "reason": "declared_prior_year",
+            "goods_products_revenue": None,
+            "threshold": INVENTORY_TURNOVER_THRESHOLD_EUR,
+        }
+    if str(book_category or "").strip().upper() not in _INVENTORY_OBLIGATION_BOOK_CATEGORIES:
+        return {
+            "required": False,
+            "reason": None,
+            "goods_products_revenue": None,
+            "threshold": INVENTORY_TURNOVER_THRESHOLD_EUR,
+        }
+    revenue = goods_products_revenue(current_entries)
+    required = revenue > INVENTORY_TURNOVER_THRESHOLD_EUR
+    return {
+        "required": required,
+        "reason": "turnover_threshold" if required else None,
+        "goods_products_revenue": revenue,
+        "threshold": INVENTORY_TURNOVER_THRESHOLD_EUR,
+    }
+
+
+def _distinct_marks_for_code(entries: List[dict], code: str, sub_code: Optional[str] = None) -> set:
+    marks = set()
+    for row in entries:
+        if str(row.get("code") or "").strip() != code:
+            continue
+        if sub_code is not None and str(row.get("sub_code") or "").strip() != sub_code:
+            continue
+        if abs(_fnum(row.get("amount"))) <= 0.005:
+            continue
+        mk = str(row.get("invoice_mark") or "").strip()
+        if mk:
+            marks.add(mk)
+    return marks
+
+
+def check_monthly_completeness(
+    current_entries: List[dict], date_from: str, date_to: str, code: str, sub_code: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compares the number of DISTINCT myDATA marks carrying `code`
+    (optionally narrowed to `sub_code`) against the number of calendar
+    months spanned by date_from..date_to. RequestE3Info doesn't return a
+    per-invoice date (see e3/checks/fetch_e3.py), so an exact "which month
+    is missing" isn't derivable without one extra AADE call per month — this
+    is a cheaper proxy that reuses the already-fetched current_entries: a
+    submission-per-month pattern (payroll declarations, ΕΦΚΑ Μη-Μισθωτών
+    payments) means roughly one distinct mark per month, so fewer distinct
+    marks than months suggests some months are missing.
+
+    Only flags a shortfall when at least one month WAS found - a company
+    with zero marks for the whole period presumably never has this at all
+    and shouldn't be nagged about it on every computation.
+
+    Returns {"expected_months": int, "found_months": int, "shortfall": bool}."""
+    d_from = parse_date(date_from)
+    d_to = parse_date(date_to)
+    expected_months = _months_in_period(d_from, d_to) if d_from and d_to else 0
+    found_months = len(_distinct_marks_for_code(current_entries, code, sub_code))
+    return {
+        "expected_months": expected_months,
+        "found_months": found_months,
+        "shortfall": 0 < found_months < expected_months,
+    }
+
+
+def last_quarter_window(date_from: str, date_to: str) -> Optional[Tuple[str, str]]:
+    """The last 3 calendar months of date_from..date_to (clipped to
+    date_from if the period itself is shorter), for the "αχαρακτήριστα
+    παραστατικά άνω του 25% στο τελευταίο 3μηνο" note — that ratio is
+    checked against just this trailing window, not the whole period, so a
+    company with a clean history but a recently-neglected last quarter
+    still gets flagged. Returns (from_iso, to_iso) or None if the dates
+    don't parse."""
+    d_from = parse_date(date_from)
+    d_to = parse_date(date_to)
+    if not d_from or not d_to:
+        return None
+    window_start_month = d_to.month - 2
+    window_start_year = d_to.year
+    while window_start_month <= 0:
+        window_start_month += 12
+        window_start_year -= 1
+    window_start = date(window_start_year, window_start_month, 1)
+    if window_start < d_from:
+        window_start = d_from
+    return window_start.isoformat(), d_to.isoformat()
+
+
 def extract_prior_year_closing_inventory(classified_entries: List[dict]) -> Dict[str, float]:
     """The ACTUAL closing-stock amounts the accountant already declared to
     AADE for the prior year (same `classified_entries` company_tracks_inventory
@@ -582,6 +722,8 @@ def build_report(
     excel_group_totals: Optional[Dict[str, float]] = None,
     vat_applicable: bool = True,
     vat_period_type: str = "",
+    current_period_entries: Optional[Tuple[List[dict], float, List[Dict[str, Any]]]] = None,
+    payroll_manual_addition: float = 0.0,
 ) -> Dict[str, Any]:
     opening_inventory = {k: _fnum(v) for k, v in (opening_inventory or {}).items()}
     closing_inventory = {k: _fnum(v) for k, v in (closing_inventory or {}).items()}
@@ -611,9 +753,16 @@ def build_report(
         vat_period_from = vat_period_to = None
         vat_outflow = vat_inflow = vat_period_balance = None
 
-    classified_entries, unclassified_net, unclassified_marks = fetch_and_split_e3_entries(
-        date_from, date_to, aade_user, aade_key,
-    )
+    if current_period_entries is not None:
+        # Already fetched by the caller (e.g. to evaluate
+        # determine_inventory_obligation before deciding whether to ask for
+        # closing inventory) — reuse it instead of hitting AADE again for
+        # the exact same date_from..date_to.
+        classified_entries, unclassified_net, unclassified_marks = current_period_entries
+    else:
+        classified_entries, unclassified_net, unclassified_marks = fetch_and_split_e3_entries(
+            date_from, date_to, aade_user, aade_key,
+        )
     sales_groups = build_sales_groups(classified_entries)
     expense_result = build_expense_groups(classified_entries)
 
@@ -626,6 +775,15 @@ def build_report(
     # (possibly disambiguated by the accountant) — it always overrides whatever
     # the CURRENT period's own 587 entries would have summed to.
     account_totals["66"] = round(_fnum(depreciation_amount), 2)
+
+    # Accountant-entered totals for months the payroll monthly-completeness
+    # check (check_monthly_completeness, code 581) found missing — ADDED on
+    # top of whatever myDATA itself already reported for group 60, not a
+    # replacement (some months WERE found correctly and shouldn't be
+    # double-counted or discarded). An explicit excel override for group 60
+    # below still takes full precedence over this, same as it always has.
+    if payroll_manual_addition:
+        account_totals["60"] = round(account_totals.get("60", 0.0) + _fnum(payroll_manual_addition), 2)
 
     if excel_group_totals:
         account_totals = merge_excel_overrides(account_totals, excel_group_totals)
@@ -714,6 +872,7 @@ def build_report(
         "unclassified_marks": unclassified_marks,
         "taxable_result": taxable_result,
         "depreciation": depreciation_amount,
+        "payroll_manual_addition": round(_fnum(payroll_manual_addition), 2),
         "vat_outflow": vat_outflow,
         "vat_inflow": vat_inflow,
         "vat_prior_credit": None,  # v1: not derivable, see module docstring

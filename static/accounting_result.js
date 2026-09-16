@@ -176,7 +176,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     (r.inventory_method_label
       ? ` Απόθεμα λήξης: ${escapeHtml(r.inventory_method_label)}.`
       : '') +
-    `</div>`;
+    `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to));
 
   return `
   <div class="ar-report-section">
@@ -586,6 +586,153 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
   return !!resp.ok;
 }
 
+// ---------------- Payroll monthly-completeness resolution ----------------
+
+const AR_MONTH_LABELS = ['Ιαν', 'Φεβ', 'Μαρ', 'Απρ', 'Μάι', 'Ιούν', 'Ιούλ', 'Αύγ', 'Σεπ', 'Οκτ', 'Νοέ', 'Δεκ'];
+
+// Every calendar month touched by dateFrom..dateTo, as {key:"YYYY-MM", label}
+// — feeds the manual monthly-totals entry form (one field per month) the
+// same way check_monthly_completeness counts "expected months" server-side.
+function monthsInRange(dateFrom, dateTo) {
+  const from = new Date(dateFrom);
+  const to = new Date(dateTo);
+  const months = [];
+  let y = from.getFullYear();
+  let m = from.getMonth();
+  const endY = to.getFullYear();
+  const endM = to.getMonth();
+  while (y < endY || (y === endY && m <= endM)) {
+    const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+    months.push({ key, label: `${AR_MONTH_LABELS[m]} ${y}` });
+    m += 1;
+    if (m > 11) { m = 0; y += 1; }
+  }
+  return months;
+}
+
+function showManualPayrollModal(title, months) {
+  moveModalsToBody();
+  return new Promise((resolve) => {
+    const modal = document.getElementById('arManualPayrollModal');
+    document.getElementById('arManualPayrollTitle').textContent = title;
+    const fields = document.getElementById('arManualPayrollFields');
+    fields.innerHTML = '';
+    months.forEach(({ key, label }) => {
+      const wrap = document.createElement('div');
+      const lbl = document.createElement('label');
+      lbl.className = 'block text-xs text-gray-600 mb-1';
+      lbl.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.01';
+      input.className = 'border rounded px-2 py-1 w-full text-sm';
+      input.value = 0;
+      input.dataset.key = key;
+      wrap.appendChild(lbl);
+      wrap.appendChild(input);
+      fields.appendChild(wrap);
+    });
+    modal.classList.remove('hidden');
+
+    const saveBtn = document.getElementById('arManualPayrollSave');
+    const cancelBtn = document.getElementById('arManualPayrollCancel');
+    function cleanup() {
+      modal.classList.add('hidden');
+      saveBtn.removeEventListener('click', onSave);
+      cancelBtn.removeEventListener('click', onCancel);
+    }
+    function onSave() {
+      const values = {};
+      fields.querySelectorAll('input').forEach((inp) => {
+        const v = parseFloat(inp.value) || 0;
+        if (v) values[inp.dataset.key] = v;
+      });
+      cleanup();
+      resolve(values);
+    }
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+    saveBtn.addEventListener('click', onSave);
+    cancelBtn.addEventListener('click', onCancel);
+  });
+}
+
+// Mirrors resolveInventoryForCompany's exact UX, per the user's own request
+// that this work "like the inventory check": a blocking modal choice, then
+// (for "manual") a per-month numeric entry form, POSTed to a resolve
+// endpoint so the same question isn't asked again for this company/year.
+async function resolvePayrollForCompany(name, year, dateFrom, dateTo, payrollCheck) {
+  const found = payrollCheck ? payrollCheck.found_months : '?';
+  const expected = payrollCheck ? payrollCheck.expected_months : '?';
+  const choice = await showModalChoice(
+    `Ελλιπείς εγγραφές μισθοδοσίας — ${name} (${year})`,
+    `Βρέθηκαν ${found} από ${expected} αναμενόμενες μηνιαίες εγγραφές μισθοδοσίας (κωδ. 581) στην περίοδο. ` +
+    'Μπορεί η εταιρία να σταμάτησε να έχει μισθοδοσία εντός του έτους. Πώς θέλετε να προχωρήσετε;',
+    [
+      { key: 'manual', label: 'Καταχώρηση μηνιαίων συνόλων' },
+      { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία' },
+    ]
+  );
+  if (!choice) return false;
+
+  let monthlyTotals = {};
+  if (choice === 'manual') {
+    const months = monthsInRange(dateFrom, dateTo);
+    const values = await showManualPayrollModal(`Μηνιαία σύνολα μισθοδοσίας — ${name}`, months);
+    if (!values) return false;
+    monthlyTotals = values;
+  }
+
+  const resp = await postJson('/api/accounting_result/payroll/resolve', {
+    credential_name: name, year, resolution: choice, monthly_totals: monthlyTotals,
+  });
+  return !!resp.ok;
+}
+
+// ---------------- ΕΦΚΑ Μη-Μισθωτών exception ----------------
+
+const AR_EFKA_EXCEPTION_OPTIONS = [
+  { key: 'sole_prop_also_employed', label: 'Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός' },
+  { key: 'company_partners_exempt', label: 'Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις' },
+];
+
+async function resolveEfkaSelfEmployedException(name, year) {
+  const choice = await showModalChoice(
+    `Εξαίρεση ΕΦΚΑ Μη-Μισθωτών — ${name} (${year})`,
+    'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
+    AR_EFKA_EXCEPTION_OPTIONS,
+  );
+  if (!choice) return false;
+  const resp = await postJson('/api/accounting_result/efka_self_employed/resolve', {
+    credential_name: name, year, reason: choice,
+  });
+  if (resp.ok) showArFlash(`Αποθηκεύτηκε η εξαίρεση ΕΦΚΑ Μη-Μισθωτών για ${name}.`, 'success', 5000);
+  return !!resp.ok;
+}
+
+// ---------------- Report notes (payroll / ΕΦΚΑ Μη-Μισθωτών / αχαρακτήριστα) ----------------
+
+function renderReportNotesHtml(notes, name, year) {
+  if (!notes || !notes.length) return '';
+  const items = notes.map((n) => {
+    const exceptionBtn = n.type === 'efka_self_employed_shortfall'
+      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση</button>`
+      : '';
+    return `<li>${escapeHtml(n.message)}${exceptionBtn}</li>`;
+  }).join('');
+  return `<div class="ar-notes" style="margin-top:6px;"><strong>Σημειώσεις:</strong><ul style="margin:4px 0 0 18px;padding:0;">${items}</ul></div>`;
+}
+
+function bindReportNoteButtons(container) {
+  container.querySelectorAll('.ar-efka-exception-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year);
+    });
+  });
+}
+
 // ---------------- Depreciation disambiguation popup ----------------
 
 function showDepreciationPickModal(entries) {
@@ -676,8 +823,20 @@ async function computeSingle() {
       showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
       return;
     }
+    // showArFlash only ever shows ONE banner at a time (a later call replaces
+    // an earlier one instantly, see its own comment) — so every advisory
+    // message this response can carry is combined into a single flash
+    // instead of racing separate calls that would silently drop all but
+    // the last one.
+    const advisories = [];
+    let advisoriesKind = 'success';
     const vatAutoMsg = vatAutoCheckFlashMessage(resp.vat_auto_check, name);
-    if (vatAutoMsg) showArFlash(vatAutoMsg, resp.vat_auto_check.ok ? 'success' : 'warning', 7000);
+    if (vatAutoMsg) { advisories.push(vatAutoMsg); if (!resp.vat_auto_check.ok) advisoriesKind = 'warning'; }
+    const inventoryObligationMsg = inventoryObligationFlashMessage(resp.inventory_obligation, name);
+    if (inventoryObligationMsg) { advisories.push(inventoryObligationMsg); advisoriesKind = 'warning'; }
+    const booksCategoryMsg = booksCategoryMismatchFlashMessage(resp.books_category_mismatch, name);
+    if (booksCategoryMsg) { advisories.push(booksCategoryMsg); advisoriesKind = 'warning'; }
+    if (advisories.length) showArFlash(advisories.join(' • '), advisoriesKind, 9000);
 
     if (resp.needs_depreciation_input) {
       hideArOverlay();
@@ -687,6 +846,22 @@ async function computeSingle() {
         return;
       }
       body.depreciation_selection = sel;
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      resp = await postJson('/api/accounting_result/compute', body);
+      if (!resp.ok) {
+        statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
+        showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
+        return;
+      }
+    }
+
+    if (resp.needs_payroll_input) {
+      hideArOverlay();
+      const resolved = await resolvePayrollForCompany(name, resp.year, from, to, resp.payroll_check);
+      if (!resolved) {
+        statusEl.textContent = 'Ακυρώθηκε.';
+        return;
+      }
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
@@ -714,12 +889,20 @@ async function computeSingle() {
 
     const container = document.getElementById('arSingleReportContainer');
     container.innerHTML = buildReportSectionHtml(name, resp.vat, from, to, resp.report);
+    bindReportNoteButtons(container);
     window.__arSingleLastSection = { name, vat: resp.vat, from, to, report: resp.report };
     document.getElementById('arSinglePdfBtn').classList.remove('hidden');
     loadSingleHistory(name);
+    // showArResultsFlash clears the transient showArFlash banner above the
+    // moment it renders (see its own comment) — often before the user can
+    // even read it, since nothing awaits in between on the common no-dialog
+    // path. Repeat the same advisories here so they survive in the
+    // persistent results banner too.
+    let resultMsg = 'Λογιστικό Αποτέλεσμα (Ατομικός): ολοκληρώθηκε — ' + name + ' (Φορολογητέα Κέρδη ' + fmtMoney(resp.report.taxable_result) + ').';
+    if (advisories.length) resultMsg += ' ' + advisories.join(' • ');
     showArResultsFlash(
-      'Λογιστικό Αποτέλεσμα (Ατομικός): ολοκληρώθηκε — ' + name + ' (Φορολογητέα Κέρδη ' + fmtMoney(resp.report.taxable_result) + ').',
-      'success',
+      resultMsg,
+      advisoriesKind === 'warning' ? 'warning' : 'success',
       {
         flashId: 'arSingleResultsFlash',
         view: () => container.scrollIntoView({ behavior: 'smooth', block: 'start' }),
@@ -1115,9 +1298,22 @@ function setBulkTableLocked(locked) {
 // Renders the compact per-company summary table + wires window.__arBulkCompanies
 // and the ZIP/Συγκεντρωτικό buttons — shared by a fresh runBulk() and by
 // reopening a past run from the «φάκελος αποθηκευμένων μαζικών».
+// Fixed global numbering (not re-numbered per batch) so the same note type
+// always carries the same asterisk across different Μαζικός runs — simpler
+// to keep straight than a batch-local renumbering, and a legend line is
+// only ever printed for numbers that actually occur in THIS batch.
+const AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
+const AR_BULK_NOTE_TYPE_LEGEND = {
+  payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
+  efka_self_employed_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών από τους μήνες της περιόδου — πιθανή οφειλή, έλεγξε ΚΕΑΟ (ή αποθήκευσε εξαίρεση από τον Ατομικό υπολογισμό).',
+  uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
+};
+const AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵'];
+
 function renderBulkCompaniesSummary(companies) {
   const container = document.getElementById('arBulkReportContainer');
   container.innerHTML = '';
+  const usedNoteNumbers = new Set();
   const summaryTable = document.createElement('table');
   // Its OWN class, not "ar-saved-table" — that class is also the jQuery
   // selector initSavedDataTable() uses (`$('.ar-saved-table')`), and since
@@ -1139,7 +1335,13 @@ function renderBulkCompaniesSummary(companies) {
       const cc = window.__arBulkCompanies[idx];
       exportHtmlAsPdf(buildReportSectionHtml(cc.name, cc.vat, cc.from, cc.to, cc.report), 'Λογιστικό_Αποτέλεσμα_' + cc.name + '_' + periodSuffix(cc.from, cc.to), 'portrait', true);
     });
-    const tdName = document.createElement('td'); tdName.textContent = c.name;
+    const noteNumbers = (c.notes || [])
+      .map((n) => AR_BULK_NOTE_TYPE_ORDER.indexOf(n.type) + 1)
+      .filter((num) => num > 0);
+    noteNumbers.forEach((num) => usedNoteNumbers.add(num));
+    const superscripts = noteNumbers.map((num) => AR_BULK_NOTE_SUPERSCRIPTS[num - 1] || `[${num}]`).join('');
+
+    const tdName = document.createElement('td'); tdName.textContent = c.name + (superscripts ? ' ' + superscripts : '');
     const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
     const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = fmtMoney(c.report.taxable_result);
     const tdBtn = document.createElement('td'); tdBtn.appendChild(dlBtn);
@@ -1147,6 +1349,17 @@ function renderBulkCompaniesSummary(companies) {
     tbody.appendChild(tr);
   });
   container.appendChild(summaryTable);
+
+  if (usedNoteNumbers.size) {
+    const legend = document.createElement('div');
+    legend.style.cssText = 'font-size:12px;color:#333;margin-top:8px;line-height:1.6;';
+    legend.innerHTML = Array.from(usedNoteNumbers).sort((a, b) => a - b).map((num) => {
+      const type = AR_BULK_NOTE_TYPE_ORDER[num - 1];
+      const sup = AR_BULK_NOTE_SUPERSCRIPTS[num - 1] || `[${num}]`;
+      return `<div>${sup} ${escapeHtml(AR_BULK_NOTE_TYPE_LEGEND[type] || '')}</div>`;
+    }).join('');
+    container.appendChild(legend);
+  }
 
   window.__arBulkCompanies = companies;
   document.getElementById('arBulkPdfBtn').disabled = companies.length === 0;
@@ -1330,7 +1543,7 @@ async function runBulk() {
   try {
   const year = yearFromDMY(to);
   showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος αποθεμάτων λήξης - η διαδικασία μπορεί να διαρκέσει.');
-  const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from });
+  const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
   hideArOverlay();
   if (!statusResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
@@ -1342,8 +1555,10 @@ async function runBulk() {
     .filter((r) => r.depreciation_ambiguous)
     .map((r) => r.name);
 
-  // Only companies myDATA shows as actually tracking inventory (a prior-year
-  // closing stock was previously declared) are ever asked about it.
+  // Companies myDATA shows as already tracking inventory (a prior-year
+  // closing stock was declared), OR a Β/Γ-κατηγορίας company whose sales of
+  // εμπορεύματα/προϊόντα crossed the 150.000€ threshold THIS period (a new
+  // obligation even if last year didn't require one) — see r.inventory_obligation_reason.
   const flagged = (statusResp.rows || []).filter((r) => r.inventory_applicable && !r.closing_inventory_known && !r.error);
   if (flagged.length) {
     const choice = await showModalChoice(
@@ -1379,6 +1594,41 @@ async function runBulk() {
     }
   }
 
+  // Same payroll monthly-completeness pre-flight as the inventory one above
+  // — resolved upfront so bulk_compute doesn't surprise the user mid-batch
+  // (see _ar_payroll_resolution in app.py).
+  const payrollFlagged = (statusResp.rows || []).filter((r) => r.payroll_needs_input && !r.error);
+  if (payrollFlagged.length) {
+    const payrollChoice = await showModalChoice(
+      `Ελλιπείς εγγραφές μισθοδοσίας (${payrollFlagged.length} εταιρίες)`,
+      'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου. Πώς θέλετε να προχωρήσετε;',
+      [
+        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
+        { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία (όλες)' },
+      ]
+    );
+    if (!payrollChoice) {
+      statusEl.textContent = 'Ακυρώθηκε.';
+      return;
+    }
+    if (payrollChoice === 'manual') {
+      for (const row of payrollFlagged) {
+        statusEl.textContent = `Μισθοδοσία — ${row.name}...`;
+        const ok = await resolvePayrollForCompany(row.name, year, from, to, row.payroll_check);
+        if (!ok) {
+          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
+          return;
+        }
+      }
+    } else {
+      for (const row of payrollFlagged) {
+        await postJson('/api/accounting_result/payroll/resolve', {
+          credential_name: row.name, year, resolution: 'skip',
+        });
+      }
+    }
+  }
+
   const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   window.__arBulkPeriod = { from, to };
   statusEl.textContent = '';
@@ -1405,11 +1655,11 @@ async function runBulk() {
   const companies = [];
   const errors = [];
   (bulkResp.results || []).forEach((res) => {
-    if (!res.ok || res.needs_inventory_input) {
-      errors.push(`${res.credential_name}: ${res.error || 'εκκρεμεί απόθεμα λήξης'}`);
+    if (!res.ok || res.needs_inventory_input || res.needs_payroll_input) {
+      errors.push(`${res.credential_name}: ${res.error || (res.needs_payroll_input ? 'εκκρεμεί μισθοδοσία' : 'εκκρεμεί απόθεμα λήξης')}`);
       return;
     }
-    companies.push({ name: res.credential_name, vat: res.vat, from, to, report: res.report });
+    companies.push({ name: res.credential_name, vat: res.vat, from, to, report: res.report, notes: res.notes });
   });
   renderBulkCompaniesSummary(companies);
   let statusMsg = bulkResp.aborted
@@ -1429,10 +1679,29 @@ async function runBulk() {
     const vatFail = vatChecks.length - vatOk;
     statusMsg += ` Αυτόματος έλεγχος ΦΠΑ (πρώτη φορά): ${vatOk} επιτυχείς${vatFail ? `, ${vatFail} απέτυχαν` : ''}.`;
   }
+  // Same 150.000€ turnover trigger as the Ατομικός flow (see
+  // inventoryObligationFlashMessage) — aggregated per-company here rather
+  // than one flash per company in a batch of many.
+  let hasWarningAdvisory = false;
+  const newlyObligated = (bulkResp.results || [])
+    .filter((r) => r.inventory_obligation && r.inventory_obligation.reason === 'turnover_threshold')
+    .map((r) => r.credential_name);
+  if (newlyObligated.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Νέα υποχρέωση απογραφής λήξης (υπέρβαση 150.000€ φέτος): ${newlyObligated.join(', ')}.`;
+  }
+  const booksCategoryMismatches = (bulkResp.results || [])
+    .map((r) => r.books_category_mismatch)
+    .filter(Boolean);
+  if (booksCategoryMismatches.length) {
+    hasWarningAdvisory = true;
+    const names = booksCategoryMismatches.map((m) => `${m.credential_name} (ΑΑΔΕ: ${m.aade_category}, εμείς: ${m.our_category})`);
+    statusMsg += ` Ασυμφωνία κατηγορίας βιβλίων με το Μητρώο ΑΑΔΕ — διόρθωσε από τη σελίδα Credentials: ${names.join(', ')}.`;
+  }
   statusEl.textContent = statusMsg;
   showArResultsFlash(
     'Λογιστικό Αποτέλεσμα (Μαζικός): ' + statusMsg,
-    bulkResp.aborted ? 'warning' : (errors.length ? 'warning' : 'success'),
+    bulkResp.aborted ? 'warning' : (errors.length || hasWarningAdvisory ? 'warning' : 'success'),
     companies.length ? {
       zip: () => document.getElementById('arBulkPdfBtn').click(),
       consolidated: () => document.getElementById('arBulkConsolidatedPdfBtn').click(),
@@ -1533,6 +1802,25 @@ function vatAutoCheckFlashMessage(check, label) {
     return `ΦΠΑ (${label}): πρώτος αυτόματος έλεγχος — ${vatProfileLabel({ vat_subject: check.vat_subject })}.`;
   }
   return `ΦΠΑ (${label}): ο αυτόματος έλεγχος απέτυχε — ${check.error || 'σφάλμα'} (κάνε τον χειροκίνητα από τα Αποθηκευμένα).`;
+}
+
+// `inventory_obligation.reason === 'turnover_threshold'` means THIS
+// computation is the one that discovered the obligation: a Β/Γ-κατηγορίας
+// company whose Πωλήσεις Εμπορευμάτων+Προϊόντων crossed 150.000€ within the
+// period, even though it never declared a closing stock before (see
+// determine_inventory_obligation in accounting_result/engine.py) — worth a
+// flash precisely because last year's report may not have required one.
+function inventoryObligationFlashMessage(obligation, label) {
+  if (!obligation || obligation.reason !== 'turnover_threshold') return null;
+  return `Απογραφή λήξης (${label}): οι πωλήσεις εμπορευμάτων/προϊόντων έφτασαν ${fmtMoney(obligation.goods_products_revenue)}€ εντός της χρήσης, πάνω από το όριο των ${fmtMoney(obligation.threshold)}€ — η εταιρεία είναι πλέον υποχρεωμένη σε απογραφή λήξης, ακόμη κι αν πέρυσι δεν ήταν.`;
+}
+
+// `books_category_mismatch` is non-null when the ΑΑΔΕ Μητρώο's own
+// κατηγορία βιβλίων disagrees with what's configured on this company's
+// credentials.json entry — see _ar_check_books_category_mismatch in app.py.
+function booksCategoryMismatchFlashMessage(mismatch, label) {
+  if (!mismatch) return null;
+  return `Κατηγορία βιβλίων (${label}): το Μητρώο ΑΑΔΕ δείχνει "${mismatch.aade_category_raw}" (${mismatch.aade_category}) ενώ στα Credentials έχουμε καταχωρημένη ${mismatch.our_category} — έλεγξε/διόρθωσε τη ρύθμιση από τη σελίδα Credentials.`;
 }
 
 async function fillSavedVatCells(container) {
