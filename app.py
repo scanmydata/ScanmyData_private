@@ -18572,7 +18572,7 @@ def api_accounting_result_compute():
         # impossible to tell from the response alone.
         report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
             current_period_entries[0], date_from, date_to,
-            ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+            ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE, flag_zero=True,
         )
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
@@ -18921,7 +18921,7 @@ def api_accounting_result_bulk_compute():
                 report["notes"] = report_notes
                 report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
                     current_period_entries[0], date_from, date_to,
-                    ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+                    ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE, flag_zero=True,
                 )
 
                 from accounting_result import history_store as ar_history
@@ -19481,6 +19481,7 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
 
     check = ar_engine.check_monthly_completeness(
         current_entries, date_from, date_to, ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+        flag_zero=True,
     )
     if not check["shortfall"]:
         return None

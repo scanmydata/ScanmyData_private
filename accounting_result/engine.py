@@ -584,6 +584,7 @@ def _sum_for_code(entries: List[dict], code: str, sub_code: Optional[str] = None
 
 def check_monthly_completeness(
     current_entries: List[dict], date_from: str, date_to: str, code: str, sub_code: Optional[str] = None,
+    *, flag_zero: bool = False,
 ) -> Dict[str, Any]:
     """Compares the number of DISTINCT myDATA marks carrying `code`
     (optionally narrowed to `sub_code`) against the number of calendar
@@ -595,19 +596,24 @@ def check_monthly_completeness(
     payments) means roughly one distinct mark per month, so fewer distinct
     marks than months suggests some months are missing.
 
-    Only flags a shortfall when at least one month WAS found - a company
-    with zero marks for the whole period presumably never has this at all
-    and shouldn't be nagged about it on every computation.
+    By default (flag_zero=False, used for payroll/rent), a company with
+    ZERO marks for the whole period is assumed to simply not have this at
+    all (no employees, owns its premises) and isn't nagged about it. ΕΦΚΑ
+    Μη-Μισθωτών is the opposite case: virtually every sole proprietor/
+    non-salaried partner owes it, so zero payments all year is the MOST
+    important case to surface (likely arrears), not the one to suppress —
+    pass flag_zero=True there so 0 found also counts as a shortfall.
 
     Returns {"expected_months": int, "found_months": int, "shortfall": bool}."""
     d_from = parse_date(date_from)
     d_to = parse_date(date_to)
     expected_months = _months_in_period(d_from, d_to) if d_from and d_to else 0
     found_months = len(_distinct_marks_for_code(current_entries, code, sub_code))
+    min_found = 0 if flag_zero else 1
     return {
         "expected_months": expected_months,
         "found_months": found_months,
-        "shortfall": 0 < found_months < expected_months,
+        "shortfall": min_found <= found_months < expected_months,
     }
 
 
