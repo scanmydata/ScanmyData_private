@@ -902,7 +902,7 @@ async function computeSingle() {
   };
 
   try {
-    showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+    showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 1: έλεγχος αποσβέσεων, μισθοδοσίας, ενοικίου και απογραφής.');
     let resp = await postJson('/api/accounting_result/compute', body);
     if (!resp.ok) {
       statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
@@ -932,7 +932,7 @@ async function computeSingle() {
         return;
       }
       body.depreciation_selection = sel;
-      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 2: επεξεργασία αποσβέσεων, συνέχεια με μισθοδοσία/ενοίκιο/απογραφή.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
         statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
@@ -948,7 +948,7 @@ async function computeSingle() {
         statusEl.textContent = 'Ακυρώθηκε.';
         return;
       }
-      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 3: επεξεργασία μισθοδοσίας, συνέχεια με ενοίκιο/απογραφή.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
         statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
@@ -964,7 +964,7 @@ async function computeSingle() {
         statusEl.textContent = 'Ακυρώθηκε.';
         return;
       }
-      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 4: επεξεργασία ενοικίου, συνέχεια με απογραφή.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
         statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
@@ -980,7 +980,7 @@ async function computeSingle() {
         statusEl.textContent = 'Ακυρώθηκε.';
         return;
       }
-      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 5: επεξεργασία απογραφής και τελικός υπολογισμός αποτελέσματος.');
       resp = await postJson('/api/accounting_result/compute', body);
       if (!resp.ok) {
         statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
@@ -1652,7 +1652,7 @@ async function runBulk() {
   AR_BULK_RUNNING = true;
   try {
   const year = yearFromDMY(to);
-  showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος αποθεμάτων λήξης - η διαδικασία μπορεί να διαρκέσει.');
+  showArOverlay('Λήψη δεδομένων από myDATA...', `Βήμα 1: προέλεγχος αποθεμάτων, μισθοδοσίας και ενοικίου για ${names.length} εταιρίες.`);
   const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
   hideArOverlay();
   if (!statusResp.ok) {

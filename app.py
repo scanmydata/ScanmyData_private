@@ -5978,9 +5978,15 @@ def safe_render(template_name, **ctx):
 # ---------------- Routes ----------------
 @app.route("/icons/<path:filename>")
 def serve_icons(filename):
-    """Serve files from the icons directory"""
+    """Serve files from the icons directory. These are static, rarely-
+    changed brand assets (logo, favicons) fetched on essentially every page
+    load via base.html — without an explicit max_age, Flask sends no
+    Cache-Control header at all, so the browser re-validates with a full
+    round-trip to the origin on every navigation instead of using its disk
+    cache. 30 days is safe since a real asset change just needs a new
+    filename (as the *_header.png variants already do)."""
     icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-    return send_file(os.path.join(icons_dir, filename))
+    return send_file(os.path.join(icons_dir, filename), max_age=60 * 60 * 24 * 30)
 
 @app.route("/")
 @monitor_resources('home')
@@ -18558,6 +18564,16 @@ def api_accounting_result_compute():
         efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
         if efka_note:
             report_notes.append(efka_note)
+        # Raw monthly-completeness numbers, exposed even when nothing was
+        # flagged — payroll/rent already surface theirs via payroll_check/
+        # rent_check on the needs_*_input branches above; ΕΦΚΑ Μη-Μισθωτών
+        # never blocks so it has no equivalent branch, which otherwise makes
+        # "did it actually run and just find nothing, or silently skip?"
+        # impossible to tell from the response alone.
+        report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
+            current_period_entries[0], date_from, date_to,
+            ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+        )
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
@@ -18903,6 +18919,10 @@ def api_accounting_result_bulk_compute():
                 if uncharacterized_note:
                     report_notes.append(uncharacterized_note)
                 report["notes"] = report_notes
+                report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
+                    current_period_entries[0], date_from, date_to,
+                    ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+                )
 
                 from accounting_result import history_store as ar_history
                 hist_entry = ar_history.append_entry(
@@ -19311,6 +19331,16 @@ def _ar_check_books_category_mismatch(cred: Optional[Dict[str, Any]], path: str)
     }
 
 
+def _ar_gr_money(v: float) -> str:
+    """Greek-locale number formatting for amounts embedded in server-built
+    note messages (decimal comma, thousand-separator period) — e.g. 49596.52
+    -> "49.596,52". Python has no dependency-free locale-aware formatting
+    that's safe to use process-wide on a multi-threaded server, so this just
+    swaps the separators on the plain US-style "%,.2f" output."""
+    s = f"{float(v):,.2f}"
+    return s.translate(str.maketrans({",": "X", ".": ","})).replace("X", ".")
+
+
 def _ar_payroll_resolution(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
     """Whether this company/year needs the accountant to resolve a payroll
     (μισθοδοσία, Ε3 code 581) monthly-completeness shortfall before
@@ -19343,8 +19373,13 @@ def _ar_payroll_resolution(path: str, year: int, current_entries: list, date_fro
     if not resolution:
         return {"needs_input": True, "payroll_manual_total": None, "payroll_check": check, "resolution": None}
     if resolution.get("resolution") == "manual":
-        total = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
-        return {"needs_input": False, "payroll_manual_total": round(total, 2), "payroll_check": check, "resolution": "manual"}
+        monthly_totals = resolution.get("monthly_totals") or {}
+        total = sum(float(v or 0) for v in monthly_totals.values())
+        filled_months = sum(1 for v in monthly_totals.values() if abs(float(v or 0)) > 0.005)
+        return {
+            "needs_input": False, "payroll_manual_total": round(total, 2), "payroll_check": check,
+            "resolution": "manual", "payroll_manual_filled_months": filled_months,
+        }
     # resolution == "skip"
     return {"needs_input": False, "payroll_manual_total": None, "payroll_check": check, "resolution": "skip"}
 
@@ -19359,8 +19394,14 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not check["shortfall"]:
         return None
     resolution = payroll_res.get("resolution")
+    # Once the accountant has filled in monthly totals, the count of
+    # covered months should reflect what they actually entered, not the
+    # stale myDATA-only figure — otherwise a company corrected up to e.g.
+    # 8/9 months still shows the original "7 από 9" that prompted the fix.
+    found_months = check["found_months"]
     if resolution == "manual":
-        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {payroll_res['payroll_manual_total']:.2f}€)"
+        found_months = payroll_res.get("payroll_manual_filled_months", found_months)
+        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(payroll_res['payroll_manual_total'])}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. διακοπή μισθοδοσίας εντός του έτους)"
     else:
@@ -19368,7 +19409,7 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "type": "payroll_shortfall",
         "message": (
-            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
+            f"Βρέθηκαν {found_months} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
             f"μισθοδοσίας (κωδ. 581) στην περίοδο — {detail}."
         ),
     }
@@ -19389,8 +19430,13 @@ def _ar_rent_resolution(path: str, year: int, current_entries: list, date_from: 
     if not resolution:
         return {"needs_input": True, "rent_manual_total": None, "rent_check": check, "resolution": None}
     if resolution.get("resolution") == "manual":
-        total = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
-        return {"needs_input": False, "rent_manual_total": round(total, 2), "rent_check": check, "resolution": "manual"}
+        monthly_totals = resolution.get("monthly_totals") or {}
+        total = sum(float(v or 0) for v in monthly_totals.values())
+        filled_months = sum(1 for v in monthly_totals.values() if abs(float(v or 0)) > 0.005)
+        return {
+            "needs_input": False, "rent_manual_total": round(total, 2), "rent_check": check,
+            "resolution": "manual", "rent_manual_filled_months": filled_months,
+        }
     # resolution == "skip"
     return {"needs_input": False, "rent_manual_total": None, "rent_check": check, "resolution": "skip"}
 
@@ -19402,8 +19448,10 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not check["shortfall"]:
         return None
     resolution = rent_res.get("resolution")
+    found_months = check["found_months"]
     if resolution == "manual":
-        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {rent_res['rent_manual_total']:.2f}€)"
+        found_months = rent_res.get("rent_manual_filled_months", found_months)
+        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(rent_res['rent_manual_total'])}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. λήξη μίσθωσης/ιδιόκτητος χώρος εντός του έτους)"
     else:
@@ -19411,7 +19459,7 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "type": "rent_shortfall",
         "message": (
-            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
+            f"Βρέθηκαν {found_months} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
             f"ενοικίου (κωδ. 585/014) στην περίοδο — {detail}."
         ),
     }
