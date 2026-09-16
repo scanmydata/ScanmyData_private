@@ -83,6 +83,7 @@ from __future__ import annotations
 
 import calendar
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -625,16 +626,30 @@ def monthly_totals_for_code(
     plain computation.
 
     Returns {"YYYY-MM": total_amount} for every month in the range (0.0
-    for a month with nothing found for this code/sub_code)."""
+    for a month with nothing found for this code/sub_code). Months are
+    fetched CONCURRENTLY (bounded thread pool) — a 9-month period done
+    sequentially was observed to exceed gunicorn's worker timeout on
+    production (each AADE call carries its own network/auth round-trip
+    regardless of the date range's size, so 9 of them back-to-back easily
+    passes 120s even though the whole-period single-call path doesn't)."""
     d_from = parse_date(date_from)
     d_to = parse_date(date_to)
-    totals: Dict[str, float] = {}
     if not d_from or not d_to:
-        return totals
+        return {}
+
+    month_keys: List[Tuple[int, int]] = []
     y, m = d_from.year, d_from.month
     while (y, m) <= (d_to.year, d_to.month):
-        month_start = date(y, m, 1)
-        month_end = date(y, m, calendar.monthrange(y, m)[1])
+        month_keys.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    def _fetch_one(ym: Tuple[int, int]) -> Tuple[str, float]:
+        yy, mm = ym
+        month_start = date(yy, mm, 1)
+        month_end = date(yy, mm, calendar.monthrange(yy, mm)[1])
         clipped_from = max(month_start, d_from)
         clipped_to = min(month_end, d_to)
         month_entries, _unclassified_total, _unclassified_marks = fetch_and_split_e3_entries(
@@ -645,11 +660,12 @@ def monthly_totals_for_code(
             if str(row.get("code") or "").strip() == code
             and (sub_code is None or str(row.get("sub_code") or "").strip() == sub_code)
         )
-        totals[f"{y}-{m:02d}"] = round(total, 2)
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
+        return f"{yy}-{mm:02d}", round(total, 2)
+
+    totals: Dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=min(6, len(month_keys)) or 1) as pool:
+        for key, total in pool.map(_fetch_one, month_keys):
+            totals[key] = total
     return totals
 
 
