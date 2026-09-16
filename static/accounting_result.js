@@ -893,6 +893,13 @@ async function computeSingle() {
     window.__arSingleLastSection = { name, vat: resp.vat, from, to, report: resp.report };
     document.getElementById('arSinglePdfBtn').classList.remove('hidden');
     loadSingleHistory(name);
+    // Μισθοδοσία/ΕΦΚΑ Μη-Μισθωτών/αχαρακτήριστα notes only exist once the
+    // final report is built (they're not known before the depreciation/
+    // payroll/inventory gates above clear) — same treatment as the
+    // απογραφή/ΦΠΑ/κατηγορία-βιβλίων advisories: popped as a flash here too,
+    // per the user's own request that these behave "like the inventory
+    // checks" in both Ατομικός and Μαζικός.
+    (resp.report.notes || []).forEach((n) => { advisories.push(n.message); advisoriesKind = 'warning'; });
     // showArResultsFlash clears the transient showArFlash banner above the
     // moment it renders (see its own comment) — often before the user can
     // even read it, since nothing awaits in between on the common no-dialog
@@ -1697,6 +1704,31 @@ async function runBulk() {
     hasWarningAdvisory = true;
     const names = booksCategoryMismatches.map((m) => `${m.credential_name} (ΑΑΔΕ: ${m.aade_category}, εμείς: ${m.our_category})`);
     statusMsg += ` Ασυμφωνία κατηγορίας βιβλίων με το Μητρώο ΑΑΔΕ — διόρθωσε από τη σελίδα Credentials: ${names.join(', ')}.`;
+  }
+  // Same μισθοδοσία/ΕΦΚΑ Μη-Μισθωτών/αχαρακτήριστα notes as the Ατομικός
+  // flow (see renderReportNotesHtml) — popped here too, per the user's own
+  // request that these behave like the other checks in both Ατομικός and
+  // Μαζικός, aggregated by company rather than one flash per company.
+  const payrollShortfallNames = (bulkResp.results || [])
+    .filter((r) => (r.notes || []).some((n) => n.type === 'payroll_shortfall'))
+    .map((r) => r.credential_name);
+  if (payrollShortfallNames.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Μισθοδοσία με λιγότερες μηνιαίες εγγραφές από τους μήνες της περιόδου: ${payrollShortfallNames.join(', ')}.`;
+  }
+  const efkaShortfallNames = (bulkResp.results || [])
+    .filter((r) => (r.notes || []).some((n) => n.type === 'efka_self_employed_shortfall'))
+    .map((r) => r.credential_name);
+  if (efkaShortfallNames.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` ΕΦΚΑ Μη-Μισθωτών με πιθανή οφειλή (έλεγξε ΚΕΑΟ): ${efkaShortfallNames.join(', ')}.`;
+  }
+  const uncharacterizedNames = (bulkResp.results || [])
+    .filter((r) => (r.notes || []).some((n) => n.type === 'uncharacterized_last_quarter'))
+    .map((r) => r.credential_name);
+  if (uncharacterizedNames.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Αχαρακτήριστα παραστατικά >25% στο τελευταίο τρίμηνο: ${uncharacterizedNames.join(', ')}.`;
   }
   statusEl.textContent = statusMsg;
   showArResultsFlash(
