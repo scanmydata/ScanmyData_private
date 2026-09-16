@@ -573,6 +573,14 @@ def _distinct_marks_for_code(entries: List[dict], code: str, sub_code: Optional[
     return marks
 
 
+def _sum_for_code(entries: List[dict], code: str, sub_code: Optional[str] = None) -> float:
+    return round(sum(
+        _fnum(row.get("amount")) for row in entries
+        if str(row.get("code") or "").strip() == code
+        and (sub_code is None or str(row.get("sub_code") or "").strip() == sub_code)
+    ), 2)
+
+
 def check_monthly_completeness(
     current_entries: List[dict], date_from: str, date_to: str, code: str, sub_code: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -600,6 +608,49 @@ def check_monthly_completeness(
         "found_months": found_months,
         "shortfall": 0 < found_months < expected_months,
     }
+
+
+def monthly_totals_for_code(
+    date_from: str, date_to: str, aade_user: str, aade_key: str, code: str, sub_code: Optional[str] = None,
+) -> Dict[str, float]:
+    """Per-calendar-month totals for `code` (optionally narrowed to
+    `sub_code`) across date_from..date_to — pre-fills the manual monthly-
+    totals entry modal with what myDATA already found per month instead of
+    leaving every field at 0. check_monthly_completeness's own shortfall
+    detection deliberately stays the cheap distinct-marks-vs-months proxy
+    (see its docstring): RequestE3Info has no per-invoice date, so
+    attributing an amount to a specific month means one extra AADE call
+    per calendar month in the period. That cost is only worth paying once
+    the accountant has actually opened the manual-entry form, not on every
+    plain computation.
+
+    Returns {"YYYY-MM": total_amount} for every month in the range (0.0
+    for a month with nothing found for this code/sub_code)."""
+    d_from = parse_date(date_from)
+    d_to = parse_date(date_to)
+    totals: Dict[str, float] = {}
+    if not d_from or not d_to:
+        return totals
+    y, m = d_from.year, d_from.month
+    while (y, m) <= (d_to.year, d_to.month):
+        month_start = date(y, m, 1)
+        month_end = date(y, m, calendar.monthrange(y, m)[1])
+        clipped_from = max(month_start, d_from)
+        clipped_to = min(month_end, d_to)
+        month_entries, _unclassified_total, _unclassified_marks = fetch_and_split_e3_entries(
+            clipped_from.strftime("%d/%m/%Y"), clipped_to.strftime("%d/%m/%Y"), aade_user, aade_key,
+        )
+        total = sum(
+            _fnum(row.get("amount")) for row in month_entries
+            if str(row.get("code") or "").strip() == code
+            and (sub_code is None or str(row.get("sub_code") or "").strip() == sub_code)
+        )
+        totals[f"{y}-{m:02d}"] = round(total, 2)
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return totals
 
 
 def last_quarter_window(date_from: str, date_to: str) -> Optional[Tuple[str, str]]:
@@ -725,8 +776,8 @@ def build_report(
     vat_applicable: bool = True,
     vat_period_type: str = "",
     current_period_entries: Optional[Tuple[List[dict], float, List[Dict[str, Any]]]] = None,
-    payroll_manual_addition: float = 0.0,
-    rent_manual_addition: float = 0.0,
+    payroll_manual_total: Optional[float] = None,
+    rent_manual_total: Optional[float] = None,
 ) -> Dict[str, Any]:
     opening_inventory = {k: _fnum(v) for k, v in (opening_inventory or {}).items()}
     closing_inventory = {k: _fnum(v) for k, v in (closing_inventory or {}).items()}
@@ -779,21 +830,29 @@ def build_report(
     # the CURRENT period's own 587 entries would have summed to.
     account_totals["66"] = round(_fnum(depreciation_amount), 2)
 
-    # Accountant-entered totals for months the payroll monthly-completeness
-    # check (check_monthly_completeness, code 581) found missing — ADDED on
-    # top of whatever myDATA itself already reported for group 60, not a
-    # replacement (some months WERE found correctly and shouldn't be
-    # double-counted or discarded). An explicit excel override for group 60
-    # below still takes full precedence over this, same as it always has.
-    if payroll_manual_addition:
-        account_totals["60"] = round(account_totals.get("60", 0.0) + _fnum(payroll_manual_addition), 2)
+    # Accountant-reviewed full-period total for payroll (code 581), from the
+    # monthly-totals entry form — the form is pre-filled with what myDATA
+    # already found per month (engine.monthly_totals_for_code) plus whatever
+    # the accountant typed/corrected for the rest, so the SUM they submit is
+    # the authoritative total for the whole period and REPLACES group 60
+    # outright rather than adding to it (code 581 is group 60's sole
+    # contributor — _OPEX_DIRECT_TO_GLS — so nothing else is lost). None
+    # means no resolution was entered this way (shortfall check passed, or
+    # the accountant chose "skip"/"continue with what myDATA has"). An
+    # explicit excel override for group 60 below still takes full precedence
+    # over this, same as it always has.
+    if payroll_manual_total is not None:
+        account_totals["60"] = round(_fnum(payroll_manual_total), 2)
 
-    # Same idea for rent (Ε3 code 585/014, which already lands in group 62
-    # ΠΑΡΟΧ.ΤΡΙΤΩΝ alongside utilities/telecom via _OPEX_585_SUBCODE_TO_GLS -
-    # this just tops that group up with the months check_monthly_completeness
-    # found missing for code 585/014 specifically).
-    if rent_manual_addition:
-        account_totals["62"] = round(account_totals.get("62", 0.0) + _fnum(rent_manual_addition), 2)
+    # Same idea for rent (Ε3 code 585/014), except group 62 ΠΑΡΟΧ.ΤΡΙΤΩΝ also
+    # carries OTHER 585 sub-codes (energy/water/telecom via
+    # _OPEX_585_SUBCODE_TO_GLS) — replacing the WHOLE group would discard
+    # those, so only the rent slice of it is swapped out: myDATA's own
+    # 585/014 contribution is subtracted back out and the accountant's
+    # reviewed total put in its place.
+    if rent_manual_total is not None:
+        mydata_rent_portion = _sum_for_code(classified_entries, RENT_E3_CODE, RENT_E3_SUBCODE)
+        account_totals["62"] = round(account_totals.get("62", 0.0) - mydata_rent_portion + _fnum(rent_manual_total), 2)
 
     if excel_group_totals:
         account_totals = merge_excel_overrides(account_totals, excel_group_totals)
@@ -882,8 +941,8 @@ def build_report(
         "unclassified_marks": unclassified_marks,
         "taxable_result": taxable_result,
         "depreciation": depreciation_amount,
-        "payroll_manual_addition": round(_fnum(payroll_manual_addition), 2),
-        "rent_manual_addition": round(_fnum(rent_manual_addition), 2),
+        "payroll_manual_total": payroll_manual_total if payroll_manual_total is None else round(_fnum(payroll_manual_total), 2),
+        "rent_manual_total": rent_manual_total if rent_manual_total is None else round(_fnum(rent_manual_total), 2),
         "vat_outflow": vat_outflow,
         "vat_inflow": vat_inflow,
         "vat_prior_credit": None,  # v1: not derivable, see module docstring

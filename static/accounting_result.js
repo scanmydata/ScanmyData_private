@@ -627,7 +627,17 @@ function monthsInRange(dateFrom, dateTo) {
   return months;
 }
 
-function showManualPayrollModal(title, months) {
+// `prefill` ({"YYYY-MM": amount}, optional) seeds each month's field with
+// what myDATA already found for it (see engine.monthly_totals_for_code)
+// instead of leaving every field at 0 — the accountant only needs to type
+// over the genuinely missing months, and can see at a glance what's
+// already on file for the rest. Resolves to:
+//   - null: cancelled outright (Άκυρο)
+//   - {__continue: true}: proceed with myDATA's own totals as-is (Συνέχεια),
+//     same as picking "Συνέχεια με τα τρέχοντα στοιχεία" on the choice modal
+//     one step back, without having to close this form to get there
+//   - {"YYYY-MM": amount, ...}: the entered/edited totals (Αποθήκευση)
+function showManualPayrollModal(title, months, prefill) {
   moveModalsToBody();
   return new Promise((resolve) => {
     const modal = document.getElementById('arManualPayrollModal');
@@ -643,7 +653,7 @@ function showManualPayrollModal(title, months) {
       input.type = 'number';
       input.step = '0.01';
       input.className = 'border rounded px-2 py-1 w-full text-sm';
-      input.value = 0;
+      input.value = (prefill && prefill[key] != null) ? prefill[key] : 0;
       input.dataset.key = key;
       wrap.appendChild(lbl);
       wrap.appendChild(input);
@@ -652,10 +662,12 @@ function showManualPayrollModal(title, months) {
     modal.classList.remove('hidden');
 
     const saveBtn = document.getElementById('arManualPayrollSave');
+    const continueBtn = document.getElementById('arManualPayrollContinue');
     const cancelBtn = document.getElementById('arManualPayrollCancel');
     function cleanup() {
       modal.classList.add('hidden');
       saveBtn.removeEventListener('click', onSave);
+      continueBtn.removeEventListener('click', onContinue);
       cancelBtn.removeEventListener('click', onCancel);
     }
     function onSave() {
@@ -667,11 +679,16 @@ function showManualPayrollModal(title, months) {
       cleanup();
       resolve(values);
     }
+    function onContinue() {
+      cleanup();
+      resolve({ __continue: true });
+    }
     function onCancel() {
       cleanup();
       resolve(null);
     }
     saveBtn.addEventListener('click', onSave);
+    continueBtn.addEventListener('click', onContinue);
     cancelBtn.addEventListener('click', onCancel);
   });
 }
@@ -694,16 +711,26 @@ async function resolvePayrollForCompany(name, year, dateFrom, dateTo, payrollChe
   );
   if (!choice) return false;
 
+  let resolution = choice;
   let monthlyTotals = {};
   if (choice === 'manual') {
     const months = monthsInRange(dateFrom, dateTo);
-    const values = await showManualPayrollModal(`Μηνιαία σύνολα μισθοδοσίας — ${name}`, months);
+    showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος μηνιαίων ποσών μισθοδοσίας ανά μήνα - η διαδικασία μπορεί να διαρκέσει.');
+    const prefillResp = await postJson('/api/accounting_result/payroll/monthly_totals', {
+      credential_name: name, date_from: dateFrom, date_to: dateTo,
+    });
+    hideArOverlay();
+    const values = await showManualPayrollModal(`Μηνιαία σύνολα μισθοδοσίας — ${name}`, months, prefillResp.ok ? prefillResp.monthly_totals : null);
     if (!values) return false;
-    monthlyTotals = values;
+    if (values.__continue) {
+      resolution = 'skip';
+    } else {
+      monthlyTotals = values;
+    }
   }
 
   const resp = await postJson('/api/accounting_result/payroll/resolve', {
-    credential_name: name, year, resolution: choice, monthly_totals: monthlyTotals,
+    credential_name: name, year, resolution, monthly_totals: monthlyTotals,
   });
   return !!resp.ok;
 }
@@ -726,16 +753,26 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
   );
   if (!choice) return false;
 
+  let resolution = choice;
   let monthlyTotals = {};
   if (choice === 'manual') {
     const months = monthsInRange(dateFrom, dateTo);
-    const values = await showManualPayrollModal(`Μηνιαία σύνολα ενοικίου — ${name}`, months);
+    showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος μηνιαίων ποσών ενοικίου ανά μήνα - η διαδικασία μπορεί να διαρκέσει.');
+    const prefillResp = await postJson('/api/accounting_result/rent/monthly_totals', {
+      credential_name: name, date_from: dateFrom, date_to: dateTo,
+    });
+    hideArOverlay();
+    const values = await showManualPayrollModal(`Μηνιαία σύνολα ενοικίου — ${name}`, months, prefillResp.ok ? prefillResp.monthly_totals : null);
     if (!values) return false;
-    monthlyTotals = values;
+    if (values.__continue) {
+      resolution = 'skip';
+    } else {
+      monthlyTotals = values;
+    }
   }
 
   const resp = await postJson('/api/accounting_result/rent/resolve', {
-    credential_name: name, year, resolution: choice, monthly_totals: monthlyTotals,
+    credential_name: name, year, resolution, monthly_totals: monthlyTotals,
   });
   return !!resp.ok;
 }

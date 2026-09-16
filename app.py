@@ -18539,8 +18539,8 @@ def api_accounting_result_compute():
             vat_applicable=_ar_vat_applicable(path),
             vat_period_type=_ar_vat_period_type(path),
             current_period_entries=current_period_entries,
-            payroll_manual_addition=payroll_res["payroll_manual_addition"],
-            rent_manual_addition=rent_res["rent_manual_addition"],
+            payroll_manual_total=payroll_res["payroll_manual_total"],
+            rent_manual_total=rent_res["rent_manual_total"],
         )
         report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
@@ -18884,8 +18884,8 @@ def api_accounting_result_bulk_compute():
                     vat_applicable=_ar_vat_applicable(path),
                     vat_period_type=_ar_vat_period_type(path),
                     current_period_entries=current_period_entries,
-                    payroll_manual_addition=payroll_res["payroll_manual_addition"],
-                    rent_manual_addition=rent_res["rent_manual_addition"],
+                    payroll_manual_total=payroll_res["payroll_manual_total"],
+                    rent_manual_total=rent_res["rent_manual_total"],
                 )
                 report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
@@ -19321,28 +19321,32 @@ def _ar_payroll_resolution(path: str, year: int, current_entries: list, date_fro
     report with it, so THIS is asked again on the very next computation of
     the same company/year rather than being silenced forever.
 
-    Returns {"needs_input": bool, "payroll_manual_addition": float,
+    Returns {"needs_input": bool, "payroll_manual_total": float | None,
     "payroll_check": {...check_monthly_completeness result...}}. Within a
     single resolve-then-recompute cycle: a "skip" resolution (see
-    compliance_notes_store.set_payroll_check) makes needs_input False with a
-    zero addition; a "manual" resolution makes needs_input False and sums
-    its stored monthly_totals into payroll_manual_addition, which the caller
-    passes straight into engine.build_report."""
+    compliance_notes_store.set_payroll_check) makes needs_input False with
+    payroll_manual_total None (myDATA's own total is used unchanged); a
+    "manual" resolution makes needs_input False and sums its stored
+    monthly_totals (pre-filled from myDATA per month, then reviewed/
+    corrected by the accountant — see the /payroll/monthly_totals endpoint)
+    into payroll_manual_total, the accountant-reviewed total for the WHOLE
+    period, which the caller passes straight into engine.build_report to
+    REPLACE (not add to) myDATA's own group-60 figure."""
     from accounting_result import engine as ar_engine
     from accounting_result import compliance_notes_store as ar_compliance
 
     check = ar_engine.check_monthly_completeness(current_entries, date_from, date_to, ar_engine.PAYROLL_E3_CODE)
     if not check["shortfall"]:
-        return {"needs_input": False, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": None}
+        return {"needs_input": False, "payroll_manual_total": None, "payroll_check": check, "resolution": None}
 
     resolution = ar_compliance.get_payroll_check(path, year)
     if not resolution:
-        return {"needs_input": True, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": None}
+        return {"needs_input": True, "payroll_manual_total": None, "payroll_check": check, "resolution": None}
     if resolution.get("resolution") == "manual":
-        addition = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
-        return {"needs_input": False, "payroll_manual_addition": round(addition, 2), "payroll_check": check, "resolution": "manual"}
+        total = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
+        return {"needs_input": False, "payroll_manual_total": round(total, 2), "payroll_check": check, "resolution": "manual"}
     # resolution == "skip"
-    return {"needs_input": False, "payroll_manual_addition": 0.0, "payroll_check": check, "resolution": "skip"}
+    return {"needs_input": False, "payroll_manual_total": None, "payroll_check": check, "resolution": "skip"}
 
 
 def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -19356,7 +19360,7 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     resolution = payroll_res.get("resolution")
     if resolution == "manual":
-        detail = f"συμπληρώθηκε χειροκίνητα (+{payroll_res['payroll_manual_addition']:.2f}€)"
+        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {payroll_res['payroll_manual_total']:.2f}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. διακοπή μισθοδοσίας εντός του έτους)"
     else:
@@ -19373,22 +19377,22 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _ar_rent_resolution(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
     """Same blocking, single-use pattern as _ar_payroll_resolution, for rent
     (ενοίκια, Ε3 code 585/014) — see that function's docstring. Returns
-    {"needs_input": bool, "rent_manual_addition": float, "rent_check": {...}}."""
+    {"needs_input": bool, "rent_manual_total": float | None, "rent_check": {...}}."""
     from accounting_result import engine as ar_engine
     from accounting_result import compliance_notes_store as ar_compliance
 
     check = ar_engine.check_monthly_completeness(current_entries, date_from, date_to, ar_engine.RENT_E3_CODE, ar_engine.RENT_E3_SUBCODE)
     if not check["shortfall"]:
-        return {"needs_input": False, "rent_manual_addition": 0.0, "rent_check": check, "resolution": None}
+        return {"needs_input": False, "rent_manual_total": None, "rent_check": check, "resolution": None}
 
     resolution = ar_compliance.get_rent_check(path, year)
     if not resolution:
-        return {"needs_input": True, "rent_manual_addition": 0.0, "rent_check": check, "resolution": None}
+        return {"needs_input": True, "rent_manual_total": None, "rent_check": check, "resolution": None}
     if resolution.get("resolution") == "manual":
-        addition = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
-        return {"needs_input": False, "rent_manual_addition": round(addition, 2), "rent_check": check, "resolution": "manual"}
+        total = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
+        return {"needs_input": False, "rent_manual_total": round(total, 2), "rent_check": check, "resolution": "manual"}
     # resolution == "skip"
-    return {"needs_input": False, "rent_manual_addition": 0.0, "rent_check": check, "resolution": "skip"}
+    return {"needs_input": False, "rent_manual_total": None, "rent_check": check, "resolution": "skip"}
 
 
 def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -19399,7 +19403,7 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     resolution = rent_res.get("resolution")
     if resolution == "manual":
-        detail = f"συμπληρώθηκε χειροκίνητα (+{rent_res['rent_manual_addition']:.2f}€)"
+        detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {rent_res['rent_manual_total']:.2f}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. λήξη μίσθωσης/ιδιόκτητος χώρος εντός του έτους)"
     else:
@@ -19504,15 +19508,72 @@ def api_accounting_result_vat_profile_detect():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/accounting_result/payroll/monthly_totals", methods=["POST"])
+def api_accounting_result_payroll_monthly_totals():
+    """Per-calendar-month totals myDATA already has for code 581 (μισθοδοσία)
+    across date_from..date_to — called only once the accountant actually
+    opens the manual monthly-totals entry form, to pre-fill each month's
+    field with what was already found instead of leaving every one at 0
+    (they'd otherwise have to re-type months myDATA already covers, not
+    just the genuinely missing ones). See engine.monthly_totals_for_code
+    for why this costs one extra AADE call per month and isn't part of the
+    cheap shortfall check itself."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        if not cred or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπει credential ή περίοδος"}), 400
+        aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+        aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+        if not aade_user or not aade_key:
+            return jsonify({"ok": False, "error": "Λείπουν στοιχεία AADE για το credential"}), 400
+
+        from accounting_result import engine as ar_engine
+        totals = ar_engine.monthly_totals_for_code(date_from, date_to, aade_user, aade_key, ar_engine.PAYROLL_E3_CODE)
+        return jsonify({"ok": True, "monthly_totals": totals}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_payroll_monthly_totals failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/rent/monthly_totals", methods=["POST"])
+def api_accounting_result_rent_monthly_totals():
+    """Same as /payroll/monthly_totals, for rent (Ε3 code 585/014)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        if not cred or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπει credential ή περίοδος"}), 400
+        aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+        aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+        if not aade_user or not aade_key:
+            return jsonify({"ok": False, "error": "Λείπουν στοιχεία AADE για το credential"}), 400
+
+        from accounting_result import engine as ar_engine
+        totals = ar_engine.monthly_totals_for_code(
+            date_from, date_to, aade_user, aade_key, ar_engine.RENT_E3_CODE, ar_engine.RENT_E3_SUBCODE,
+        )
+        return jsonify({"ok": True, "monthly_totals": totals}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_rent_monthly_totals failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/accounting_result/payroll/resolve", methods=["POST"])
 def api_accounting_result_payroll_resolve():
     """Saves how the accountant resolved a payroll (μισθοδοσία) monthly-
     completeness shortfall for one company/year (see _ar_payroll_resolution)
-    - either "skip" (proceed as-is for this computation) or "manual" (their
-    keyed-in totals for the missing months, ADDED on top of myDATA's own
-    code-581 total, see engine.build_report's payroll_manual_addition).
-    Single-use: the compute route clears this right after building the
-    report with it, so the next computation asks again."""
+    - either "skip" (proceed with myDATA's own code-581 total as-is) or
+    "manual" (their reviewed/corrected per-month totals -- pre-filled from
+    myDATA via /payroll/monthly_totals -- summed into the period's
+    authoritative total, which REPLACES myDATA's own group-60 figure, see
+    engine.build_report's payroll_manual_total). Single-use: the compute
+    route clears this right after building the report with it, so the next
+    computation asks again."""
     try:
         payload = request.get_json(silent=True) or {}
         credential_name, cred = _ar_resolve_credential(payload)
