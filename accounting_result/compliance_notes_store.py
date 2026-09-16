@@ -42,27 +42,52 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 
+class ComplianceNotesStoreCorruptError(Exception):
+    """Raised when an existing file can't be parsed. This store shares its
+    JSON file with inventory_store.py/vat_profile_store.py (see module
+    docstring), so it gets the same atomic-write + refuse-on-corrupt-read
+    treatment inventory_store.py already uses: swallowing corruption into
+    an empty {} on a write path would let one write silently wipe out
+    whatever the other modules had just written to the same file."""
+
+
 def _read(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {}
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        data = json.loads(raw)
+    except Exception as e:
+        raise ComplianceNotesStoreCorruptError(f"Corrupt file at {path}: {e}") from e
+    return data if isinstance(data, dict) else {}
+
+
+def _read_or_empty(path: str) -> Dict[str, Any]:
+    """Read-only callers degrade to "nothing on file" on corruption rather
+    than blocking the report entirely — they never write, so there's
+    nothing to lose."""
+    try:
+        return _read(path)
+    except ComplianceNotesStoreCorruptError:
         return {}
 
 
 def _write(path: str, data: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    # PID-namespaced, not a shared "<path>.tmp": this file is also written
+    # by inventory_store.py/vat_profile_store.py, and a shared temp name
+    # lets two concurrent writers (two requests for the same company) race
+    # each other's tmp file before either renames, silently losing one
+    # side's change — see inventory_store.py's own _write for the same fix.
+    tmp = path + "." + str(os.getpid()) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
 
 def get_payroll_check(path: str, year: int) -> Dict[str, Any]:
-    return dict((_read(path).get("payroll_checks") or {}).get(str(year)) or {})
+    return dict((_read_or_empty(path).get("payroll_checks") or {}).get(str(year)) or {})
 
 
 def set_payroll_check(
@@ -95,8 +120,14 @@ def set_payroll_check(
 def clear_payroll_check(path: str, year: int) -> None:
     """Called by app.py right after a resolved payroll_check has been
     consumed to build a report — see set_payroll_check's docstring for why
-    this is single-use rather than a standing exception."""
-    data = _read(path)
+    this is single-use rather than a standing exception. Best-effort, same
+    reasoning as inventory_store.clear_closing_inventory: the report is
+    already built and saved by the time this runs, so a corrupt file here
+    should never turn into a 500 for an otherwise-successful computation."""
+    try:
+        data = _read(path)
+    except ComplianceNotesStoreCorruptError:
+        return
     checks = data.get("payroll_checks")
     if isinstance(checks, dict) and str(year) in checks:
         del checks[str(year)]
@@ -104,7 +135,7 @@ def clear_payroll_check(path: str, year: int) -> None:
 
 
 def get_rent_check(path: str, year: int) -> Dict[str, Any]:
-    return dict((_read(path).get("rent_checks") or {}).get(str(year)) or {})
+    return dict((_read_or_empty(path).get("rent_checks") or {}).get(str(year)) or {})
 
 
 def set_rent_check(
@@ -132,8 +163,12 @@ def set_rent_check(
 
 def clear_rent_check(path: str, year: int) -> None:
     """Called by app.py right after a resolved rent_check has been consumed
-    to build a report — see set_rent_check's docstring."""
-    data = _read(path)
+    to build a report — see set_rent_check's docstring and
+    clear_payroll_check's best-effort reasoning."""
+    try:
+        data = _read(path)
+    except ComplianceNotesStoreCorruptError:
+        return
     checks = data.get("rent_checks")
     if isinstance(checks, dict) and str(year) in checks:
         del checks[str(year)]
@@ -141,7 +176,7 @@ def clear_rent_check(path: str, year: int) -> None:
 
 
 def get_efka_self_employed_check(path: str, year: int) -> Dict[str, Any]:
-    return dict((_read(path).get("efka_self_employed_checks") or {}).get(str(year)) or {})
+    return dict((_read_or_empty(path).get("efka_self_employed_checks") or {}).get(str(year)) or {})
 
 
 def set_efka_self_employed_check(path: str, year: int, reason: str) -> Dict[str, Any]:
