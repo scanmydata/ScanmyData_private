@@ -590,17 +590,34 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
 
 const AR_MONTH_LABELS = ['Ιαν', 'Φεβ', 'Μαρ', 'Απρ', 'Μάι', 'Ιούν', 'Ιούλ', 'Αύγ', 'Σεπ', 'Οκτ', 'Νοέ', 'Δεκ'];
 
+// The Από/Έως fields are flatpickr'd to dd/mm/yyyy (see ddmmyyyy's own
+// comment), NOT native <input type="date"> — so `new Date(dateStr)` silently
+// mis-parses or Invalid-Dates a "16/09/2026" string (JS's slash-separated
+// parser assumes US mm/dd/yyyy), which is exactly what made the manual
+// payroll modal render with zero month fields. Parsed directly via regex
+// instead of going through Date at all, mirroring yearFromDMY's own
+// dd/mm/yyyy-first-ISO-fallback handling.
+function _arParseDmyOrIso(dateStr) {
+  const s = String(dateStr || '').trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return { year: parseInt(m[3], 10), month: parseInt(m[2], 10) - 1 };
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) - 1 };
+  return null;
+}
+
 // Every calendar month touched by dateFrom..dateTo, as {key:"YYYY-MM", label}
 // — feeds the manual monthly-totals entry form (one field per month) the
 // same way check_monthly_completeness counts "expected months" server-side.
 function monthsInRange(dateFrom, dateTo) {
-  const from = new Date(dateFrom);
-  const to = new Date(dateTo);
+  const from = _arParseDmyOrIso(dateFrom);
+  const to = _arParseDmyOrIso(dateTo);
   const months = [];
-  let y = from.getFullYear();
-  let m = from.getMonth();
-  const endY = to.getFullYear();
-  const endM = to.getMonth();
+  if (!from || !to) return months;
+  let y = from.year;
+  let m = from.month;
+  const endY = to.year;
+  const endM = to.month;
   while (y < endY || (y === endY && m <= endM)) {
     const key = `${y}-${String(m + 1).padStart(2, '0')}`;
     months.push({ key, label: `${AR_MONTH_LABELS[m]} ${y}` });
@@ -686,6 +703,38 @@ async function resolvePayrollForCompany(name, year, dateFrom, dateTo, payrollChe
   }
 
   const resp = await postJson('/api/accounting_result/payroll/resolve', {
+    credential_name: name, year, resolution: choice, monthly_totals: monthlyTotals,
+  });
+  return !!resp.ok;
+}
+
+// ---------------- Rent monthly-completeness resolution ----------------
+
+// Same UX as resolvePayrollForCompany (reuses the same generic monthly-
+// totals modal), for ενοίκια (Ε3 code 585/014).
+async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
+  const found = rentCheck ? rentCheck.found_months : '?';
+  const expected = rentCheck ? rentCheck.expected_months : '?';
+  const choice = await showModalChoice(
+    `Ελλιπείς εγγραφές ενοικίου — ${name} (${year})`,
+    `Βρέθηκαν ${found} από ${expected} αναμενόμενες μηνιαίες εγγραφές ενοικίου (κωδ. 585/014) στην περίοδο. ` +
+    'Μπορεί η εταιρία να άλλαξε/έληξε τη μίσθωση εντός του έτους. Πώς θέλετε να προχωρήσετε;',
+    [
+      { key: 'manual', label: 'Καταχώρηση μηνιαίων συνόλων' },
+      { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία' },
+    ]
+  );
+  if (!choice) return false;
+
+  let monthlyTotals = {};
+  if (choice === 'manual') {
+    const months = monthsInRange(dateFrom, dateTo);
+    const values = await showManualPayrollModal(`Μηνιαία σύνολα ενοικίου — ${name}`, months);
+    if (!values) return false;
+    monthlyTotals = values;
+  }
+
+  const resp = await postJson('/api/accounting_result/rent/resolve', {
     credential_name: name, year, resolution: choice, monthly_totals: monthlyTotals,
   });
   return !!resp.ok;
@@ -858,6 +907,22 @@ async function computeSingle() {
     if (resp.needs_payroll_input) {
       hideArOverlay();
       const resolved = await resolvePayrollForCompany(name, resp.year, from, to, resp.payroll_check);
+      if (!resolved) {
+        statusEl.textContent = 'Ακυρώθηκε.';
+        return;
+      }
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Υπολογισμός λογιστικού αποτελέσματος - η διαδικασία μπορεί να διαρκέσει.');
+      resp = await postJson('/api/accounting_result/compute', body);
+      if (!resp.ok) {
+        statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
+        showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
+        return;
+      }
+    }
+
+    if (resp.needs_rent_input) {
+      hideArOverlay();
+      const resolved = await resolveRentForCompany(name, resp.year, from, to, resp.rent_check);
       if (!resolved) {
         statusEl.textContent = 'Ακυρώθηκε.';
         return;
@@ -1309,9 +1374,10 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-const AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
+const AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
 const AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
+  rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
   efka_self_employed_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών από τους μήνες της περιόδου — πιθανή οφειλή, έλεγξε ΚΕΑΟ (ή αποθήκευσε εξαίρεση από τον Ατομικό υπολογισμό).',
   uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
 };
@@ -1636,6 +1702,40 @@ async function runBulk() {
     }
   }
 
+  // Same pre-flight as payroll, for rent (Ε3 code 585/014) — see
+  // _ar_rent_resolution in app.py.
+  const rentFlagged = (statusResp.rows || []).filter((r) => r.rent_needs_input && !r.error);
+  if (rentFlagged.length) {
+    const rentChoice = await showModalChoice(
+      `Ελλιπείς εγγραφές ενοικίου (${rentFlagged.length} εταιρίες)`,
+      'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου. Πώς θέλετε να προχωρήσετε;',
+      [
+        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
+        { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία (όλες)' },
+      ]
+    );
+    if (!rentChoice) {
+      statusEl.textContent = 'Ακυρώθηκε.';
+      return;
+    }
+    if (rentChoice === 'manual') {
+      for (const row of rentFlagged) {
+        statusEl.textContent = `Ενοίκιο — ${row.name}...`;
+        const ok = await resolveRentForCompany(row.name, year, from, to, row.rent_check);
+        if (!ok) {
+          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
+          return;
+        }
+      }
+    } else {
+      for (const row of rentFlagged) {
+        await postJson('/api/accounting_result/rent/resolve', {
+          credential_name: row.name, year, resolution: 'skip',
+        });
+      }
+    }
+  }
+
   const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   window.__arBulkPeriod = { from, to };
   statusEl.textContent = '';
@@ -1662,8 +1762,10 @@ async function runBulk() {
   const companies = [];
   const errors = [];
   (bulkResp.results || []).forEach((res) => {
-    if (!res.ok || res.needs_inventory_input || res.needs_payroll_input) {
-      errors.push(`${res.credential_name}: ${res.error || (res.needs_payroll_input ? 'εκκρεμεί μισθοδοσία' : 'εκκρεμεί απόθεμα λήξης')}`);
+    if (!res.ok || res.needs_inventory_input || res.needs_payroll_input || res.needs_rent_input) {
+      const reason = res.error
+        || (res.needs_payroll_input ? 'εκκρεμεί μισθοδοσία' : (res.needs_rent_input ? 'εκκρεμεί ενοίκιο' : 'εκκρεμεί απόθεμα λήξης'));
+      errors.push(`${res.credential_name}: ${reason}`);
       return;
     }
     companies.push({ name: res.credential_name, vat: res.vat, from, to, report: res.report, notes: res.notes });
@@ -1715,6 +1817,13 @@ async function runBulk() {
   if (payrollShortfallNames.length) {
     hasWarningAdvisory = true;
     statusMsg += ` Μισθοδοσία με λιγότερες μηνιαίες εγγραφές από τους μήνες της περιόδου: ${payrollShortfallNames.join(', ')}.`;
+  }
+  const rentShortfallNames = (bulkResp.results || [])
+    .filter((r) => (r.notes || []).some((n) => n.type === 'rent_shortfall'))
+    .map((r) => r.credential_name);
+  if (rentShortfallNames.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Ενοίκιο με λιγότερες μηνιαίες εγγραφές από τους μήνες της περιόδου: ${rentShortfallNames.join(', ')}.`;
   }
   const efkaShortfallNames = (bulkResp.results || [])
     .filter((r) => (r.notes || []).some((n) => n.type === 'efka_self_employed_shortfall'))

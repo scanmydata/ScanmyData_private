@@ -18488,6 +18488,22 @@ def api_accounting_result_compute():
                 "inventory_obligation": inventory_obligation,
             }), 200
 
+        # Same blocking pattern for rent (ενοίκια, Ε3 code 585/014) —
+        # see _ar_rent_resolution.
+        rent_res = _ar_rent_resolution(path, year, current_period_entries[0], date_from, date_to)
+        if rent_res["needs_input"]:
+            return jsonify({
+                "ok": True,
+                "needs_rent_input": True,
+                "credential_name": credential_name,
+                "vat": vat,
+                "year": year,
+                "rent_check": rent_res["rent_check"],
+                "vat_auto_check": vat_auto_check,
+                "books_category_mismatch": books_category_mismatch,
+                "inventory_obligation": inventory_obligation,
+            }), 200
+
         if has_inventory:
             # Opening is always last year's ALREADY-DECLARED myDATA closing
             # stock, re-derived fresh here — never stored/edited, see
@@ -18524,17 +18540,21 @@ def api_accounting_result_compute():
             vat_period_type=_ar_vat_period_type(path),
             current_period_entries=current_period_entries,
             payroll_manual_addition=payroll_res["payroll_manual_addition"],
+            rent_manual_addition=rent_res["rent_manual_addition"],
         )
         report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
         # Non-blocking compliance notes — computed once every blocking gate
         # above has cleared, so a mid-resolution retry (depreciation/payroll/
-        # inventory) doesn't pay for the extra last-quarter AADE call more
-        # than once.
+        # rent/inventory) doesn't pay for the extra last-quarter AADE call
+        # more than once.
         report_notes = []
         payroll_note = _ar_payroll_note(payroll_res)
         if payroll_note:
             report_notes.append(payroll_note)
+        rent_note = _ar_rent_note(rent_res)
+        if rent_note:
+            report_notes.append(rent_note)
         efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
         if efka_note:
             report_notes.append(efka_note)
@@ -18558,11 +18578,27 @@ def api_accounting_result_compute():
         if has_inventory:
             ar_inventory.clear_closing_inventory(path, year)
 
+        # Same single-use treatment for the payroll resolution just applied
+        # above (manual totals / skip): clear it now that this report has
+        # durably captured its own copy, so the NEXT computation of this
+        # company/year asks again instead of silently reusing an old
+        # decision — the user explicitly wants this to behave exactly like
+        # the closing-inventory check, not a permanent per-year silence.
+        if payroll_res["payroll_check"]["shortfall"]:
+            from accounting_result import compliance_notes_store as ar_compliance
+            ar_compliance.clear_payroll_check(path, year)
+
+        # Same single-use treatment for the rent resolution.
+        if rent_res["rent_check"]["shortfall"]:
+            from accounting_result import compliance_notes_store as ar_compliance
+            ar_compliance.clear_rent_check(path, year)
+
         return jsonify({
             "ok": True,
             "needs_inventory_input": False,
             "needs_depreciation_input": False,
             "needs_payroll_input": False,
+            "needs_rent_input": False,
             "credential_name": credential_name,
             "vat": vat,
             "year": year,
@@ -18669,6 +18705,9 @@ def api_accounting_result_inventory_bulk_status():
             # independent of the inventory check above, so the upfront modal
             # already covers it instead of surprising the user mid-batch.
             payroll_res = _ar_payroll_resolution(path, year, current_entries, date_from, date_to)
+            # Same rent monthly-completeness gate bulk_compute itself
+            # enforces (see _ar_rent_resolution) — pre-flagged here too.
+            rent_res = _ar_rent_resolution(path, year, current_entries, date_from, date_to)
 
             if not has_inventory:
                 rows.append({
@@ -18676,6 +18715,8 @@ def api_accounting_result_inventory_bulk_status():
                     "inventory_applicable": False, "depreciation_ambiguous": len(dep_entries) > 1,
                     "payroll_needs_input": payroll_res["needs_input"],
                     "payroll_check": payroll_res["payroll_check"],
+                    "rent_needs_input": rent_res["needs_input"],
+                    "rent_check": rent_res["rent_check"],
                 })
                 continue
 
@@ -18690,6 +18731,8 @@ def api_accounting_result_inventory_bulk_status():
                 "inventory_obligation_reason": obligation["reason"],
                 "payroll_needs_input": payroll_res["needs_input"],
                 "payroll_check": payroll_res["payroll_check"],
+                "rent_needs_input": rent_res["needs_input"],
+                "rent_check": rent_res["rent_check"],
             })
         return jsonify({"ok": True, "rows": rows}), 200
     except Exception as e:
@@ -18799,6 +18842,17 @@ def api_accounting_result_bulk_compute():
                     "inventory_obligation": inventory_obligation,
                 })
                 continue
+            # Same blocking pattern for rent - see _ar_rent_resolution.
+            rent_res = _ar_rent_resolution(path, year, current_period_entries[0], date_from, date_to)
+            if rent_res["needs_input"]:
+                results.append({
+                    "credential_name": name, "ok": True, "needs_rent_input": True,
+                    "vat": vat, "year": year, "rent_check": rent_res["rent_check"],
+                    "vat_auto_check": vat_auto_check,
+                    "books_category_mismatch": books_category_mismatch,
+                    "inventory_obligation": inventory_obligation,
+                })
+                continue
             dep_entries = ar_engine.depreciation_entries_from(prior_entries)
             # Bulk runs default depreciation to "sum every prior-year entry" rather
             # than blocking the whole batch on a per-company pick — the per-mark
@@ -18831,6 +18885,7 @@ def api_accounting_result_bulk_compute():
                     vat_period_type=_ar_vat_period_type(path),
                     current_period_entries=current_period_entries,
                     payroll_manual_addition=payroll_res["payroll_manual_addition"],
+                    rent_manual_addition=rent_res["rent_manual_addition"],
                 )
                 report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
@@ -18838,6 +18893,9 @@ def api_accounting_result_bulk_compute():
                 payroll_note = _ar_payroll_note(payroll_res)
                 if payroll_note:
                     report_notes.append(payroll_note)
+                rent_note = _ar_rent_note(rent_res)
+                if rent_note:
+                    report_notes.append(rent_note)
                 efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
                 if efka_note:
                     report_notes.append(efka_note)
@@ -18859,6 +18917,17 @@ def api_accounting_result_bulk_compute():
                 # same year silently reuse a stocktake figure that may have changed.
                 if has_inventory:
                     ar_inventory.clear_closing_inventory(path, year)
+
+                # Same single-use treatment for the payroll resolution - see
+                # the identical comment in api_accounting_result_compute.
+                if payroll_res["payroll_check"]["shortfall"]:
+                    from accounting_result import compliance_notes_store as ar_compliance
+                    ar_compliance.clear_payroll_check(path, year)
+
+                # Same single-use treatment for the rent resolution.
+                if rent_res["rent_check"]["shortfall"]:
+                    from accounting_result import compliance_notes_store as ar_compliance
+                    ar_compliance.clear_rent_check(path, year)
 
                 results.append({
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
@@ -19246,15 +19315,19 @@ def _ar_payroll_resolution(path: str, year: int, current_entries: list, date_fro
     """Whether this company/year needs the accountant to resolve a payroll
     (μισθοδοσία, Ε3 code 581) monthly-completeness shortfall before
     computing — mirrors the existing needs_inventory_input flow exactly, per
-    the user's own instruction to make this work "like the inventory check".
+    the user's own instruction to make this work "like the inventory check",
+    single-use resolution included: the caller clears the resolution (see
+    compliance_notes_store.clear_payroll_check) right after building the
+    report with it, so THIS is asked again on the very next computation of
+    the same company/year rather than being silenced forever.
 
     Returns {"needs_input": bool, "payroll_manual_addition": float,
-    "payroll_check": {...check_monthly_completeness result...}}. A prior
-    "skip" resolution (see compliance_notes_store.set_payroll_check) makes
-    needs_input False with a zero addition every time from then on for this
-    company/year; a prior "manual" resolution makes needs_input False and
-    sums its stored monthly_totals into payroll_manual_addition, which the
-    caller passes straight into engine.build_report."""
+    "payroll_check": {...check_monthly_completeness result...}}. Within a
+    single resolve-then-recompute cycle: a "skip" resolution (see
+    compliance_notes_store.set_payroll_check) makes needs_input False with a
+    zero addition; a "manual" resolution makes needs_input False and sums
+    its stored monthly_totals into payroll_manual_addition, which the caller
+    passes straight into engine.build_report."""
     from accounting_result import engine as ar_engine
     from accounting_result import compliance_notes_store as ar_compliance
 
@@ -19293,6 +19366,49 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "message": (
             f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
             f"μισθοδοσίας (κωδ. 581) στην περίοδο — {detail}."
+        ),
+    }
+
+
+def _ar_rent_resolution(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
+    """Same blocking, single-use pattern as _ar_payroll_resolution, for rent
+    (ενοίκια, Ε3 code 585/014) — see that function's docstring. Returns
+    {"needs_input": bool, "rent_manual_addition": float, "rent_check": {...}}."""
+    from accounting_result import engine as ar_engine
+    from accounting_result import compliance_notes_store as ar_compliance
+
+    check = ar_engine.check_monthly_completeness(current_entries, date_from, date_to, ar_engine.RENT_E3_CODE, ar_engine.RENT_E3_SUBCODE)
+    if not check["shortfall"]:
+        return {"needs_input": False, "rent_manual_addition": 0.0, "rent_check": check, "resolution": None}
+
+    resolution = ar_compliance.get_rent_check(path, year)
+    if not resolution:
+        return {"needs_input": True, "rent_manual_addition": 0.0, "rent_check": check, "resolution": None}
+    if resolution.get("resolution") == "manual":
+        addition = sum(float(v or 0) for v in (resolution.get("monthly_totals") or {}).values())
+        return {"needs_input": False, "rent_manual_addition": round(addition, 2), "rent_check": check, "resolution": "manual"}
+    # resolution == "skip"
+    return {"needs_input": False, "rent_manual_addition": 0.0, "rent_check": check, "resolution": "skip"}
+
+
+def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Standing note describing a rent monthly-completeness shortfall found
+    for this company/year — see _ar_payroll_note's identical reasoning."""
+    check = rent_res["rent_check"]
+    if not check["shortfall"]:
+        return None
+    resolution = rent_res.get("resolution")
+    if resolution == "manual":
+        detail = f"συμπληρώθηκε χειροκίνητα (+{rent_res['rent_manual_addition']:.2f}€)"
+    elif resolution == "skip":
+        detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. λήξη μίσθωσης/ιδιόκτητος χώρος εντός του έτους)"
+    else:
+        detail = "εκκρεμεί επιβεβαίωση"
+    return {
+        "type": "rent_shortfall",
+        "message": (
+            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες εγγραφές "
+            f"ενοικίου (κωδ. 585/014) στην περίοδο — {detail}."
         ),
     }
 
@@ -19392,11 +19508,11 @@ def api_accounting_result_vat_profile_detect():
 def api_accounting_result_payroll_resolve():
     """Saves how the accountant resolved a payroll (μισθοδοσία) monthly-
     completeness shortfall for one company/year (see _ar_payroll_resolution)
-    - either "skip" (proceed as-is; this company genuinely had no payroll
-    for some months of that year) or "manual" (their keyed-in totals for
-    the missing months, ADDED on top of myDATA's own code-581 total on
-    every future compute of that year, see engine.build_report's
-    payroll_manual_addition)."""
+    - either "skip" (proceed as-is for this computation) or "manual" (their
+    keyed-in totals for the missing months, ADDED on top of myDATA's own
+    code-581 total, see engine.build_report's payroll_manual_addition).
+    Single-use: the compute route clears this right after building the
+    report with it, so the next computation asks again."""
     try:
         payload = request.get_json(silent=True) or {}
         credential_name, cred = _ar_resolve_credential(payload)
@@ -19415,6 +19531,32 @@ def api_accounting_result_payroll_resolve():
         return jsonify({"ok": True, "payroll_check": rec}), 200
     except Exception as e:
         log.exception("api_accounting_result_payroll_resolve failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/rent/resolve", methods=["POST"])
+def api_accounting_result_rent_resolve():
+    """Same shape as /payroll/resolve, for rent (ενοίκια, Ε3 code 585/014) -
+    see _ar_rent_resolution. Single-use: cleared right after the resulting
+    report is built, so the next computation asks again."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        resolution = str(payload.get("resolution") or "").strip()
+        if not cred or not year or resolution not in ("manual", "skip"):
+            return jsonify({"ok": False, "error": "Λείπει credential, έτος ή έγκυρη επιλογή"}), 400
+        year = int(year)
+        vat = str(cred.get("vat") or "").strip()
+        monthly_totals = payload.get("monthly_totals") if isinstance(payload.get("monthly_totals"), dict) else {}
+        if resolution == "manual" and not monthly_totals:
+            return jsonify({"ok": False, "error": "Λείπουν τα μηνιαία σύνολα"}), 400
+
+        from accounting_result import compliance_notes_store as ar_compliance
+        rec = ar_compliance.set_rent_check(_ar_store_path(vat), year, resolution, monthly_totals)
+        return jsonify({"ok": True, "rent_check": rec}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_rent_resolve failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 

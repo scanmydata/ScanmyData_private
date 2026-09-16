@@ -541,11 +541,13 @@
   </div>
 </div>
 
-<!-- Manual per-month payroll totals entry modal -->
+<!-- Manual per-month totals entry modal — reused for both payroll (κωδ. 581)
+     and rent (κωδ. 585/014) monthly-completeness resolution; the title is
+     set per use, the subtitle is deliberately generic for the same reason. -->
 <div id="arManualPayrollModal" class="hidden fixed inset-0 z-[10050] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
   <div class="bg-white rounded-lg shadow-lg max-w-md w-full p-5">
-    <h3 id="arManualPayrollTitle" class="text-lg font-semibold mb-3">Μηνιαία σύνολα μισθοδοσίας</h3>
-    <p class="text-xs text-gray-500 mb-3">Καταχωρήστε το μηνιαίο σύνολο μισθοδοσίας για τους μήνες που λείπουν — προστίθεται πάνω σε ό,τι βρήκε ήδη το myDATA.</p>
+    <h3 id="arManualPayrollTitle" class="text-lg font-semibold mb-3">Μηνιαία σύνολα</h3>
+    <p class="text-xs text-gray-500 mb-3">Καταχωρήστε το μηνιαίο σύνολο για τους μήνες που λείπουν — προστίθεται πάνω σε ό,τι βρήκε ήδη το myDATA.</p>
     <div id="arManualPayrollFields" class="grid grid-cols-2 gap-2 mb-4 text-sm max-h-72 overflow-y-auto"></div>
     <div class="flex justify-end gap-2">
       <button id="arManualPayrollCancel" type="button" data-modal-close class="px-3 py-2 rounded border text-sm">Άκυρο</button>

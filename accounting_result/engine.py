@@ -181,6 +181,8 @@ DEPRECIATION_E3_CODE = "587"
 PAYROLL_E3_CODE = "581"
 EFKA_SELF_EMPLOYED_E3_CODE = "585"
 EFKA_SELF_EMPLOYED_E3_SUBCODE = "007"
+RENT_E3_CODE = "585"
+RENT_E3_SUBCODE = "014"
 
 # Ε3 "closing stock" info codes (table Δ2/Δ3/Δ4) — only present in a company's
 # official myDATA E3 classification when the accountant has actually declared
@@ -724,6 +726,7 @@ def build_report(
     vat_period_type: str = "",
     current_period_entries: Optional[Tuple[List[dict], float, List[Dict[str, Any]]]] = None,
     payroll_manual_addition: float = 0.0,
+    rent_manual_addition: float = 0.0,
 ) -> Dict[str, Any]:
     opening_inventory = {k: _fnum(v) for k, v in (opening_inventory or {}).items()}
     closing_inventory = {k: _fnum(v) for k, v in (closing_inventory or {}).items()}
@@ -784,6 +787,13 @@ def build_report(
     # below still takes full precedence over this, same as it always has.
     if payroll_manual_addition:
         account_totals["60"] = round(account_totals.get("60", 0.0) + _fnum(payroll_manual_addition), 2)
+
+    # Same idea for rent (Ε3 code 585/014, which already lands in group 62
+    # ΠΑΡΟΧ.ΤΡΙΤΩΝ alongside utilities/telecom via _OPEX_585_SUBCODE_TO_GLS -
+    # this just tops that group up with the months check_monthly_completeness
+    # found missing for code 585/014 specifically).
+    if rent_manual_addition:
+        account_totals["62"] = round(account_totals.get("62", 0.0) + _fnum(rent_manual_addition), 2)
 
     if excel_group_totals:
         account_totals = merge_excel_overrides(account_totals, excel_group_totals)
@@ -873,6 +883,7 @@ def build_report(
         "taxable_result": taxable_result,
         "depreciation": depreciation_amount,
         "payroll_manual_addition": round(_fnum(payroll_manual_addition), 2),
+        "rent_manual_addition": round(_fnum(rent_manual_addition), 2),
         "vat_outflow": vat_outflow,
         "vat_inflow": vat_inflow,
         "vat_prior_credit": None,  # v1: not derivable, see module docstring
