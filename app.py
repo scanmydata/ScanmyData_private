@@ -18734,6 +18734,19 @@ def api_accounting_result_inventory_bulk_status():
             # Same rent monthly-completeness gate bulk_compute itself
             # enforces (see _ar_rent_resolution) — pre-flagged here too.
             rent_res = _ar_rent_resolution(path, year, current_entries, date_from, date_to)
+            # ΕΦΚΑ Μη-Μισθωτών never blocks (see _ar_efka_self_employed_note),
+            # but is still surfaced here so the frontend's per-company
+            # consolidated resolution screen can offer the "save exception"
+            # action alongside whichever of inventory/payroll/rent actually
+            # need one, instead of only ever reaching it from the Ατομικός
+            # report's own inline button.
+            efka_shortfall = bool(_ar_efka_self_employed_note(path, year, current_entries, date_from, date_to))
+            # Same natural-person/legal-entity kind the Ατομικός report's own
+            # ΕΦΚΑ exception button uses to show only the applicable reason
+            # (see resolveEfkaSelfEmployedException in accounting_result.js) -
+            # threaded through here too so the bulk consolidated screen's
+            # dropdown doesn't offer an option that can't apply to this company.
+            legal_kind = vat_profile_store_get(path).get("legal_kind")
 
             if not has_inventory:
                 rows.append({
@@ -18743,6 +18756,8 @@ def api_accounting_result_inventory_bulk_status():
                     "payroll_check": payroll_res["payroll_check"],
                     "rent_needs_input": rent_res["needs_input"],
                     "rent_check": rent_res["rent_check"],
+                    "efka_shortfall": efka_shortfall,
+                    "legal_kind": legal_kind,
                 })
                 continue
 
@@ -18759,6 +18774,8 @@ def api_accounting_result_inventory_bulk_status():
                 "payroll_check": payroll_res["payroll_check"],
                 "rent_needs_input": rent_res["needs_input"],
                 "rent_check": rent_res["rent_check"],
+                "efka_shortfall": efka_shortfall,
+                "legal_kind": legal_kind,
             })
         return jsonify({"ok": True, "rows": rows}), 200
     except Exception as e:

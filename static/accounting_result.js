@@ -777,6 +777,211 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
   return !!resp.ok;
 }
 
+// ---------------- Consolidated per-company Μαζικός resolution ----------------
+// Instead of three separate batch passes (all-companies-inventory, then
+// all-companies-payroll, then all-companies-rent) each looping through
+// every flagged company on its own, runBulk() still asks the quick "same
+// method for everyone" question per category ONCE up front (that's the
+// fast path for the common case), but any company left needing MANUAL
+// entry in one or more categories — plus any ΕΦΚΑ Μη-Μισθωτών note — gets
+// ONE consolidated screen covering everything it still needs, instead of
+// being asked about inventory, then (after every other company's
+// inventory) payroll, then (after every other company's payroll) rent.
+
+async function showCompanyChecksModal(row, opts) {
+  // Payroll/rent fields MUST be pre-filled with what myDATA already has per
+  // month, not left at 0 — build_report now REPLACES (not adds to) the
+  // whole period's group 60/62 figure with whatever's submitted here (see
+  // engine.build_report's payroll_manual_total/rent_manual_total), exactly
+  // like resolvePayrollForCompany/resolveRentForCompany's own standalone
+  // flow already does. Leaving an already-correct month at 0 would silently
+  // wipe out real myDATA data for that month, not just leave it unchanged.
+  let payrollPrefill = null;
+  let rentPrefill = null;
+  if (opts.needsPayroll) {
+    showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών μισθοδοσίας — ${row.name}...`);
+    const resp = await postJson('/api/accounting_result/payroll/monthly_totals', {
+      credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
+    });
+    hideArOverlay();
+    payrollPrefill = resp.ok ? resp.monthly_totals : null;
+  }
+  if (opts.needsRent) {
+    showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών ενοικίου — ${row.name}...`);
+    const resp = await postJson('/api/accounting_result/rent/monthly_totals', {
+      credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
+    });
+    hideArOverlay();
+    rentPrefill = resp.ok ? resp.monthly_totals : null;
+  }
+
+  moveModalsToBody();
+  return new Promise((resolve) => {
+    const modal = document.getElementById('arCompanyChecksModal');
+    document.getElementById('arCompanyChecksTitle').textContent = `Έλεγχοι — ${row.name}`;
+
+    const invSection = document.getElementById('arCompanyChecksInventorySection');
+    const invFields = document.getElementById('arCompanyChecksInventoryFields');
+    invFields.innerHTML = '';
+    if (opts.needsInventory) {
+      invSection.classList.remove('hidden');
+      (window.AR_STOCK_CODES || []).forEach((code) => {
+        const wrap = document.createElement('div');
+        const label = document.createElement('label');
+        label.className = 'block text-xs text-gray-600 mb-1';
+        label.textContent = code + ' ' + (window.AR_STOCK_LABELS[code] || '');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.className = 'border rounded px-2 py-1 w-full text-sm';
+        input.value = (row.opening_inventory && row.opening_inventory[code] != null) ? row.opening_inventory[code] : 0;
+        input.dataset.code = code;
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+        invFields.appendChild(wrap);
+      });
+    } else {
+      invSection.classList.add('hidden');
+    }
+
+    function fillMonthlyFields(container, dateFrom, dateTo, prefill) {
+      container.innerHTML = '';
+      monthsInRange(dateFrom, dateTo).forEach(({ key, label }) => {
+        const wrap = document.createElement('div');
+        const lbl = document.createElement('label');
+        lbl.className = 'block text-xs text-gray-600 mb-1';
+        lbl.textContent = label;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.className = 'border rounded px-2 py-1 w-full text-sm';
+        input.value = (prefill && prefill[key] != null) ? prefill[key] : 0;
+        input.dataset.key = key;
+        wrap.appendChild(lbl);
+        wrap.appendChild(input);
+        container.appendChild(wrap);
+      });
+    }
+
+    const payrollSection = document.getElementById('arCompanyChecksPayrollSection');
+    const payrollFields = document.getElementById('arCompanyChecksPayrollFields');
+    if (opts.needsPayroll) {
+      payrollSection.classList.remove('hidden');
+      fillMonthlyFields(payrollFields, opts.dateFrom, opts.dateTo, payrollPrefill);
+    } else {
+      payrollSection.classList.add('hidden');
+      payrollFields.innerHTML = '';
+    }
+
+    const rentSection = document.getElementById('arCompanyChecksRentSection');
+    const rentFields = document.getElementById('arCompanyChecksRentFields');
+    if (opts.needsRent) {
+      rentSection.classList.remove('hidden');
+      fillMonthlyFields(rentFields, opts.dateFrom, opts.dateTo, rentPrefill);
+    } else {
+      rentSection.classList.add('hidden');
+      rentFields.innerHTML = '';
+    }
+
+    const efkaSection = document.getElementById('arCompanyChecksEfkaSection');
+    const efkaSelect = document.getElementById('arCompanyChecksEfkaSelect');
+    if (opts.hasEfkaNote) {
+      efkaSection.classList.remove('hidden');
+      // Same natural-person/legal-entity filtering as the Ατομικός report's
+      // own ΕΦΚΑ exception button (resolveEfkaSelfEmployedException) — only
+      // offer the reason that actually matches this company's known type,
+      // falling back to both when it's not known yet.
+      const applicable = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !row.legal_kind || o.legalKind === row.legal_kind);
+      const options = applicable.length ? applicable : AR_EFKA_EXCEPTION_OPTIONS;
+      efkaSelect.innerHTML = '<option value="">Καμία ενέργεια τώρα</option>' +
+        options.map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
+      efkaSelect.value = '';
+    } else {
+      efkaSection.classList.add('hidden');
+    }
+
+    modal.classList.remove('hidden');
+    const saveBtn = document.getElementById('arCompanyChecksSave');
+    const cancelBtn = document.getElementById('arCompanyChecksCancel');
+    function cleanup() {
+      modal.classList.add('hidden');
+      saveBtn.removeEventListener('click', onSave);
+      cancelBtn.removeEventListener('click', onCancel);
+    }
+    function onSave() {
+      const result = {};
+      if (opts.needsInventory) {
+        const values = {};
+        invFields.querySelectorAll('input').forEach((inp) => { values[inp.dataset.code] = parseFloat(inp.value) || 0; });
+        result.inventory = values;
+      }
+      if (opts.needsPayroll) {
+        const values = {};
+        payrollFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
+        result.payroll = values;
+      }
+      if (opts.needsRent) {
+        const values = {};
+        rentFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
+        result.rent = values;
+      }
+      if (opts.hasEfkaNote && efkaSelect.value) {
+        result.efka = efkaSelect.value;
+      }
+      cleanup();
+      resolve(result);
+    }
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+    saveBtn.addEventListener('click', onSave);
+    cancelBtn.addEventListener('click', onCancel);
+  });
+}
+
+// Applies the modal's answers: inventory always goes in as "manual" (that's
+// the only reason this screen showed an inventory section at all — batch
+// defaults for inventory are resolved before this loop even starts, see
+// runBulk()). Payroll/rent fields are pre-filled from myDATA (see
+// showCompanyChecksModal), so submitting them untouched still reproduces
+// myDATA's own total via "manual" — "skip" is only the fallback for the
+// unlikely case every field ends up at literal 0 (nothing pre-filled and
+// nothing typed), since an empty monthly_totals would otherwise fail
+// server-side validation.
+async function resolveCompanyChecksManually(row, year, dateFrom, dateTo, opts) {
+  const result = await showCompanyChecksModal(row, { ...opts, dateFrom, dateTo });
+  if (!result) return false;
+
+  if (opts.needsInventory) {
+    await postJson('/api/accounting_result/inventory/resolve', {
+      credential_name: row.name, year, method: 'manual', value: result.inventory, date_from: dateFrom, date_to: dateTo,
+    });
+  }
+  if (opts.needsPayroll) {
+    const hasValues = Object.keys(result.payroll || {}).length > 0;
+    await postJson('/api/accounting_result/payroll/resolve', {
+      credential_name: row.name, year,
+      resolution: hasValues ? 'manual' : 'skip',
+      monthly_totals: result.payroll || {},
+    });
+  }
+  if (opts.needsRent) {
+    const hasValues = Object.keys(result.rent || {}).length > 0;
+    await postJson('/api/accounting_result/rent/resolve', {
+      credential_name: row.name, year,
+      resolution: hasValues ? 'manual' : 'skip',
+      monthly_totals: result.rent || {},
+    });
+  }
+  if (opts.hasEfkaNote && result.efka) {
+    await postJson('/api/accounting_result/efka_self_employed/resolve', {
+      credential_name: row.name, year, reason: result.efka,
+    });
+  }
+  return true;
+}
+
 // ---------------- ΕΦΚΑ Μη-Μισθωτών exception ----------------
 
 const AR_EFKA_EXCEPTION_OPTIONS = [
@@ -1209,6 +1414,38 @@ function makeColumnsResizable(tableEl) {
   });
 }
 
+// document.querySelectorAll only sees checkboxes in rows a DataTable has
+// currently attached to the DOM — rows on any OTHER page of a paginated
+// table are detached (not destroyed, just out of the live tree) until the
+// user pages back to them, so a plain querySelectorAll silently misses
+// anything checked on a page other than the one showing right now. That
+// was the actual cause of "select several companies across pages, only 1
+// gets processed": every selection/count/lock call below used to go
+// straight through document.querySelectorAll. These helpers go through the
+// DataTables API instead (table.$(), which knows about every row
+// regardless of which page is displayed), falling back to a plain DOM
+// query only when the table isn't (yet) a DataTable at all — e.g. jQuery/
+// DataTables failed to load.
+function arTableCheckboxes(tableSelector, checkboxSelector) {
+  const $ = window.jQuery;
+  if ($ && $.fn && $.fn.DataTable && $.fn.DataTable.isDataTable(tableSelector)) {
+    return $(tableSelector).DataTable().$(checkboxSelector).toArray();
+  }
+  return Array.from(document.querySelectorAll(checkboxSelector));
+}
+function arTableCheckedValues(tableSelector, checkboxSelector) {
+  return arTableCheckboxes(tableSelector, checkboxSelector)
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.value);
+}
+
+function updateArBulkSelectedCount() {
+  const el = document.getElementById('arBulkSelectedCount');
+  if (!el) return;
+  const n = arTableCheckedValues('.ar-bulk-table', '.ar-bulk-cb').length;
+  el.textContent = n === 1 ? '1 επιλεγμένη' : `${n} επιλεγμένες`;
+}
+
 function initBulkDataTable() {
   if (typeof window.jQuery === 'undefined' || !window.jQuery.fn.DataTable) return;
   const $ = window.jQuery;
@@ -1223,6 +1460,7 @@ function initBulkDataTable() {
     language: AR_DT_LANG,
   });
   makeColumnsResizable($table.get(0));
+  updateArBulkSelectedCount();
 }
 
 function initSavedDataTable() {
@@ -1241,7 +1479,12 @@ function initSavedDataTable() {
     // stateDuration:-1 means it never expires on its own.
     stateSave: true,
     stateDuration: -1,
-    columnDefs: [{ orderable: false, searchable: false, targets: [0, 3, 4, 6] }],
+    // Τύπος(3)/ΦΠΑ(4) are now fully searchable+orderable too — they used to
+    // be excluded because their content only exists after fillSaved*Cells()
+    // fills it in async, which previously never told DataTables it changed
+    // (see redrawSavedDataTable). 0=checkbox, 6=action buttons stay excluded
+    // since neither has meaningful text to search/sort by.
+    columnDefs: [{ orderable: false, searchable: false, targets: [0, 6] }],
     language: AR_DT_LANG,
   });
 }
@@ -1402,7 +1645,7 @@ function showArResultsFlash(message, kind, opts) {
 
 // Prevent the selection from changing while a bulk run is in flight.
 function setBulkTableLocked(locked) {
-  document.querySelectorAll('.ar-bulk-cb').forEach((cb) => { cb.disabled = locked; });
+  arTableCheckboxes('.ar-bulk-table', '.ar-bulk-cb').forEach((cb) => { cb.disabled = locked; });
   ['arBulkSelectAllBtn', 'arBulkSelectNoneBtn', 'arBulkRunBtn'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.disabled = locked;
@@ -1643,7 +1886,7 @@ async function deleteBulkRun(batchId, onDone) {
 async function runBulk() {
   const from = document.getElementById('arBulkFrom').value;
   const to = document.getElementById('arBulkTo').value;
-  const names = Array.from(document.querySelectorAll('.ar-bulk-cb:checked')).map((cb) => cb.value);
+  const names = arTableCheckedValues('.ar-bulk-table', '.ar-bulk-cb');
   const statusEl = document.getElementById('arBulkStatus');
   document.getElementById('arBulkPdfBtn').disabled = true;
   document.getElementById('arBulkConsolidatedPdfBtn').disabled = true;
@@ -1662,13 +1905,26 @@ async function runBulk() {
   hideArOverlay();
   if (!statusResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
-    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα ελέγχου αποθεμάτων λήξης — ' + (statusResp.error || ''), 'error');
+    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα προελέγχου αποθεμάτων/μισθοδοσίας/ενοικίου — ' + (statusResp.error || ''), 'error');
     return;
   }
 
   const depreciationAmbiguousNames = (statusResp.rows || [])
     .filter((r) => r.depreciation_ambiguous)
     .map((r) => r.name);
+
+  // Each category still gets ONE quick "same answer for everyone?" question
+  // up front — that stays the fast path for the common case (batch defaults
+  // for most companies, no per-company back-and-forth at all). Only
+  // "χειροκίνητα" defers to the consolidated per-company screen below,
+  // rather than immediately looping through every flagged company right
+  // here — a company needing manual entry in more than one category would
+  // otherwise get asked about it three separate times, once per category,
+  // each pass working through the ENTIRE flagged list before the next
+  // category's pass even starts.
+  const needsManualInventory = new Set();
+  const needsManualPayroll = new Set();
+  const needsManualRent = new Set();
 
   // Companies myDATA shows as already tracking inventory (a prior-year
   // closing stock was declared), OR a Β/Γ-κατηγορίας company whose sales of
@@ -1690,16 +1946,8 @@ async function runBulk() {
       statusEl.textContent = 'Ακυρώθηκε.';
       return;
     }
-
     if (choice === 'manual') {
-      for (const row of flagged) {
-        statusEl.textContent = `Απόθεμα λήξης — ${row.name}...`;
-        const ok = await resolveInventoryForCompany(row.name, row.vat, year, row.opening_inventory, from, to);
-        if (!ok) {
-          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
-          return;
-        }
-      }
+      flagged.forEach((row) => needsManualInventory.add(row.name));
     } else {
       for (const row of flagged) {
         await postJson('/api/accounting_result/inventory/resolve', {
@@ -1727,14 +1975,7 @@ async function runBulk() {
       return;
     }
     if (payrollChoice === 'manual') {
-      for (const row of payrollFlagged) {
-        statusEl.textContent = `Μισθοδοσία — ${row.name}...`;
-        const ok = await resolvePayrollForCompany(row.name, year, from, to, row.payroll_check);
-        if (!ok) {
-          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
-          return;
-        }
-      }
+      payrollFlagged.forEach((row) => needsManualPayroll.add(row.name));
     } else {
       for (const row of payrollFlagged) {
         await postJson('/api/accounting_result/payroll/resolve', {
@@ -1761,19 +2002,40 @@ async function runBulk() {
       return;
     }
     if (rentChoice === 'manual') {
-      for (const row of rentFlagged) {
-        statusEl.textContent = `Ενοίκιο — ${row.name}...`;
-        const ok = await resolveRentForCompany(row.name, year, from, to, row.rent_check);
-        if (!ok) {
-          statusEl.textContent = `Ακυρώθηκε στο ${row.name}.`;
-          return;
-        }
-      }
+      rentFlagged.forEach((row) => needsManualRent.add(row.name));
     } else {
       for (const row of rentFlagged) {
         await postJson('/api/accounting_result/rent/resolve', {
           credential_name: row.name, year, resolution: 'skip',
         });
+      }
+    }
+  }
+
+  // One consolidated screen per company for everything it still needs —
+  // whichever of inventory/payroll/rent it was marked "χειροκίνητα" for
+  // above, PLUS a ΕΦΚΑ Μη-Μισθωτών exception option riding along IF the
+  // company already needs the screen for one of those other reasons. ΕΦΚΑ
+  // alone never opens a screen by itself — it stays a silent report note
+  // (as before) unless the company is already stopping the batch for
+  // something else, since interrupting an otherwise-clean run just to
+  // offer an optional exception would work against "faster", not for it.
+  const consolidatedNames = new Set([...needsManualInventory, ...needsManualPayroll, ...needsManualRent]);
+  if (consolidatedNames.size) {
+    const rowByName = new Map((statusResp.rows || []).map((r) => [r.name, r]));
+    for (const name of consolidatedNames) {
+      const row = rowByName.get(name);
+      if (!row) continue;
+      statusEl.textContent = `Έλεγχοι — ${name}...`;
+      const ok = await resolveCompanyChecksManually(row, year, from, to, {
+        needsInventory: needsManualInventory.has(name),
+        needsPayroll: needsManualPayroll.has(name),
+        needsRent: needsManualRent.has(name),
+        hasEfkaNote: !!row.efka_shortfall,
+      });
+      if (!ok) {
+        statusEl.textContent = `Ακυρώθηκε στο ${name}.`;
+        return;
       }
     }
   }
@@ -2006,6 +2268,20 @@ function booksCategoryMismatchFlashMessage(mismatch, label) {
   return `Κατηγορία βιβλίων (${label}): το Μητρώο ΑΑΔΕ δείχνει "${mismatch.aade_category_raw}" (${mismatch.aade_category}) ενώ στα Credentials έχουμε καταχωρημένη ${mismatch.our_category} — έλεγξε/διόρθωσε τη ρύθμιση από τη σελίδα Credentials.`;
 }
 
+// Both async-filled columns below write into cells via raw textContent
+// AFTER initSavedDataTable() has already captured the initial "…"
+// placeholder as that cell's sort/search data — DataTables never notices
+// a plain DOM mutation on its own, so sorting/searching kept acting on the
+// stale placeholder forever. redrawSavedDataTable() re-reads every cell's
+// live DOM content (which is exactly what DataTables' own `data-order`
+// attribute convention is for — see fillSavedHistoryCells) into its cache
+// once the fill is done.
+function redrawSavedDataTable() {
+  const $ = window.jQuery;
+  if (!$ || !$.fn || !$.fn.DataTable || !$.fn.DataTable.isDataTable('.ar-saved-table')) return;
+  $('.ar-saved-table').DataTable().rows().invalidate('dom').draw(false);
+}
+
 async function fillSavedVatCells(container) {
   const cells = Array.from(container.querySelectorAll('.ar-saved-vat'));
   await Promise.all(cells.map(async (cell) => {
@@ -2020,6 +2296,7 @@ async function fillSavedVatCells(container) {
       label.textContent = '—';
     }
   }));
+  redrawSavedDataTable();
   container.querySelectorAll('.ar-saved-vat-detect-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const afm = btn.dataset.afm;
@@ -2033,6 +2310,7 @@ async function fillSavedVatCells(container) {
         if (label) label.textContent = '⚠ ' + (resp.error || 'σφάλμα');
       }
       btn.disabled = false;
+      redrawSavedDataTable();
     });
   });
 }
@@ -2041,23 +2319,35 @@ async function fillSavedHistoryCells(container) {
   const cells = Array.from(container.querySelectorAll('.ar-saved-hist'));
   await Promise.all(cells.map(async (cell) => {
     const afm = cell.dataset.afm;
-    if (!afm) { cell.textContent = '—'; return; }
+    // "—" (never computed) sorts first with an empty data-order — keep
+    // every branch of this cell consistently keyed on data-order rather
+    // than mixing "sort by ISO timestamp" here with "sort by literal
+    // dash text" there.
+    if (!afm) { cell.textContent = '—'; cell.setAttribute('data-order', ''); return; }
     try {
       const res = await fetch('/api/accounting_result/history?vat=' + encodeURIComponent(afm));
       const data = await res.json();
       const latest = data.ok && data.history && data.history[0];
-      if (!latest) { cell.textContent = '—'; return; }
+      if (!latest) { cell.textContent = '—'; cell.setAttribute('data-order', ''); return; }
       const ts = new Date(latest.timestamp);
       const tsStr = String(ts.getDate()).padStart(2, '0') + '/' + String(ts.getMonth() + 1).padStart(2, '0') + '/' + ts.getFullYear();
       cell.textContent = tsStr + (latest.computed_by ? ' (' + latest.computed_by + ')' : '');
+      // dd/mm/yyyy display text does NOT sort chronologically as a plain
+      // string (e.g. "01/02/2027" < "15/01/2026" alphabetically) — this
+      // `data-order` attribute is DataTables' own built-in convention for
+      // "sort by THIS instead of the cell's text"; the ISO timestamp sorts
+      // correctly as a plain string too, no custom sort-type needed.
+      cell.setAttribute('data-order', latest.timestamp || '');
     } catch (e) {
       cell.textContent = '—';
+      cell.setAttribute('data-order', '');
     }
   }));
+  redrawSavedDataTable();
 }
 
 async function bulkDeleteSavedClients() {
-  const afms = Array.from(document.querySelectorAll('.ar-saved-cb:checked')).map((cb) => cb.value);
+  const afms = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
   if (!afms.length) {
     showArFlash('Δεν έχεις επιλέξει καμία εταιρία.', 'warning', 4000);
     return;
@@ -2090,7 +2380,7 @@ async function bulkDeleteSavedClients() {
 // already just forward to it.
 async function runVatBulkDetect() {
   const statusEl = document.getElementById('arSavedBulkStatus');
-  const selected = Array.from(document.querySelectorAll('.ar-saved-cb:checked')).map((cb) => cb.value);
+  const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
   const afms = selected.length
     ? selected
     : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean);
@@ -2363,13 +2653,13 @@ function _arBindBackdropClose(modalId, useInlineStyle) {
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function arInitSavedTabHandlers() {
   document.getElementById('arSavedRefreshBtn').addEventListener('click', loadSavedClients);
   document.getElementById('arSavedSelectAllBtn').addEventListener('click', () => {
-    document.querySelectorAll('.ar-saved-cb').forEach((cb) => { cb.checked = true; });
+    arTableCheckboxes('.ar-saved-table', '.ar-saved-cb').forEach((cb) => { cb.checked = true; });
   });
   document.getElementById('arSavedSelectNoneBtn').addEventListener('click', () => {
-    document.querySelectorAll('.ar-saved-cb').forEach((cb) => { cb.checked = false; });
+    arTableCheckboxes('.ar-saved-table', '.ar-saved-cb').forEach((cb) => { cb.checked = false; });
   });
   document.getElementById('arSavedBulkDeleteBtn').addEventListener('click', bulkDeleteSavedClients);
   document.getElementById('arSavedVatBulkDetectBtn').addEventListener('click', runVatBulkDetect);
@@ -2404,9 +2694,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const afms = new Set((window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')));
     const names = new Set((window.AR_CREDENTIALS || []).filter((c) => afms.has(c.vat)).map((c) => c.name));
     showArTab('bulk');
-    document.querySelectorAll('.ar-bulk-cb').forEach((cb) => { cb.checked = names.has(cb.value); });
+    arTableCheckboxes('.ar-bulk-table', '.ar-bulk-cb').forEach((cb) => { cb.checked = names.has(cb.value); });
+    updateArBulkSelectedCount();
   });
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', arInitSavedTabHandlers);
+} else {
+  arInitSavedTabHandlers();
+}
 
 // ---------------- Wiring ----------------
 
@@ -2477,7 +2773,7 @@ moveModalsToBody();
 
 if (!window.__arModalObserverInstalled) {
   window.__arModalObserverInstalled = true;
-  const AR_MOVE_MODAL_IDS = ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'];
+  const AR_MOVE_MODAL_IDS = ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arManualPayrollModal', 'arCompanyChecksModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'];
   const arModalObserver = new MutationObserver((muts) => {
     for (const m of muts) {
       if (!m.addedNodes || !m.addedNodes.length) continue;
@@ -2495,7 +2791,7 @@ if (!window.__arModalObserverInstalled) {
   arModalObserver.observe(document.body, { childList: true, subtree: true });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function arInitPageHandlers() {
   moveModalsToBody();
   initBulkDataTable();
   // Double-click a company's name or ΑΦΜ to toggle its checkbox — delegated
@@ -2506,6 +2802,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!cell) return;
     const cb = cell.closest('tr') && cell.closest('tr').querySelector('.ar-bulk-cb');
     if (cb) cb.checked = !cb.checked;
+    updateArBulkSelectedCount();
+  });
+  // Same delegated-container trick, for the selected-count display: any
+  // individual checkbox click/keyboard toggle bubbles a 'change' event up
+  // to this container regardless of which DataTables page it's on.
+  document.getElementById('arBulkCredentialList').addEventListener('change', (e) => {
+    if (e.target.classList && e.target.classList.contains('ar-bulk-cb')) updateArBulkSelectedCount();
   });
   document.getElementById('arTabSingleBtn').addEventListener('click', () => showArTab('single'));
   document.getElementById('arTabBulkBtn').addEventListener('click', () => showArTab('bulk'));
@@ -2561,10 +2864,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   document.getElementById('arBulkSelectAllBtn').addEventListener('click', () => {
-    document.querySelectorAll('.ar-bulk-cb').forEach((cb) => { cb.checked = true; });
+    arTableCheckboxes('.ar-bulk-table', '.ar-bulk-cb').forEach((cb) => { cb.checked = true; });
+    updateArBulkSelectedCount();
   });
   document.getElementById('arBulkSelectNoneBtn').addEventListener('click', () => {
-    document.querySelectorAll('.ar-bulk-cb').forEach((cb) => { cb.checked = false; });
+    arTableCheckboxes('.ar-bulk-table', '.ar-bulk-cb').forEach((cb) => { cb.checked = false; });
+    updateArBulkSelectedCount();
   });
 
   document.getElementById('arBulkRunsBtn').addEventListener('click', showBulkRunsModal);
@@ -2595,4 +2900,21 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('arBulkRunsDetailDeleteBtn').addEventListener('click', () => {
     if (AR_OPEN_BATCH) deleteBulkRun(AR_OPEN_BATCH.batch.id, showBulkRunsModal);
   });
-});
+}
+// Same "run now if the DOM is already here, otherwise wait for
+// DOMContentLoaded" idiom as moveModalsToBody() above and
+// arInitSavedTabHandlers() — DOMContentLoaded fires exactly ONCE per real
+// document load. On a partial-nav visit to this page (the app swaps
+// #appShell's innerHTML and re-executes this script without a real
+// navigation), the event has already long since fired and never will
+// again, so a plain `document.addEventListener('DOMContentLoaded', …)`
+// here silently never ran — every tab button, the bulk-run button, and the
+// Αποθηκευμένα delete button all went dead the moment someone reached this
+// page via partial nav instead of a full reload. readyState is already
+// 'complete'/'interactive' by the time that happens, so this branch runs
+// the init immediately instead.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', arInitPageHandlers);
+} else {
+  arInitPageHandlers();
+}

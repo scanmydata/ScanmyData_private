@@ -301,6 +301,7 @@
       <div class="flex items-center gap-2 mb-2">
         <button id="arBulkSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Επιλογή όλων</button>
         <button id="arBulkSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Καμία επιλογή</button>
+        <span id="arBulkSelectedCount" class="text-xs text-gray-500 ml-1">0 επιλεγμένες</span>
       </div>
       <div id="arBulkCredentialList" class="border rounded overflow-x-auto">
         <table class="ar-bulk-table w-full text-sm">
@@ -556,6 +557,50 @@
       <button id="arManualPayrollCancel" type="button" data-modal-close class="px-3 py-2 rounded border text-sm">Άκυρο</button>
       <button id="arManualPayrollContinue" type="button" class="px-3 py-2 rounded border text-sm">Συνέχεια με τρέχοντα</button>
       <button id="arManualPayrollSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+<!-- Consolidated per-company Μαζικός pre-check resolution: whichever of
+     απόθεμα λήξης / μισθοδοσία / ενοίκιο / ΕΦΚΑ Μη-Μισθωτών apply to THIS
+     company, in one screen, instead of asking about each across three
+     separate passes over the whole batch. Sections toggle visibility per
+     company via JS. -->
+<div id="arCompanyChecksModal" class="hidden fixed inset-0 z-[10050] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
+  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto">
+    <h3 id="arCompanyChecksTitle" class="text-lg font-semibold mb-1">Έλεγχοι εταιρίας</h3>
+    <p class="text-xs text-gray-500 mb-3">Μόνο τα σχετικά για αυτή την εταιρία εμφανίζονται παρακάτω.</p>
+
+    <div id="arCompanyChecksInventorySection" class="mb-4 hidden">
+      <div class="font-medium text-sm mb-1">📦 Απόθεμα λήξης</div>
+      <div id="arCompanyChecksInventoryFields" class="grid grid-cols-2 gap-2 text-sm"></div>
+    </div>
+
+    <div id="arCompanyChecksPayrollSection" class="mb-4 hidden">
+      <div class="font-medium text-sm mb-1">💼 Μισθοδοσία — μηνιαία σύνολα</div>
+      <p class="text-xs text-gray-500 mb-1">Προσυμπληρωμένα με ό,τι βρήκε ήδη το myDATA ανά μήνα — διόρθωσε μόνο τους μήνες που λείπουν ή είναι λάθος, τα υπόλοιπα μένουν ως έχουν.</p>
+      <div id="arCompanyChecksPayrollFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <div id="arCompanyChecksRentSection" class="mb-4 hidden">
+      <div class="font-medium text-sm mb-1">🏠 Ενοίκιο — μηνιαία σύνολα</div>
+      <p class="text-xs text-gray-500 mb-1">Προσυμπληρωμένα με ό,τι βρήκε ήδη το myDATA ανά μήνα — διόρθωσε μόνο τους μήνες που λείπουν ή είναι λάθος, τα υπόλοιπα μένουν ως έχουν.</p>
+      <div id="arCompanyChecksRentFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <div id="arCompanyChecksEfkaSection" class="mb-4 hidden">
+      <div class="font-medium text-sm mb-1">🧾 ΕΦΚΑ Μη-Μισθωτών</div>
+      <p class="text-xs text-gray-500 mb-1">Πιθανή οφειλή — έλεγξε ΚΕΑΟ, ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη.</p>
+      <select id="arCompanyChecksEfkaSelect" class="border rounded px-2 py-1 text-sm w-full">
+        <option value="">Καμία ενέργεια τώρα</option>
+        <option value="sole_prop_also_employed">Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός</option>
+        <option value="company_partners_exempt">Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις</option>
+      </select>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-2">
+      <button id="arCompanyChecksCancel" type="button" data-modal-close class="px-3 py-2 rounded border text-sm">Άκυρο (διακοπή όλων)</button>
+      <button id="arCompanyChecksSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Αποθήκευση &amp; Επόμενη</button>
     </div>
   </div>
 </div>
