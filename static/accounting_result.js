@@ -1429,7 +1429,17 @@ function makeColumnsResizable(tableEl) {
 function arTableCheckboxes(tableSelector, checkboxSelector) {
   const $ = window.jQuery;
   if ($ && $.fn && $.fn.DataTable && $.fn.DataTable.isDataTable(tableSelector)) {
-    return $(tableSelector).DataTable().$(checkboxSelector).toArray();
+    // table.$() is the LEGACY DataTables shortcut, and unlike .rows()/
+    // .cells()/.nodes() (whose selector-modifier defaults to page:'all'),
+    // .$() defaults to the CURRENTLY DISPLAYED PAGE ONLY. That silently
+    // dropped every checkbox checked on any page other than the one showing
+    // at read time — exactly why "select one row, page to another page,
+    // select another, delete both" only ever deleted the one on the page
+    // left open, and why rows checked on an earlier page then never
+    // revisited looked like they could never be deleted at all.
+    // table.rows().nodes() is explicit and documented to span every page.
+    const table = $(tableSelector).DataTable();
+    return $(table.rows().nodes()).find(checkboxSelector).toArray();
   }
   return Array.from(document.querySelectorAll(checkboxSelector));
 }
@@ -1443,6 +1453,13 @@ function updateArBulkSelectedCount() {
   const el = document.getElementById('arBulkSelectedCount');
   if (!el) return;
   const n = arTableCheckedValues('.ar-bulk-table', '.ar-bulk-cb').length;
+  el.textContent = n === 1 ? '1 επιλεγμένη' : `${n} επιλεγμένες`;
+}
+
+function updateArSavedSelectedCount() {
+  const el = document.getElementById('arSavedSelectedCount');
+  if (!el) return;
+  const n = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb').length;
   el.textContent = n === 1 ? '1 επιλεγμένη' : `${n} επιλεγμένες`;
 }
 
@@ -1487,6 +1504,7 @@ function initSavedDataTable() {
     columnDefs: [{ orderable: false, searchable: false, targets: [0, 6] }],
     language: AR_DT_LANG,
   });
+  updateArSavedSelectedCount();
 }
 
 // ---------------- Bulk mode ----------------
@@ -2206,11 +2224,17 @@ function renderSavedTable(companies) {
     const actionCell = credName
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
       : `<span class="text-xs text-gray-400" title="Δεν βρέθηκαν πλήρη myDATA credentials για αυτό το ΑΦΜ στη σελίδα Credentials.">— χωρίς myDATA</span>`;
+    // Same ΓΕΜΗ+ΑΑΔΕ cross-check flow e3_check.html's single-company panel
+    // uses (/api/e3/brain/company_members) — only offered while unresolved;
+    // once a type is on file there's nothing left to fetch here.
+    const typeDetectBtn = typeResolutionTbl === 'unknown'
+      ? `<button type="button" class="ar-saved-type-detect-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Ανάκτηση νομικής μορφής/μελών από ΓΕΜΗ-ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet σε αυτή τη γραμμή — πρόσθεσέ τους από το ✏️)">🔍</button>`
+      : '';
     return `<tr>
       <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
       <td>${escapeHtml(c.name || '')}</td>
-      <td>${typeBadge}</td>
+      <td>${typeBadge}${typeDetectBtn}</td>
       <td class="ar-saved-vat text-xs" data-afm="${afm}">
         <span class="ar-saved-vat-label text-gray-400">…</span>
         <button type="button" class="ar-saved-vat-detect-btn text-xs px-1.5 py-0.5 rounded border hover:bg-gray-50" data-afm="${afm}" title="Ανάκτηση κατηγορίας βιβλίων/υπαγωγής ΦΠΑ από το Μητρώο ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet)">🔍</button>
@@ -2280,6 +2304,54 @@ function redrawSavedDataTable() {
   const $ = window.jQuery;
   if (!$ || !$.fn || !$.fn.DataTable || !$.fn.DataTable.isDataTable('.ar-saved-table')) return;
   $('.ar-saved-table').DataTable().rows().invalidate('dom').draw(false);
+}
+
+// Same ΓΕΜΗ+ΑΑΔΕ cross-check as e3_check.html's single-company "🔍
+// Ανάκτηση διεύθυνσης" flow (/api/e3/brain/company_members), triggered
+// per-row from the Τύπος column's 🔍 button instead — this store entry
+// already carries its own TAXISnet creds (filled via ✏️ or Excel import),
+// so there's no separate credentials form to fill in here first. Runs a
+// real Playwright/ΓΕΜΗ round-trip (~30-60s), so it's an explicit per-row
+// action, never automatic — see runBulk()'s pre-check gate below for why
+// a missing type blocks a compute instead of silently auto-fetching it.
+async function fetchCompanyInfoForSavedRow(afm, btn) {
+  const entry = (window.__arSavedCompanies || []).find((e) => String((e.company || {}).afm || '') === afm);
+  const c = (entry && entry.company) || {};
+  const taxisUser = c.taxisnet_username || '';
+  const taxisPass = c.taxisnet_password || '';
+  if (!taxisUser || !taxisPass) {
+    showArFlash(`Δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για ΑΦΜ ${afm} — πρόσθεσέ τους πρώτα από το ✏️.`, 'warning', 6000);
+    return;
+  }
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⌛';
+  try {
+    const resp = await fetch('/api/e3/brain/company_members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ afm, taxis_user: taxisUser, taxis_pass: taxisPass }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία ανάκτησης.');
+    const legalType = (data.company && data.company.legal_type) || '';
+    const isIndividual = Boolean(data.is_individual);
+    const members = Array.isArray(data.members) ? data.members : [];
+    if (entry) {
+      entry.company = entry.company || {};
+      if (legalType) entry.company.legal_type = legalType;
+      const addr = data.company && data.company.address;
+      if (addr && !entry.company.address) entry.company.address = addr;
+      entry.members = isIndividual ? [] : members;
+      await postJson('/api/e3/brain/credentials_store/update', { snapshot: entry });
+    }
+    showArFlash(`Ανακτήθηκαν στοιχεία ΓΕΜΗ/ΑΑΔΕ για ΑΦΜ ${afm}.`, 'success', 4000);
+    loadSavedClients();
+  } catch (e) {
+    showArFlash(`Σφάλμα ανάκτησης ΓΕΜΗ/ΑΑΔΕ (ΑΦΜ ${afm}): ${e && e.message ? e.message : e}`, 'error', 7000);
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
 }
 
 async function fillSavedVatCells(container) {
@@ -2470,6 +2542,9 @@ async function loadSavedClients() {
   container.querySelectorAll('.ar-saved-edit-btn').forEach((btn) => {
     btn.addEventListener('click', () => openSavedEditModal(btn.dataset.afm));
   });
+  container.querySelectorAll('.ar-saved-type-detect-btn').forEach((btn) => {
+    btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn));
+  });
   fillSavedHistoryCells(container);
   fillSavedVatCells(container);
   initSavedDataTable();
@@ -2657,9 +2732,18 @@ function arInitSavedTabHandlers() {
   document.getElementById('arSavedRefreshBtn').addEventListener('click', loadSavedClients);
   document.getElementById('arSavedSelectAllBtn').addEventListener('click', () => {
     arTableCheckboxes('.ar-saved-table', '.ar-saved-cb').forEach((cb) => { cb.checked = true; });
+    updateArSavedSelectedCount();
   });
   document.getElementById('arSavedSelectNoneBtn').addEventListener('click', () => {
     arTableCheckboxes('.ar-saved-table', '.ar-saved-cb').forEach((cb) => { cb.checked = false; });
+    updateArSavedSelectedCount();
+  });
+  // Delegated: .ar-saved-cb checkboxes are recreated on every
+  // loadSavedClients() re-render, so a direct listener per-checkbox would
+  // need rebinding each time — same reasoning as arBulkCredentialList's own
+  // delegated 'change' listener for updateArBulkSelectedCount().
+  document.getElementById('arSavedListContainer').addEventListener('change', (e) => {
+    if (e.target && e.target.classList.contains('ar-saved-cb')) updateArSavedSelectedCount();
   });
   document.getElementById('arSavedBulkDeleteBtn').addEventListener('click', bulkDeleteSavedClients);
   document.getElementById('arSavedVatBulkDetectBtn').addEventListener('click', runVatBulkDetect);

@@ -2401,6 +2401,45 @@
     } catch (_) {}
   }
 
+  // The single-company "🔍 Ανάκτηση διεύθυνσης" flow (loadE3Partners below)
+  // only ever wrote the resolved legal_type into the localStorage cache
+  // (_membersCacheSet) and the in-page pill — never into the shared
+  // Αποθηκευμένα store (e3_company_credentials_store.json) that both this
+  // page's own «Αποθηκευμένα» tab AND Λογιστικό Αποτέλεσμα's own saved-
+  // clients table read from. That's why the type looked right here (pill +
+  // cache) but never showed up in either saved table. Only syncs into a
+  // company that's ALREADY in the shared roster — a one-off ΑΦΜ typed into
+  // this checker isn't necessarily meant to be archived there, so this
+  // never creates a new roster entry, only updates an existing one.
+  // credentials_store/update REPLACES the whole snapshot by AFM (see
+  // api_e3_brain_credentials_store_update), so the existing record must be
+  // fetched and merged into, not rebuilt from just these fields.
+  async function _syncBrainLegalTypeToStore(afm, info) {
+    if (!afm) return;
+    try {
+      const resp = await fetch('/api/e3/brain/credentials_store');
+      const data = await resp.json();
+      if (!data.ok) return;
+      const companies = Array.isArray(data.companies) ? data.companies : [];
+      const existing = companies.find((c) => String((c.company || {}).afm || '').trim() === afm);
+      if (!existing) return;
+      const c = existing.company || (existing.company = {});
+      if (info.legal_type) c.legal_type = info.legal_type;
+      if (info.address && !c.address) c.address = info.address;
+      if (info.is_individual) {
+        existing.members = [];
+      } else if (Array.isArray(info.members) && info.members.length) {
+        existing.members = info.members;
+      }
+      await fetch('/api/e3/brain/credentials_store/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshot: existing }),
+      });
+      E3_BRAIN_CREDS_CACHE = companies.map((c) => (c === existing ? existing : c));
+    } catch (_) { /* best-effort — the pill/cache above already reflect the type either way */ }
+  }
+
   async function loadE3Partners(dateFromIso=null, dateToIso=null, opts) {
     const force = !!(opts && opts.force);
     const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
@@ -2533,6 +2572,14 @@
           });
         }
       } catch (_) {}
+      // Best-effort, not awaited — don't hold up the rest of the form fill
+      // for a store round-trip the user never asked for directly.
+      _syncBrainLegalTypeToStore(afm, {
+        legal_type: legalType,
+        address: addrEl ? addrEl.value : '',
+        is_individual: isIndividual,
+        members: normalized,
+      });
 
       // === Υποκαταστήματα (sub_home) ===
       // Already in-flight (kicked off in parallel with company_members
