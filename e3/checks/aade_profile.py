@@ -27,6 +27,7 @@ CLI:
 
 from __future__ import annotations
 
+import time
 import argparse
 import json
 import logging
@@ -70,9 +71,14 @@ class _HyperHttp:
     other e3/checks pure-HTTP scripts this session (efka_teka_certificate.py,
     keao-mistoton.py) — see those for the fuller rationale."""
 
-    def __init__(self, timeout: float = 60.0):
+    def __init__(self, timeout: float = 25.0, total_budget: float = 90.0):
         self.jar: Dict[str, Dict[str, str]] = {}
         self.timeout = timeout
+        # Overall wall-clock budget for the whole login + fetch chain (~10+
+        # sequential requests): without it a slow/half-dead ΑΑΔΕ made the
+        # request outlive the hosting gateway/gunicorn timeout, so the browser
+        # got an HTML 502 instead of a readable JSON error.
+        self.deadline = time.monotonic() + total_budget
 
     @staticmethod
     def _host(url: str) -> str:
@@ -105,6 +111,9 @@ class _HyperHttp:
         return "; ".join(parts)
 
     def _once(self, method: str, url: str, form: Optional[Dict[str, str]] = None) -> requests.Response:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 1:
+            raise requests.exceptions.Timeout("ΑΑΔΕ: ξεπεράστηκε ο συνολικός χρόνος αναμονής")
         headers = {"User-Agent": UA, "Accept-Language": "el-GR,el;q=0.9,en;q=0.8"}
         ck = self._cookie(url)
         if ck:
@@ -114,7 +123,7 @@ class _HyperHttp:
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
             data = urlencode(form).encode("utf-8")
         resp = requests.request(method, url, headers=headers, data=data,
-                                allow_redirects=False, timeout=self.timeout)
+                                allow_redirects=False, timeout=min(self.timeout, remaining))
         self._store(url, resp)
         return resp
 
@@ -294,8 +303,7 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
 
     email = mobile = phone = ""
     try:
-        import time as _time
-        ldap = http.follow("GET", w + "/getLdapInfo/" + target_afm + "?" + str(int(_time.time() * 1000)))["text"]
+        ldap = http.follow("GET", w + "/getLdapInfo/" + target_afm + "?" + str(int(time.time() * 1000)))["text"]
         email, mobile, phone = _pick_email(ldap), _pick_mobile(ldap), _pick_landline(ldap)
     except Exception:
         logging.exception("getLdapInfo failed for afm=%s", target_afm)

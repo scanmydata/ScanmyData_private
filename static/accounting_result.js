@@ -1310,6 +1310,21 @@ async function computeSingle() {
       }
     }
 
+    if (resp.needs_efka_input) {
+      hideArOverlay();
+      // Asked before the final computation; resolved or cancelled, it is not
+      // asked again (efka_skip) — a cancel just leaves the standing note.
+      await resolveEfkaSelfEmployedException(name, resp.year, resp.legal_kind || null, from, to);
+      body.efka_skip = true;
+      showArOverlay('Λήψη δεδομένων από myDATA...', 'Επεξεργασία ΕΦΚΑ Μη-Μισθωτών, συνέχεια με απογραφή και τελικό υπολογισμό.');
+      resp = await postJson('/api/accounting_result/compute', body);
+      if (!resp.ok) {
+        statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
+        showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
+        return;
+      }
+    }
+
     if (resp.needs_inventory_input) {
       hideArOverlay();
       const resolved = await resolveInventoryForCompany(name, resp.vat, resp.year, resp.opening_inventory, from, to);
@@ -2605,6 +2620,7 @@ async function arFetchCompanyInfoCore(afm) {
   const parts = [resp.legal_type, resp.address, resp.email, resp.mobile, resp.phone].filter(Boolean);
   let summary = 'Ανακτήθηκαν: ' + (parts.join(' · ') || '—') + '.';
   if (resp.members_count) summary += ` Μέλη: ${resp.members_count} (ενεργά ανά έτος αποθηκεύτηκαν).`;
+  if (resp.members_pending) summary += ' Τα μέλη (ανά έτος) ανακτώνται στο παρασκήνιο και θα αποθηκευτούν σε 1-2 λεπτά.';
   if (resp.members_error) summary += ` Τα μέλη δεν ανακτήθηκαν: ${resp.members_error}`;
   return { ok: true, summary, membersError: resp.members_error || null };
 }

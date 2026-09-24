@@ -18516,6 +18516,27 @@ def api_accounting_result_compute():
                 "inventory_obligation": inventory_obligation,
             }), 200
 
+        # ΕΦΚΑ Μη-Μισθωτών: asked BEFORE the final computation (exception or
+        # manual totals, like payroll/rent) rather than only as a post-report
+        # note. The frontend sends efka_skip=true after the dialog (resolved
+        # or cancelled) so this never blocks twice; a cancelled choice still
+        # yields the standing note in the report.
+        if not payload.get("efka_skip"):
+            _efka_pre = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
+            if _efka_pre and not _efka_pre.get("resolved_manual"):
+                return jsonify({
+                    "ok": True,
+                    "needs_efka_input": True,
+                    "credential_name": credential_name,
+                    "vat": vat,
+                    "year": year,
+                    "legal_kind": _ar_legal_kind(path, vat),
+                    "efka_message": _efka_pre.get("message"),
+                    "vat_auto_check": vat_auto_check,
+                    "books_category_mismatch": books_category_mismatch,
+                    "inventory_obligation": inventory_obligation,
+                }), 200
+
         if has_inventory:
             # Opening is always last year's ALREADY-DECLARED myDATA closing
             # stock, re-derived fresh here — never stored/edited, see
@@ -19397,7 +19418,11 @@ def _ar_ensure_company_type_saved(vat: str) -> None:
     blocks a computation, and failures just leave it for the next compute/🔍."""
     try:
         company = (_ar_store_company_record(vat).get("company")) or {}
-        if company.get("info_checked_at"):
+        has_contact = bool(company.get("email") or company.get("mobile") or company.get("phone"))
+        # Checked before -> normally never again. Exception: an older record
+        # with no contact details at all (checked before contacts were fetched
+        # / the fetch then missed them) gets ONE refresh (contact_checked_at).
+        if company.get("info_checked_at") and (has_contact or company.get("contact_checked_at")):
             return
         user, pw = _ar_lookup_taxis_creds(vat)
         if not user or not pw:
@@ -19406,7 +19431,10 @@ def _ar_ensure_company_type_saved(vat: str) -> None:
         grp = get_active_group()
         if not grp:
             return
-        r = _ar_company_info_fetch_and_save(str(vat).strip(), user, pw, grp)
+        r = _ar_company_info_fetch_and_save(
+            str(vat).strip(), user, pw, grp,
+            members_mode=("none" if company.get("info_checked_at") else "background"),
+        )
         resp = r[0] if isinstance(r, tuple) else r
         result = resp.get_json(silent=True) or {}
         if not result.get("ok"):
@@ -21513,7 +21541,66 @@ def api_e3_brain_credentials_store_delete():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp):
+_AR_INFO_STORE_LOCK = threading.Lock()
+
+
+def _ar_fetch_members_by_year(afm: str, taxis_user: str, taxis_pass: str):
+    """Playwright-based ΑΑΔΕ registry fetch (heavy, ~30-60s): every member with
+    the periods they were active, pre-computed per year. Returns
+    (members_now, members_by_year); raises on failure."""
+    from e3.checks.company_info import fetch_registry
+    from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
+    reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
+    if not reg.get("ok"):
+        reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
+    if not reg.get("ok"):
+        raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
+    all_members = []
+    for m in _extract_company_info_members(reg.get("registry") or {}):
+        mafm = str(m.get("afm") or "").strip()
+        if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
+            continue
+        all_members.append(m)
+    today = datetime.date.today()
+    first_year = today.year - 5
+    for m in all_members:
+        d = _parse_date(m.get("dt_from"))
+        if d and d.year < first_year:
+            first_year = d.year
+    first_year = max(first_year, today.year - 20)
+    members_by_year: dict = {}
+    for y in range(first_year, today.year + 1):
+        ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
+        members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
+    members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
+    return members, members_by_year
+
+
+def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> None:
+    """Runs the heavy members fetch OFF the request thread (it used to run
+    inside the HTTP request and, together with the ΑΑΔΕ login, outlived the
+    gateway timeout -> HTML 502), then merges the result into the store."""
+    try:
+        members, members_by_year = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
+        file_path = _credentials_store_file_path(grp)
+        with _AR_INFO_STORE_LOCK:
+            data, read_error = ({"companies": []}, None)
+            if os.path.exists(file_path):
+                data, read_error = _read_credentials_store_or_refuse(file_path)
+            if read_error:
+                return
+            entry = next((c for c in data.setdefault("companies", []) if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
+            if entry is None:
+                return
+            entry["members"] = members
+            entry["members_by_year"] = members_by_year
+            data["updated_at"] = datetime.datetime.utcnow().isoformat()
+            _write_credentials_store_atomic(file_path, data)
+    except Exception as e:
+        log.warning("background members fetch failed for afm=%s: %s", afm, _friendly_net_error(e) or e)
+
+
+def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp, members_mode: str = "background"):
     """ΑΑΔΕ retrieval + save into the shared store (see the route below). Returns a
     Flask response or (response, status). Also used by the automatic per-compute
     check, so a company gets its type/contact/members filled in on first compute."""
@@ -21531,44 +21618,23 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     is_individual = kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ")
     legal_type = "Ατομική" if is_individual else "Νομικό Πρόσωπο"
 
+    members_pending = (not is_individual) and members_mode == "background"
     members: list = []
-    members_by_year: dict = {}
     members_error = None
-    if not is_individual:
+    if (not is_individual) and members_mode == "sync":
         try:
-            from e3.checks.company_info import fetch_registry
-            from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
-            reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
-            if not reg.get("ok"):
-                reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
-            if not reg.get("ok"):
-                raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
-            all_members = []
-            for m in _extract_company_info_members(reg.get("registry") or {}):
-                mafm = str(m.get("afm") or "").strip()
-                if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
-                    continue
-                all_members.append(m)
-            today = datetime.date.today()
-            first_year = today.year - 5
-            for m in all_members:
-                d = _parse_date(m.get("dt_from"))
-                if d and d.year < first_year:
-                    first_year = d.year
-            first_year = max(first_year, today.year - 20)
-            for y in range(first_year, today.year + 1):
-                ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
-                members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
-            members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
+            members, members_by_year = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
         except Exception as e:
             log.exception("company_info members failed for afm=%s", afm)
             members_error = _friendly_net_error(e) or str(e)
 
     file_path = _credentials_store_file_path(grp)
+    _AR_INFO_STORE_LOCK.acquire()
     data, read_error = ({"companies": []}, None)
     if os.path.exists(file_path):
         data, read_error = _read_credentials_store_or_refuse(file_path)
     if read_error:
+        _AR_INFO_STORE_LOCK.release()
         return jsonify({"ok": False, "error": read_error}), 409
     companies = data.setdefault("companies", [])
     entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
@@ -21578,6 +21644,9 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     co = entry.setdefault("company", {})
     co["legal_type"] = legal_type
     co["info_checked_at"] = datetime.datetime.utcnow().isoformat()
+    # Contact details were part of this fetch: lets the auto-check know an
+    # older record (checked before contacts were fetched) needs one refresh.
+    co["contact_checked_at"] = co["info_checked_at"]
     if prof.get("address"):
         co["address"] = prof["address"]
     if prof.get("email"):
@@ -21593,16 +21662,21 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     if is_individual:
         entry["members"] = []
         entry["members_by_year"] = {}
-    elif members_error is None:
+    elif members_mode == "sync" and members_error is None:
         entry["members"] = members
         entry["members_by_year"] = members_by_year
     entry["saved_at"] = datetime.datetime.utcnow().isoformat()
     data["updated_at"] = entry["saved_at"]
-    _write_credentials_store_atomic(file_path, data)
+    try:
+        _write_credentials_store_atomic(file_path, data)
+    finally:
+        _AR_INFO_STORE_LOCK.release()
+    if members_pending:
+        threading.Thread(target=_ar_members_background, args=(afm, taxis_user, taxis_pass, grp), daemon=True).start()
     return jsonify({
         "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
         "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
-        "members_count": len(members), "members_error": members_error,
+        "members_count": len(members), "members_error": members_error, "members_pending": members_pending,
     })
 
 
