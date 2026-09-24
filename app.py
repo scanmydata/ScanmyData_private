@@ -18447,6 +18447,7 @@ def api_accounting_result_compute():
         # this same request's retry once needs_depreciation_input/
         # needs_inventory_input is resolved.
         vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+        _ar_ensure_company_type_saved(vat)
         # Compares the just-(re)detected ΑΑΔΕ κατηγορία βιβλίων against this
         # company's own credentials.json setting — see the function's
         # docstring for why a stale local setting matters.
@@ -18552,6 +18553,7 @@ def api_accounting_result_compute():
             current_period_entries=current_period_entries,
             payroll_manual_total=payroll_res["payroll_manual_total"],
             rent_manual_total=rent_res["rent_manual_total"],
+            efka_manual_total=_ar_efka_manual_total(path, year),
         )
         report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
@@ -18587,7 +18589,9 @@ def api_accounting_result_compute():
         # auto-detect that already ran for this company (see
         # _ar_ensure_vat_profile_checked); lets the frontend's ΕΦΚΑ
         # Μη-Μισθωτών exception modal show only the one reason that applies.
-        report["legal_kind"] = vat_profile_store_get(path).get("legal_kind")
+        report["legal_kind"] = _ar_legal_kind(path, vat)
+        from accounting_result import compliance_notes_store as _ar_cn_efka
+        _ar_cn_efka.clear_efka_check(path, year)
 
         from accounting_result import history_store as ar_history
         ar_history.append_entry(
@@ -18635,7 +18639,7 @@ def api_accounting_result_compute():
         }), 200
     except Exception as e:
         log.exception("api_accounting_result_compute failed")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
 
 
 @app.route("/api/accounting_result/inventory/resolve", methods=["POST"])
@@ -18740,13 +18744,14 @@ def api_accounting_result_inventory_bulk_status():
             # action alongside whichever of inventory/payroll/rent actually
             # need one, instead of only ever reaching it from the Ατομικός
             # report's own inline button.
-            efka_shortfall = bool(_ar_efka_self_employed_note(path, year, current_entries, date_from, date_to))
+            _efka_note_pre = _ar_efka_self_employed_note(path, year, current_entries, date_from, date_to)
+            efka_shortfall = bool(_efka_note_pre and not _efka_note_pre.get("resolved_manual"))
             # Same natural-person/legal-entity kind the Ατομικός report's own
             # ΕΦΚΑ exception button uses to show only the applicable reason
             # (see resolveEfkaSelfEmployedException in accounting_result.js) -
             # threaded through here too so the bulk consolidated screen's
             # dropdown doesn't offer an option that can't apply to this company.
-            legal_kind = vat_profile_store_get(path).get("legal_kind")
+            legal_kind = _ar_legal_kind(path, vat)
 
             if not has_inventory:
                 rows.append({
@@ -18858,6 +18863,7 @@ def api_accounting_result_bulk_compute():
             # ΦΠΑ first, then the rest of THIS company's computation - see
             # _ar_ensure_vat_profile_checked's docstring.
             vat_auto_check = _ar_ensure_vat_profile_checked(vat)
+            _ar_ensure_company_type_saved(vat)
             books_category_mismatch = _ar_check_books_category_mismatch(cred, path)
 
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
@@ -18929,6 +18935,7 @@ def api_accounting_result_bulk_compute():
                     current_period_entries=current_period_entries,
                     payroll_manual_total=payroll_res["payroll_manual_total"],
                     rent_manual_total=rent_res["rent_manual_total"],
+                    efka_manual_total=_ar_efka_manual_total(path, year),
                 )
                 report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
 
@@ -18950,6 +18957,10 @@ def api_accounting_result_bulk_compute():
                     current_period_entries[0], date_from, date_to,
                     ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE, flag_zero=True,
                 )
+
+                report["legal_kind"] = _ar_legal_kind(path, vat)
+                from accounting_result import compliance_notes_store as _ar_cn_efka
+                _ar_cn_efka.clear_efka_check(path, year)
 
                 from accounting_result import history_store as ar_history
                 hist_entry = ar_history.append_entry(
@@ -18986,7 +18997,7 @@ def api_accounting_result_bulk_compute():
                 })
             except Exception as e:
                 log.exception("accounting_result bulk_compute failed for %s", name)
-                results.append({"credential_name": name, "ok": False, "error": str(e)})
+                results.append({"credential_name": name, "ok": False, "error": _friendly_net_error(e) or str(e)})
 
         if job_id:
             ar_jobs.clear_progress(job_id)
@@ -19231,6 +19242,8 @@ def _ar_detect_vat_profile_for_afm(vat: str):
         return False, {
             "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
         }, 504
+    except requests.exceptions.RequestException as e:
+        return False, {"error": _friendly_net_error(e) or str(e)}, 502
     if not isinstance(result, dict) or not result.get("ok"):
         reason = (isinstance(result, dict) and result.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο."
         return False, {"error": str(reason)}, 400
@@ -19286,10 +19299,130 @@ def _ar_detect_vat_profile_for_afm(vat: str):
             source="aade_profile",
             legal_kind=legal_kind,
         )
+        _ar_store_save_profile_info(vat, result)
         return True, {"profile": profile}, 200
     except Exception as e:
         log.exception("_ar_detect_vat_profile_for_afm failed for vat=%s", vat)
         return False, {"error": str(e)}, 500
+
+
+def _friendly_net_error(exc: Exception) -> Optional[str]:
+    """Human-readable Greek text for DNS/connection failures towards
+    ΑΑΔΕ/TAXISnet/myDATA/gsis (None when it's some other kind of error)."""
+    text = str(exc)
+    low = text.lower()
+    if any(k in low for k in ("nameresolutionerror", "failed to resolve", "no address associated", "name or service not known", "connectionerror", "max retries exceeded", "connection aborted", "connection refused")):
+        host = ""
+        m = re.search(r"host='([^']+)'", text)
+        if m:
+            host = f" ({m.group(1)})"
+        return (
+            f"Αδυναμία σύνδεσης με την ΑΑΔΕ/TAXISnet{host} — πρόβλημα δικτύου ή DNS στον server, "
+            "όχι στα στοιχεία σου. Δοκίμασε ξανά σε λίγο· αν επιμένει, έλεγξε τη σύνδεση/DNS του server."
+        )
+    return None
+
+
+def _ar_store_company_record(vat: str) -> Dict[str, Any]:
+    """The {company:..., members:...} entry for `vat` in the group's shared
+    e3_company_credentials_store.json ({} when not there)."""
+    try:
+        path = group_path("e3_company_credentials_store.json")
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for entry in (data.get("companies") or []):
+            if str(((entry or {}).get("company") or {}).get("afm") or "").strip() == str(vat or "").strip():
+                return entry
+    except Exception:
+        log.exception("_ar_store_company_record failed for vat=%s", vat)
+    return {}
+
+
+def _ar_legal_kind(path: str, vat: str) -> Optional[str]:
+    """"sole_proprietor" | "legal_entity" | None. Prefers the ΑΑΔΕ Μητρώο value
+    kept in vat_profile_store; falls back to the legal_type saved in the shared
+    credentials store (so a company whose type was fetched from Αποθηκευμένα is
+    never treated as "unknown" just because the ΦΠΑ check never stored one)."""
+    kind = _ar_legal_kind(path, vat)
+    if kind:
+        return kind
+    legal_type = str(((_ar_store_company_record(vat).get("company")) or {}).get("legal_type") or "").strip().lower()
+    if legal_type:
+        return "sole_proprietor" if "ατομικ" in legal_type else "legal_entity"
+    return None
+
+
+def _ar_store_save_profile_info(vat: str, prof: Dict[str, Any]) -> None:
+    """Best-effort: persist what a fetch_company_profile() result tells us
+    (type, address, email, mobile, landline, ΔΟΥ) into the shared credentials
+    store, filling address/contact only where nothing is stored yet."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return
+        file_path = _credentials_store_file_path(grp)
+        data, read_error = ({"companies": []}, None)
+        if os.path.exists(file_path):
+            data, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return
+        companies = data.setdefault("companies", [])
+        entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == str(vat).strip()), None)
+        if entry is None:
+            entry = {"company": {"afm": str(vat).strip()}, "members": []}
+            companies.append(entry)
+        co = entry.setdefault("company", {})
+        kind = str(prof.get("kind") or "")
+        if kind:
+            co["legal_type"] = "Ατομική" if kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ") else "Νομικό Πρόσωπο"
+        for key in ("address", "email", "mobile", "phone", "doy"):
+            if prof.get(key) and not co.get(key):
+                co[key] = prof[key]
+        if not co.get("name") and prof.get("name"):
+            co["name"] = prof["name"]
+        _write_credentials_store_atomic(file_path, data)
+    except Exception:
+        log.exception("_ar_store_save_profile_info failed for vat=%s", vat)
+
+
+def _ar_ensure_company_type_saved(vat: str) -> None:
+    """Auto company-info check, same idea as _ar_ensure_vat_profile_checked: the
+    first time a company is computed (no info_checked_at on its shared-store
+    record) fetch its full ΑΑΔΕ info once — legal type, address, email/mobile/
+    landline and, for legal entities, the members with per-year activity, exactly
+    what the Αποθηκευμένα 🔍 does — and save it. Silent and best-effort: never
+    blocks a computation, and failures just leave it for the next compute/🔍."""
+    try:
+        company = (_ar_store_company_record(vat).get("company")) or {}
+        if company.get("info_checked_at"):
+            return
+        user, pw = _ar_lookup_taxis_creds(vat)
+        if not user or not pw:
+            return
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return
+        r = _ar_company_info_fetch_and_save(str(vat).strip(), user, pw, grp)
+        resp = r[0] if isinstance(r, tuple) else r
+        result = resp.get_json(silent=True) or {}
+        if not result.get("ok"):
+            log.warning("auto company-info check failed for vat=%s: %s", vat, result.get("error"))
+    except Exception as e:
+        log.warning("_ar_ensure_company_type_saved failed for vat=%s: %s", vat, _friendly_net_error(e) or e)
+
+
+def _ar_efka_manual_total(path: str, year: int) -> Optional[float]:
+    """Manually keyed ΕΦΚΑ Μη-Μισθωτών period total (single-use, see
+    compliance_notes_store.set_efka_check) or None."""
+    from accounting_result import compliance_notes_store as ar_compliance
+    rec = ar_compliance.get_efka_check(path, year)
+    if rec.get("resolution") != "manual":
+        return None
+    return round(sum(float(v or 0) for v in (rec.get("monthly_totals") or {}).values()), 2)
 
 
 def _ar_ensure_vat_profile_checked(vat: str) -> Optional[Dict[str, Any]]:
@@ -19523,6 +19656,16 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
     )
     if not check["shortfall"]:
         return None
+    manual_total = _ar_efka_manual_total(path, year)
+    if manual_total is not None:
+        return {
+            "type": "efka_self_employed_shortfall",
+            "resolved_manual": True,
+            "message": (
+                f"ΕΦΚΑ Μη-Μισθωτών: βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές — "
+                f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(manual_total)}€)."
+            ),
+        }
     if ar_compliance.get_efka_self_employed_check(path, year).get("reason"):
         return None
     return {
@@ -19705,6 +19848,51 @@ def api_accounting_result_rent_resolve():
         return jsonify({"ok": True, "rent_check": rec}), 200
     except Exception as e:
         log.exception("api_accounting_result_rent_resolve failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/efka_self_employed/monthly_totals", methods=["POST"])
+def api_accounting_result_efka_monthly_totals():
+    """Same as /rent/monthly_totals, for ΕΦΚΑ Μη-Μισθωτών (Ε3 code 585/007)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        if not cred or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπει credential ή περίοδος"}), 400
+        aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
+        aade_key = str(cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV) or "").strip()
+        if not aade_user or not aade_key:
+            return jsonify({"ok": False, "error": "Λείπουν στοιχεία AADE για το credential"}), 400
+        from accounting_result import engine as ar_engine
+        totals = ar_engine.monthly_totals_for_code(
+            date_from, date_to, aade_user, aade_key, ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+        )
+        return jsonify({"ok": True, "monthly_totals": totals}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_efka_monthly_totals failed")
+        return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
+
+
+@app.route("/api/accounting_result/efka_self_employed/resolve_totals", methods=["POST"])
+def api_accounting_result_efka_resolve_totals():
+    """Saves manually keyed ΕΦΚΑ Μη-Μισθωτών monthly totals for one
+    company/year (single-use, replaces myDATA's 585/007 slice of group 61 on
+    the next computation — see engine.build_report's efka_manual_total)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        monthly_totals = payload.get("monthly_totals") if isinstance(payload.get("monthly_totals"), dict) else {}
+        if not cred or not year or not monthly_totals:
+            return jsonify({"ok": False, "error": "Λείπει credential, έτος ή μηνιαία σύνολα"}), 400
+        vat = str(cred.get("vat") or "").strip()
+        from accounting_result import compliance_notes_store as ar_compliance
+        rec = ar_compliance.set_efka_check(_ar_store_path(vat), int(year), monthly_totals)
+        return jsonify({"ok": True, "efka_check": rec}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_efka_resolve_totals failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -20349,8 +20537,8 @@ def api_e3_brain_company_members():
                 "gemi_only_message": ("Οι συνεργάτες προέρχονται μόνο από το ΓΕΜΗ. Συμπλήρωσε κωδικούς TAXISnet για έλεγχο στην ΑΑΔΕ.") if gemi_only else None,
                 "aade_fallback_used": bool(aade_fallback_used),
                 "aade_fallback_message": (
-                    "Η κύρια πηγή (Business Portal/ΓΕΜΗ) απέτυχε — η διεύθυνση/στοιχεία "
-                    "ανακτήθηκαν εναλλακτικά από την ΑΑΔΕ (myAADE). Επιβεβαίωσε χειροκίνητα αν χρειάζεται."
+                    "Το ΓΕΜΗ (Business Portal) δεν ήταν διαθέσιμο — η διεύθυνση και η νομική μορφή "
+                    "ανακτήθηκαν από την ΑΑΔΕ (myAADE/TAXISnet). Επιβεβαίωσε χειροκίνητα αν χρειάζεται."
                 ) if aade_fallback_used else None,
             }
         ), 200
@@ -21325,6 +21513,99 @@ def api_e3_brain_credentials_store_delete():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp):
+    """ΑΑΔΕ retrieval + save into the shared store (see the route below). Returns a
+    Flask response or (response, status). Also used by the automatic per-compute
+    check, so a company gets its type/contact/members filled in on first compute."""
+    from e3.checks.aade_profile import fetch_company_profile
+    try:
+        prof = fetch_company_profile(taxis_user, taxis_pass, afm)
+    except requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα. Δοκίμασε ξανά σε λίγο."}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 502
+    if not isinstance(prof, dict) or not prof.get("ok"):
+        return jsonify({"ok": False, "error": str((isinstance(prof, dict) and prof.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο.")}), 400
+
+    kind = str(prof.get("kind") or "")
+    is_individual = kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ")
+    legal_type = "Ατομική" if is_individual else "Νομικό Πρόσωπο"
+
+    members: list = []
+    members_by_year: dict = {}
+    members_error = None
+    if not is_individual:
+        try:
+            from e3.checks.company_info import fetch_registry
+            from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
+            reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
+            if not reg.get("ok"):
+                reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
+            if not reg.get("ok"):
+                raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
+            all_members = []
+            for m in _extract_company_info_members(reg.get("registry") or {}):
+                mafm = str(m.get("afm") or "").strip()
+                if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
+                    continue
+                all_members.append(m)
+            today = datetime.date.today()
+            first_year = today.year - 5
+            for m in all_members:
+                d = _parse_date(m.get("dt_from"))
+                if d and d.year < first_year:
+                    first_year = d.year
+            first_year = max(first_year, today.year - 20)
+            for y in range(first_year, today.year + 1):
+                ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
+                members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
+            members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
+        except Exception as e:
+            log.exception("company_info members failed for afm=%s", afm)
+            members_error = _friendly_net_error(e) or str(e)
+
+    file_path = _credentials_store_file_path(grp)
+    data, read_error = ({"companies": []}, None)
+    if os.path.exists(file_path):
+        data, read_error = _read_credentials_store_or_refuse(file_path)
+    if read_error:
+        return jsonify({"ok": False, "error": read_error}), 409
+    companies = data.setdefault("companies", [])
+    entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
+    if entry is None:
+        entry = {"company": {"afm": afm}, "members": []}
+        companies.append(entry)
+    co = entry.setdefault("company", {})
+    co["legal_type"] = legal_type
+    co["info_checked_at"] = datetime.datetime.utcnow().isoformat()
+    if prof.get("address"):
+        co["address"] = prof["address"]
+    if prof.get("email"):
+        co["email"] = prof["email"]
+    if prof.get("mobile"):
+        co["mobile"] = prof["mobile"]
+    if prof.get("phone"):
+        co["phone"] = prof["phone"]
+    if prof.get("doy"):
+        co["doy"] = prof["doy"]
+    if not co.get("name") and prof.get("name"):
+        co["name"] = prof["name"]
+    if is_individual:
+        entry["members"] = []
+        entry["members_by_year"] = {}
+    elif members_error is None:
+        entry["members"] = members
+        entry["members_by_year"] = members_by_year
+    entry["saved_at"] = datetime.datetime.utcnow().isoformat()
+    data["updated_at"] = entry["saved_at"]
+    _write_credentials_store_atomic(file_path, data)
+    return jsonify({
+        "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
+        "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
+        "members_count": len(members), "members_error": members_error,
+    })
+
+
 @app.route("/api/accounting_result/company_info", methods=["POST"])
 @login_required
 def api_accounting_result_company_info():
@@ -21347,93 +21628,10 @@ def api_accounting_result_company_info():
         if not taxis_user or not taxis_pass:
             return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ — πρόσθεσέ τους από το ✏️."}), 400
 
-        from e3.checks.aade_profile import fetch_company_profile
-        try:
-            prof = fetch_company_profile(taxis_user, taxis_pass, afm)
-        except requests.exceptions.Timeout:
-            return jsonify({"ok": False, "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα. Δοκίμασε ξανά σε λίγο."}), 504
-        if not isinstance(prof, dict) or not prof.get("ok"):
-            return jsonify({"ok": False, "error": str((isinstance(prof, dict) and prof.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο.")}), 400
-
-        kind = str(prof.get("kind") or "")
-        is_individual = kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ")
-        legal_type = "Ατομική" if is_individual else "Νομικό Πρόσωπο"
-
-        members: list = []
-        members_by_year: dict = {}
-        members_error = None
-        if not is_individual:
-            try:
-                from e3.checks.company_info import fetch_registry
-                from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
-                reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
-                if not reg.get("ok"):
-                    reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
-                if not reg.get("ok"):
-                    raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
-                all_members = []
-                for m in _extract_company_info_members(reg.get("registry") or {}):
-                    mafm = str(m.get("afm") or "").strip()
-                    if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
-                        continue
-                    all_members.append(m)
-                today = datetime.date.today()
-                first_year = today.year - 5
-                for m in all_members:
-                    d = _parse_date(m.get("dt_from"))
-                    if d and d.year < first_year:
-                        first_year = d.year
-                first_year = max(first_year, today.year - 20)
-                for y in range(first_year, today.year + 1):
-                    ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
-                    members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
-                members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
-            except Exception as e:
-                log.exception("company_info members failed for afm=%s", afm)
-                members_error = str(e)
-
-        file_path = _credentials_store_file_path(grp)
-        data, read_error = ({"companies": []}, None)
-        if os.path.exists(file_path):
-            data, read_error = _read_credentials_store_or_refuse(file_path)
-        if read_error:
-            return jsonify({"ok": False, "error": read_error}), 409
-        companies = data.setdefault("companies", [])
-        entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
-        if entry is None:
-            entry = {"company": {"afm": afm}, "members": []}
-            companies.append(entry)
-        co = entry.setdefault("company", {})
-        co["legal_type"] = legal_type
-        if prof.get("address"):
-            co["address"] = prof["address"]
-        if prof.get("email"):
-            co["email"] = prof["email"]
-        if prof.get("mobile"):
-            co["mobile"] = prof["mobile"]
-        if prof.get("phone"):
-            co["phone"] = prof["phone"]
-        if prof.get("doy"):
-            co["doy"] = prof["doy"]
-        if not co.get("name") and prof.get("name"):
-            co["name"] = prof["name"]
-        if is_individual:
-            entry["members"] = []
-            entry["members_by_year"] = {}
-        elif members_error is None:
-            entry["members"] = members
-            entry["members_by_year"] = members_by_year
-        entry["saved_at"] = datetime.datetime.utcnow().isoformat()
-        data["updated_at"] = entry["saved_at"]
-        _write_credentials_store_atomic(file_path, data)
-        return jsonify({
-            "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
-            "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
-            "members_count": len(members), "members_error": members_error,
-        })
+        return _ar_company_info_fetch_and_save(afm, taxis_user, taxis_pass, grp)
     except Exception as e:
         log.exception("api_accounting_result_company_info failed")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
 
 
 @app.route("/api/e3/brain/credentials_store/bulk_delete", methods=["POST"])

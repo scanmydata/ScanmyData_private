@@ -2633,7 +2633,7 @@
       if (isIndividual) {
         parts.push('Ατομική επιχείρηση — συμπλήρωσε TAXISnet & ΑΜΚΑ.');
       } else if (E3_BRAIN_MEMBERS.length) {
-        parts.push(`Βρέθηκαν ${E3_BRAIN_MEMBERS.length} μέλη.`);
+        parts.push(`Βρέθηκαν ${E3_BRAIN_MEMBERS.length} μέλη${data.aade_fallback_used ? ' (από το μητρώο ΑΑΔΕ)' : ''}.`);
         if (missingAfmCount) {
           parts.push(`⚠ ${missingAfmCount} ${missingAfmCount === 1 ? 'μέλος' : 'μέλη'} χωρίς ΑΦΜ από ΑΑΔΕ/ΓΕΜΗ — συμπλήρωσέ το χειροκίνητα.`);
         }
@@ -2644,7 +2644,7 @@
         parts.push(data.gemi_only_message || 'Τα μέλη προέρχονται μόνο από ΓΕΜΗ — δεν επιβεβαιώθηκαν στην ΑΑΔΕ.');
       }
       if (data.aade_fallback_used) {
-        parts.push(data.aade_fallback_message || '⚠ Η διεύθυνση ανακτήθηκε εναλλακτικά από την ΑΑΔΕ (η κύρια πηγή απέτυχε).');
+        parts.push(data.aade_fallback_message || '⚠ Το ΓΕΜΗ δεν ήταν διαθέσιμο — η διεύθυνση ανακτήθηκε από την ΑΑΔΕ.');
       }
       if (!isIndividual && (!taxisUser || !taxisPass)) {
         parts.push('Συμπλήρωσε κωδικούς TAXISnet για αντιπαραβολή με ΑΑΔΕ/ΓΕΜΗ.');
@@ -3065,6 +3065,9 @@
     // this is the group's own private vault, not a login form.
     setVal('editTaxisPass', c.taxisnet_password || '');
     setVal('editAmka', c.amka || '');
+    setVal('editEmail', c.email || '');
+    setVal('editMobile', c.mobile || '');
+    setVal('editPhone', c.phone || '');
     setVal('editIkaEmpUser', c.ika_employer_username || '');
     setVal('editIkaEmpPass', c.ika_employer_password || '');
     setVal('editMydataUser', c.mydata_user || '');
@@ -3287,6 +3290,11 @@
     c.taxisnet_username = document.getElementById('editTaxisUser').value;
     c.taxisnet_password = document.getElementById('editTaxisPass').value;
     c.amka = document.getElementById('editAmka').value;
+    ['Email:email', 'Mobile:mobile', 'Phone:phone'].forEach((p) => {
+      const [id, key] = p.split(':');
+      const el = document.getElementById('edit' + id);
+      if (el) c[key] = el.value.trim();
+    });
     const ikaEmpUserEl = document.getElementById('editIkaEmpUser');
     if (ikaEmpUserEl) c.ika_employer_username = ikaEmpUserEl.value;
     const ikaEmpPassEl = document.getElementById('editIkaEmpPass');
@@ -7683,6 +7691,18 @@
                   <div class="brain-cred-field" id="editAmkaWrapper">
                     <label>ΑΜΚΑ</label>
                     <input id="editAmka" name="amka" placeholder="ΑΜΚΑ ατομικής επιχείρησης">
+                  </div>
+                  <div class="brain-cred-field" style="grid-column:1/-1;">
+                    <label>Email</label>
+                    <input id="editEmail" name="email" type="text" placeholder="email επικοινωνίας" autocomplete="off">
+                  </div>
+                  <div class="brain-cred-field">
+                    <label>Κινητό</label>
+                    <input id="editMobile" name="mobile" type="text" placeholder="69XXXXXXXX" autocomplete="off">
+                  </div>
+                  <div class="brain-cred-field">
+                    <label>Σταθερό</label>
+                    <input id="editPhone" name="phone" type="text" placeholder="2XXXXXXXXX" autocomplete="off">
                   </div>
                 </div>
                 <div class="brain-cred-section-label" style="margin-top:0.4rem;"

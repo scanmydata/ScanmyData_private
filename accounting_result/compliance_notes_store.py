@@ -194,3 +194,37 @@ def set_efka_self_employed_check(path: str, year: int, reason: str) -> Dict[str,
     data["efka_self_employed_checks"] = checks
     _write(path, data)
     return rec
+
+
+def get_efka_check(path: str, year: int) -> Dict[str, Any]:
+    return dict((_read_or_empty(path).get("efka_checks") or {}).get(str(year)) or {})
+
+
+def set_efka_check(path: str, year: int, monthly_totals: Dict[str, float]) -> Dict[str, Any]:
+    """Manually keyed ΕΦΚΑ Μη-Μισθωτών (Ε3 585/007) monthly totals, {"YYYY-MM":
+    amount}. Same SINGLE-USE lifecycle as set_rent_check: REPLACES myDATA's own
+    585/007 slice of group 61 for the next computation (see
+    engine.build_report's efka_manual_total), then app.py clears it via
+    clear_efka_check so the accountant is asked again next time."""
+    data = _read(path)
+    checks = data.setdefault("efka_checks", {})
+    rec = {
+        "resolution": "manual",
+        "monthly_totals": {k: round(float(v), 2) for k, v in (monthly_totals or {}).items()},
+        "updated_at": datetime.now().isoformat(),
+    }
+    checks[str(year)] = rec
+    data["efka_checks"] = checks
+    _write(path, data)
+    return rec
+
+
+def clear_efka_check(path: str, year: int) -> None:
+    try:
+        data = _read(path)
+    except ComplianceNotesStoreCorruptError:
+        return
+    checks = data.get("efka_checks")
+    if isinstance(checks, dict) and str(year) in checks:
+        del checks[str(year)]
+        _write(path, data)

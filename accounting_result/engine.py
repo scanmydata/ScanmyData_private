@@ -800,6 +800,7 @@ def build_report(
     current_period_entries: Optional[Tuple[List[dict], float, List[Dict[str, Any]]]] = None,
     payroll_manual_total: Optional[float] = None,
     rent_manual_total: Optional[float] = None,
+    efka_manual_total: Optional[float] = None,
 ) -> Dict[str, Any]:
     opening_inventory = {k: _fnum(v) for k, v in (opening_inventory or {}).items()}
     closing_inventory = {k: _fnum(v) for k, v in (closing_inventory or {}).items()}
@@ -875,6 +876,12 @@ def build_report(
     if rent_manual_total is not None:
         mydata_rent_portion = _sum_for_code(classified_entries, RENT_E3_CODE, RENT_E3_SUBCODE)
         account_totals["62"] = round(account_totals.get("62", 0.0) - mydata_rent_portion + _fnum(rent_manual_total), 2)
+
+    # Same slice-replacement for the manually keyed ΕΦΚΑ Μη-Μισθωτών total
+    # (585/007 lands in group 61 together with other contributions/fees).
+    if efka_manual_total is not None:
+        mydata_efka_portion = _sum_for_code(classified_entries, EFKA_SELF_EMPLOYED_E3_CODE, EFKA_SELF_EMPLOYED_E3_SUBCODE)
+        account_totals["61"] = round(account_totals.get("61", 0.0) - mydata_efka_portion + _fnum(efka_manual_total), 2)
 
     if excel_group_totals:
         account_totals = merge_excel_overrides(account_totals, excel_group_totals)
@@ -965,6 +972,7 @@ def build_report(
         "depreciation": depreciation_amount,
         "payroll_manual_total": payroll_manual_total if payroll_manual_total is None else round(_fnum(payroll_manual_total), 2),
         "rent_manual_total": rent_manual_total if rent_manual_total is None else round(_fnum(rent_manual_total), 2),
+        "efka_manual_total": efka_manual_total if efka_manual_total is None else round(_fnum(efka_manual_total), 2),
         "vat_outflow": vat_outflow,
         "vat_inflow": vat_inflow,
         "vat_prior_credit": None,  # v1: not derivable, see module docstring

@@ -353,6 +353,7 @@
       <button id="arSavedSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Καμία επιλογή</button>
       <button id="arSavedBulkDeleteBtn" type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50">🗑 Διαγραφή επιλεγμένων</button>
       <button id="arSavedVatBulkDetectBtn" type="button" class="text-xs px-2 py-1 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50" title="Μαζική αναζήτηση από ΑΑΔΕ/ΓΕΜΗ για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη): ΦΠΑ και/ή τύπος εταιρίας — χρειάζεται αποθηκευμένους κωδικούς TAXISnet.">🔍 Μαζική αναζήτηση…</button>
+      <button id="arSavedNoMydataBtn" type="button" class="hidden" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.5rem;height:1.5rem;font-size:0.8rem;font-weight:800;cursor:pointer;line-height:1;" title="Υπάρχουν εταιρίες χωρίς κωδικούς myDATA — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε αυτές (ξανά για καθαρισμό).">i</button>
       <span id="arSavedSelectedCount" class="text-xs text-gray-500 ml-1">0 επιλεγμένες</span>
       <span id="arSavedBulkStatus" class="text-xs text-gray-500"></span>
     </div>
@@ -494,6 +495,18 @@
             <label>ΑΜΚΑ</label>
             <input id="arEditAmka" type="text" placeholder="ΑΜΚΑ ατομικής επιχείρησης">
           </div>
+          <div class="brain-cred-field" style="grid-column:1/-1;">
+            <label>Email</label>
+            <input id="arEditEmail" type="text" placeholder="email επικοινωνίας" autocomplete="off">
+          </div>
+          <div class="brain-cred-field">
+            <label>Κινητό</label>
+            <input id="arEditMobile" type="text" placeholder="69XXXXXXXX" autocomplete="off">
+          </div>
+          <div class="brain-cred-field">
+            <label>Σταθερό</label>
+            <input id="arEditPhone" type="text" placeholder="2XXXXXXXXX" autocomplete="off">
+          </div>
         </div>
         <div class="brain-cred-section-label" style="margin-top:0.4rem;">Ι.Κ.Α. Εργοδότη (Καρτέλα ΤΕΚΑ)</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
@@ -596,6 +609,7 @@
         <option value="sole_prop_also_employed">Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός</option>
         <option value="company_partners_exempt">Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις</option>
       </select>
+      <div id="arCompanyChecksEfkaFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto mt-2 hidden"></div>
     </div>
 
     <div class="flex justify-end gap-2 mt-2">

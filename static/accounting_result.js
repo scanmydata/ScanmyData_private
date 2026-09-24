@@ -205,7 +205,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     (r.inventory_method_label
       ? ` Απόθεμα λήξης: ${escapeHtml(r.inventory_method_label)}.`
       : '') +
-    `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to), r.legal_kind);
+    `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to), r.legal_kind, from, to);
 
   return `
   <div class="ar-report-section">
@@ -966,6 +966,7 @@ async function showCompanyChecksModal(row, opts) {
 
     const efkaSection = document.getElementById('arCompanyChecksEfkaSection');
     const efkaSelect = document.getElementById('arCompanyChecksEfkaSelect');
+    const efkaFields = document.getElementById('arCompanyChecksEfkaFields');
     if (opts.hasEfkaNote) {
       efkaSection.classList.remove('hidden');
       // Same natural-person/legal-entity filtering as the Ατομικός report's
@@ -975,8 +976,20 @@ async function showCompanyChecksModal(row, opts) {
       const applicable = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !row.legal_kind || o.legalKind === row.legal_kind);
       const options = applicable.length ? applicable : AR_EFKA_EXCEPTION_OPTIONS;
       efkaSelect.innerHTML = '<option value="">Καμία ενέργεια τώρα</option>' +
-        options.map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
+        [...options, AR_EFKA_MANUAL_OPTION].map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
       efkaSelect.value = '';
+      efkaFields.classList.add('hidden');
+      efkaFields.innerHTML = '';
+      efkaSelect.onchange = async () => {
+        if (efkaSelect.value !== 'manual_totals') { efkaFields.classList.add('hidden'); efkaFields.innerHTML = ''; return; }
+        showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών ΕΦΚΑ — ${row.name}...`);
+        const resp = await postJson('/api/accounting_result/efka_self_employed/monthly_totals', {
+          credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
+        });
+        hideArOverlay();
+        fillMonthlyFields(efkaFields, opts.dateFrom, opts.dateTo, resp.ok ? resp.monthly_totals : null);
+        efkaFields.classList.remove('hidden');
+      };
     } else {
       efkaSection.classList.add('hidden');
     }
@@ -1008,6 +1021,11 @@ async function showCompanyChecksModal(row, opts) {
       }
       if (opts.hasEfkaNote && efkaSelect.value) {
         result.efka = efkaSelect.value;
+        if (efkaSelect.value === 'manual_totals') {
+          const values = {};
+          efkaFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
+          result.efkaTotals = values;
+        }
       }
       cleanup();
       resolve(result);
@@ -1055,7 +1073,13 @@ async function resolveCompanyChecksManually(row, year, dateFrom, dateTo, opts) {
       monthly_totals: result.rent || {},
     });
   }
-  if (opts.hasEfkaNote && result.efka) {
+  if (opts.hasEfkaNote && result.efka === 'manual_totals') {
+    if (Object.keys(result.efkaTotals || {}).length) {
+      await postJson('/api/accounting_result/efka_self_employed/resolve_totals', {
+        credential_name: row.name, year, monthly_totals: result.efkaTotals,
+      });
+    }
+  } else if (opts.hasEfkaNote && result.efka) {
     await postJson('/api/accounting_result/efka_self_employed/resolve', {
       credential_name: row.name, year, reason: result.efka,
     });
@@ -1069,8 +1093,11 @@ var AR_EFKA_EXCEPTION_OPTIONS = [
   { key: 'sole_prop_also_employed', label: 'Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός', legalKind: 'sole_proprietor' },
   { key: 'company_partners_exempt', label: 'Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις', legalKind: 'legal_entity' },
 ];
+// Always offered, whatever the company type: key in the totals by hand
+// (per month or as a lump sum), like payroll/rent.
+var AR_EFKA_MANUAL_OPTION = { key: 'manual_totals', label: 'Καταχώρηση συνόλων ΕΦΚΑ (χειροκίνητα, ανά μήνα ή σύνολο)' };
 
-async function resolveEfkaSelfEmployedException(name, year, legalKind) {
+async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom, dateTo) {
   // Only offer the one reason that actually matches this company's known
   // type (from the ΑΑΔΕ Μητρώο auto-detect — see report.legal_kind) instead
   // of always showing both; when it's not known yet, fall back to both
@@ -1079,9 +1106,28 @@ async function resolveEfkaSelfEmployedException(name, year, legalKind) {
   const choice = await showModalChoice(
     `Εξαίρεση ΕΦΚΑ Μη-Μισθωτών — ${name} (${year})`,
     'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
-    options.length ? options : AR_EFKA_EXCEPTION_OPTIONS,
+    [...(options.length ? options : AR_EFKA_EXCEPTION_OPTIONS), AR_EFKA_MANUAL_OPTION],
   );
   if (!choice) return false;
+  if (choice === 'manual_totals') {
+    if (!dateFrom || !dateTo) {
+      showArFlash('Δεν βρέθηκε η περίοδος — ξαναϋπολόγισε την εταιρία και δοκίμασε ξανά.', 'warning', 6000);
+      return false;
+    }
+    showArOverlay('Λήψη δεδομένων από myDATA...', 'Έλεγχος μηνιαίων ποσών ΕΦΚΑ Μη-Μισθωτών ανά μήνα - η διαδικασία μπορεί να διαρκέσει.');
+    const prefillResp = await postJson('/api/accounting_result/efka_self_employed/monthly_totals', {
+      credential_name: name, date_from: dateFrom, date_to: dateTo,
+    });
+    hideArOverlay();
+    const values = await showManualPayrollModal(`Μηνιαία σύνολα ΕΦΚΑ Μη-Μισθωτών — ${name}`, monthsInRange(dateFrom, dateTo), prefillResp.ok ? prefillResp.monthly_totals : null);
+    if (!values || values.__continue || !Object.keys(values).length) return false;
+    const r = await postJson('/api/accounting_result/efka_self_employed/resolve_totals', {
+      credential_name: name, year, monthly_totals: values,
+    });
+    if (r.ok) showArFlash(`Αποθηκεύτηκαν τα σύνολα ΕΦΚΑ για ${name} — πάτησε ξανά «Υπολογισμός» για να εφαρμοστούν στο αποτέλεσμα.`, 'success', 8000);
+    else showArFlash('Σφάλμα αποθήκευσης συνόλων ΕΦΚΑ: ' + (r.error || ''), 'error', 7000);
+    return !!r.ok;
+  }
   const resp = await postJson('/api/accounting_result/efka_self_employed/resolve', {
     credential_name: name, year, reason: choice,
   });
@@ -1091,11 +1137,11 @@ async function resolveEfkaSelfEmployedException(name, year, legalKind) {
 
 // ---------------- Report notes (payroll / ΕΦΚΑ Μη-Μισθωτών / αχαρακτήριστα) ----------------
 
-function renderReportNotesHtml(notes, name, year, legalKind) {
+function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
   if (!notes || !notes.length) return '';
   const items = notes.map((n) => {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
-      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση</button>`
+      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" data-from="${escapeHtml(from || '')}" data-to="${escapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
       : '';
     return `<li>${escapeHtml(n.message)}${exceptionBtn}</li>`;
   }).join('');
@@ -1105,7 +1151,7 @@ function renderReportNotesHtml(notes, name, year, legalKind) {
 function bindReportNoteButtons(container) {
   container.querySelectorAll('.ar-efka-exception-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year, btn.dataset.legalKind || null);
+      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year, btn.dataset.legalKind || null, btn.dataset.from || '', btn.dataset.to || '');
     });
   });
 }
@@ -2730,6 +2776,12 @@ async function loadSavedClients() {
   container.querySelectorAll('.ar-saved-nomydata-btn').forEach((btn) => {
     btn.addEventListener('click', arToggleNoMydataFilter);
   });
+  // Toolbar copy of the same yellow i (shown only while such companies exist).
+  const topNoMydata = document.getElementById('arSavedNoMydataBtn');
+  if (topNoMydata) {
+    topNoMydata.classList.toggle('hidden', !container.querySelector('[data-no-mydata]'));
+    topNoMydata.onclick = arToggleNoMydataFilter;
+  }
   container.querySelectorAll('.ar-saved-type-detect-btn').forEach((btn) => {
     btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn));
   });
@@ -2763,6 +2815,9 @@ function openSavedEditModal(afm) {
   document.getElementById('arEditLegalType').value = c.legal_type || '';
   document.getElementById('arEditMydataUser').value = c.mydata_user || '';
   document.getElementById('arEditMydataKey').value = c.mydata_key || '';
+  document.getElementById('arEditEmail').value = c.email || '';
+  document.getElementById('arEditMobile').value = c.mobile || '';
+  document.getElementById('arEditPhone').value = c.phone || '';
   document.getElementById('arEditIkaEmpUser').value = c.ika_employer_username || '';
   document.getElementById('arEditIkaEmpPass').value = c.ika_employer_password || '';
 
@@ -2839,6 +2894,9 @@ async function saveSavedEdit() {
   c.legal_type = document.getElementById('arEditLegalType').value;
   c.mydata_user = document.getElementById('arEditMydataUser').value;
   c.mydata_key = document.getElementById('arEditMydataKey').value;
+  c.email = document.getElementById('arEditEmail').value.trim();
+  c.mobile = document.getElementById('arEditMobile').value.trim();
+  c.phone = document.getElementById('arEditPhone').value.trim();
   c.ika_employer_username = document.getElementById('arEditIkaEmpUser').value;
   c.ika_employer_password = document.getElementById('arEditIkaEmpPass').value;
   delete entry._synthetic;
