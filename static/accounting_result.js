@@ -2363,6 +2363,9 @@ function renderSavedTable(companies) {
       : typeResolutionTbl === 'company'
       ? '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>'
       : '<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">—</span>';
+    const gemiWarnBadge = c.members_gemi_warning
+      ? ` <span title="${escapeHtml(c.members_gemi_warning)}" style="cursor:help;">⚠</span>`
+      : '';
     const credName = afmToCredentialName(afm);
     const actionCell = credName
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
@@ -2372,12 +2375,12 @@ function renderSavedTable(companies) {
     // once a type is on file there's nothing left to fetch here.
     const typeDetectBtn = typeResolutionTbl === 'unknown'
       ? `<button type="button" class="ar-saved-type-detect-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Ανάκτηση νομικής μορφής, διεύθυνσης, email/κινητού και μελών από ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet σε αυτή τη γραμμή — πρόσθεσέ τους από το ✏️)">🔍</button>`
-      : '';
+      : `<button type="button" class="ar-saved-recheck-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Επανέλεγχος: ξαναφέρνει από ΑΑΔΕ (με ένα login) τύπο, διεύθυνση, email/κινητό/σταθερό και ΦΠΑ/κατηγορία βιβλίων">🔄</button>`;
     return `<tr${credName ? '' : ' data-no-mydata="1"'}>
       <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
       <td>${escapeHtml(c.name || '')}</td>
-      <td>${typeBadge}${typeDetectBtn}</td>
+      <td>${typeBadge}${gemiWarnBadge}${typeDetectBtn}</td>
       <td class="ar-saved-vat text-xs" data-afm="${afm}">
         <span class="ar-saved-vat-label text-gray-400">…</span>
         <button type="button" class="ar-saved-vat-detect-btn text-xs px-1.5 py-0.5 rounded border hover:bg-gray-50" data-afm="${afm}" title="Ανάκτηση κατηγορίας βιβλίων/υπαγωγής ΦΠΑ από το Μητρώο ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet)">🔍</button>
@@ -2484,14 +2487,15 @@ function redrawSavedDataTable() {
 // real Playwright/ΓΕΜΗ round-trip (~30-60s), so it's an explicit per-row
 // action, never automatic — see runBulk()'s pre-check gate below for why
 // a missing type blocks a compute instead of silently auto-fetching it.
-async function fetchCompanyInfoForSavedRow(afm, btn) {
+async function fetchCompanyInfoForSavedRow(afm, btn, opts) {
   const prevText = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⌛';
   showArFlash(`Ανάκτηση στοιχείων από ΑΑΔΕ για ΑΦΜ ${afm}… (νομική μορφή, διεύθυνση, email/κινητό, μέλη)`, 'info', 5000);
-  const r = await arFetchCompanyInfoCore(afm);
+  const r = await arFetchCompanyInfoCore(afm, opts);
   if (r.ok) {
-    showArFlash(`ΑΦΜ ${afm}: ${r.summary}`, r.membersError ? 'warning' : 'success', r.membersError ? 9000 : 5000);
+    const warn = r.membersError || r.noContact || /⚠/.test(r.summary || '');
+    showArFlash(`ΑΦΜ ${afm}: ${r.summary}`, warn ? 'warning' : 'success', warn ? 12000 : 5000);
     loadSavedClients();
   } else {
     showArFlash(`Σφάλμα ανάκτησης ΑΑΔΕ (ΑΦΜ ${afm}): ${r.error}`, 'error', 7000);
@@ -2611,18 +2615,26 @@ async function bulkDeleteSavedClients() {
 // already just forward to it.
 // Core of the per-row Τύπος 🔍 (no UI side effects) so the bulk menu below
 // can reuse it. Resolves {ok, error}.
-async function arFetchCompanyInfoCore(afm) {
+async function arFetchCompanyInfoCore(afm, opts) {
   // Server does the ΑΑΔΕ-only retrieval AND the store write (see
   // api_accounting_result_company_info in app.py) — TAXISnet creds never
   // travel to the browser and back.
-  const resp = await postJson('/api/accounting_result/company_info', { afm });
+  const resp = await postJson('/api/accounting_result/company_info', { afm, apply_vat: !!(opts && opts.applyVat) });
   if (!resp.ok) return { ok: false, error: resp.error || 'σφάλμα' };
   const parts = [resp.legal_type, resp.address, resp.email, resp.mobile, resp.phone].filter(Boolean);
   let summary = 'Ανακτήθηκαν: ' + (parts.join(' · ') || '—') + '.';
   if (resp.members_count) summary += ` Μέλη: ${resp.members_count} (ενεργά ανά έτος αποθηκεύτηκαν).`;
   if (resp.members_pending) summary += ' Τα μέλη (ανά έτος) ανακτώνται στο παρασκήνιο και θα αποθηκευτούν σε 1-2 λεπτά.';
+  if (resp.gemi_warning) summary += ' ⚠ ' + resp.gemi_warning;
   if (resp.members_error) summary += ` Τα μέλη δεν ανακτήθηκαν: ${resp.members_error}`;
-  return { ok: true, summary, membersError: resp.members_error || null };
+  if (resp.vat_updated === true) summary += ' ΦΠΑ/κατηγορία βιβλίων ενημερώθηκαν (ίδιο login).';
+  else if (resp.vat_updated === false) summary += ' Το ΦΠΑ δεν ενημερώθηκε.';
+  const noContact = resp.contact_found === false;
+  if (noContact) {
+    const tags = resp.ldap_debug && resp.ldap_debug.filled_tags ? resp.ldap_debug.filled_tags.join(', ') : '';
+    summary += ' ⚠ Δεν βρέθηκαν στοιχεία επικοινωνίας στο myAADE για αυτό το ΑΦΜ (πιθανόν δεν έχουν δηλωθεί εκεί)' + (tags ? ' — πεδία που επέστρεψε η ΑΑΔΕ: ' + tags : '') + '. Μπορείς να τα συμπληρώσεις από το ✏️.';
+  }
+  return { ok: true, summary, membersError: resp.members_error || null, noContact };
 }
 
 // Popup menu for the bulk-search button: lets the user pick ΦΠΑ and/or
@@ -2638,7 +2650,9 @@ function showBulkDetectMenu() {
         <div class="modal-warning-body">
           <p class="text-sm mb-2">Για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη). Χρειάζονται αποθηκευμένους κωδικούς TAXISnet.</p>
           <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmVat" checked> ΦΠΑ / κατηγορία βιβλίων (Μητρώο ΑΑΔΕ)</label>
-          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας + διεύθυνση, email/κινητό, μέλη (ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
+          <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας + διεύθυνση, email/κινητό, μέλη (ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmContact"> Επανέλεγχος στοιχείων επικοινωνίας — για όσες δεν έχουν email/κινητό/σταθερό</label>
+          <p class="text-xs text-gray-500 mt-2">Όπου χρειάζονται και ΦΠΑ και στοιχεία εταιρίας, γίνεται ένα μόνο login στην ΑΑΔΕ.</p>
         </div>
         <div class="modal-warning-actions">
           <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arBdmCancel">Άκυρο</button>
@@ -2654,12 +2668,14 @@ function showBulkDetectMenu() {
     modal.querySelector('#arBdmRun').addEventListener('click', () => {
       const vat = modal.querySelector('#arBdmVat').checked;
       const type = modal.querySelector('#arBdmType').checked;
-      finish(vat || type ? { vat, type } : null);
+      const contact = modal.querySelector('#arBdmContact').checked;
+      finish(vat || type || contact ? { vat, type, contact } : null);
     });
   });
 }
 
-async function runTypeBulkDetect() {
+async function runTypeBulkDetect(opts) {
+  opts = opts || {};
   const statusEl = document.getElementById('arSavedBulkStatus');
   const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
   const pool = selected.length
@@ -2668,11 +2684,13 @@ async function runTypeBulkDetect() {
   const targets = pool.filter((afm) => {
     const e = (window.__arSavedCompanies || []).find((x) => String((x.company || {}).afm || '') === afm);
     const c = (e && e.company) || {};
-    return !c.legal_type && !(Array.isArray(e && e.members) && e.members.length);
+    const noType = !c.legal_type && !(Array.isArray(e && e.members) && e.members.length);
+    const noContact = !(c.email || c.mobile || c.phone);
+    return (opts.type !== false && noType) || (opts.contact && noContact);
   });
   if (!targets.length) {
-    showArFlash('Αναζήτηση τύπου: όλες οι εταιρίες έχουν ήδη αποθηκευμένο τύπο.', 'info', 5000);
-    return;
+    showArFlash('Αναζήτηση τύπου/επικοινωνίας: δεν βρέθηκαν εταιρίες που να χρειάζονται ανάκτηση.', 'info', 5000);
+    return [];
   }
   showArFlash(`Αναζήτηση τύπου/στοιχείων: ξεκίνησε για ${targets.length} εταιρίες (ΑΑΔΕ)…`, 'info', 6000);
   let okCount = 0;
@@ -2680,28 +2698,34 @@ async function runTypeBulkDetect() {
   for (let i = 0; i < targets.length; i++) {
     const afm = targets[i];
     if (statusEl) statusEl.textContent = `Τύπος: ${i + 1}/${targets.length} (ΑΦΜ ${afm})…`;
-    const r = await arFetchCompanyInfoCore(afm);
+    const r = await arFetchCompanyInfoCore(afm, { applyVat: !!opts.applyVat });
     if (r.ok) okCount++; else failed.push(`${afm} (${r.error})`);
   }
   const msg = `Ολοκληρώθηκε (${okCount} επιτυχίες${failed.length ? ', ' + failed.length + ' σφάλματα: ' + failed.join(', ') : ''}).`;
   if (statusEl) statusEl.textContent = msg;
   showArFlash('Αναζήτηση τύπου: ' + msg, failed.length ? 'warning' : 'success', failed.length ? 12000 : 6000);
   loadSavedClients();
+  return targets;
 }
 
 async function runBulkDetectFromMenu() {
   const choice = await showBulkDetectMenu();
   if (!choice) return;
-  if (choice.vat) await runVatBulkDetect();
-  if (choice.type) await runTypeBulkDetect();
+  // One ΑΑΔΕ login per company: companies handled by the type/contact fetch
+  // get their ΦΠΑ from that same login, the ΦΠΑ bulk then covers only the rest.
+  let done = [];
+  if (choice.type || choice.contact) done = (await runTypeBulkDetect({ type: !!choice.type, contact: !!choice.contact, applyVat: !!choice.vat })) || [];
+  if (choice.vat) await runVatBulkDetect(done);
 }
 
-async function runVatBulkDetect() {
+async function runVatBulkDetect(skipAfms) {
   const statusEl = document.getElementById('arSavedBulkStatus');
   const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
-  const afms = selected.length
+  const skip = new Set(skipAfms || []);
+  const afms = (selected.length
     ? selected
-    : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean);
+    : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean)).filter((a) => !skip.has(a));
+  if (!afms.length && skip.size) return;
   if (!afms.length) {
     if (statusEl) statusEl.textContent = 'Δεν υπάρχουν αποθηκευμένες εταιρίες.';
     return;
@@ -2800,6 +2824,9 @@ async function loadSavedClients() {
   }
   container.querySelectorAll('.ar-saved-type-detect-btn').forEach((btn) => {
     btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn));
+  });
+  container.querySelectorAll('.ar-saved-recheck-btn').forEach((btn) => {
+    btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn, { applyVat: true }));
   });
   fillSavedHistoryCells(container);
   fillSavedVatCells(container);

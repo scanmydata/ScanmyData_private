@@ -28,6 +28,7 @@ CLI:
 from __future__ import annotations
 
 import time
+import threading
 import argparse
 import json
 import logging
@@ -302,10 +303,17 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
     address_tags = {k: v for k, v in all_tags.items() if any(h in k for h in _ADDRESS_TAG_HINTS)}
 
     email = mobile = phone = ""
+    ldap_debug: Dict[str, Any] = {}
     try:
         ldap = http.follow("GET", w + "/getLdapInfo/" + target_afm + "?" + str(int(time.time() * 1000)))["text"]
         email, mobile, phone = _pick_email(ldap), _pick_mobile(ldap), _pick_landline(ldap)
-    except Exception:
+        ltags = _parse_all_tags(ldap)
+        # Diagnostics only (no values): why a company shows no contact details.
+        ldap_debug = {"length": len(ldap or ""), "filled_tags": sorted(ltags.keys())}
+        if not (email or mobile or phone):
+            logging.info("[aade-profile] no contact for afm=%s (ldap length=%s, tags=%s)", target_afm, len(ldap or ""), sorted(ltags.keys()))
+    except Exception as _e:
+        ldap_debug = {"error": str(_e)}
         logging.exception("getLdapInfo failed for afm=%s", target_afm)
 
     active = (
@@ -327,9 +335,32 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
         "email": email,
         "mobile": mobile,
         "phone": phone,
+        "ldap_debug": ldap_debug,
         "address_tags": address_tags,
         "all_tags": all_tags,
     }
+
+
+_PROFILE_CACHE: Dict[Any, Any] = {}
+_PROFILE_CACHE_LOCK = threading.Lock()
+
+
+def fetch_company_profile_cached(username: str, password: str, afm: Optional[str] = None, ttl: float = 180.0) -> Dict[str, Any]:
+    """fetch_company_profile with a short-lived cache of SUCCESSFUL results, so
+    the ΦΠΑ auto-detect and the company-info (type/contact/members) check that
+    run back-to-back on the same computation share ONE ΑΑΔΕ login instead of
+    each logging in on its own. Failures are never cached."""
+    key = (username, (afm or "").strip())
+    now = time.monotonic()
+    with _PROFILE_CACHE_LOCK:
+        hit = _PROFILE_CACHE.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    res = fetch_company_profile(username, password, afm)
+    if isinstance(res, dict) and res.get("ok"):
+        with _PROFILE_CACHE_LOCK:
+            _PROFILE_CACHE[key] = (time.monotonic(), res)
+    return res
 
 
 def main() -> int:

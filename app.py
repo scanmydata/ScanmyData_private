@@ -19242,7 +19242,7 @@ def api_accounting_result_vat_profile_set():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _ar_detect_vat_profile_for_afm(vat: str):
+def _ar_detect_vat_profile_for_afm(vat: str, use_cache: bool = False, prefetched: Optional[Dict[str, Any]] = None):
     """Core of the single ΦΠΑ auto-detect endpoint, factored out so the bulk
     endpoint can loop over many AFMs without duplicating the ΑΑΔΕ-tag
     interpretation logic. Returns (ok, payload, http_status): payload is
@@ -19256,15 +19256,18 @@ def _ar_detect_vat_profile_for_afm(vat: str):
     if not taxis_user or not taxis_pass:
         return False, {"error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ στα αποθηκευμένα credentials."}, 400
 
-    from e3.checks.aade_profile import fetch_company_profile
-    try:
-        result = fetch_company_profile(taxis_user, taxis_pass, vat)
-    except requests.exceptions.Timeout:
-        return False, {
-            "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
-        }, 504
-    except requests.exceptions.RequestException as e:
-        return False, {"error": _friendly_net_error(e) or str(e)}, 502
+    from e3.checks.aade_profile import fetch_company_profile, fetch_company_profile_cached
+    if prefetched is not None:
+        result = prefetched
+    else:
+        try:
+            result = (fetch_company_profile_cached if use_cache else fetch_company_profile)(taxis_user, taxis_pass, vat)
+        except requests.exceptions.Timeout:
+            return False, {
+                "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα (είναι γνωστό ότι αργεί ενίοτε). Δοκιμάστε ξανά σε λίγο.",
+            }, 504
+        except requests.exceptions.RequestException as e:
+            return False, {"error": _friendly_net_error(e) or str(e)}, 502
     if not isinstance(result, dict) or not result.get("ok"):
         reason = (isinstance(result, dict) and result.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο."
         return False, {"error": str(reason)}, 400
@@ -19385,28 +19388,36 @@ def _ar_store_save_profile_info(vat: str, prof: Dict[str, Any]) -> None:
         if not grp:
             return
         file_path = _credentials_store_file_path(grp)
-        data, read_error = ({"companies": []}, None)
-        if os.path.exists(file_path):
-            data, read_error = _read_credentials_store_or_refuse(file_path)
-        if read_error:
-            return
-        companies = data.setdefault("companies", [])
-        entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == str(vat).strip()), None)
-        if entry is None:
-            entry = {"company": {"afm": str(vat).strip()}, "members": []}
-            companies.append(entry)
-        co = entry.setdefault("company", {})
-        kind = str(prof.get("kind") or "")
-        if kind:
-            co["legal_type"] = "Ατομική" if kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ") else "Νομικό Πρόσωπο"
-        for key in ("address", "email", "mobile", "phone", "doy"):
-            if prof.get(key) and not co.get(key):
-                co[key] = prof[key]
-        if not co.get("name") and prof.get("name"):
-            co["name"] = prof["name"]
-        _write_credentials_store_atomic(file_path, data)
+        _AR_INFO_STORE_LOCK.acquire()
+        try:
+            _ar_store_save_profile_info_locked(vat, prof, file_path)
+        finally:
+            _AR_INFO_STORE_LOCK.release()
     except Exception:
         log.exception("_ar_store_save_profile_info failed for vat=%s", vat)
+
+
+def _ar_store_save_profile_info_locked(vat: str, prof: Dict[str, Any], file_path: str) -> None:
+    data, read_error = ({"companies": []}, None)
+    if os.path.exists(file_path):
+        data, read_error = _read_credentials_store_or_refuse(file_path)
+    if read_error:
+        return
+    companies = data.setdefault("companies", [])
+    entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == str(vat).strip()), None)
+    if entry is None:
+        entry = {"company": {"afm": str(vat).strip()}, "members": []}
+        companies.append(entry)
+    co = entry.setdefault("company", {})
+    kind = str(prof.get("kind") or "")
+    if kind:
+        co["legal_type"] = "Ατομική" if kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ") else "Νομικό Πρόσωπο"
+    for key in ("address", "email", "mobile", "phone", "doy"):
+        if prof.get(key) and not co.get(key):
+            co[key] = prof[key]
+    if not co.get("name") and prof.get("name"):
+        co["name"] = prof["name"]
+    _write_credentials_store_atomic(file_path, data)
 
 
 def _ar_ensure_company_type_saved(vat: str) -> None:
@@ -19433,7 +19444,7 @@ def _ar_ensure_company_type_saved(vat: str) -> None:
             return
         r = _ar_company_info_fetch_and_save(
             str(vat).strip(), user, pw, grp,
-            members_mode=("none" if company.get("info_checked_at") else "background"),
+            members_mode="auto", use_cache=True,
         )
         resp = r[0] if isinstance(r, tuple) else r
         result = resp.get_json(silent=True) or {}
@@ -19476,7 +19487,7 @@ def _ar_ensure_vat_profile_checked(vat: str) -> Optional[Dict[str, Any]]:
             return None
     except Exception:
         return None
-    ok, body, _status = _ar_detect_vat_profile_for_afm(vat)
+    ok, body, _status = _ar_detect_vat_profile_for_afm(vat, use_cache=True)
     if ok:
         return {"ok": True, "vat_subject": (body.get("profile") or {}).get("vat_subject"), "error": None}
     return {"ok": False, "vat_subject": None, "error": body.get("error")}
@@ -21544,10 +21555,24 @@ def api_e3_brain_credentials_store_delete():
 _AR_INFO_STORE_LOCK = threading.Lock()
 
 
+def _ar_member_name_key(name: str) -> str:
+    """Accent/order-insensitive name key (same idea as the Ε3 reconcile)."""
+    import unicodedata as _u
+    if not name:
+        return ""
+    nf = _u.normalize("NFD", str(name))
+    toks = sorted(t for t in "".join(c for c in nf if _u.category(c) != "Mn").upper().split() if t)
+    return " ".join(toks)
+
+
 def _ar_fetch_members_by_year(afm: str, taxis_user: str, taxis_pass: str):
-    """Playwright-based ΑΑΔΕ registry fetch (heavy, ~30-60s): every member with
-    the periods they were active, pre-computed per year. Returns
-    (members_now, members_by_year); raises on failure."""
+    """Members of a legal entity with the periods each was active, pre-computed
+    per year. AADE registry (Playwright, ~30-60s) is the main source; ΓΕΜΗ
+    (Business Portal) is cross-checked best-effort exactly like the Ε3 member
+    lookup — a member counts as active in a year if ANY source says so.
+    Returns (members_now, members_by_year, gemi_warning); gemi_warning is a
+    message when ΓΕΜΗ was unavailable (AADE-only result, not an error).
+    Raises only when the AADE registry itself fails."""
     from e3.checks.company_info import fetch_registry
     from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
     reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
@@ -21555,25 +21580,83 @@ def _ar_fetch_members_by_year(afm: str, taxis_user: str, taxis_pass: str):
         reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
     if not reg.get("ok"):
         raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
-    all_members = []
+
+    merged: dict = {}
+
+    def _add(item: dict, source: str) -> None:
+        mafm = str(item.get("afm") or "").strip()
+        if mafm.startswith("NOAFM_"):
+            mafm = ""
+        name = str(item.get("name") or "").strip()
+        if (mafm and mafm == afm) or (not mafm and not name):
+            return
+        nkey = _ar_member_name_key(name)
+        key = mafm or ("NAME:" + nkey)
+        hit = merged.get(key)
+        if hit is None and nkey:
+            for v in merged.values():
+                if _ar_member_name_key(v.get("name") or "") == nkey:
+                    hit = v
+                    break
+        d_from, d_to = item.get("dt_from"), item.get("dt_to")
+        if hit is None:
+            merged[key] = {
+                "afm": mafm, "name": name, "role": item.get("role") or "",
+                "dt_from": d_from, "dt_to": d_to, "sources": [source], "periods": [(d_from, d_to)],
+            }
+            return
+        if source not in hit["sources"]:
+            hit["sources"].append(source)
+        if mafm and not hit["afm"]:
+            hit["afm"] = mafm
+        if not hit["role"] and item.get("role"):
+            hit["role"] = item.get("role")
+        hit["periods"].append((d_from, d_to))
+
     for m in _extract_company_info_members(reg.get("registry") or {}):
-        mafm = str(m.get("afm") or "").strip()
-        if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
-            continue
-        all_members.append(m)
+        _add(m, "aade")
+
+    gemi_warning = None
+    try:
+        from e3.checks.fetch_business_partners import BusinessPortalFetcher
+        gres = BusinessPortalFetcher().fetch_partners(afm)
+        if isinstance(gres, dict) and gres.get("success"):
+            for p in (gres.get("partners") or []):
+                if isinstance(p, dict):
+                    _add({
+                        "afm": p.get("afm") or p.get("AFM") or p.get("personAfm") or p.get("vat") or "",
+                        "name": p.get("name") or p.get("personName") or p.get("businessName") or p.get("fullName") or "",
+                        "role": p.get("role") or p.get("position") or p.get("category") or "",
+                        "dt_from": p.get("dtFrom") or p.get("dt_from") or p.get("fromDate") or p.get("start"),
+                        "dt_to": p.get("dtTo") or p.get("dt_to") or p.get("toDate") or p.get("end"),
+                    }, "gemi")
+        else:
+            gemi_warning = "Το ΓΕΜΗ δεν ήταν διαθέσιμο — τα μέλη προέρχονται μόνο από την ΑΑΔΕ (" + str((isinstance(gres, dict) and gres.get("error")) or "άγνωστο σφάλμα") + ")."
+    except Exception as e:
+        gemi_warning = "Το ΓΕΜΗ δεν ήταν διαθέσιμο — τα μέλη προέρχονται μόνο από την ΑΑΔΕ (" + (_friendly_net_error(e) or str(e)) + ")."
+
+    def _active(rec: dict, ys, ye) -> bool:
+        return any(_is_active_between(ys, ye, f, t) for f, t in rec["periods"])
+
+    def _out(rec: dict) -> dict:
+        return {"afm": rec["afm"], "name": rec["name"], "role": rec["role"],
+                "dt_from": rec["dt_from"], "dt_to": rec["dt_to"], "sources": rec["sources"]}
+
+    all_members = list(merged.values())
     today = datetime.date.today()
     first_year = today.year - 5
-    for m in all_members:
-        d = _parse_date(m.get("dt_from"))
-        if d and d.year < first_year:
-            first_year = d.year
+    for rec in all_members:
+        for f, _t in rec["periods"]:
+            d = _parse_date(f)
+            if d and d.year < first_year:
+                first_year = d.year
     first_year = max(first_year, today.year - 20)
     members_by_year: dict = {}
     for y in range(first_year, today.year + 1):
         ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
-        members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
-    members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
-    return members, members_by_year
+        members_by_year[str(y)] = [_out(r) for r in all_members if _active(r, ys, ye)]
+    members = [_out(r) for r in all_members if _active(r, today, today)]
+    return members, members_by_year, gemi_warning
 
 
 def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> None:
@@ -21581,7 +21664,7 @@ def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> N
     inside the HTTP request and, together with the ΑΑΔΕ login, outlived the
     gateway timeout -> HTML 502), then merges the result into the store."""
     try:
-        members, members_by_year = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
+        members, members_by_year, gemi_warning = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
         file_path = _credentials_store_file_path(grp)
         with _AR_INFO_STORE_LOCK:
             data, read_error = ({"companies": []}, None)
@@ -21594,19 +21677,24 @@ def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> N
                 return
             entry["members"] = members
             entry["members_by_year"] = members_by_year
+            co_b = entry.setdefault("company", {})
+            if gemi_warning:
+                co_b["members_gemi_warning"] = gemi_warning
+            else:
+                co_b.pop("members_gemi_warning", None)
             data["updated_at"] = datetime.datetime.utcnow().isoformat()
             _write_credentials_store_atomic(file_path, data)
     except Exception as e:
         log.warning("background members fetch failed for afm=%s: %s", afm, _friendly_net_error(e) or e)
 
 
-def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp, members_mode: str = "background"):
+def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp, members_mode: str = "auto", use_cache: bool = False, apply_vat: bool = False):
     """ΑΑΔΕ retrieval + save into the shared store (see the route below). Returns a
     Flask response or (response, status). Also used by the automatic per-compute
     check, so a company gets its type/contact/members filled in on first compute."""
-    from e3.checks.aade_profile import fetch_company_profile
+    from e3.checks.aade_profile import fetch_company_profile, fetch_company_profile_cached
     try:
-        prof = fetch_company_profile(taxis_user, taxis_pass, afm)
+        prof = (fetch_company_profile_cached if use_cache else fetch_company_profile)(taxis_user, taxis_pass, afm)
     except requests.exceptions.Timeout:
         return jsonify({"ok": False, "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα. Δοκίμασε ξανά σε λίγο."}), 504
     except requests.exceptions.RequestException as e:
@@ -21618,12 +21706,12 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     is_individual = kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ")
     legal_type = "Ατομική" if is_individual else "Νομικό Πρόσωπο"
 
-    members_pending = (not is_individual) and members_mode == "background"
     members: list = []
     members_error = None
+    members_gemi_warning = None
     if (not is_individual) and members_mode == "sync":
         try:
-            members, members_by_year = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
+            members, members_by_year, members_gemi_warning = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
         except Exception as e:
             log.exception("company_info members failed for afm=%s", afm)
             members_error = _friendly_net_error(e) or str(e)
@@ -21641,6 +21729,11 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     if entry is None:
         entry = {"company": {"afm": afm}, "members": []}
         companies.append(entry)
+    # "auto": background members fetch only for a legal entity whose per-year
+    # members were never stored (a re-check of a known company doesn't redo it).
+    members_pending = (not is_individual) and (
+        members_mode == "background" or (members_mode == "auto" and not entry.get("members_by_year"))
+    )
     co = entry.setdefault("company", {})
     co["legal_type"] = legal_type
     co["info_checked_at"] = datetime.datetime.utcnow().isoformat()
@@ -21665,6 +21758,8 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     elif members_mode == "sync" and members_error is None:
         entry["members"] = members
         entry["members_by_year"] = members_by_year
+        if members_gemi_warning:
+            co["members_gemi_warning"] = members_gemi_warning
     entry["saved_at"] = datetime.datetime.utcnow().isoformat()
     data["updated_at"] = entry["saved_at"]
     try:
@@ -21673,10 +21768,17 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
         _AR_INFO_STORE_LOCK.release()
     if members_pending:
         threading.Thread(target=_ar_members_background, args=(afm, taxis_user, taxis_pass, grp), daemon=True).start()
+    vat_updated = None
+    if apply_vat:
+        # Same login/result feeds the ΦΠΑ profile — no second ΑΑΔΕ login.
+        v_ok, v_body, _vs = _ar_detect_vat_profile_for_afm(afm, prefetched=prof)
+        vat_updated = bool(v_ok) if v_ok else False
+    contact_found = bool(co.get("email") or co.get("mobile") or co.get("phone"))
     return jsonify({
+        "vat_updated": vat_updated, "contact_found": contact_found, "ldap_debug": prof.get("ldap_debug"),
         "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
         "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
-        "members_count": len(members), "members_error": members_error, "members_pending": members_pending,
+        "members_count": len(members), "members_error": members_error, "members_pending": members_pending, "gemi_warning": members_gemi_warning,
     })
 
 
@@ -21702,7 +21804,11 @@ def api_accounting_result_company_info():
         if not taxis_user or not taxis_pass:
             return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ — πρόσθεσέ τους από το ✏️."}), 400
 
-        return _ar_company_info_fetch_and_save(afm, taxis_user, taxis_pass, grp)
+        return _ar_company_info_fetch_and_save(
+            afm, taxis_user, taxis_pass, grp,
+            members_mode=("background" if payload.get("refetch_members") else "auto"),
+            apply_vat=bool(payload.get("apply_vat")),
+        )
     except Exception as e:
         log.exception("api_accounting_result_company_info failed")
         return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
