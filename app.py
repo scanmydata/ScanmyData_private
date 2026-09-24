@@ -19345,7 +19345,7 @@ def _ar_legal_kind(path: str, vat: str) -> Optional[str]:
     kept in vat_profile_store; falls back to the legal_type saved in the shared
     credentials store (so a company whose type was fetched from Αποθηκευμένα is
     never treated as "unknown" just because the ΦΠΑ check never stored one)."""
-    kind = _ar_legal_kind(path, vat)
+    kind = vat_profile_store_get(path).get("legal_kind")
     if kind:
         return kind
     legal_type = str(((_ar_store_company_record(vat).get("company")) or {}).get("legal_type") or "").strip().lower()
