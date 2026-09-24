@@ -7116,6 +7116,17 @@
     const now = new Date();
     const stamp = now.toLocaleString('el-GR');
 
+    // Client contact details (mobile/landline/email) saved in the shared
+    // credentials store — printed under each client's heading.
+    const contactByAfm = {};
+    try {
+      const sr = await (await fetch('/api/e3/brain/credentials_store')).json();
+      (sr.ok ? (sr.companies || []) : []).forEach((e) => {
+        const co = e.company || {};
+        if (co.afm) contactByAfm[String(co.afm).trim()] = co;
+      });
+    } catch (_) { /* no contact line */ }
+
     // Fetch per-AFM ATAK choices (sqm_used / has_rental) in parallel so
     // the PDF can show what the user picked alongside the raw E9 data.
     const atakChoicesByAfm = {};
@@ -7425,6 +7436,14 @@
       return (
         '<section class="client-block">' +
           '<h3>' + esc(c.name || c.afm || '—') + ' — ΑΦΜ ' + esc(c.afm || '—') + '</h3>' +
+          (function () {
+            const co = contactByAfm[String(c.afm || '').trim()] || {};
+            const bits = [];
+            if (co.mobile) bits.push('Κινητό: ' + esc(co.mobile));
+            if (co.phone) bits.push('Σταθερό: ' + esc(co.phone));
+            if (co.email) bits.push('Email: ' + esc(co.email));
+            return bits.length ? '<div style="font-size:9pt;color:#475569;margin:0 0 4px 0;">' + bits.join(' &nbsp;·&nbsp; ') + '</div>' : '';
+          })() +
           '<h4 style="margin:6px 0 2px 0;font-size:10pt;color:#0f766e;">Πίνακας E3 (βασικοί κωδικοί)</h4>' +
           e3Table +
           (brk.length ? '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">Ανάλυση 585.014 ανά ακίνητο</h4>' + breakdown : '') +

@@ -167,6 +167,50 @@ def _guess_address(tags: Dict[str, str]) -> str:
     return " ".join(dict.fromkeys(parts))  # de-dup while preserving order
 
 
+def format_address(raw: str) -> str:
+    """Normalise ΑΑΔΕ's "ΚΑΜΑΡΕΣ 0 ΤΚ:84003 ΣΙΦΝΟΣ" into "ΚΑΜΑΡΕΣ ΣΙΦΝΟΣ 84003"
+    (street + number, city, then postal code — no "ΤΚ:" label). A lone "0"
+    street number is AADE's placeholder for "no number" and is dropped."""
+    s = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not s:
+        return ""
+    m = re.search(r"(?:Τ\.?\s?Κ\.?|TK)\s*:?\s*(\d{5})", s, re.I)
+    if not m:
+        return re.sub(r"\s+0$", "", s) if not re.search(r"\s0\s", s) else s
+    zip_code = m.group(1)
+    street = s[:m.start()].strip(" ,-")
+    city = s[m.end():].strip(" ,-")
+    street = re.sub(r"\s+0$", "", street)
+    return " ".join(p for p in (street, city, zip_code) if p)
+
+
+def _pick_email(xml: str) -> str:
+    # mail2 = contact address the taxpayer declared, mailemep = the
+    # accountant/representative's, mail = legacy TAXISnet address (same
+    # priority as the Tax Center's aade-profile.js).
+    for name in ("mail2", "mailemep", "mail"):
+        v = _tag(xml, name).strip().lower()
+        if re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$", v):
+            return v
+    return ""
+
+
+def _pick_mobile(xml: str) -> str:
+    # phonenumber is a landline and is ignored on purpose (same as Tax Center).
+    for name in ("mobilenumber", "mobilenumberemep"):
+        digits = re.sub(r"^0030|^30(?=69)", "", re.sub(r"\D", "", _tag(xml, name)))
+        if re.match(r"^69\d{8}$", digits):
+            return digits
+    return ""
+
+
+def _pick_landline(xml: str) -> str:
+    # Greek landlines are 10 digits starting with 2 (after dropping a +30/0030
+    # country prefix); the tag is "phonenumber".
+    digits = re.sub(r"^0030|^30(?=2\d{9}$)", "", re.sub(r"\D", "", _tag(xml, "phonenumber")))
+    return digits if re.match(r"^2\d{9}$", digits) else ""
+
+
 def aade_login(username: str, password: str) -> Dict[str, Any]:
     """Login μέσω GSIS OAM (myAADE) — ΔΙΑΦΟΡΕΤΙΚΟ login από το Keycloak-brokered
     e-EFKA (efka_teka_certificate.py). Επιστρέφει {ok, http, page} ή {ok:False, reason}."""
@@ -248,6 +292,14 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
     guessed_address = _guess_address(all_tags)
     address_tags = {k: v for k, v in all_tags.items() if any(h in k for h in _ADDRESS_TAG_HINTS)}
 
+    email = mobile = phone = ""
+    try:
+        import time as _time
+        ldap = http.follow("GET", w + "/getLdapInfo/" + target_afm + "?" + str(int(_time.time() * 1000)))["text"]
+        email, mobile, phone = _pick_email(ldap), _pick_mobile(ldap), _pick_landline(ldap)
+    except Exception:
+        logging.exception("getLdapInfo failed for afm=%s", target_afm)
+
     active = (
         not re.search(r"ΔΙΑΚΟΠ|ΑΝΕΝΕΡΓ", _tag(epix, "katastashepixeirhshs"), re.I)
         if has_epix else
@@ -262,7 +314,11 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
         "doy": doy,
         "active": active,
         "business_start": _tag(epix, "hmenarxhs"),
-        "address": guessed_address,
+        "address": format_address(guessed_address),
+        "address_raw": guessed_address,
+        "email": email,
+        "mobile": mobile,
+        "phone": phone,
         "address_tags": address_tags,
         "all_tags": all_tags,
     }

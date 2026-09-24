@@ -128,6 +128,35 @@ async function postJson(url, body) {
 
 // ---------------- Report table rendering ----------------
 
+// vat -> {phone,email} from the shared saved-clients store, filled by
+// arLoadContactCache() at page init and after every saved-list reload, so the
+// (synchronous) PDF/report builders can show the client's contact details.
+window.__arContactByVat = window.__arContactByVat || {};
+async function arLoadContactCache() {
+  try {
+    const resp = await (await fetch('/api/e3/brain/credentials_store')).json();
+    if (!resp.ok) return;
+    const map = {};
+    (resp.companies || []).forEach((e) => {
+      const c = e.company || {};
+      if (c.afm) map[String(c.afm)] = { mobile: c.mobile || '', phone: c.phone || '', email: c.email || '' };
+    });
+    window.__arContactByVat = map;
+  } catch (_) { /* contact line just stays empty */ }
+}
+function arContactBits(vat) {
+  const c = (window.__arContactByVat || {})[String(vat || '')] || {};
+  const bits = [];
+  if (c.mobile) bits.push('Κινητό: ' + escapeHtml(c.mobile));
+  if (c.phone) bits.push('Σταθερό: ' + escapeHtml(c.phone));
+  if (c.email) bits.push('Email: ' + escapeHtml(c.email));
+  return bits;
+}
+function arContactLineHtml(vat) {
+  const bits = arContactBits(vat);
+  return bits.length ? '<div style="font-weight:400;font-size:0.8rem;color:#475569;">' + bits.join(' &nbsp;·&nbsp; ') + '</div>' : '';
+}
+
 function buildReportSectionHtml(name, vat, from, to, r) {
   const stockRowsHtml = r.stock_rows.map((row) => `
     <tr>
@@ -181,7 +210,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
   return `
   <div class="ar-report-section">
     <div class="ar-report-header">
-      <div class="ar-company-block">${escapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${escapeHtml(vat || '')})</span></div>
+      <div class="ar-company-block">${escapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${escapeHtml(vat || '')})</span>${arContactLineHtml(vat)}</div>
       <div style="text-align:right;">Στοιχεία Λογιστή: ${escapeHtml(window.AR_ACCOUNTANT_NAME || '')}<br><strong>Ημερομηνία: ${todayStr()}</strong></div>
     </div>
     <div class="ar-report-title">Λογιστικό Αποτέλεσμα</div>
@@ -339,6 +368,43 @@ function ensureJsZip() {
 // here) are set explicitly — our tables have long Greek labels in nowrap
 // cells that routinely exceed that, cropping columns silently, so both
 // must always be read from the container's actual rendered size.
+// html2pdf only turns <a href> into EXTERNAL url links, so the consolidated
+// report's name -> contact-legend jumps are drawn here instead: elements
+// marked data-ar-goto="<id>" get a jsPDF internal link to the page holding
+// #<id>. Page mapping mirrors html2pdf's 'legacy' slicing (fixed-height
+// slices of the captured container, inner box = page minus margins).
+function arAddInternalPdfLinks(pdf, container, orientation, marginMm) {
+  try {
+    const pageW = orientation === 'landscape' ? 297 : 210;
+    const pageH = orientation === 'landscape' ? 210 : 297;
+    const innerW = pageW - 2 * marginMm;
+    const innerH = pageH - 2 * marginMm;
+    const cw = container.scrollWidth;
+    const slice = Math.floor(cw * innerH / innerW);
+    const toMm = innerW / cw;
+    const cr = container.getBoundingClientRect();
+    const pages = pdf.internal.getNumberOfPages();
+    const pos = (el) => {
+      const r = el.getBoundingClientRect();
+      const top = r.top - cr.top;
+      const page = Math.floor(top / slice) + 1;
+      return { page, x: marginMm + (r.left - cr.left) * toMm, y: marginMm + (top - (page - 1) * slice) * toMm, w: r.width * toMm, h: r.height * toMm };
+    };
+    container.querySelectorAll('[data-ar-goto]').forEach((el) => {
+      const target = container.querySelector('#' + el.getAttribute('data-ar-goto'));
+      if (!target) return;
+      const from = pos(el);
+      const to = pos(target);
+      if (from.page > pages || to.page > pages) return;
+      pdf.setPage(from.page);
+      pdf.link(from.x, from.y, from.w, from.h, { pageNumber: to.page });
+    });
+    pdf.setPage(pages);
+  } catch (e) {
+    console.warn('PDF internal links skipped:', e);
+  }
+}
+
 async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
   await ensureHtml2Pdf();
   const container = document.createElement('div');
@@ -381,6 +447,7 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
 
     if (!fitToOnePage) {
       const pdf = await worker.toPdf().get('pdf');
+      arAddInternalPdfLinks(pdf, container, orientation, 8);
       return pdf.output('blob');
     }
     // Force everything onto a single A4 page (shrinking, never cropping):
@@ -435,6 +502,7 @@ function downloadBlob(blob, filename) {
 }
 
 async function exportHtmlAsPdf(innerHtml, filename, orientation, fitToOnePage) {
+  await arLoadContactCache();
   showArOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
   try {
     const blob = await buildPdfBlob(innerHtml, orientation, fitToOnePage);
@@ -473,7 +541,7 @@ function buildConsolidatedTableHtml(companies) {
     const closingSum = (r.stock_rows || []).reduce((a, s) => a + (s.closing || 0), 0);
     return `<tr>
       <td class="ar-num">${i + 1}</td>
-      <td>${escapeHtml(c.name)}</td>
+      <td>${arContactBits(c.vat).length ? `<span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(c.name)}</span>` : escapeHtml(c.name)}</td>
       <td>${escapeHtml(c.vat || '')}</td>
       <td>${todayStr()}</td>
       <td>${ddmmyyyy(c.from)}</td>
@@ -492,6 +560,18 @@ function buildConsolidatedTableHtml(companies) {
     </tr>`;
   }).join('');
 
+  const legendRows = companies.map((c, i) => {
+    const bits = arContactBits(c.vat);
+    if (!bits.length) return '';
+    return `<tr id="ar-contact-${i}"><td style="font-weight:600;white-space:nowrap;">${escapeHtml(c.name)}</td><td class="ar-mono">${escapeHtml(c.vat || '')}</td><td>${bits.join(' &nbsp;·&nbsp; ')}</td></tr>`;
+  }).join('');
+  const legendHtml = legendRows
+    ? `<div style="margin-top:28px;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Υπόμνημα — Στοιχεία επικοινωνίας πελατών</div>
+      <table class="ar-consolidated-table"><thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Επικοινωνία</th></tr></thead><tbody>${legendRows}</tbody></table>
+    </div>`
+    : '';
+
   return `
   <div>
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
@@ -507,6 +587,7 @@ function buildConsolidatedTableHtml(companies) {
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
+    ${legendHtml}
   </div>`;
 }
 
@@ -1481,6 +1562,7 @@ function initBulkDataTable() {
 }
 
 function initSavedDataTable() {
+  arInstallNoMydataFilter();
   if (typeof window.jQuery === 'undefined' || !window.jQuery.fn.DataTable) return;
   const $ = window.jQuery;
   const $table = $('.ar-saved-table');
@@ -2223,14 +2305,14 @@ function renderSavedTable(companies) {
     const credName = afmToCredentialName(afm);
     const actionCell = credName
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
-      : `<span class="text-xs text-gray-400" title="Δεν βρέθηκαν πλήρη myDATA credentials για αυτό το ΑΦΜ στη σελίδα Credentials.">— χωρίς myDATA</span>`;
+      : `<button type="button" class="ar-saved-nomydata-btn" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.35rem;height:1.35rem;font-size:0.75rem;font-weight:800;cursor:pointer;line-height:1;" title="Δεν υπάρχουν κωδικοί myDATA για αυτή την εταιρία — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε τέτοιες εταιρίες (ξανά για καθαρισμό).">i</button>`;
     // Same ΓΕΜΗ+ΑΑΔΕ cross-check flow e3_check.html's single-company panel
     // uses (/api/e3/brain/company_members) — only offered while unresolved;
     // once a type is on file there's nothing left to fetch here.
     const typeDetectBtn = typeResolutionTbl === 'unknown'
-      ? `<button type="button" class="ar-saved-type-detect-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Ανάκτηση νομικής μορφής/μελών από ΓΕΜΗ-ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet σε αυτή τη γραμμή — πρόσθεσέ τους από το ✏️)">🔍</button>`
+      ? `<button type="button" class="ar-saved-type-detect-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Ανάκτηση νομικής μορφής, διεύθυνσης, email/κινητού και μελών από ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet σε αυτή τη γραμμή — πρόσθεσέ τους από το ✏️)">🔍</button>`
       : '';
-    return `<tr>
+    return `<tr${credName ? '' : ' data-no-mydata="1"'}>
       <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
       <td>${escapeHtml(c.name || '')}</td>
@@ -2300,6 +2382,33 @@ function booksCategoryMismatchFlashMessage(mismatch, label) {
 // live DOM content (which is exactly what DataTables' own `data-order`
 // attribute convention is for — see fillSavedHistoryCells) into its cache
 // once the fill is done.
+// «Χωρίς κωδικούς myDATA» filter, toggled by the yellow ⓘ on such rows. A
+// DataTables custom search (registered once) so it composes with the normal
+// search box, works across pages and survives the table being rebuilt.
+window.__arNoMydataFilter = false;
+function arInstallNoMydataFilter() {
+  const $ = window.jQuery;
+  if (!$ || !$.fn || !$.fn.dataTable || window.__arNoMydataFilterInstalled) return;
+  window.__arNoMydataFilterInstalled = true;
+  $.fn.dataTable.ext.search.push((settings, data, dataIndex) => {
+    if (!window.__arNoMydataFilter) return true;
+    if (!settings.nTable || !settings.nTable.classList.contains('ar-saved-table')) return true;
+    const tr = settings.aoData[dataIndex] && settings.aoData[dataIndex].nTr;
+    return !!(tr && tr.getAttribute('data-no-mydata') === '1');
+  });
+}
+function arToggleNoMydataFilter() {
+  window.__arNoMydataFilter = !window.__arNoMydataFilter;
+  const $ = window.jQuery;
+  if ($ && $.fn.DataTable.isDataTable('.ar-saved-table')) $('.ar-saved-table').DataTable().draw();
+  const n = document.querySelectorAll('.ar-saved-table [data-no-mydata]').length;
+  const t = window.jQuery && window.jQuery.fn.DataTable.isDataTable('.ar-saved-table')
+    ? window.jQuery('.ar-saved-table').DataTable().rows().nodes().to$().filter('[data-no-mydata]').length : n;
+  showArFlash(window.__arNoMydataFilter
+    ? `Φίλτρο: εμφανίζονται μόνο οι ${t} εταιρίες χωρίς κωδικούς myDATA (δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα). Πάτησε ξανά το κίτρινο i για καθαρισμό.`
+    : 'Φίλτρο myDATA: καθαρίστηκε.', 'info', 6000);
+}
+
 function redrawSavedDataTable() {
   const $ = window.jQuery;
   if (!$ || !$.fn || !$.fn.DataTable || !$.fn.DataTable.isDataTable('.ar-saved-table')) return;
@@ -2315,41 +2424,16 @@ function redrawSavedDataTable() {
 // action, never automatic — see runBulk()'s pre-check gate below for why
 // a missing type blocks a compute instead of silently auto-fetching it.
 async function fetchCompanyInfoForSavedRow(afm, btn) {
-  const entry = (window.__arSavedCompanies || []).find((e) => String((e.company || {}).afm || '') === afm);
-  const c = (entry && entry.company) || {};
-  const taxisUser = c.taxisnet_username || '';
-  const taxisPass = c.taxisnet_password || '';
-  if (!taxisUser || !taxisPass) {
-    showArFlash(`Δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για ΑΦΜ ${afm} — πρόσθεσέ τους πρώτα από το ✏️.`, 'warning', 6000);
-    return;
-  }
   const prevText = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⌛';
-  showArFlash(`Ανάκτηση νομικής μορφής/μελών από ΓΕΜΗ-ΑΑΔΕ για ΑΦΜ ${afm}… (μπορεί να πάρει έως 1 λεπτό)`, 'info', 5000);
-  try {
-    const resp = await fetch('/api/e3/brain/company_members', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ afm, taxis_user: taxisUser, taxis_pass: taxisPass }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία ανάκτησης.');
-    const legalType = (data.company && data.company.legal_type) || '';
-    const isIndividual = Boolean(data.is_individual);
-    const members = Array.isArray(data.members) ? data.members : [];
-    if (entry) {
-      entry.company = entry.company || {};
-      if (legalType) entry.company.legal_type = legalType;
-      const addr = data.company && data.company.address;
-      if (addr && !entry.company.address) entry.company.address = addr;
-      entry.members = isIndividual ? [] : members;
-      await postJson('/api/e3/brain/credentials_store/update', { snapshot: entry });
-    }
-    showArFlash(`Ανακτήθηκαν στοιχεία ΓΕΜΗ/ΑΑΔΕ για ΑΦΜ ${afm}.`, 'success', 4000);
+  showArFlash(`Ανάκτηση στοιχείων από ΑΑΔΕ για ΑΦΜ ${afm}… (νομική μορφή, διεύθυνση, email/κινητό, μέλη)`, 'info', 5000);
+  const r = await arFetchCompanyInfoCore(afm);
+  if (r.ok) {
+    showArFlash(`ΑΦΜ ${afm}: ${r.summary}`, r.membersError ? 'warning' : 'success', r.membersError ? 9000 : 5000);
     loadSavedClients();
-  } catch (e) {
-    showArFlash(`Σφάλμα ανάκτησης ΓΕΜΗ/ΑΑΔΕ (ΑΦΜ ${afm}): ${e && e.message ? e.message : e}`, 'error', 7000);
+  } else {
+    showArFlash(`Σφάλμα ανάκτησης ΑΑΔΕ (ΑΦΜ ${afm}): ${r.error}`, 'error', 7000);
     btn.disabled = false;
     btn.textContent = prevText;
   }
@@ -2467,29 +2551,16 @@ async function bulkDeleteSavedClients() {
 // Core of the per-row Τύπος 🔍 (no UI side effects) so the bulk menu below
 // can reuse it. Resolves {ok, error}.
 async function arFetchCompanyInfoCore(afm) {
-  const entry = (window.__arSavedCompanies || []).find((e) => String((e.company || {}).afm || '') === afm);
-  const c = (entry && entry.company) || {};
-  if (!c.taxisnet_username || !c.taxisnet_password) return { ok: false, error: 'χωρίς κωδικούς TAXISnet' };
-  try {
-    const resp = await fetch('/api/e3/brain/company_members', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ afm, taxis_user: c.taxisnet_username, taxis_pass: c.taxisnet_password }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία ανάκτησης.');
-    const legalType = (data.company && data.company.legal_type) || '';
-    const isIndividual = Boolean(data.is_individual);
-    entry.company = entry.company || {};
-    if (legalType) entry.company.legal_type = legalType;
-    const addr = data.company && data.company.address;
-    if (addr && !entry.company.address) entry.company.address = addr;
-    entry.members = isIndividual ? [] : (Array.isArray(data.members) ? data.members : []);
-    await postJson('/api/e3/brain/credentials_store/update', { snapshot: entry });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e && e.message ? e.message : String(e) };
-  }
+  // Server does the ΑΑΔΕ-only retrieval AND the store write (see
+  // api_accounting_result_company_info in app.py) — TAXISnet creds never
+  // travel to the browser and back.
+  const resp = await postJson('/api/accounting_result/company_info', { afm });
+  if (!resp.ok) return { ok: false, error: resp.error || 'σφάλμα' };
+  const parts = [resp.legal_type, resp.address, resp.email, resp.mobile, resp.phone].filter(Boolean);
+  let summary = 'Ανακτήθηκαν: ' + (parts.join(' · ') || '—') + '.';
+  if (resp.members_count) summary += ` Μέλη: ${resp.members_count} (ενεργά ανά έτος αποθηκεύτηκαν).`;
+  if (resp.members_error) summary += ` Τα μέλη δεν ανακτήθηκαν: ${resp.members_error}`;
+  return { ok: true, summary, membersError: resp.members_error || null };
 }
 
 // Popup menu for the bulk-search button: lets the user pick ΦΠΑ and/or
@@ -2505,7 +2576,7 @@ function showBulkDetectMenu() {
         <div class="modal-warning-body">
           <p class="text-sm mb-2">Για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη). Χρειάζονται αποθηκευμένους κωδικούς TAXISnet.</p>
           <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmVat" checked> ΦΠΑ / κατηγορία βιβλίων (Μητρώο ΑΑΔΕ)</label>
-          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας (ΓΕΜΗ-ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας + διεύθυνση, email/κινητό, μέλη (ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
         </div>
         <div class="modal-warning-actions">
           <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arBdmCancel">Άκυρο</button>
@@ -2541,7 +2612,7 @@ async function runTypeBulkDetect() {
     showArFlash('Αναζήτηση τύπου: όλες οι εταιρίες έχουν ήδη αποθηκευμένο τύπο.', 'info', 5000);
     return;
   }
-  showArFlash(`Αναζήτηση τύπου: ξεκίνησε για ${targets.length} εταιρίες (ΓΕΜΗ-ΑΑΔΕ, ~1 λεπτό η καθεμία)…`, 'info', 6000);
+  showArFlash(`Αναζήτηση τύπου/στοιχείων: ξεκίνησε για ${targets.length} εταιρίες (ΑΑΔΕ)…`, 'info', 6000);
   let okCount = 0;
   const failed = [];
   for (let i = 0; i < targets.length; i++) {
@@ -2656,12 +2727,16 @@ async function loadSavedClients() {
   container.querySelectorAll('.ar-saved-edit-btn').forEach((btn) => {
     btn.addEventListener('click', () => openSavedEditModal(btn.dataset.afm));
   });
+  container.querySelectorAll('.ar-saved-nomydata-btn').forEach((btn) => {
+    btn.addEventListener('click', arToggleNoMydataFilter);
+  });
   container.querySelectorAll('.ar-saved-type-detect-btn').forEach((btn) => {
     btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn));
   });
   fillSavedHistoryCells(container);
   fillSavedVatCells(container);
   initSavedDataTable();
+  arLoadContactCache();
 }
 
 // Same field set as e3_check.html's own credentials edit modal (company
@@ -2991,6 +3066,7 @@ if (!window.__arModalObserverInstalled) {
 
 function arInitPageHandlers() {
   moveModalsToBody();
+  arLoadContactCache();
   initBulkDataTable();
   // Double-click a company's name or ΑΦΜ to toggle its checkbox — delegated
   // on the wrapping container so it keeps working across DataTables redraws

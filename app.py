@@ -21325,6 +21325,117 @@ def api_e3_brain_credentials_store_delete():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/accounting_result/company_info", methods=["POST"])
+@login_required
+def api_accounting_result_company_info():
+    """ΑΑΔΕ-only (no ΓΕΜΗ/Business Portal) company-info retrieval + save into
+    the shared credentials store, for Λογιστικό Αποτέλεσμα's Αποθηκευμένα:
+    legal type, normalised address, email/mobile (as in the Tax Center's
+    aade-profile) and — for legal entities — every member with the periods
+    they were active, pre-computed per year into members_by_year so the Ε3
+    Μαζικός member dropdown reads it from the store instead of re-fetching."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        payload = request.get_json(silent=True) or {}
+        afm = "".join(ch for ch in str(payload.get("afm") or "") if ch.isdigit())
+        if len(afm) != 9:
+            return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
+        taxis_user, taxis_pass = _ar_lookup_taxis_creds(afm)
+        if not taxis_user or not taxis_pass:
+            return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ — πρόσθεσέ τους από το ✏️."}), 400
+
+        from e3.checks.aade_profile import fetch_company_profile
+        try:
+            prof = fetch_company_profile(taxis_user, taxis_pass, afm)
+        except requests.exceptions.Timeout:
+            return jsonify({"ok": False, "error": "Το Μητρώο ΑΑΔΕ δεν απάντησε έγκαιρα. Δοκίμασε ξανά σε λίγο."}), 504
+        if not isinstance(prof, dict) or not prof.get("ok"):
+            return jsonify({"ok": False, "error": str((isinstance(prof, dict) and prof.get("reason")) or "Αποτυχία ανάκτησης από ΑΑΔΕ Μητρώο.")}), 400
+
+        kind = str(prof.get("kind") or "")
+        is_individual = kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ")
+        legal_type = "Ατομική" if is_individual else "Νομικό Πρόσωπο"
+
+        members: list = []
+        members_by_year: dict = {}
+        members_error = None
+        if not is_individual:
+            try:
+                from e3.checks.company_info import fetch_registry
+                from e3.checks.e3_brain import _extract_company_info_members, _is_active_between, _parse_date
+                reg = fetch_registry(taxis_user, taxis_pass, headed=False, keep_tmpdir=False)
+                if not reg.get("ok"):
+                    reg = fetch_registry(taxis_user, taxis_pass, headed=True, keep_tmpdir=False)
+                if not reg.get("ok"):
+                    raise RuntimeError(reg.get("error") or "Αποτυχία ανάκτησης μελών από ΑΑΔΕ.")
+                all_members = []
+                for m in _extract_company_info_members(reg.get("registry") or {}):
+                    mafm = str(m.get("afm") or "").strip()
+                    if (mafm and mafm == afm) or (not mafm and not str(m.get("name") or "").strip()):
+                        continue
+                    all_members.append(m)
+                today = datetime.date.today()
+                first_year = today.year - 5
+                for m in all_members:
+                    d = _parse_date(m.get("dt_from"))
+                    if d and d.year < first_year:
+                        first_year = d.year
+                first_year = max(first_year, today.year - 20)
+                for y in range(first_year, today.year + 1):
+                    ys, ye = datetime.date(y, 1, 1), datetime.date(y, 12, 31)
+                    members_by_year[str(y)] = [dict(m) for m in all_members if _is_active_between(ys, ye, m.get("dt_from"), m.get("dt_to"))]
+                members = [dict(m) for m in all_members if _is_active_between(today, today, m.get("dt_from"), m.get("dt_to"))]
+            except Exception as e:
+                log.exception("company_info members failed for afm=%s", afm)
+                members_error = str(e)
+
+        file_path = _credentials_store_file_path(grp)
+        data, read_error = ({"companies": []}, None)
+        if os.path.exists(file_path):
+            data, read_error = _read_credentials_store_or_refuse(file_path)
+        if read_error:
+            return jsonify({"ok": False, "error": read_error}), 409
+        companies = data.setdefault("companies", [])
+        entry = next((c for c in companies if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
+        if entry is None:
+            entry = {"company": {"afm": afm}, "members": []}
+            companies.append(entry)
+        co = entry.setdefault("company", {})
+        co["legal_type"] = legal_type
+        if prof.get("address"):
+            co["address"] = prof["address"]
+        if prof.get("email"):
+            co["email"] = prof["email"]
+        if prof.get("mobile"):
+            co["mobile"] = prof["mobile"]
+        if prof.get("phone"):
+            co["phone"] = prof["phone"]
+        if prof.get("doy"):
+            co["doy"] = prof["doy"]
+        if not co.get("name") and prof.get("name"):
+            co["name"] = prof["name"]
+        if is_individual:
+            entry["members"] = []
+            entry["members_by_year"] = {}
+        elif members_error is None:
+            entry["members"] = members
+            entry["members_by_year"] = members_by_year
+        entry["saved_at"] = datetime.datetime.utcnow().isoformat()
+        data["updated_at"] = entry["saved_at"]
+        _write_credentials_store_atomic(file_path, data)
+        return jsonify({
+            "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
+            "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
+            "members_count": len(members), "members_error": members_error,
+        })
+    except Exception as e:
+        log.exception("api_accounting_result_company_info failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/e3/brain/credentials_store/bulk_delete", methods=["POST"])
 @login_required
 def api_e3_brain_credentials_store_bulk_delete():
