@@ -588,7 +588,7 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
 
 // ---------------- Payroll monthly-completeness resolution ----------------
 
-const AR_MONTH_LABELS = ['Ιαν', 'Φεβ', 'Μαρ', 'Απρ', 'Μάι', 'Ιούν', 'Ιούλ', 'Αύγ', 'Σεπ', 'Οκτ', 'Νοέ', 'Δεκ'];
+var AR_MONTH_LABELS = ['Ιαν', 'Φεβ', 'Μαρ', 'Απρ', 'Μάι', 'Ιούν', 'Ιούλ', 'Αύγ', 'Σεπ', 'Οκτ', 'Νοέ', 'Δεκ'];
 
 // The Από/Έως fields are flatpickr'd to dd/mm/yyyy (see ddmmyyyy's own
 // comment), NOT native <input type="date"> — so `new Date(dateStr)` silently
@@ -984,7 +984,7 @@ async function resolveCompanyChecksManually(row, year, dateFrom, dateTo, opts) {
 
 // ---------------- ΕΦΚΑ Μη-Μισθωτών exception ----------------
 
-const AR_EFKA_EXCEPTION_OPTIONS = [
+var AR_EFKA_EXCEPTION_OPTIONS = [
   { key: 'sole_prop_also_employed', label: 'Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός', legalKind: 'sole_proprietor' },
   { key: 'company_partners_exempt', label: 'Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις', legalKind: 'legal_entity' },
 ];
@@ -1677,14 +1677,14 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-const AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
-const AR_BULK_NOTE_TYPE_LEGEND = {
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
+var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
   efka_self_employed_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών από τους μήνες της περιόδου — πιθανή οφειλή, έλεγξε ΚΕΑΟ (ή αποθήκευσε εξαίρεση από τον Ατομικό υπολογισμό).',
   uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
 };
-const AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵'];
+var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵'];
 
 function renderBulkCompaniesSummary(companies) {
   const container = document.getElementById('arBulkReportContainer');
@@ -2326,6 +2326,7 @@ async function fetchCompanyInfoForSavedRow(afm, btn) {
   const prevText = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⌛';
+  showArFlash(`Ανάκτηση νομικής μορφής/μελών από ΓΕΜΗ-ΑΑΔΕ για ΑΦΜ ${afm}… (μπορεί να πάρει έως 1 λεπτό)`, 'info', 5000);
   try {
     const resp = await fetch('/api/e3/brain/company_members', {
       method: 'POST',
@@ -2375,11 +2376,14 @@ async function fillSavedVatCells(container) {
       const label = btn.parentElement.querySelector('.ar-saved-vat-label');
       btn.disabled = true;
       if (label) label.textContent = '⌛...';
+      showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}) από το Μητρώο ΑΑΔΕ…`, 'info', 4000);
       const resp = await postJson('/api/accounting_result/vat_profile/detect', { vat: afm });
       if (resp.ok) {
         if (label) label.textContent = vatProfileLabel(resp.profile);
+        showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}): ${vatProfileLabel(resp.profile)}.`, 'success', 4000);
       } else {
         if (label) label.textContent = '⚠ ' + (resp.error || 'σφάλμα');
+        showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}): σφάλμα — ${resp.error || ''}`, 'error', 7000);
       }
       btn.disabled = false;
       redrawSavedDataTable();
@@ -2435,6 +2439,16 @@ async function bulkDeleteSavedClients() {
     return;
   }
   const protectedList = resp.protected || [];
+  // window.AR_CREDENTIALS is a page-render-time snapshot that already
+  // includes every store company having myDATA creds (see
+  // _load_credentials_with_excel_store_merge). loadSavedClients() below
+  // re-creates a minimal store record for any AR_CREDENTIALS company missing
+  // from the store, so without dropping the just-deleted ones from that
+  // snapshot a delete was silently undone (and the record's data wiped) on
+  // the very next refresh.
+  const protectedAfms = new Set(protectedList.map((p) => String(p.afm)));
+  const deletedAfms = new Set(afms.filter((a) => !protectedAfms.has(String(a))));
+  window.AR_CREDENTIALS = (window.AR_CREDENTIALS || []).filter((c) => !deletedAfms.has(String(c.vat)));
   let msg = `Διαγράφηκαν ${resp.deleted || 0} εταιρίες.`;
   if (protectedList.length) {
     const names = protectedList.map((p) => p.name || p.afm).join(', ');
@@ -2450,6 +2464,105 @@ async function bulkDeleteSavedClients() {
 // since job_registry is generic (keyed only by job_id, no notion of "which
 // kind of bulk job") and /api/accounting_result/bulk_progress|bulk_abort
 // already just forward to it.
+// Core of the per-row Τύπος 🔍 (no UI side effects) so the bulk menu below
+// can reuse it. Resolves {ok, error}.
+async function arFetchCompanyInfoCore(afm) {
+  const entry = (window.__arSavedCompanies || []).find((e) => String((e.company || {}).afm || '') === afm);
+  const c = (entry && entry.company) || {};
+  if (!c.taxisnet_username || !c.taxisnet_password) return { ok: false, error: 'χωρίς κωδικούς TAXISnet' };
+  try {
+    const resp = await fetch('/api/e3/brain/company_members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ afm, taxis_user: c.taxisnet_username, taxis_pass: c.taxisnet_password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'Αποτυχία ανάκτησης.');
+    const legalType = (data.company && data.company.legal_type) || '';
+    const isIndividual = Boolean(data.is_individual);
+    entry.company = entry.company || {};
+    if (legalType) entry.company.legal_type = legalType;
+    const addr = data.company && data.company.address;
+    if (addr && !entry.company.address) entry.company.address = addr;
+    entry.members = isIndividual ? [] : (Array.isArray(data.members) ? data.members : []);
+    await postJson('/api/e3/brain/credentials_store/update', { snapshot: entry });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+// Popup menu for the bulk-search button: lets the user pick ΦΠΑ and/or
+// Τύπος (the latter only for companies with no stored type).
+function showBulkDetectMenu() {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
+    modal.setAttribute('data-managed', '1');
+    modal.innerHTML = `
+      <div class="modal-warning-panel max-w-md w-11/12">
+        <div class="modal-warning-title">🔍 Μαζική αναζήτηση</div>
+        <div class="modal-warning-body">
+          <p class="text-sm mb-2">Για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη). Χρειάζονται αποθηκευμένους κωδικούς TAXISnet.</p>
+          <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmVat" checked> ΦΠΑ / κατηγορία βιβλίων (Μητρώο ΑΑΔΕ)</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας (ΓΕΜΗ-ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
+        </div>
+        <div class="modal-warning-actions">
+          <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arBdmCancel">Άκυρο</button>
+          <button type="button" class="modal-warning-btn" id="arBdmRun">Εκτέλεση</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const finish = (val) => { document.removeEventListener('keydown', onKey); modal.remove(); resolve(val); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#arBdmCancel').addEventListener('click', () => finish(null));
+    modal.addEventListener('mousedown', (e) => { if (e.target === modal) finish(null); });
+    modal.querySelector('#arBdmRun').addEventListener('click', () => {
+      const vat = modal.querySelector('#arBdmVat').checked;
+      const type = modal.querySelector('#arBdmType').checked;
+      finish(vat || type ? { vat, type } : null);
+    });
+  });
+}
+
+async function runTypeBulkDetect() {
+  const statusEl = document.getElementById('arSavedBulkStatus');
+  const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
+  const pool = selected.length
+    ? selected
+    : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean);
+  const targets = pool.filter((afm) => {
+    const e = (window.__arSavedCompanies || []).find((x) => String((x.company || {}).afm || '') === afm);
+    const c = (e && e.company) || {};
+    return !c.legal_type && !(Array.isArray(e && e.members) && e.members.length);
+  });
+  if (!targets.length) {
+    showArFlash('Αναζήτηση τύπου: όλες οι εταιρίες έχουν ήδη αποθηκευμένο τύπο.', 'info', 5000);
+    return;
+  }
+  showArFlash(`Αναζήτηση τύπου: ξεκίνησε για ${targets.length} εταιρίες (ΓΕΜΗ-ΑΑΔΕ, ~1 λεπτό η καθεμία)…`, 'info', 6000);
+  let okCount = 0;
+  const failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const afm = targets[i];
+    if (statusEl) statusEl.textContent = `Τύπος: ${i + 1}/${targets.length} (ΑΦΜ ${afm})…`;
+    const r = await arFetchCompanyInfoCore(afm);
+    if (r.ok) okCount++; else failed.push(`${afm} (${r.error})`);
+  }
+  const msg = `Ολοκληρώθηκε (${okCount} επιτυχίες${failed.length ? ', ' + failed.length + ' σφάλματα: ' + failed.join(', ') : ''}).`;
+  if (statusEl) statusEl.textContent = msg;
+  showArFlash('Αναζήτηση τύπου: ' + msg, failed.length ? 'warning' : 'success', failed.length ? 12000 : 6000);
+  loadSavedClients();
+}
+
+async function runBulkDetectFromMenu() {
+  const choice = await showBulkDetectMenu();
+  if (!choice) return;
+  if (choice.vat) await runVatBulkDetect();
+  if (choice.type) await runTypeBulkDetect();
+}
+
 async function runVatBulkDetect() {
   const statusEl = document.getElementById('arSavedBulkStatus');
   const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
@@ -2463,6 +2576,7 @@ async function runVatBulkDetect() {
   const jobId = 'ar-vat-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   if (statusEl) statusEl.textContent = '';
   startBulkCrossPageBanner(jobId, afms.length);
+  showArFlash(`Μαζική αναζήτηση ΦΠΑ: ξεκίνησε για ${afms.length} εταιρίες…`, 'info', 4000);
   let resp;
   try {
     resp = await postJson('/api/accounting_result/vat_profile/bulk_detect', { afms, job_id: jobId });
@@ -2746,7 +2860,7 @@ function arInitSavedTabHandlers() {
     if (e.target && e.target.classList.contains('ar-saved-cb')) updateArSavedSelectedCount();
   });
   document.getElementById('arSavedBulkDeleteBtn').addEventListener('click', bulkDeleteSavedClients);
-  document.getElementById('arSavedVatBulkDetectBtn').addEventListener('click', runVatBulkDetect);
+  document.getElementById('arSavedVatBulkDetectBtn').addEventListener('click', runBulkDetectFromMenu);
   document.getElementById('arSavedEditClose').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
   document.getElementById('arSavedEditCancel').addEventListener('click', () => { document.getElementById('arSavedEditModal').style.display = 'none'; });
   document.getElementById('arSavedEditForm').addEventListener('submit', (e) => { e.preventDefault(); saveSavedEdit(); });
