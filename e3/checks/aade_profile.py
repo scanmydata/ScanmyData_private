@@ -274,11 +274,27 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
     if not target_afm:
         return {"ok": False, "reason": "NoAfm"}
 
-    fysiko = http.follow("GET", w + "/getMhtrwoFusikou/" + target_afm)["text"]
-    has_fysiko = f"<afm>{target_afm}</afm>" in fysiko
-
     epix = http.follow("GET", w + "/getMhtrwoEpixeirhshs/" + target_afm)["text"]
     has_epix = "<hmenarxhs>" in epix
+
+    # Confirmed live (2026-09-24, a real ΕΕ): for a legal entity
+    # getMhtrwoFusikou hangs ~30s and then returns an empty 204, which blew
+    # past the per-request timeout and ended as an HTTP 504 in Λογιστικό
+    # Αποτέλεσμα. The επιχείρηση registry already names the legal form
+    # (nomikhmorfh, e.g. "ΕΕ"; kathgoriamhfp "ΝΠΙΔ ...") — when it does, skip
+    # the φυσικού lookup. Sole proprietors keep the original path.
+    legal_form = _tag(epix, "nomikhmorfh").upper()
+    mhfp_category = _tag(epix, "kathgoriamhfp").upper()
+    is_legal_entity = has_epix and (
+        (legal_form and not re.search(r"ΑΤΟΜ|ΦΥΣΙΚ", legal_form))
+        or mhfp_category.startswith("ΝΠ")
+    )
+    if is_legal_entity:
+        fysiko = ""
+        has_fysiko = False
+    else:
+        fysiko = http.follow("GET", w + "/getMhtrwoFusikou/" + target_afm)["text"]
+        has_fysiko = f"<afm>{target_afm}</afm>" in fysiko
 
     if has_fysiko:
         kind = "ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ" if has_epix else "ΙΔΙΩΤΗΣ"
