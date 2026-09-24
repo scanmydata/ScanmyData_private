@@ -584,7 +584,7 @@ def _sum_for_code(entries: List[dict], code: str, sub_code: Optional[str] = None
 
 def check_monthly_completeness(
     current_entries: List[dict], date_from: str, date_to: str, code: str, sub_code: Optional[str] = None,
-    *, flag_zero: bool = False,
+    *, flag_zero: bool = False, per_month: int = 1,
 ) -> Dict[str, Any]:
     """Compares the number of DISTINCT myDATA marks carrying `code`
     (optionally narrowed to `sub_code`) against the number of calendar
@@ -604,16 +604,24 @@ def check_monthly_completeness(
     important case to surface (likely arrears), not the one to suppress —
     pass flag_zero=True there so 0 found also counts as a shortfall.
 
-    Returns {"expected_months": int, "found_months": int, "shortfall": bool}."""
+    `per_month` multiplies the expectation — ΕΦΚΑ Μη-Μισθωτών of a legal
+    entity is one payment per partner per month (months x partners).
+
+    Returns {"expected_months": int, "found_months": int, "shortfall": bool,
+    "months": int, "per_month": int}."""
     d_from = parse_date(date_from)
     d_to = parse_date(date_to)
-    expected_months = _months_in_period(d_from, d_to) if d_from and d_to else 0
+    months = _months_in_period(d_from, d_to) if d_from and d_to else 0
+    per_month = max(1, int(per_month or 1))
+    expected_months = months * per_month
     found_months = len(_distinct_marks_for_code(current_entries, code, sub_code))
     min_found = 0 if flag_zero else 1
     return {
         "expected_months": expected_months,
         "found_months": found_months,
         "shortfall": min_found <= found_months < expected_months,
+        "months": months,
+        "per_month": per_month,
     }
 
 

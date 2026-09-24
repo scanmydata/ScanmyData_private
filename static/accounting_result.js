@@ -534,11 +534,26 @@ async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
 }
 
 function buildConsolidatedTableHtml(companies) {
+  // Findings (report notes) become markers next to the affected cell —
+  // * μισθοδοσία, ** ενοίκιο, *** ΕΦΚΑ on Δαπάνες, † on Αχαρακτ. — each
+  // linking (inside the PDF) to its explanation in «Παρατηρήσεις» below.
+  const noteRows = [];
+  const marksFor = (c, i, cell) => (c.notes || (c.report && c.report.notes) || [])
+    .filter((n) => AR_NOTE_TYPES[n.type] && AR_NOTE_TYPES[n.type].cell === cell)
+    .map((n) => {
+      const id = `ar-note-${i}-${noteRows.length}`;
+      noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message });
+      return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${escapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
+    }).join('');
   const rowsHtml = companies.map((c, i) => {
     const r = c.report;
     const openingSum = (r.stock_rows || []).reduce((a, s) => a + (s.opening || 0), 0);
     const purchasesSum = (r.stock_rows || []).reduce((a, s) => a + (s.purchases || 0), 0);
     const closingSum = (r.stock_rows || []).reduce((a, s) => a + (s.closing || 0), 0);
+    const expenseMarks = marksFor(c, i, 'expenses');
+    const unclassifiedMarks = marksFor(c, i, 'unclassified');
+    // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
+    const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
       <td class="ar-num">${i + 1}</td>
       <td>${arContactBits(c.vat).length ? `<span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(c.name)}</span>` : escapeHtml(c.name)}</td>
@@ -550,15 +565,25 @@ function buildConsolidatedTableHtml(companies) {
       <td class="ar-num">${fmtAmountOrBlank(purchasesSum)}</td>
       <td class="ar-num">${fmtAmountOrBlank(closingSum)}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.cogs_total)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.expenses_total)}</td>
+      <td class="ar-num">${fmtAmountOrBlank(r.expenses_total)}${expenseMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.sales_total)}</td>
       <td class="ar-num"></td>
-      <td class="ar-num">${fmtAmountOrBlank(Math.abs(r.unclassified_net || 0))}</td>
+      <td class="ar-num">${fmtAmountOrBlank(-Math.abs(r.unclassified_net || 0))}${unclassifiedMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.taxable_result)}</td>
       <td class="ar-num"></td>
-      <td class="ar-num">${fmtAmountOrBlank(r.vat_period_balance)}</td>
+      <td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}</td>
     </tr>`;
   }).join('');
+
+  const notesHtml = noteRows.length
+    ? `<div style="margin-top:24px;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;">Παρατηρήσεις</div>
+      <div style="font-size:11px;color:#475569;margin-bottom:6px;">${Object.values(AR_NOTE_TYPES).map((t) => `<b>${escapeHtml(t.mark)}</b> ${escapeHtml(t.label)}`).join(' &nbsp;·&nbsp; ')} &nbsp;·&nbsp; <b>Χ</b> στη στήλη ΦΠΑ: μη υπόχρεος ΦΠΑ</div>
+      <table class="ar-consolidated-table"><thead><tr><th></th><th>Επωνυμία</th><th>Παρατήρηση</th></tr></thead><tbody>
+        ${noteRows.map((n) => `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="font-weight:600;">${escapeHtml(n.name)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`).join('')}
+      </tbody></table>
+    </div>`
+    : '';
 
   const legendRows = companies.map((c, i) => {
     const bits = arContactBits(c.vat);
@@ -587,6 +612,7 @@ function buildConsolidatedTableHtml(companies) {
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
+    ${notesHtml}
     ${legendHtml}
   </div>`;
 }
@@ -858,233 +884,258 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
   return !!resp.ok;
 }
 
-// ---------------- Consolidated per-company Μαζικός resolution ----------------
-// Instead of three separate batch passes (all-companies-inventory, then
-// all-companies-payroll, then all-companies-rent) each looping through
-// every flagged company on its own, runBulk() still asks the quick "same
-// method for everyone" question per category ONCE up front (that's the
-// fast path for the common case), but any company left needing MANUAL
-// entry in one or more categories — plus any ΕΦΚΑ Μη-Μισθωτών note — gets
-// ONE consolidated screen covering everything it still needs, instead of
-// being asked about inventory, then (after every other company's
-// inventory) payroll, then (after every other company's payroll) rent.
+// ---------------- Μαζικός pre-check: ΑΑΔΕ + grouped-by-type resolution ----------------
 
-async function showCompanyChecksModal(row, opts) {
-  // Payroll/rent fields MUST be pre-filled with what myDATA already has per
-  // month, not left at 0 — build_report now REPLACES (not adds to) the
-  // whole period's group 60/62 figure with whatever's submitted here (see
-  // engine.build_report's payroll_manual_total/rent_manual_total), exactly
-  // like resolvePayrollForCompany/resolveRentForCompany's own standalone
-  // flow already does. Leaving an already-correct month at 0 would silently
-  // wipe out real myDATA data for that month, not just leave it unchanged.
-  let payrollPrefill = null;
-  let rentPrefill = null;
-  if (opts.needsPayroll) {
-    showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών μισθοδοσίας — ${row.name}...`);
-    const resp = await postJson('/api/accounting_result/payroll/monthly_totals', {
-      credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
-    });
-    hideArOverlay();
-    payrollPrefill = resp.ok ? resp.monthly_totals : null;
-  }
-  if (opts.needsRent) {
-    showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών ενοικίου — ${row.name}...`);
-    const resp = await postJson('/api/accounting_result/rent/monthly_totals', {
-      credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
-    });
-    hideArOverlay();
-    rentPrefill = resp.ok ? resp.monthly_totals : null;
-  }
+// Kinds of findings a report note can carry, with the marker the
+// consolidated PDF puts next to the affected cell (see
+// buildConsolidatedTableHtml) and the label used in grouped popups.
+var AR_NOTE_TYPES = {
+  payroll_shortfall: { label: 'Μισθοδοσία (κωδ. 581)', mark: '*', cell: 'expenses' },
+  rent_shortfall: { label: 'Ενοίκιο (κωδ. 585/014)', mark: '**', cell: 'expenses' },
+  efka_self_employed_shortfall: { label: 'ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)', mark: '***', cell: 'expenses' },
+  uncharacterized_last_quarter: { label: 'Αχαρακτήριστα παραστατικά (τελευταίο τρίμηνο)', mark: '†', cell: 'unclassified' },
+};
 
-  moveModalsToBody();
+function arLegalKindBadge(kind) {
+  if (kind === 'sole_proprietor') return '<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:0 0.45rem;font-size:0.7rem;font-weight:700;">Ατομική</span>';
+  if (kind === 'legal_entity') return '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0 0.45rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>';
+  return '<span style="color:#94a3b8;">—</span>';
+}
+
+function arEfkaFindingText(check, legalKind) {
+  if (!check) return 'Πιθανή οφειλή — έλεγξε ΚΕΑΟ';
+  let t = `Βρέθηκαν ${check.found_months} από ${check.expected_months} πληρωμές`;
+  if (check.partners) t += ` (${check.months} μήνες × ${check.partners} εταίροι)`;
+  else if (legalKind === 'legal_entity') t += ' (εταίροι άγνωστοι — υπολογισμός ανά μήνα)';
+  return t;
+}
+
+// Step 1 of Μαζικός: before anything is checked, make sure every selected
+// company's type, contact details and ΦΠΑ are on file (one ΑΑΔΕ login each,
+// skipped when already stored) and — for companies — wait for the partners,
+// so the ΕΦΚΑ check counts months × partners and its dropdown only offers
+// the options that apply to that company type. Returns warning strings.
+async function arBulkAadePrecheck(names) {
+  const creds = window.AR_CREDENTIALS || [];
+  const warnings = [];
+  const pending = [];
+  for (let i = 0; i < names.length; i++) {
+    const cred = creds.find((c) => c.name === names[i]);
+    const vat = cred && cred.vat;
+    if (!vat) continue;
+    showArOverlay('Έλεγχος ΑΑΔΕ...', `Βήμα 1: τύπος εταιρίας, στοιχεία επικοινωνίας και ΦΠΑ — ${names[i]} (${i + 1}/${names.length}).`);
+    const r = await postJson('/api/accounting_result/company_info', { afm: vat, apply_vat: true, only_if_missing: true });
+    if (!r.ok) warnings.push(`${names[i]}: ${r.error || 'σφάλμα'}`);
+    else if (r.members_pending) pending.push(vat);
+  }
+  if (pending.length) {
+    const deadline = Date.now() + 180000;
+    let left = pending;
+    while (left.length && Date.now() < deadline) {
+      showArOverlay('Έλεγχος ΑΑΔΕ...', `Ανάκτηση εταίρων για ${left.length} εταιρίες (για τον έλεγχο ΕΦΚΑ: μήνες × εταίροι)...`);
+      await new Promise((res) => setTimeout(res, 5000));
+      try {
+        const st = await (await fetch('/api/accounting_result/company_info/members_pending?afms=' + encodeURIComponent(left.join(',')))).json();
+        if (st.ok) left = st.pending || [];
+      } catch (_) { /* retry on the next tick */ }
+    }
+    if (left.length) warnings.push(`Οι εταίροι δεν ανακτήθηκαν έγκαιρα για ${left.length} εταιρίες — ο έλεγχος ΕΦΚΑ τους γίνεται ανά μήνα.`);
+  }
+  hideArOverlay();
+  return warnings;
+}
+
+// Pre-check findings grouped by KIND (one table per απόθεμα/μισθοδοσία/
+// ενοίκιο/ΕΦΚΑ, a row per company) instead of one screen per company.
+function arBuildCheckGroups(rows) {
+  const ok = (rows || []).filter((r) => !r.error);
+  const monthly = (c) => (c ? `Βρέθηκαν ${c.found_months} από ${c.expected_months} μηνιαίες εγγραφές` : '');
+  return [
+    {
+      key: 'inventory', title: '📦 Απόθεμα λήξης',
+      rows: ok.filter((r) => r.inventory_applicable && !r.closing_inventory_known),
+      finding: (r) => (r.inventory_obligation_reason === 'turnover_threshold' ? 'Νέα υποχρέωση (πωλήσεις > 150.000€) — δεν έχει καταχωρηθεί' : 'Δεν έχει καταχωρηθεί απόθεμα λήξης'),
+      options: () => [
+        { key: 'manual', label: 'Χειροκίνητα' },
+        { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
+        { key: 'pct10_up', label: '+10% επί έναρξης' },
+        { key: 'pct10_down', label: '-10% επί έναρξης' },
+      ],
+    },
+    {
+      key: 'payroll', title: '💼 Μισθοδοσία (κωδ. 581)',
+      rows: ok.filter((r) => r.payroll_needs_input),
+      finding: (r) => monthly(r.payroll_check),
+      options: () => [{ key: 'manual', label: 'Μηνιαία σύνολα (χειροκίνητα)' }, { key: 'skip', label: 'Συνέχεια με τα τρέχοντα' }],
+    },
+    {
+      key: 'rent', title: '🏠 Ενοίκιο (κωδ. 585/014)',
+      rows: ok.filter((r) => r.rent_needs_input),
+      finding: (r) => monthly(r.rent_check),
+      options: () => [{ key: 'manual', label: 'Μηνιαία σύνολα (χειροκίνητα)' }, { key: 'skip', label: 'Συνέχεια με τα τρέχοντα' }],
+    },
+    {
+      key: 'efka', title: '🧾 ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)',
+      rows: ok.filter((r) => r.efka_shortfall),
+      finding: (r) => arEfkaFindingText(r.efka_check, r.legal_kind),
+      options: (r) => {
+        const applicable = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !r.legal_kind || o.legalKind === r.legal_kind);
+        return [{ key: '', label: 'Σημείωση στην αναφορά (έλεγξε ΚΕΑΟ)' }, ...applicable, AR_EFKA_MANUAL_OPTION];
+      },
+    },
+  ].filter((g) => g.rows.length);
+}
+
+// Resolves to {groupKey: {companyName: choiceKey}} or null (cancelled).
+function showGroupedChecksModal(groups) {
   return new Promise((resolve) => {
-    const modal = document.getElementById('arCompanyChecksModal');
-    document.getElementById('arCompanyChecksTitle').textContent = `Έλεγχοι — ${row.name}`;
-
-    const invSection = document.getElementById('arCompanyChecksInventorySection');
-    const invFields = document.getElementById('arCompanyChecksInventoryFields');
-    invFields.innerHTML = '';
-    if (opts.needsInventory) {
-      invSection.classList.remove('hidden');
-      (window.AR_STOCK_CODES || []).forEach((code) => {
-        const wrap = document.createElement('div');
-        const label = document.createElement('label');
-        label.className = 'block text-xs text-gray-600 mb-1';
-        label.textContent = code + ' ' + (window.AR_STOCK_LABELS[code] || '');
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.step = '0.01';
-        input.className = 'border rounded px-2 py-1 w-full text-sm';
-        input.value = (row.opening_inventory && row.opening_inventory[code] != null) ? row.opening_inventory[code] : 0;
-        input.dataset.code = code;
-        wrap.appendChild(label);
-        wrap.appendChild(input);
-        invFields.appendChild(wrap);
+    const optionsHtml = (opts) => opts.map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
+    const sectionsHtml = groups.map((g) => {
+      // «Όλες» offers only the options every row of the group has (the ΕΦΚΑ
+      // exception reason differs per company type).
+      const common = g.options(g.rows[0]).filter((o) => g.rows.every((r) => g.options(r).some((x) => x.key === o.key)));
+      const trs = g.rows.map((r) => `<tr>
+          <td style="white-space:nowrap;">${escapeHtml(r.name)}</td>
+          <td>${arLegalKindBadge(r.legal_kind)}</td>
+          <td style="font-size:0.78rem;">${escapeHtml(g.finding(r))}</td>
+          <td><select class="ar-gc-select border rounded px-1 py-0.5 text-xs" data-group="${g.key}" data-name="${escapeHtml(r.name)}">${optionsHtml(g.options(r))}</select></td>
+        </tr>`).join('');
+      return `<div class="mb-4">
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <div class="font-semibold text-sm">${g.title} — ${g.rows.length} εταιρίες</div>
+          <label class="text-xs text-gray-600">Όλες:
+            <select class="ar-gc-all border rounded px-1 py-0.5 text-xs" data-group="${g.key}"><option value="__">—</option>${optionsHtml(common)}</select>
+          </label>
+        </div>
+        <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Τύπος</th><th>Εύρημα</th><th>Ενέργεια</th></tr></thead><tbody>${trs}</tbody></table>
+      </div>`;
+    }).join('');
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
+    modal.setAttribute('data-managed', '1');
+    modal.innerHTML = `
+      <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
+        <div class="modal-warning-title">Διαφορές προελέγχου — ανά είδος</div>
+        <div class="modal-warning-body">
+          <p class="text-xs text-gray-500 mb-3">Διάλεξε ενέργεια ανά εταιρία (ή για όλες μιας ομάδας). Τα «χειροκίνητα» ζητούνται αμέσως μετά, ένα-ένα.</p>
+          ${sectionsHtml}
+        </div>
+        <div class="modal-warning-actions">
+          <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arGcCancel">Άκυρο</button>
+          <button type="button" class="modal-warning-btn" id="arGcRun">Συνέχεια</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelectorAll('.ar-gc-all').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        if (sel.value === '__') return;
+        modal.querySelectorAll(`.ar-gc-select[data-group="${sel.dataset.group}"]`).forEach((s) => { s.value = sel.value; });
       });
-    } else {
-      invSection.classList.add('hidden');
-    }
-
-    function fillMonthlyFields(container, dateFrom, dateTo, prefill) {
-      container.innerHTML = '';
-      monthsInRange(dateFrom, dateTo).forEach(({ key, label }) => {
-        const wrap = document.createElement('div');
-        const lbl = document.createElement('label');
-        lbl.className = 'block text-xs text-gray-600 mb-1';
-        lbl.textContent = label;
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.step = '0.01';
-        input.className = 'border rounded px-2 py-1 w-full text-sm';
-        input.value = (prefill && prefill[key] != null) ? prefill[key] : 0;
-        input.dataset.key = key;
-        wrap.appendChild(lbl);
-        wrap.appendChild(input);
-        container.appendChild(wrap);
+    });
+    const finish = (val) => { document.removeEventListener('keydown', onKey); modal.remove(); resolve(val); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#arGcCancel').addEventListener('click', () => finish(null));
+    modal.querySelector('#arGcRun').addEventListener('click', () => {
+      const out = {};
+      modal.querySelectorAll('.ar-gc-select').forEach((s) => {
+        (out[s.dataset.group] = out[s.dataset.group] || {})[s.dataset.name] = s.value;
       });
-    }
-
-    const payrollSection = document.getElementById('arCompanyChecksPayrollSection');
-    const payrollFields = document.getElementById('arCompanyChecksPayrollFields');
-    if (opts.needsPayroll) {
-      payrollSection.classList.remove('hidden');
-      fillMonthlyFields(payrollFields, opts.dateFrom, opts.dateTo, payrollPrefill);
-    } else {
-      payrollSection.classList.add('hidden');
-      payrollFields.innerHTML = '';
-    }
-
-    const rentSection = document.getElementById('arCompanyChecksRentSection');
-    const rentFields = document.getElementById('arCompanyChecksRentFields');
-    if (opts.needsRent) {
-      rentSection.classList.remove('hidden');
-      fillMonthlyFields(rentFields, opts.dateFrom, opts.dateTo, rentPrefill);
-    } else {
-      rentSection.classList.add('hidden');
-      rentFields.innerHTML = '';
-    }
-
-    const efkaSection = document.getElementById('arCompanyChecksEfkaSection');
-    const efkaSelect = document.getElementById('arCompanyChecksEfkaSelect');
-    const efkaFields = document.getElementById('arCompanyChecksEfkaFields');
-    if (opts.hasEfkaNote) {
-      efkaSection.classList.remove('hidden');
-      // Same natural-person/legal-entity filtering as the Ατομικός report's
-      // own ΕΦΚΑ exception button (resolveEfkaSelfEmployedException) — only
-      // offer the reason that actually matches this company's known type,
-      // falling back to both when it's not known yet.
-      const applicable = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !row.legal_kind || o.legalKind === row.legal_kind);
-      const options = applicable.length ? applicable : AR_EFKA_EXCEPTION_OPTIONS;
-      efkaSelect.innerHTML = '<option value="">Καμία ενέργεια τώρα</option>' +
-        [...options, AR_EFKA_MANUAL_OPTION].map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
-      efkaSelect.value = '';
-      efkaFields.classList.add('hidden');
-      efkaFields.innerHTML = '';
-      efkaSelect.onchange = async () => {
-        if (efkaSelect.value !== 'manual_totals') { efkaFields.classList.add('hidden'); efkaFields.innerHTML = ''; return; }
-        showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών ΕΦΚΑ — ${row.name}...`);
-        const resp = await postJson('/api/accounting_result/efka_self_employed/monthly_totals', {
-          credential_name: row.name, date_from: opts.dateFrom, date_to: opts.dateTo,
-        });
-        hideArOverlay();
-        fillMonthlyFields(efkaFields, opts.dateFrom, opts.dateTo, resp.ok ? resp.monthly_totals : null);
-        efkaFields.classList.remove('hidden');
-      };
-    } else {
-      efkaSection.classList.add('hidden');
-    }
-
-    modal.classList.remove('hidden');
-    const saveBtn = document.getElementById('arCompanyChecksSave');
-    const cancelBtn = document.getElementById('arCompanyChecksCancel');
-    function cleanup() {
-      modal.classList.add('hidden');
-      saveBtn.removeEventListener('click', onSave);
-      cancelBtn.removeEventListener('click', onCancel);
-    }
-    function onSave() {
-      const result = {};
-      if (opts.needsInventory) {
-        const values = {};
-        invFields.querySelectorAll('input').forEach((inp) => { values[inp.dataset.code] = parseFloat(inp.value) || 0; });
-        result.inventory = values;
-      }
-      if (opts.needsPayroll) {
-        const values = {};
-        payrollFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
-        result.payroll = values;
-      }
-      if (opts.needsRent) {
-        const values = {};
-        rentFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
-        result.rent = values;
-      }
-      if (opts.hasEfkaNote && efkaSelect.value) {
-        result.efka = efkaSelect.value;
-        if (efkaSelect.value === 'manual_totals') {
-          const values = {};
-          efkaFields.querySelectorAll('input').forEach((inp) => { const v = parseFloat(inp.value) || 0; if (v) values[inp.dataset.key] = v; });
-          result.efkaTotals = values;
-        }
-      }
-      cleanup();
-      resolve(result);
-    }
-    function onCancel() {
-      cleanup();
-      resolve(null);
-    }
-    saveBtn.addEventListener('click', onSave);
-    cancelBtn.addEventListener('click', onCancel);
+      finish(out);
+    });
   });
 }
 
-// Applies the modal's answers: inventory always goes in as "manual" (that's
-// the only reason this screen showed an inventory section at all — batch
-// defaults for inventory are resolved before this loop even starts, see
-// runBulk()). Payroll/rent fields are pre-filled from myDATA (see
-// showCompanyChecksModal), so submitting them untouched still reproduces
-// myDATA's own total via "manual" — "skip" is only the fallback for the
-// unlikely case every field ends up at literal 0 (nothing pre-filled and
-// nothing typed), since an empty monthly_totals would otherwise fail
-// server-side validation.
-async function resolveCompanyChecksManually(row, year, dateFrom, dateTo, opts) {
-  const result = await showCompanyChecksModal(row, { ...opts, dateFrom, dateTo });
-  if (!result) return false;
+var AR_MONTHLY_ENDPOINTS = {
+  payroll: { totals: '/api/accounting_result/payroll/monthly_totals', label: 'μισθοδοσίας' },
+  rent: { totals: '/api/accounting_result/rent/monthly_totals', label: 'ενοικίου' },
+  efka: { totals: '/api/accounting_result/efka_self_employed/monthly_totals', label: 'ΕΦΚΑ Μη-Μισθωτών' },
+};
 
-  if (opts.needsInventory) {
-    await postJson('/api/accounting_result/inventory/resolve', {
-      credential_name: row.name, year, method: 'manual', value: result.inventory, date_from: dateFrom, date_to: dateTo,
-    });
-  }
-  if (opts.needsPayroll) {
-    const hasValues = Object.keys(result.payroll || {}).length > 0;
-    await postJson('/api/accounting_result/payroll/resolve', {
-      credential_name: row.name, year,
-      resolution: hasValues ? 'manual' : 'skip',
-      monthly_totals: result.payroll || {},
-    });
-  }
-  if (opts.needsRent) {
-    const hasValues = Object.keys(result.rent || {}).length > 0;
-    await postJson('/api/accounting_result/rent/resolve', {
-      credential_name: row.name, year,
-      resolution: hasValues ? 'manual' : 'skip',
-      monthly_totals: result.rent || {},
-    });
-  }
-  if (opts.hasEfkaNote && result.efka === 'manual_totals') {
-    if (Object.keys(result.efkaTotals || {}).length) {
-      await postJson('/api/accounting_result/efka_self_employed/resolve_totals', {
-        credential_name: row.name, year, monthly_totals: result.efkaTotals,
-      });
+// Prefilled monthly-totals form for one company; same return values as
+// showManualPayrollModal.
+async function arAskMonthlyTotals(kind, name, dateFrom, dateTo) {
+  const ep = AR_MONTHLY_ENDPOINTS[kind];
+  showArOverlay('Λήψη δεδομένων από myDATA...', `Έλεγχος μηνιαίων ποσών ${ep.label} — ${name}...`);
+  const prefill = await postJson(ep.totals, { credential_name: name, date_from: dateFrom, date_to: dateTo });
+  hideArOverlay();
+  return showManualPayrollModal(`Μηνιαία σύνολα ${ep.label} — ${name}`, monthsInRange(dateFrom, dateTo), prefill.ok ? prefill.monthly_totals : null);
+}
+
+// Applies the grouped popup's choices; manual ones open their entry form
+// one company at a time. false = the user cancelled a form (stop the run).
+async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusEl) {
+  const rowByName = new Map((rows || []).map((r) => [r.name, r]));
+  for (const [name, method] of Object.entries(choices.inventory || {})) {
+    let value = null;
+    if (method === 'manual') {
+      value = await showManualInventoryModal(`Απόθεμα λήξης — ${name} (${year})`, (rowByName.get(name) || {}).opening_inventory);
+      if (!value) return false;
     }
-  } else if (opts.hasEfkaNote && result.efka) {
-    await postJson('/api/accounting_result/efka_self_employed/resolve', {
-      credential_name: row.name, year, reason: result.efka,
+    if (statusEl) statusEl.textContent = `Απόθεμα λήξης — ${name}...`;
+    await postJson('/api/accounting_result/inventory/resolve', {
+      credential_name: name, year, method, value, date_from: dateFrom, date_to: dateTo,
     });
+  }
+  for (const kind of ['payroll', 'rent']) {
+    for (const [name, choice] of Object.entries(choices[kind] || {})) {
+      let resolution = 'skip';
+      let monthlyTotals = {};
+      if (choice === 'manual') {
+        const values = await arAskMonthlyTotals(kind, name, dateFrom, dateTo);
+        if (!values) return false;
+        if (!values.__continue && Object.keys(values).length) { resolution = 'manual'; monthlyTotals = values; }
+      }
+      await postJson(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals });
+    }
+  }
+  for (const [name, choice] of Object.entries(choices.efka || {})) {
+    if (!choice) continue;
+    if (choice === 'manual_totals') {
+      const values = await arAskMonthlyTotals('efka', name, dateFrom, dateTo);
+      if (!values) return false;
+      if (values.__continue || !Object.keys(values).length) continue;
+      await postJson('/api/accounting_result/efka_self_employed/resolve_totals', { credential_name: name, year, monthly_totals: values });
+    } else {
+      await postJson('/api/accounting_result/efka_self_employed/resolve', { credential_name: name, year, reason: choice });
+    }
   }
   return true;
+}
+
+// After a Μαζικός run: every finding (report note) grouped by kind, a row
+// per company — the «📋 Διαφορές ανά είδος» button of the results flash.
+function showBulkNotesByTypeModal(results) {
+  const byType = {};
+  (results || []).forEach((r) => {
+    (r.notes || []).forEach((n) => {
+      (byType[n.type] = byType[n.type] || []).push({ name: r.credential_name, message: n.message });
+    });
+  });
+  const types = Object.keys(byType);
+  const body = types.length
+    ? types.map((t) => {
+      const info = AR_NOTE_TYPES[t] || { label: t };
+      const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${escapeHtml(x.name)}</td><td style="font-size:0.78rem;">${escapeHtml(x.message)}</td></tr>`).join('');
+      return `<div class="mb-4"><div class="font-semibold text-sm mb-1">${escapeHtml(info.label)} — ${byType[t].length} εταιρίες</div>
+        <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Παρατήρηση</th></tr></thead><tbody>${trs}</tbody></table></div>`;
+    }).join('')
+    : '<p class="text-sm">Δεν βρέθηκαν διαφορές.</p>';
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
+  modal.setAttribute('data-managed', '1');
+  modal.innerHTML = `
+    <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
+      <div class="modal-warning-title">📋 Διαφορές ανά είδος</div>
+      <div class="modal-warning-body">${body}</div>
+      <div class="modal-warning-actions"><button type="button" class="modal-warning-btn" id="arNotesClose">Κλείσιμο</button></div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => { document.removeEventListener('keydown', onKey); modal.remove(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  modal.querySelector('#arNotesClose').addEventListener('click', close);
+  modal.addEventListener('mousedown', (e) => { if (e.target === modal) close(); });
 }
 
 // ---------------- ΕΦΚΑ Μη-Μισθωτών exception ----------------
@@ -1728,8 +1779,12 @@ function showArFlash(message, type, ttl) {
   el.append(textNode, closeBtn);
   container.prepend(el);
 
+  // Mirrored into the Μαζικός status line only while that tab is the one
+  // showing — otherwise e.g. an Αποθηκευμένα ΦΠΑ search message sat there
+  // and resurfaced under the Μαζικός table later.
   const statusEl = document.getElementById('arBulkStatus');
-  if (statusEl) statusEl.textContent = message;
+  const bulkTab = document.getElementById('arTabBulk');
+  if (statusEl && bulkTab && !bulkTab.classList.contains('hidden')) statusEl.textContent = message;
 
   // ttl === 0 means "stays until explicitly replaced or closed" — used for
   // in-progress status messages whose real duration isn't known upfront
@@ -1780,7 +1835,7 @@ function showArResultsFlash(message, kind, opts) {
   row1.append(textNode, closeBtn);
   el.appendChild(row1);
 
-  if (opts && (opts.zip || opts.consolidated || opts.pdf || opts.view)) {
+  if (opts && (opts.zip || opts.consolidated || opts.pdf || opts.view || opts.notes)) {
     const row2 = document.createElement('div');
     row2.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;';
     const linkBtnStyle = 'font-size:11px;padding:3px 8px;border-radius:6px;border:none;background:rgba(255,255,255,.3);color:inherit;cursor:pointer;font-weight:700;';
@@ -1796,6 +1851,7 @@ function showArResultsFlash(message, kind, opts) {
     if (opts.pdf) addBtn('⬇ PDF', opts.pdf);
     if (opts.zip) addBtn('⬇ ZIP (ανά εταιρία)', opts.zip);
     if (opts.consolidated) addBtn('⬇ Συγκεντρωτικό PDF', opts.consolidated);
+    if (opts.notes) addBtn('📋 Διαφορές ανά είδος', opts.notes);
     el.appendChild(row2);
   }
 
@@ -2061,12 +2117,15 @@ async function runBulk() {
   AR_BULK_RUNNING = true;
   try {
   const year = yearFromDMY(to);
-  showArOverlay('Λήψη δεδομένων από myDATA...', `Βήμα 1: προέλεγχος αποθεμάτων, μισθοδοσίας και ενοικίου για ${names.length} εταιρίες.`);
+  // Βήμα 1: ΑΑΔΕ (type/contact/ΦΠΑ/partners) BEFORE any check, so the ΕΦΚΑ
+  // check below knows each company's type and partner count.
+  const aadeWarnings = await arBulkAadePrecheck(names);
+  showArOverlay('Λήψη δεδομένων από myDATA...', `Βήμα 2: προέλεγχος αποθεμάτων, μισθοδοσίας, ενοικίου και ΕΦΚΑ Μη-Μισθωτών για ${names.length} εταιρίες.`);
   const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
   hideArOverlay();
   if (!statusResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
-    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα προελέγχου αποθεμάτων/μισθοδοσίας/ενοικίου — ' + (statusResp.error || ''), 'error');
+    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα προελέγχου αποθεμάτων/μισθοδοσίας/ενοικίου/ΕΦΚΑ — ' + (statusResp.error || ''), 'error');
     return;
   }
 
@@ -2074,130 +2133,20 @@ async function runBulk() {
     .filter((r) => r.depreciation_ambiguous)
     .map((r) => r.name);
 
-  // Each category still gets ONE quick "same answer for everyone?" question
-  // up front — that stays the fast path for the common case (batch defaults
-  // for most companies, no per-company back-and-forth at all). Only
-  // "χειροκίνητα" defers to the consolidated per-company screen below,
-  // rather than immediately looping through every flagged company right
-  // here — a company needing manual entry in more than one category would
-  // otherwise get asked about it three separate times, once per category,
-  // each pass working through the ENTIRE flagged list before the next
-  // category's pass even starts.
-  const needsManualInventory = new Set();
-  const needsManualPayroll = new Set();
-  const needsManualRent = new Set();
-
-  // Companies myDATA shows as already tracking inventory (a prior-year
-  // closing stock was declared), OR a Β/Γ-κατηγορίας company whose sales of
-  // εμπορεύματα/προϊόντα crossed the 150.000€ threshold THIS period (a new
-  // obligation even if last year didn't require one) — see r.inventory_obligation_reason.
-  const flagged = (statusResp.rows || []).filter((r) => r.inventory_applicable && !r.closing_inventory_known && !r.error);
-  if (flagged.length) {
-    const choice = await showModalChoice(
-      `Λείπει απόθεμα λήξης (${flagged.length} εταιρίες)`,
-      'Πώς θέλετε να συμπληρωθεί το απόθεμα λήξης για τις εταιρίες που δεν το έχουν καταχωρημένο;',
-      [
-        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
-        { key: 'same_as_opening', label: 'Ίσο με έναρξη (όλες)' },
-        { key: 'pct10_up', label: '+10% επί έναρξης (όλες)' },
-        { key: 'pct10_down', label: '-10% επί έναρξης (όλες)' },
-      ]
-    );
-    if (!choice) {
+  // Every finding in ONE popup, grouped by kind (απόθεμα / μισθοδοσία /
+  // ενοίκιο / ΕΦΚΑ Μη-Μισθωτών) with a row per company, then any manual
+  // entries one after the other.
+  const groups = arBuildCheckGroups(statusResp.rows);
+  if (groups.length) {
+    const choices = await showGroupedChecksModal(groups);
+    if (!choices) {
       statusEl.textContent = 'Ακυρώθηκε.';
       return;
     }
-    if (choice === 'manual') {
-      flagged.forEach((row) => needsManualInventory.add(row.name));
-    } else {
-      for (const row of flagged) {
-        await postJson('/api/accounting_result/inventory/resolve', {
-          credential_name: row.name, year, method: choice, date_from: from, date_to: to,
-        });
-      }
-    }
-  }
-
-  // Same payroll monthly-completeness pre-flight as the inventory one above
-  // — resolved upfront so bulk_compute doesn't surprise the user mid-batch
-  // (see _ar_payroll_resolution in app.py).
-  const payrollFlagged = (statusResp.rows || []).filter((r) => r.payroll_needs_input && !r.error);
-  if (payrollFlagged.length) {
-    const payrollChoice = await showModalChoice(
-      `Ελλιπείς εγγραφές μισθοδοσίας (${payrollFlagged.length} εταιρίες)`,
-      'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου. Πώς θέλετε να προχωρήσετε;',
-      [
-        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
-        { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία (όλες)' },
-      ]
-    );
-    if (!payrollChoice) {
+    const applied = await applyGroupedChecks(choices, statusResp.rows, year, from, to, statusEl);
+    if (!applied) {
       statusEl.textContent = 'Ακυρώθηκε.';
       return;
-    }
-    if (payrollChoice === 'manual') {
-      payrollFlagged.forEach((row) => needsManualPayroll.add(row.name));
-    } else {
-      for (const row of payrollFlagged) {
-        await postJson('/api/accounting_result/payroll/resolve', {
-          credential_name: row.name, year, resolution: 'skip',
-        });
-      }
-    }
-  }
-
-  // Same pre-flight as payroll, for rent (Ε3 code 585/014) — see
-  // _ar_rent_resolution in app.py.
-  const rentFlagged = (statusResp.rows || []).filter((r) => r.rent_needs_input && !r.error);
-  if (rentFlagged.length) {
-    const rentChoice = await showModalChoice(
-      `Ελλιπείς εγγραφές ενοικίου (${rentFlagged.length} εταιρίες)`,
-      'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου. Πώς θέλετε να προχωρήσετε;',
-      [
-        { key: 'manual', label: 'Χειροκίνητα ανά εταιρία' },
-        { key: 'skip', label: 'Συνέχεια με τα τρέχοντα στοιχεία (όλες)' },
-      ]
-    );
-    if (!rentChoice) {
-      statusEl.textContent = 'Ακυρώθηκε.';
-      return;
-    }
-    if (rentChoice === 'manual') {
-      rentFlagged.forEach((row) => needsManualRent.add(row.name));
-    } else {
-      for (const row of rentFlagged) {
-        await postJson('/api/accounting_result/rent/resolve', {
-          credential_name: row.name, year, resolution: 'skip',
-        });
-      }
-    }
-  }
-
-  // One consolidated screen per company for everything it still needs —
-  // whichever of inventory/payroll/rent it was marked "χειροκίνητα" for
-  // above, PLUS a ΕΦΚΑ Μη-Μισθωτών exception option riding along IF the
-  // company already needs the screen for one of those other reasons. ΕΦΚΑ
-  // alone never opens a screen by itself — it stays a silent report note
-  // (as before) unless the company is already stopping the batch for
-  // something else, since interrupting an otherwise-clean run just to
-  // offer an optional exception would work against "faster", not for it.
-  const consolidatedNames = new Set([...needsManualInventory, ...needsManualPayroll, ...needsManualRent]);
-  if (consolidatedNames.size) {
-    const rowByName = new Map((statusResp.rows || []).map((r) => [r.name, r]));
-    for (const name of consolidatedNames) {
-      const row = rowByName.get(name);
-      if (!row) continue;
-      statusEl.textContent = `Έλεγχοι — ${name}...`;
-      const ok = await resolveCompanyChecksManually(row, year, from, to, {
-        needsInventory: needsManualInventory.has(name),
-        needsPayroll: needsManualPayroll.has(name),
-        needsRent: needsManualRent.has(name),
-        hasEfkaNote: !!row.efka_shortfall,
-      });
-      if (!ok) {
-        statusEl.textContent = `Ακυρώθηκε στο ${name}.`;
-        return;
-      }
     }
   }
 
@@ -2304,15 +2253,22 @@ async function runBulk() {
     hasWarningAdvisory = true;
     statusMsg += ` Αχαρακτήριστα παραστατικά >25% στο τελευταίο τρίμηνο: ${uncharacterizedNames.join(', ')}.`;
   }
+  if (aadeWarnings.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Έλεγχος ΑΑΔΕ (τύπος/επικοινωνία/ΦΠΑ) χωρίς επιτυχία: ${aadeWarnings.join(' · ')}.`;
+  }
   statusEl.textContent = statusMsg;
+  const hasNotes = (bulkResp.results || []).some((r) => (r.notes || []).length);
   showArResultsFlash(
     'Λογιστικό Αποτέλεσμα (Μαζικός): ' + statusMsg,
     bulkResp.aborted ? 'warning' : (errors.length || hasWarningAdvisory ? 'warning' : 'success'),
     companies.length ? {
       zip: () => document.getElementById('arBulkPdfBtn').click(),
       consolidated: () => document.getElementById('arBulkConsolidatedPdfBtn').click(),
+      notes: hasNotes ? () => showBulkNotesByTypeModal(bulkResp.results) : null,
     } : null,
   );
+  if (hasNotes) showBulkNotesByTypeModal(bulkResp.results);
   } catch (err) {
     // Without this, any unexpected exception anywhere above (e.g. a
     // network hiccup mid-flow) unwinds as a silent unhandled promise
@@ -2370,12 +2326,11 @@ function renderSavedTable(companies) {
     const actionCell = credName
       ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
       : `<button type="button" class="ar-saved-nomydata-btn" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.35rem;height:1.35rem;font-size:0.75rem;font-weight:800;cursor:pointer;line-height:1;" title="Δεν υπάρχουν κωδικοί myDATA για αυτή την εταιρία — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε τέτοιες εταιρίες (ξανά για καθαρισμό).">i</button>`;
-    // Same ΓΕΜΗ+ΑΑΔΕ cross-check flow e3_check.html's single-company panel
-    // uses (/api/e3/brain/company_members) — only offered while unresolved;
-    // once a type is on file there's nothing left to fetch here.
-    const typeDetectBtn = typeResolutionTbl === 'unknown'
-      ? `<button type="button" class="ar-saved-type-detect-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Ανάκτηση νομικής μορφής, διεύθυνσης, email/κινητού και μελών από ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet σε αυτή τη γραμμή — πρόσθεσέ τους από το ✏️)">🔍</button>`
-      : `<button type="button" class="ar-saved-recheck-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Επανέλεγχος: ξαναφέρνει από ΑΑΔΕ (με ένα login) τύπο, διεύθυνση, email/κινητό/σταθερό και ΦΠΑ/κατηγορία βιβλίων">🔄</button>`;
+    // One ΑΑΔΕ lookup for everything the registry page gives us — type,
+    // address, email/κινητό/σταθερό AND ΦΠΑ/κατηγορία βιβλίων (same login,
+    // see api_accounting_result_company_info). 🔍 while the type is unknown,
+    // 🔄 (re-check) once it's on file.
+    const typeDetectBtn = `<button type="button" class="ar-saved-aade-btn text-xs px-1 py-0.5 rounded border hover:bg-gray-50 ml-1" data-afm="${afm}" title="Λήψη από ΑΑΔΕ (ένα login): τύπος εταιρίας, διεύθυνση, email/κινητό/σταθερό και ΦΠΑ/κατηγορία βιβλίων — χρειάζεται αποθηκευμένους κωδικούς TAXISnet (✏️)">${typeResolutionTbl === 'unknown' ? '🔍' : '🔄'}</button>`;
     return `<tr${credName ? '' : ' data-no-mydata="1"'}>
       <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
@@ -2383,7 +2338,6 @@ function renderSavedTable(companies) {
       <td>${typeBadge}${gemiWarnBadge}${typeDetectBtn}</td>
       <td class="ar-saved-vat text-xs" data-afm="${afm}">
         <span class="ar-saved-vat-label text-gray-400">…</span>
-        <button type="button" class="ar-saved-vat-detect-btn text-xs px-1.5 py-0.5 rounded border hover:bg-gray-50" data-afm="${afm}" title="Ανάκτηση κατηγορίας βιβλίων/υπαγωγής ΦΠΑ από το Μητρώο ΑΑΔΕ (χρειάζεται αποθηκευμένους κωδικούς TAXISnet)">🔍</button>
       </td>
       <td class="ar-saved-hist text-xs text-gray-500" data-afm="${afm}">…</td>
       <td style="white-space:nowrap;">
@@ -2491,7 +2445,7 @@ async function fetchCompanyInfoForSavedRow(afm, btn, opts) {
   const prevText = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⌛';
-  showArFlash(`Ανάκτηση στοιχείων από ΑΑΔΕ για ΑΦΜ ${afm}… (νομική μορφή, διεύθυνση, email/κινητό, μέλη)`, 'info', 5000);
+  showArFlash(`Ανάκτηση στοιχείων από ΑΑΔΕ για ΑΦΜ ${afm}… (νομική μορφή, διεύθυνση, email/κινητό, ΦΠΑ, μέλη)`, 'info', 5000);
   const r = await arFetchCompanyInfoCore(afm, opts);
   if (r.ok) {
     const warn = r.membersError || r.noContact || /⚠/.test(r.summary || '');
@@ -2519,25 +2473,6 @@ async function fillSavedVatCells(container) {
     }
   }));
   redrawSavedDataTable();
-  container.querySelectorAll('.ar-saved-vat-detect-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const afm = btn.dataset.afm;
-      const label = btn.parentElement.querySelector('.ar-saved-vat-label');
-      btn.disabled = true;
-      if (label) label.textContent = '⌛...';
-      showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}) από το Μητρώο ΑΑΔΕ…`, 'info', 4000);
-      const resp = await postJson('/api/accounting_result/vat_profile/detect', { vat: afm });
-      if (resp.ok) {
-        if (label) label.textContent = vatProfileLabel(resp.profile);
-        showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}): ${vatProfileLabel(resp.profile)}.`, 'success', 4000);
-      } else {
-        if (label) label.textContent = '⚠ ' + (resp.error || 'σφάλμα');
-        showArFlash(`Αναζήτηση ΦΠΑ (ΑΦΜ ${afm}): σφάλμα — ${resp.error || ''}`, 'error', 7000);
-      }
-      btn.disabled = false;
-      redrawSavedDataTable();
-    });
-  });
 }
 
 async function fillSavedHistoryCells(container) {
@@ -2637,122 +2572,43 @@ async function arFetchCompanyInfoCore(afm, opts) {
   return { ok: true, summary, membersError: resp.members_error || null, noContact };
 }
 
-// Popup menu for the bulk-search button: lets the user pick ΦΠΑ and/or
-// Τύπος (the latter only for companies with no stored type).
-function showBulkDetectMenu() {
-  return new Promise((resolve) => {
-    const modal = document.createElement('div');
-    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
-    modal.setAttribute('data-managed', '1');
-    modal.innerHTML = `
-      <div class="modal-warning-panel max-w-md w-11/12">
-        <div class="modal-warning-title">🔍 Μαζική αναζήτηση</div>
-        <div class="modal-warning-body">
-          <p class="text-sm mb-2">Για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη). Χρειάζονται αποθηκευμένους κωδικούς TAXISnet.</p>
-          <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmVat" checked> ΦΠΑ / κατηγορία βιβλίων (Μητρώο ΑΑΔΕ)</label>
-          <label class="flex items-center gap-2 text-sm mb-1"><input type="checkbox" id="arBdmType"> Τύπος εταιρίας + διεύθυνση, email/κινητό, μέλη (ΑΑΔΕ) — μόνο για όσες δεν έχουν αποθηκευμένο τύπο</label>
-          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="arBdmContact"> Επανέλεγχος στοιχείων επικοινωνίας — για όσες δεν έχουν email/κινητό/σταθερό</label>
-          <p class="text-xs text-gray-500 mt-2">Όπου χρειάζονται και ΦΠΑ και στοιχεία εταιρίας, γίνεται ένα μόνο login στην ΑΑΔΕ.</p>
-        </div>
-        <div class="modal-warning-actions">
-          <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arBdmCancel">Άκυρο</button>
-          <button type="button" class="modal-warning-btn" id="arBdmRun">Εκτέλεση</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    const finish = (val) => { document.removeEventListener('keydown', onKey); modal.remove(); resolve(val); };
-    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
-    document.addEventListener('keydown', onKey);
-    modal.querySelector('#arBdmCancel').addEventListener('click', () => finish(null));
-    modal.addEventListener('mousedown', (e) => { if (e.target === modal) finish(null); });
-    modal.querySelector('#arBdmRun').addEventListener('click', () => {
-      const vat = modal.querySelector('#arBdmVat').checked;
-      const type = modal.querySelector('#arBdmType').checked;
-      const contact = modal.querySelector('#arBdmContact').checked;
-      finish(vat || type || contact ? { vat, type, contact } : null);
-    });
-  });
-}
-
-async function runTypeBulkDetect(opts) {
-  opts = opts || {};
+// «🔍 Μαζική αναζήτηση»: one ΑΑΔΕ login per company fetches type, address,
+// contact details AND ΦΠΑ/κατηγορία βιβλίων together (same registry page),
+// for the selected companies (or all, if none is selected).
+async function runBulkDetectFromMenu() {
+  const mode = await showModalChoice(
+    '🔍 Μαζική αναζήτηση ΑΑΔΕ',
+    'Τύπος εταιρίας, διεύθυνση, email/κινητό/σταθερό και ΦΠΑ/κατηγορία βιβλίων — με ένα login ανά εταιρία, για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη). Χρειάζονται αποθηκευμένους κωδικούς TAXISnet.',
+    [
+      { key: 'missing', label: 'Μόνο όσες δεν έχουν ήδη τα στοιχεία' },
+      { key: 'all', label: 'Επανέλεγχος όλων' },
+    ]
+  );
+  if (!mode) return;
   const statusEl = document.getElementById('arSavedBulkStatus');
   const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
-  const pool = selected.length
+  const afms = selected.length
     ? selected
     : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean);
-  const targets = pool.filter((afm) => {
-    const e = (window.__arSavedCompanies || []).find((x) => String((x.company || {}).afm || '') === afm);
-    const c = (e && e.company) || {};
-    const noType = !c.legal_type && !(Array.isArray(e && e.members) && e.members.length);
-    const noContact = !(c.email || c.mobile || c.phone);
-    return (opts.type !== false && noType) || (opts.contact && noContact);
-  });
-  if (!targets.length) {
-    showArFlash('Αναζήτηση τύπου/επικοινωνίας: δεν βρέθηκαν εταιρίες που να χρειάζονται ανάκτηση.', 'info', 5000);
-    return [];
-  }
-  showArFlash(`Αναζήτηση τύπου/στοιχείων: ξεκίνησε για ${targets.length} εταιρίες (ΑΑΔΕ)…`, 'info', 6000);
-  let okCount = 0;
-  const failed = [];
-  for (let i = 0; i < targets.length; i++) {
-    const afm = targets[i];
-    if (statusEl) statusEl.textContent = `Τύπος: ${i + 1}/${targets.length} (ΑΦΜ ${afm})…`;
-    const r = await arFetchCompanyInfoCore(afm, { applyVat: !!opts.applyVat });
-    if (r.ok) okCount++; else failed.push(`${afm} (${r.error})`);
-  }
-  const msg = `Ολοκληρώθηκε (${okCount} επιτυχίες${failed.length ? ', ' + failed.length + ' σφάλματα: ' + failed.join(', ') : ''}).`;
-  if (statusEl) statusEl.textContent = msg;
-  showArFlash('Αναζήτηση τύπου: ' + msg, failed.length ? 'warning' : 'success', failed.length ? 12000 : 6000);
-  loadSavedClients();
-  return targets;
-}
-
-async function runBulkDetectFromMenu() {
-  const choice = await showBulkDetectMenu();
-  if (!choice) return;
-  // One ΑΑΔΕ login per company: companies handled by the type/contact fetch
-  // get their ΦΠΑ from that same login, the ΦΠΑ bulk then covers only the rest.
-  let done = [];
-  if (choice.type || choice.contact) done = (await runTypeBulkDetect({ type: !!choice.type, contact: !!choice.contact, applyVat: !!choice.vat })) || [];
-  if (choice.vat) await runVatBulkDetect(done);
-}
-
-async function runVatBulkDetect(skipAfms) {
-  const statusEl = document.getElementById('arSavedBulkStatus');
-  const selected = arTableCheckedValues('.ar-saved-table', '.ar-saved-cb');
-  const skip = new Set(skipAfms || []);
-  const afms = (selected.length
-    ? selected
-    : (window.__arSavedCompanies || []).map((e) => String((e.company || {}).afm || '')).filter(Boolean)).filter((a) => !skip.has(a));
-  if (!afms.length && skip.size) return;
   if (!afms.length) {
     if (statusEl) statusEl.textContent = 'Δεν υπάρχουν αποθηκευμένες εταιρίες.';
     return;
   }
-  const jobId = 'ar-vat-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  if (statusEl) statusEl.textContent = '';
-  startBulkCrossPageBanner(jobId, afms.length);
-  showArFlash(`Μαζική αναζήτηση ΦΠΑ: ξεκίνησε για ${afms.length} εταιρίες…`, 'info', 4000);
-  let resp;
-  try {
-    resp = await postJson('/api/accounting_result/vat_profile/bulk_detect', { afms, job_id: jobId });
-  } finally {
-    stopBulkCrossPageBanner();
+  showArFlash(`Μαζική αναζήτηση ΑΑΔΕ: ξεκίνησε για ${afms.length} εταιρίες…`, 'info', 5000);
+  let okCount = 0;
+  let skipped = 0;
+  const failed = [];
+  for (let i = 0; i < afms.length; i++) {
+    const afm = afms[i];
+    if (statusEl) statusEl.textContent = `ΑΑΔΕ: ${i + 1}/${afms.length} (ΑΦΜ ${afm})…`;
+    const resp = await postJson('/api/accounting_result/company_info', { afm, apply_vat: true, only_if_missing: mode === 'missing' });
+    if (resp.ok && resp.skipped) skipped++;
+    else if (resp.ok) okCount++;
+    else failed.push(`${afm} (${resp.error || 'σφάλμα'})`);
   }
-  if (!resp.ok) {
-    if (statusEl) statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
-    showArFlash('Μαζική αναζήτηση ΦΠΑ: σφάλμα — ' + (resp.error || ''), 'error');
-    return;
-  }
-  const results = resp.results || [];
-  const okCount = results.filter((r) => r.ok).length;
-  const errCount = results.length - okCount;
-  const msg = resp.aborted
-    ? `Διακόπηκε από τον χρήστη μετά από ${results.length} εταιρίες.`
-    : `Ολοκληρώθηκε (${okCount} επιτυχίες${errCount ? ', ' + errCount + ' σφάλματα' : ''}).`;
+  const msg = `Ολοκληρώθηκε: ${okCount} ενημερώθηκαν${skipped ? `, ${skipped} είχαν ήδη στοιχεία` : ''}${failed.length ? `, ${failed.length} σφάλματα: ${failed.join(', ')}` : ''}.`;
   if (statusEl) statusEl.textContent = msg;
-  showArFlash('Μαζική αναζήτηση ΦΠΑ: ' + msg, resp.aborted || errCount ? 'warning' : 'success', 6000);
+  showArFlash('Μαζική αναζήτηση ΑΑΔΕ: ' + msg, failed.length ? 'warning' : 'success', failed.length ? 12000 : 6000);
   loadSavedClients();
 }
 
@@ -2822,10 +2678,7 @@ async function loadSavedClients() {
     topNoMydata.classList.toggle('hidden', !container.querySelector('[data-no-mydata]'));
     topNoMydata.onclick = arToggleNoMydataFilter;
   }
-  container.querySelectorAll('.ar-saved-type-detect-btn').forEach((btn) => {
-    btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn));
-  });
-  container.querySelectorAll('.ar-saved-recheck-btn').forEach((btn) => {
+  container.querySelectorAll('.ar-saved-aade-btn').forEach((btn) => {
     btn.addEventListener('click', () => fetchCompanyInfoForSavedRow(btn.dataset.afm, btn, { applyVat: true }));
   });
   fillSavedHistoryCells(container);
@@ -3147,7 +3000,7 @@ moveModalsToBody();
 
 if (!window.__arModalObserverInstalled) {
   window.__arModalObserverInstalled = true;
-  const AR_MOVE_MODAL_IDS = ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arManualPayrollModal', 'arCompanyChecksModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'];
+  const AR_MOVE_MODAL_IDS = ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arManualPayrollModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'];
   const arModalObserver = new MutationObserver((muts) => {
     for (const m of muts) {
       if (!m.addedNodes || !m.addedNodes.length) continue;

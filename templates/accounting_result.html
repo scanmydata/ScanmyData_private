@@ -352,7 +352,7 @@
       <button id="arSavedSelectAllBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Επιλογή όλων</button>
       <button id="arSavedSelectNoneBtn" type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50">Καμία επιλογή</button>
       <button id="arSavedBulkDeleteBtn" type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50">🗑 Διαγραφή επιλεγμένων</button>
-      <button id="arSavedVatBulkDetectBtn" type="button" class="text-xs px-2 py-1 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50" title="Μαζική αναζήτηση από ΑΑΔΕ/ΓΕΜΗ για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη): ΦΠΑ και/ή τύπος εταιρίας — χρειάζεται αποθηκευμένους κωδικούς TAXISnet.">🔍 Μαζική αναζήτηση…</button>
+      <button id="arSavedVatBulkDetectBtn" type="button" class="text-xs px-2 py-1 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50" title="Μαζική αναζήτηση ΑΑΔΕ για τις επιλεγμένες εταιρίες (ή όλες, αν καμία δεν είναι επιλεγμένη): τύπος εταιρίας, στοιχεία επικοινωνίας και ΦΠΑ με ένα login ανά εταιρία — χρειάζεται αποθηκευμένους κωδικούς TAXISnet.">🔍 Μαζική αναζήτηση ΑΑΔΕ…</button>
       <button id="arSavedNoMydataBtn" type="button" class="hidden" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.5rem;height:1.5rem;font-size:0.8rem;font-weight:800;cursor:pointer;line-height:1;" title="Υπάρχουν εταιρίες χωρίς κωδικούς myDATA — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε αυτές (ξανά για καθαρισμό).">i</button>
       <span id="arSavedSelectedCount" class="text-xs text-gray-500 ml-1">0 επιλεγμένες</span>
       <span id="arSavedBulkStatus" class="text-xs text-gray-500"></span>
@@ -570,51 +570,6 @@
       <button id="arManualPayrollCancel" type="button" data-modal-close class="px-3 py-2 rounded border text-sm">Άκυρο</button>
       <button id="arManualPayrollContinue" type="button" class="px-3 py-2 rounded border text-sm">Συνέχεια με τρέχοντα</button>
       <button id="arManualPayrollSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Αποθήκευση</button>
-    </div>
-  </div>
-</div>
-
-<!-- Consolidated per-company Μαζικός pre-check resolution: whichever of
-     απόθεμα λήξης / μισθοδοσία / ενοίκιο / ΕΦΚΑ Μη-Μισθωτών apply to THIS
-     company, in one screen, instead of asking about each across three
-     separate passes over the whole batch. Sections toggle visibility per
-     company via JS. -->
-<div id="arCompanyChecksModal" class="hidden fixed inset-0 z-[10050] flex items-center justify-center p-4" style="background:rgba(0,0,0,.4);">
-  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto">
-    <h3 id="arCompanyChecksTitle" class="text-lg font-semibold mb-1">Έλεγχοι εταιρίας</h3>
-    <p class="text-xs text-gray-500 mb-3">Μόνο τα σχετικά για αυτή την εταιρία εμφανίζονται παρακάτω.</p>
-
-    <div id="arCompanyChecksInventorySection" class="mb-4 hidden">
-      <div class="font-medium text-sm mb-1">📦 Απόθεμα λήξης</div>
-      <div id="arCompanyChecksInventoryFields" class="grid grid-cols-2 gap-2 text-sm"></div>
-    </div>
-
-    <div id="arCompanyChecksPayrollSection" class="mb-4 hidden">
-      <div class="font-medium text-sm mb-1">💼 Μισθοδοσία — μηνιαία σύνολα</div>
-      <p class="text-xs text-gray-500 mb-1">Προσυμπληρωμένα με ό,τι βρήκε ήδη το myDATA ανά μήνα — διόρθωσε μόνο τους μήνες που λείπουν ή είναι λάθος, τα υπόλοιπα μένουν ως έχουν.</p>
-      <div id="arCompanyChecksPayrollFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto"></div>
-    </div>
-
-    <div id="arCompanyChecksRentSection" class="mb-4 hidden">
-      <div class="font-medium text-sm mb-1">🏠 Ενοίκιο — μηνιαία σύνολα</div>
-      <p class="text-xs text-gray-500 mb-1">Προσυμπληρωμένα με ό,τι βρήκε ήδη το myDATA ανά μήνα — διόρθωσε μόνο τους μήνες που λείπουν ή είναι λάθος, τα υπόλοιπα μένουν ως έχουν.</p>
-      <div id="arCompanyChecksRentFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto"></div>
-    </div>
-
-    <div id="arCompanyChecksEfkaSection" class="mb-4 hidden">
-      <div class="font-medium text-sm mb-1">🧾 ΕΦΚΑ Μη-Μισθωτών</div>
-      <p class="text-xs text-gray-500 mb-1">Πιθανή οφειλή — έλεγξε ΚΕΑΟ, ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη.</p>
-      <select id="arCompanyChecksEfkaSelect" class="border rounded px-2 py-1 text-sm w-full">
-        <option value="">Καμία ενέργεια τώρα</option>
-        <option value="sole_prop_also_employed">Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός</option>
-        <option value="company_partners_exempt">Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις</option>
-      </select>
-      <div id="arCompanyChecksEfkaFields" class="grid grid-cols-2 gap-2 text-sm max-h-40 overflow-y-auto mt-2 hidden"></div>
-    </div>
-
-    <div class="flex justify-end gap-2 mt-2">
-      <button id="arCompanyChecksCancel" type="button" data-modal-close class="px-3 py-2 rounded border text-sm">Άκυρο (διακοπή όλων)</button>
-      <button id="arCompanyChecksSave" type="button" class="px-3 py-2 rounded bg-sky-600 text-white text-sm">Αποθήκευση &amp; Επόμενη</button>
     </div>
   </div>
 </div>

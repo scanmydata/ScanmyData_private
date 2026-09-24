@@ -18598,10 +18598,7 @@ def api_accounting_result_compute():
         # never blocks so it has no equivalent branch, which otherwise makes
         # "did it actually run and just find nothing, or silently skip?"
         # impossible to tell from the response alone.
-        report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
-            current_period_entries[0], date_from, date_to,
-            ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE, flag_zero=True,
-        )
+        report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
@@ -18767,6 +18764,7 @@ def api_accounting_result_inventory_bulk_status():
             # report's own inline button.
             _efka_note_pre = _ar_efka_self_employed_note(path, year, current_entries, date_from, date_to)
             efka_shortfall = bool(_efka_note_pre and not _efka_note_pre.get("resolved_manual"))
+            efka_check = _ar_efka_completeness(path, year, current_entries, date_from, date_to) if efka_shortfall else None
             # Same natural-person/legal-entity kind the Ατομικός report's own
             # ΕΦΚΑ exception button uses to show only the applicable reason
             # (see resolveEfkaSelfEmployedException in accounting_result.js) -
@@ -18784,6 +18782,7 @@ def api_accounting_result_inventory_bulk_status():
                     "rent_check": rent_res["rent_check"],
                     "efka_shortfall": efka_shortfall,
                     "legal_kind": legal_kind,
+                    "efka_check": efka_check,
                 })
                 continue
 
@@ -18802,6 +18801,7 @@ def api_accounting_result_inventory_bulk_status():
                 "rent_check": rent_res["rent_check"],
                 "efka_shortfall": efka_shortfall,
                 "legal_kind": legal_kind,
+                "efka_check": efka_check,
             })
         return jsonify({"ok": True, "rows": rows}), 200
     except Exception as e:
@@ -18974,10 +18974,7 @@ def api_accounting_result_bulk_compute():
                 if uncharacterized_note:
                     report_notes.append(uncharacterized_note)
                 report["notes"] = report_notes
-                report["efka_self_employed_check"] = ar_engine.check_monthly_completeness(
-                    current_period_entries[0], date_from, date_to,
-                    ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE, flag_zero=True,
-                )
+                report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
 
                 report["legal_kind"] = _ar_legal_kind(path, vat)
                 from accounting_result import compliance_notes_store as _ar_cn_efka
@@ -19675,6 +19672,37 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _ar_efka_partner_count(path: str, year: int) -> Optional[int]:
+    """Partners of a legal entity active in `year` (members_by_year in the
+    shared store, filled by the ΑΑΔΕ/ΓΕΜΗ members fetch). None for a sole
+    proprietor, an unknown type, or members not fetched yet."""
+    vat = os.path.splitext(os.path.basename(path))[0]
+    if _ar_legal_kind(path, vat) != "legal_entity":
+        return None
+    mby = _ar_store_company_record(vat).get("members_by_year") or {}
+    members = mby.get(str(year)) if isinstance(mby, dict) else None
+    return len(members) if isinstance(members, list) and members else None
+
+
+def _ar_efka_completeness(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
+    """ΕΦΚΑ Μη-Μισθωτών (585/007) monthly completeness: one payment per month,
+    or per month AND partner for a legal entity (months x partners)."""
+    from accounting_result import engine as ar_engine
+    partners = _ar_efka_partner_count(path, year)
+    check = ar_engine.check_monthly_completeness(
+        current_entries, date_from, date_to, ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
+        flag_zero=True, per_month=partners or 1,
+    )
+    check["partners"] = partners
+    return check
+
+
+def _ar_efka_basis_text(check: Dict[str, Any]) -> str:
+    if check.get("partners"):
+        return f" ({check.get('months')} μήνες × {check['partners']} εταίροι)"
+    return ""
+
+
 def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
     """Non-blocking counterpart of _ar_payroll_resolution for ΕΦΚΑ
     Μη-Μισθωτών (Ε3 code 585/007): unlike payroll, a shortfall here never
@@ -19689,19 +19717,17 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
     from accounting_result import engine as ar_engine
     from accounting_result import compliance_notes_store as ar_compliance
 
-    check = ar_engine.check_monthly_completeness(
-        current_entries, date_from, date_to, ar_engine.EFKA_SELF_EMPLOYED_E3_CODE, ar_engine.EFKA_SELF_EMPLOYED_E3_SUBCODE,
-        flag_zero=True,
-    )
+    check = _ar_efka_completeness(path, year, current_entries, date_from, date_to)
     if not check["shortfall"]:
         return None
+    basis = _ar_efka_basis_text(check)
     manual_total = _ar_efka_manual_total(path, year)
     if manual_total is not None:
         return {
             "type": "efka_self_employed_shortfall",
             "resolved_manual": True,
             "message": (
-                f"ΕΦΚΑ Μη-Μισθωτών: βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές — "
+                f"ΕΦΚΑ Μη-Μισθωτών: βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές{basis} — "
                 f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(manual_total)}€)."
             ),
         }
@@ -19711,7 +19737,7 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
         "type": "efka_self_employed_shortfall",
         "message": (
             f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές "
-            "ΕΦΚΑ Μη-Μισθωτών στην περίοδο — πιθανόν να υπάρχει ακόμα οφειλή, έλεγξε το ΚΕΑΟ της επιχείρησης "
+            f"ΕΦΚΑ Μη-Μισθωτών{basis} στην περίοδο — πιθανόν να υπάρχει ακόμα οφειλή, έλεγξε το ΚΕΑΟ της επιχείρησης "
             "(ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη)."
         ),
     }
@@ -21553,6 +21579,9 @@ def api_e3_brain_credentials_store_delete():
 
 
 _AR_INFO_STORE_LOCK = threading.Lock()
+# ΑΦΜ whose background members fetch (_ar_members_background) is still running
+# — lets the Μαζικός pre-check wait for the partner count the ΕΦΚΑ check needs.
+_AR_MEMBERS_PENDING: set = set()
 
 
 def _ar_member_name_key(name: str) -> str:
@@ -21686,6 +21715,8 @@ def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> N
             _write_credentials_store_atomic(file_path, data)
     except Exception as e:
         log.warning("background members fetch failed for afm=%s: %s", afm, _friendly_net_error(e) or e)
+    finally:
+        _AR_MEMBERS_PENDING.discard(afm)
 
 
 def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, grp, members_mode: str = "auto", use_cache: bool = False, apply_vat: bool = False):
@@ -21766,7 +21797,8 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
         _write_credentials_store_atomic(file_path, data)
     finally:
         _AR_INFO_STORE_LOCK.release()
-    if members_pending:
+    if members_pending and afm not in _AR_MEMBERS_PENDING:
+        _AR_MEMBERS_PENDING.add(afm)
         threading.Thread(target=_ar_members_background, args=(afm, taxis_user, taxis_pass, grp), daemon=True).start()
     vat_updated = None
     if apply_vat:
@@ -21800,6 +21832,18 @@ def api_accounting_result_company_info():
         afm = "".join(ch for ch in str(payload.get("afm") or "") if ch.isdigit())
         if len(afm) != 9:
             return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
+        if payload.get("only_if_missing"):
+            # Μαζικός pre-check: skip the ΑΑΔΕ login when type, contact
+            # (or a contact check that found none) and ΦΠΑ are all on file.
+            entry = _ar_store_company_record(afm)
+            co = entry.get("company") or {}
+            has_contact = bool(co.get("email") or co.get("mobile") or co.get("phone"))
+            if co.get("legal_type") and co.get("info_checked_at") and (has_contact or co.get("contact_checked_at")) \
+                    and vat_profile_store_get(_ar_store_path(afm)):
+                return jsonify({
+                    "ok": True, "skipped": True, "afm": afm, "legal_type": co.get("legal_type"),
+                    "members_pending": afm in _AR_MEMBERS_PENDING,
+                })
         taxis_user, taxis_pass = _ar_lookup_taxis_creds(afm)
         if not taxis_user or not taxis_pass:
             return jsonify({"ok": False, "error": "Δεν βρέθηκαν κωδικοί TAXISnet για αυτό το ΑΦΜ — πρόσθεσέ τους από το ✏️."}), 400
@@ -21812,6 +21856,14 @@ def api_accounting_result_company_info():
     except Exception as e:
         log.exception("api_accounting_result_company_info failed")
         return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
+
+
+@app.route("/api/accounting_result/company_info/members_pending", methods=["GET"])
+@login_required
+def api_accounting_result_company_info_members_pending():
+    """Which of ?afms=a,b,c still have a background members fetch running."""
+    afms = [a.strip() for a in str(request.args.get("afms") or "").split(",") if a.strip()]
+    return jsonify({"ok": True, "pending": [a for a in afms if a in _AR_MEMBERS_PENDING]})
 
 
 @app.route("/api/e3/brain/credentials_store/bulk_delete", methods=["POST"])
