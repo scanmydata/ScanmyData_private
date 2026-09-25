@@ -547,7 +547,7 @@ function buildConsolidatedTableHtml(companies) {
     .filter((n) => AR_NOTE_TYPES[n.type] && AR_NOTE_TYPES[n.type].cell === cell)
     .map((n) => {
       const id = `ar-note-${i}-${noteRows.length}`;
-      noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message });
+      noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message, bold: !!AR_NOTE_TYPES[n.type].bold });
       return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${escapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
     }).join('');
   const rowsHtml = companies.map((c, i) => {
@@ -557,6 +557,7 @@ function buildConsolidatedTableHtml(companies) {
     const closingSum = (r.stock_rows || []).reduce((a, s) => a + (s.closing || 0), 0);
     const expenseMarks = marksFor(c, i, 'expenses');
     const unclassifiedMarks = marksFor(c, i, 'unclassified');
+    const vatMarks = marksFor(c, i, 'vat');
     // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
     const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
@@ -576,7 +577,7 @@ function buildConsolidatedTableHtml(companies) {
       <td class="ar-num">${fmtAmountOrBlank(-Math.abs(r.unclassified_net || 0))}${unclassifiedMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.taxable_result)}</td>
       <td class="ar-num"></td>
-      <td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}</td>
+      <td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}${vatMarks}</td>
     </tr>`;
   }).join('');
 
@@ -588,11 +589,11 @@ function buildConsolidatedTableHtml(companies) {
         ${noteRows.map((n, k) => {
           // One block per client: the name cell spans all of its notes.
           if (k > 0 && noteRows[k - 1].name === n.name) {
-            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`;
+            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${escapeHtml(n.message)}</td></tr>`;
           }
           let span = 1;
           while (noteRows[k + span] && noteRows[k + span].name === n.name) span++;
-          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${escapeHtml(n.name)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`;
+          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${escapeHtml(n.name)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${escapeHtml(n.message)}</td></tr>`;
         }).join('')}
       </tbody></table>
     </div>`
@@ -917,6 +918,7 @@ var AR_NOTE_TYPES = {
   rent_shortfall: { label: 'Ενοίκιο (κωδ. 585/014)', mark: '**', cell: 'expenses' },
   efka_self_employed_shortfall: { label: 'ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)', mark: '***', cell: 'expenses' },
   uncharacterized_last_quarter: { label: 'Αχαρακτήριστα παραστατικά (τελευταίο τρίμηνο)', mark: '†', cell: 'unclassified' },
+  small_business_vat_limit: { label: 'Απαλλαγή ΦΠΑ μικρών επιχειρήσεων — έσοδα κοντά/πάνω από 10.000€', mark: '§', cell: 'vat', bold: true },
 };
 
 function arLegalKindBadge(kind) {
@@ -1371,7 +1373,9 @@ async function computeSingle() {
     if (inventoryObligationMsg) { advisories.push(inventoryObligationMsg); advisoriesKind = 'warning'; }
     const booksCategoryMsg = booksCategoryMismatchFlashMessage(resp.books_category_mismatch, name);
     if (booksCategoryMsg) { advisories.push(booksCategoryMsg); advisoriesKind = 'warning'; }
-    if (advisories.length) showArFlash(advisories.join(' • '), advisoriesKind, 9000);
+    const smallBizNote = ((resp.report && resp.report.notes) || []).find((n) => n.type === 'small_business_vat_limit');
+    if (smallBizNote) { advisories.push(`${name}: ${smallBizNote.message}`); advisoriesKind = smallBizNote.level === 'exceeded' ? 'error' : 'warning'; }
+    if (advisories.length) showArFlash(advisories.join(' • '), advisoriesKind, smallBizNote ? 15000 : 9000);
 
     if (resp.needs_depreciation_input) {
       hideArOverlay();
@@ -1987,12 +1991,13 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter'];
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit'];
 var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
   efka_self_employed_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών από τους μήνες της περιόδου — πιθανή οφειλή, έλεγξε ΚΕΑΟ (ή αποθήκευσε εξαίρεση από τον Ατομικό υπολογισμό).',
   uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
+  small_business_vat_limit: 'Ειδικό καθεστώς μικρών επιχειρήσεων: τα έσοδα πλησιάζουν (≥80%) ή ξεπέρασαν το όριο απαλλαγής ΦΠΑ των 10.000€.',
 };
 var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵'];
 
@@ -2379,6 +2384,13 @@ async function runBulk() {
     hasWarningAdvisory = true;
     statusMsg += ` ΕΦΚΑ Μη-Μισθωτών με πιθανή οφειλή (έλεγξε ΚΕΑΟ): ${efkaShortfallNames.join(', ')}.`;
   }
+  const smallBizNotes = (bulkResp.results || [])
+    .map((r) => ({ name: r.credential_name, note: (r.notes || []).find((n) => n.type === 'small_business_vat_limit') }))
+    .filter((x) => x.note);
+  if (smallBizNotes.length) {
+    hasWarningAdvisory = true;
+    statusMsg += ` Απαλλαγή ΦΠΑ μικρών επιχειρήσεων (όριο 10.000€): ${smallBizNotes.map((x) => `${x.name} (${x.note.level === 'exceeded' ? 'ΞΕΠΕΡΑΣΤΗΚΕ' : 'πλησιάζει'})`).join(', ')}.`;
+  }
   const uncharacterizedNames = (bulkResp.results || [])
     .filter((r) => (r.notes || []).some((n) => n.type === 'uncharacterized_last_quarter'))
     .map((r) => r.credential_name);
@@ -2485,6 +2497,8 @@ function renderSavedTable(companies) {
 
 function vatProfileLabel(profile) {
   if (!profile || profile.vat_subject === undefined || profile.vat_subject === null) return '— άγνωστο';
+  // Ειδικό καθεστώς μικρών επιχειρήσεων (ΑΑΔΕ «Καθεστώς ΦΠΑ»).
+  if (/ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ/i.test(profile.vat_regime || '')) return 'Απαλλαγή 10.000€';
   if (profile.vat_subject === false) return '❌ Όχι ΦΠΑ';
   const period = profile.vat_period_type === 'monthly' ? 'μηνιαίο' : (profile.vat_period_type === 'quarterly' ? '3μηνο' : '');
   return '✓ ΦΠΑ' + (period ? ' (' + period + ')' : '');

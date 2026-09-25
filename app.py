@@ -18599,6 +18599,9 @@ def api_accounting_result_compute():
         # "did it actually run and just find nothing, or silently skip?"
         # impossible to tell from the response alone.
         report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
+        small_business_note = _ar_small_business_note(path, report, date_from, date_to)
+        if small_business_note:
+            report_notes.append(small_business_note)
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
@@ -18970,6 +18973,9 @@ def api_accounting_result_bulk_compute():
                 efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
                 if efka_note:
                     report_notes.append(efka_note)
+                small_business_note = _ar_small_business_note(path, report, date_from, date_to)
+                if small_business_note:
+                    report_notes.append(small_business_note)
                 uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
                 if uncharacterized_note:
                     report_notes.append(uncharacterized_note)
@@ -19318,6 +19324,13 @@ def _ar_detect_vat_profile_for_afm(vat: str, use_cache: bool = False, prefetched
             "legal_entity" if kind == "ΝΟΜΙΚΟ ΠΡΟΣΩΠΟ" else None
         )
 
+        # «Καθεστώς ΦΠΑ» (tag kathestwsfpa, confirmed live 2026-09-24 as
+        # e.g. "ΚΑΝΟΝΙΚΟ"); falls back to the regime text found by the scan
+        # above when the tag itself is missing.
+        vat_regime = str(all_tags.get("kathestwsfpa") or "").strip()
+        if not vat_regime and "ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ" in regime_text:
+            vat_regime = "ΕΙΔΙΚΟ ΕΓΧΩΡΙΟ ΚΑΘΕΣΤΩΣ ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ"
+
         from accounting_result import vat_profile_store as ar_vat_profile
         profile = ar_vat_profile.set_vat_profile(
             _ar_store_path(vat), vat_subject,
@@ -19325,6 +19338,7 @@ def _ar_detect_vat_profile_for_afm(vat: str, use_cache: bool = False, prefetched
             vat_period_type=vat_period_type,
             source="aade_profile",
             legal_kind=legal_kind,
+            vat_regime=vat_regime,
         )
         _ar_store_save_profile_info(vat, result)
         return True, {"profile": profile}, 200
@@ -19676,6 +19690,29 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"ενοικίου (κωδ. 585/014) στην περίοδο — {detail}."
         ),
     }
+
+
+_AR_SMALL_BUSINESS_LIMIT = 10000.0
+
+
+def _ar_small_business_note(path: str, report: Dict[str, Any], date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
+    """Ειδικό καθεστώς μικρών επιχειρήσεων (ΦΠΑ απαλλαγή έως 10.000€ ετήσια
+    έσοδα): a note when the period's revenue (report sales_total) has
+    reached 80% of the limit or passed it. None otherwise / other regimes."""
+    regime = str(vat_profile_store_get(path).get("vat_regime") or "").upper()
+    if "ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ" not in regime:
+        return None
+    revenue = float(report.get("sales_total") or 0.0)
+    ratio = revenue / _AR_SMALL_BUSINESS_LIMIT
+    if ratio < 0.8:
+        return None
+    base = (f"Ειδικό καθεστώς μικρών επιχειρήσεων (απαλλαγή ΦΠΑ έως {_ar_gr_money(_AR_SMALL_BUSINESS_LIMIT)}€): "
+            f"έσοδα περιόδου {date_from} – {date_to}: {_ar_gr_money(revenue)}€ ({ratio * 100:.0f}% του ορίου)")
+    if ratio >= 1:
+        return {"type": "small_business_vat_limit", "level": "exceeded",
+                "message": base + " — ΞΕΠΕΡΑΣΤΗΚΕ το όριο: η απαλλαγή παύει να ισχύει, έλεγξε την ένταξη στο κανονικό καθεστώς ΦΠΑ."}
+    return {"type": "small_business_vat_limit", "level": "approaching",
+            "message": base + " — πλησιάζει το όριο της απαλλαγής."}
 
 
 def _ar_efka_partner_count(path: str, year: int) -> Optional[int]:
@@ -21854,7 +21891,9 @@ def api_accounting_result_company_info():
             co = entry.get("company") or {}
             has_contact = bool(co.get("email") or co.get("mobile") or co.get("phone"))
             if co.get("legal_type") and co.get("info_checked_at") and (has_contact or co.get("contact_checked_at")) \
-                    and vat_profile_store_get(_ar_store_path(afm)):
+                    and "vat_regime" in vat_profile_store_get(_ar_store_path(afm)):
+                # ("vat_regime" missing = ΦΠΑ detected before the regime was
+                # stored -> one refresh, so the small-business check applies.)
                 is_company = "ατομικ" not in str(co.get("legal_type") or "").lower()
                 return jsonify({
                     "ok": True, "skipped": True, "afm": afm, "legal_type": co.get("legal_type"),

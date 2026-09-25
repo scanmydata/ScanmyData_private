@@ -60,6 +60,7 @@ def set_vat_profile(
     vat_period_type: str = "",
     source: str = "manual",
     legal_kind: Any = _UNSET,
+    vat_regime: Any = _UNSET,
 ) -> Dict[str, Any]:
     """`vat_subject`: True/False once known, None to explicitly clear (treat
     as unknown -> the report defaults to showing the ΦΠΑ block, i.e. the
@@ -80,6 +81,9 @@ def set_vat_profile(
         "books_category": str(books_category or ""),
         "vat_period_type": str(vat_period_type or ""),  # "monthly" | "quarterly" | ""
         "legal_kind": existing.get("legal_kind") if legal_kind is _UNSET else legal_kind,
+        # ΑΑΔΕ «Καθεστώς ΦΠΑ» text (e.g. "ΕΙΔΙΚΟ ΕΓΧΩΡΙΟ ΚΑΘΕΣΤΩΣ ΜΙΚΡΩΝ
+        # ΕΠΙΧΕΙΡΗΣΕΩΝ") — same _UNSET rule as legal_kind.
+        "vat_regime": existing.get("vat_regime") if vat_regime is _UNSET else str(vat_regime or ""),
         "source": source,
         "updated_at": datetime.now().isoformat(),
     }
