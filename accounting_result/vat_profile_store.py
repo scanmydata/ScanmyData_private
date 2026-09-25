@@ -61,6 +61,8 @@ def set_vat_profile(
     source: str = "manual",
     legal_kind: Any = _UNSET,
     vat_regime: Any = _UNSET,
+    vat_entry_mode: Any = _UNSET,
+    small_business_exemption: Any = _UNSET,
 ) -> Dict[str, Any]:
     """`vat_subject`: True/False once known, None to explicitly clear (treat
     as unknown -> the report defaults to showing the ΦΠΑ block, i.e. the
@@ -84,6 +86,10 @@ def set_vat_profile(
         # ΑΑΔΕ «Καθεστώς ΦΠΑ» text (e.g. "ΕΙΔΙΚΟ ΕΓΧΩΡΙΟ ΚΑΘΕΣΤΩΣ ΜΙΚΡΩΝ
         # ΕΠΙΧΕΙΡΗΣΕΩΝ") — same _UNSET rule as legal_kind.
         "vat_regime": existing.get("vat_regime") if vat_regime is _UNSET else str(vat_regime or ""),
+        # ΑΑΔΕ «Τρόπος Ένταξης ΦΠΑ» (ΥΠΟΧΡΕΩΤΙΚΑ / ΠΡΟΑΙΡΕΤΙΚΑ).
+        "vat_entry_mode": existing.get("vat_entry_mode") if vat_entry_mode is _UNSET else str(vat_entry_mode or ""),
+        # Απαλλαγή μικρών επιχειρήσεων (όριο 10.000€), derived at detect time.
+        "small_business_exemption": existing.get("small_business_exemption") if small_business_exemption is _UNSET else bool(small_business_exemption),
         "source": source,
         "updated_at": datetime.now().isoformat(),
     }

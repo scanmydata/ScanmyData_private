@@ -2547,7 +2547,7 @@ function renderSavedTable(companies) {
 function vatProfileLabel(profile) {
   if (!profile || profile.vat_subject === undefined || profile.vat_subject === null) return '— άγνωστο';
   // Ειδικό καθεστώς μικρών επιχειρήσεων (ΑΑΔΕ «Καθεστώς ΦΠΑ»).
-  if (/ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ/i.test(profile.vat_regime || '')) return 'Απαλλαγή 10.000€';
+  if (profile.small_business_exemption || /ΜΙΚΡΩΝ ΕΠΙΧΕΙΡΗΣΕΩΝ/i.test(profile.vat_regime || '')) return 'Απαλλαγή 10.000€';
   if (profile.vat_subject === false) return '❌ Όχι ΦΠΑ';
   const period = profile.vat_period_type === 'monthly' ? 'μηνιαίο' : (profile.vat_period_type === 'quarterly' ? '3μηνο' : '');
   return '✓ ΦΠΑ' + (period ? ' (' + period + ')' : '');
