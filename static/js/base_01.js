@@ -279,12 +279,16 @@
               consecutiveEmpty = 0;
               var pct = (typeof p.percent === 'number') ? ' (' + p.percent + '%)' : '';
               renderBanner(active, 'Λογιστικό Αποτέλεσμα — ' + p.label + pct);
-            } else if (active.label && (Date.now() - (active.updatedAt || 0)) < 20 * 60 * 1000) {
+            } else if (active.label && (Date.now() - (active.updatedAt || 0)) < 20000) {
               // Browser-driven steps (ΑΑΔΕ/myDATA pre-check, choices): the page
-              // keeps active.label current; the server has no progress yet.
-              // The time guard drops a label left behind by a full reload.
+              // keeps active.label current and heartbeats updatedAt every 3s.
               consecutiveEmpty = 0;
               renderBanner(active, 'Λογιστικό Αποτέλεσμα — ' + active.label);
+            } else if (active.label) {
+              // Heartbeat stopped: a full page load / logout ended the run's
+              // script, so nothing is running any more — drop the banner now.
+              clearActive();
+              removeBanner();
             } else {
               // After ~5 empty polls (15s) + run started >30s ago, assume the
               // job finished (the originating tab clears sessionStorage on

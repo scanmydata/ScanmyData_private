@@ -5,20 +5,25 @@
  * pattern as the E3-check page — this app has no server-side PDF generation).
  */
 
-function escapeHtml(s) {
-  const div = document.createElement('div');
-  div.textContent = String(s == null ? '' : s);
-  return div.innerHTML;
+// Page-private names on purpose: partial navigation runs other pages'
+// scripts in this same global scope, and several define their own global
+// escapeHtml/fmtMoney (credentials_list.html's escapeHtml throws on
+// anything that isn't a string) — a Μαζικός run still going after the user
+// moved to another page would otherwise start calling those.
+function arEscapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
-function fmtMoney(v) {
+function arFmtMoney(v) {
   if (v === null || v === undefined || v === '') return '—';
   return Number(v).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtAmountOrBlank(v) {
   if (v === null || v === undefined || Number(v) === 0) return '';
-  return fmtMoney(v);
+  return arFmtMoney(v);
 }
 
 function fmtPct(v) {
@@ -98,12 +103,17 @@ function hideArOverlay() {
   }
 }
 
-async function postJson(url, body) {
+// `timeoutMs` (optional): give up after that long, so one hanging request
+// can't stall a whole Μαζικός run.
+async function postJson(url, body, timeoutMs) {
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
+      signal: ctrl ? ctrl.signal : undefined,
     });
     // A non-JSON body here (almost always HTML) means something outside
     // Flask's own error handling intervened — a hosting-platform gateway
@@ -122,7 +132,10 @@ async function postJson(url, body) {
     }
     return await res.json();
   } catch (e) {
+    if (e && e.name === 'AbortError') return { ok: false, error: `ξεπεράστηκε ο χρόνος αναμονής (${Math.round(timeoutMs / 1000)}s)` };
     return { ok: false, error: String(e) };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -147,9 +160,9 @@ async function arLoadContactCache() {
 function arContactBits(vat) {
   const c = (window.__arContactByVat || {})[String(vat || '')] || {};
   const bits = [];
-  if (c.mobile) bits.push('Κινητό: ' + escapeHtml(c.mobile));
-  if (c.phone) bits.push('Σταθερό: ' + escapeHtml(c.phone));
-  if (c.email) bits.push('Email: ' + escapeHtml(c.email));
+  if (c.mobile) bits.push('Κινητό: ' + arEscapeHtml(c.mobile));
+  if (c.phone) bits.push('Σταθερό: ' + arEscapeHtml(c.phone));
+  if (c.email) bits.push('Email: ' + arEscapeHtml(c.email));
   return bits;
 }
 function arContactLineHtml(vat) {
@@ -160,7 +173,7 @@ function arContactLineHtml(vat) {
 function buildReportSectionHtml(name, vat, from, to, r) {
   const stockRowsHtml = r.stock_rows.map((row) => `
     <tr>
-      <td class="ar-label">${escapeHtml(row.code)} ${escapeHtml(row.label)}</td>
+      <td class="ar-label">${arEscapeHtml(row.code)} ${arEscapeHtml(row.label)}</td>
       <td class="ar-num">${fmtAmountOrBlank(row.opening)}</td>
       <td class="ar-num">${fmtAmountOrBlank(row.purchases)}</td>
       <td class="ar-num">${fmtAmountOrBlank(row.closing)}</td>
@@ -170,9 +183,9 @@ function buildReportSectionHtml(name, vat, from, to, r) {
   const salesExpenseRowsHtml = r.sales_rows.map((s, i) => {
     const e = r.expense_rows[i];
     return `<tr>
-      <td class="ar-label">${escapeHtml(s.code)} ${escapeHtml(s.label)}</td>
+      <td class="ar-label">${arEscapeHtml(s.code)} ${arEscapeHtml(s.label)}</td>
       <td class="ar-num">${fmtAmountOrBlank(s.amount)}</td>
-      <td class="ar-label">${e ? escapeHtml(e.code) + ' ' + escapeHtml(e.label) : ''}</td>
+      <td class="ar-label">${e ? arEscapeHtml(e.code) + ' ' + arEscapeHtml(e.label) : ''}</td>
       <td class="ar-num">${e ? fmtAmountOrBlank(e.amount) : ''}</td>
     </tr>`;
   }).join('');
@@ -180,9 +193,9 @@ function buildReportSectionHtml(name, vat, from, to, r) {
   const extraRowsHtml = r.extra_sales_rows.map((s, i) => {
     const e = r.extra_expense_rows[i];
     return `<tr>
-      <td class="ar-label">${escapeHtml(s.code)} ${escapeHtml(s.label)}</td>
+      <td class="ar-label">${arEscapeHtml(s.code)} ${arEscapeHtml(s.label)}</td>
       <td class="ar-num">${fmtAmountOrBlank(s.amount)}</td>
-      <td class="ar-label">${e ? escapeHtml(e.code) + ' ' + escapeHtml(e.label) : ''}</td>
+      <td class="ar-label">${e ? arEscapeHtml(e.code) + ' ' + arEscapeHtml(e.label) : ''}</td>
       <td class="ar-num">${e ? fmtAmountOrBlank(e.amount) : ''}</td>
     </tr>`;
   }).join('');
@@ -192,26 +205,26 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     ? `<tr>
         <td colspan="2"></td>
         <td class="ar-label">Αχαρακτήριστα παραστατικά (myDATA${unclassifiedCount ? ', ' + unclassifiedCount + ' MARK' : ''})</td>
-        <td class="ar-num">−${fmtMoney(Math.abs(r.unclassified_net))}</td>
+        <td class="ar-num">−${arFmtMoney(Math.abs(r.unclassified_net))}</td>
       </tr>`
     : '';
 
   const unresolvedNote = r.unresolved_purchase_count
-    ? `<div class="text-xs" style="color:#b45309;margin-top:4px;">⚠ ${fmtMoney(r.unresolved_purchase_total)} € (${r.unresolved_purchase_count} γραμμές) δεν αντιστοιχίστηκαν σε λογαριασμό — ελέγξτε τις ρυθμίσεις κατηγοριών.</div>`
+    ? `<div class="text-xs" style="color:#b45309;margin-top:4px;">⚠ ${arFmtMoney(r.unresolved_purchase_total)} € (${r.unresolved_purchase_count} γραμμές) δεν αντιστοιχίστηκαν σε λογαριασμό — ελέγξτε τις ρυθμίσεις κατηγοριών.</div>`
     : '';
 
   const methodologyNote = `<div class="ar-footnote" style="font-size:12px;color:#333;margin-top:8px;line-height:1.5;">
     * Αποσβέσεις: υπολογίζονται αναλογικά (pro-rata, βάσει μηνών της περιόδου) από τις εγγραφές κωδ. 587 του myDATA του <strong>προηγούμενου</strong> έτους.` +
     (r.inventory_method_label
-      ? ` Απόθεμα λήξης: ${escapeHtml(r.inventory_method_label)}.`
+      ? ` Απόθεμα λήξης: ${arEscapeHtml(r.inventory_method_label)}.`
       : '') +
     `</div>` + renderReportNotesHtml(r.notes, name, yearFromDMY(to), r.legal_kind, from, to);
 
   return `
   <div class="ar-report-section">
     <div class="ar-report-header">
-      <div class="ar-company-block">${escapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${escapeHtml(vat || '')})</span>${arContactLineHtml(vat)}</div>
-      <div style="text-align:right;">Στοιχεία Λογιστή: ${escapeHtml(window.AR_ACCOUNTANT_NAME || '')}<br><strong>Ημερομηνία: ${todayStr()}</strong></div>
+      <div class="ar-company-block">${arEscapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${arEscapeHtml(vat || '')})</span>${arContactLineHtml(vat)}</div>
+      <div style="text-align:right;">Στοιχεία Λογιστή: ${arEscapeHtml(window.AR_ACCOUNTANT_NAME || '')}<br><strong>Ημερομηνία: ${todayStr()}</strong></div>
     </div>
     <div class="ar-report-title">Λογιστικό Αποτέλεσμα</div>
     <div class="ar-report-period">Από: ${ddmmyyyy(from)}&nbsp;&nbsp;Έως: ${ddmmyyyy(to)}</div>
@@ -223,10 +236,10 @@ function buildReportSectionHtml(name, vat, from, to, r) {
       <tbody>
         ${stockRowsHtml}
         <tr><td class="ar-label">Δαπάνες Παραγωγής</td><td></td><td></td><td></td><td class="ar-num">${fmtAmountOrBlank(r.production_expenses)}</td></tr>
-        <tr><td class="ar-label">Αγορές Παγίων</td><td></td><td class="ar-num">${fmtMoney(r.fixed_asset_purchases)}</td><td></td><td></td></tr>
-        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων Εμπορευμάτων</td><td colspan="3"></td><td class="ar-num">${fmtMoney(r.cogs_goods)}</td></tr>
-        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων Προϊόντων</td><td colspan="3"></td><td class="ar-num">${fmtMoney(r.cogs_products)}</td></tr>
-        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων</td><td colspan="3"></td><td class="ar-num">${fmtMoney(r.cogs_total)}</td></tr>
+        <tr><td class="ar-label">Αγορές Παγίων</td><td></td><td class="ar-num">${arFmtMoney(r.fixed_asset_purchases)}</td><td></td><td></td></tr>
+        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων Εμπορευμάτων</td><td colspan="3"></td><td class="ar-num">${arFmtMoney(r.cogs_goods)}</td></tr>
+        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων Προϊόντων</td><td colspan="3"></td><td class="ar-num">${arFmtMoney(r.cogs_products)}</td></tr>
+        <tr class="ar-total-row"><td class="ar-label">Σύνολο Κόστους Πωληθέντων</td><td colspan="3"></td><td class="ar-num">${arFmtMoney(r.cogs_total)}</td></tr>
       </tbody>
     </table>
 
@@ -235,13 +248,13 @@ function buildReportSectionHtml(name, vat, from, to, r) {
       <tbody>
         ${salesExpenseRowsHtml}
         <tr class="ar-total-row">
-          <td class="ar-label">Σύνολο Πωλήσεων Εκμ/σης</td><td class="ar-num">${fmtMoney(r.sales_ekm)}</td>
-          <td class="ar-label">Σύνολο Εξόδων Εκμ/σης</td><td class="ar-num">${fmtMoney(r.expenses_ekm)}</td>
+          <td class="ar-label">Σύνολο Πωλήσεων Εκμ/σης</td><td class="ar-num">${arFmtMoney(r.sales_ekm)}</td>
+          <td class="ar-label">Σύνολο Εξόδων Εκμ/σης</td><td class="ar-num">${arFmtMoney(r.expenses_ekm)}</td>
         </tr>
         ${extraRowsHtml}
         <tr class="ar-total-row">
-          <td class="ar-label">Σύνολα Πωλήσεων</td><td class="ar-num">${fmtMoney(r.sales_total)}</td>
-          <td class="ar-label">Σύνολα Δαπανών</td><td class="ar-num">${fmtMoney(r.expenses_total)}</td>
+          <td class="ar-label">Σύνολα Πωλήσεων</td><td class="ar-num">${arFmtMoney(r.sales_total)}</td>
+          <td class="ar-label">Σύνολα Δαπανών</td><td class="ar-num">${arFmtMoney(r.expenses_total)}</td>
         </tr>
         <tr><td class="ar-label">Πωλήσεις Παγίων</td><td class="ar-num">${fmtAmountOrBlank(r.sales_paggion)}</td><td></td><td></td></tr>
       </tbody>
@@ -251,48 +264,48 @@ function buildReportSectionHtml(name, vat, from, to, r) {
       <tbody>
         <tr>
           <td class="ar-label">Μικτό Κέρδος Εμπορευμάτων</td><td class="ar-num">${fmtAmountOrBlank(r.gross_goods)}</td>
-          <td class="ar-label ar-total-row">Καθαρά Κέρδη</td><td class="ar-num ar-total-row">${fmtMoney(r.net_profit)}</td>
+          <td class="ar-label ar-total-row">Καθαρά Κέρδη</td><td class="ar-num ar-total-row">${arFmtMoney(r.net_profit)}</td>
         </tr>
         <tr>
           <td class="ar-label">Μικτό Κέρδος Προϊόντων</td><td class="ar-num">${fmtAmountOrBlank(r.gross_products)}</td>
           <td class="ar-label">Ζημίες Προηγούμενου Έτους</td><td class="ar-num">${fmtAmountOrBlank(r.prior_year_losses)}</td>
         </tr>
         <tr class="ar-total-row">
-          <td class="ar-label">Συνολικό Μικτό Κέρδος</td><td class="ar-num">${fmtMoney(r.gross_total)}</td>
-          <td class="ar-label">Τελικά Καθαρά Κέρδη</td><td class="ar-num">${fmtMoney(r.final_net_profit)}</td>
+          <td class="ar-label">Συνολικό Μικτό Κέρδος</td><td class="ar-num">${arFmtMoney(r.gross_total)}</td>
+          <td class="ar-label">Τελικά Καθαρά Κέρδη</td><td class="ar-num">${arFmtMoney(r.final_net_profit)}</td>
         </tr>
         ${unclassifiedRow}
         <tr class="ar-total-row">
           <td colspan="2"></td>
-          <td class="ar-label">Φορολογητέο Αποτέλεσμα</td><td class="ar-num">${fmtMoney(r.taxable_result)}</td>
+          <td class="ar-label">Φορολογητέο Αποτέλεσμα</td><td class="ar-num">${arFmtMoney(r.taxable_result)}</td>
         </tr>
       </tbody>
     </table>
 
     ${r.vat_applicable !== false && r.vat_period_from && r.vat_period_to ? `
-    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${escapeHtml(ddmmyyyy(r.vat_period_from))} – ${escapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
+    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${arEscapeHtml(ddmmyyyy(r.vat_period_from))} – ${arEscapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
     <table class="ar-report-table" style="margin-top:4px;">
       <tbody>
         <tr>
           <td>% μεικτό εμπορικό αποτέλεσμα επί κόστους</td><td class="ar-num">${fmtPct(r.pct_gross_on_cost)}</td>
-          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">ΦΠΑ Εκροών</td><td class="ar-num">${fmtMoney(r.vat_outflow)}</td>`}
+          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">ΦΠΑ Εκροών</td><td class="ar-num">${arFmtMoney(r.vat_outflow)}</td>`}
         </tr>
         <tr>
           <td>% μεικτό εμπορικό αποτέλεσμα επί πωλήσεων</td><td class="ar-num">${fmtPct(r.pct_gross_on_sales)}</td>
-          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">Μείον ΦΠΑ Εισροών</td><td class="ar-num">${fmtMoney(r.vat_inflow)}</td>`}
+          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">Μείον ΦΠΑ Εισροών</td><td class="ar-num">${arFmtMoney(r.vat_inflow)}</td>`}
         </tr>
         <tr>
           <td>% αποτελέσματα παροχής υπ. επί εσόδων Π/Υ</td><td class="ar-num">${fmtPct(r.pct_services)}</td>
-          ${r.vat_applicable === false ? '<td class="ar-label" style="color:#6b7280;font-style:italic;">Μη υπόχρεη ΦΠΑ</td><td></td>' : `<td class="ar-label">Μείον Πιστ.Υπόλ.Προηγ.Περ.</td><td class="ar-num">${fmtMoney(r.vat_prior_credit)}</td>`}
+          ${r.vat_applicable === false ? '<td class="ar-label" style="color:#6b7280;font-style:italic;">Μη υπόχρεη ΦΠΑ</td><td></td>' : `<td class="ar-label">Μείον Πιστ.Υπόλ.Προηγ.Περ.</td><td class="ar-num">${arFmtMoney(r.vat_prior_credit)}</td>`}
         </tr>
         ${r.vat_applicable === false ? '' : `
         <tr>
           <td></td><td></td>
-          <td class="ar-label">Μείον Πληρωμές στο Δημόσιο</td><td class="ar-num">${fmtMoney(r.vat_state_payments)}</td>
+          <td class="ar-label">Μείον Πληρωμές στο Δημόσιο</td><td class="ar-num">${arFmtMoney(r.vat_state_payments)}</td>
         </tr>
         <tr class="ar-total-row">
           <td></td><td></td>
-          <td class="ar-label">Χρεωστικό Υπόλοιπο Περιόδου</td><td class="ar-num">${fmtMoney(r.vat_period_balance)}</td>
+          <td class="ar-label">Χρεωστικό Υπόλοιπο Περιόδου</td><td class="ar-num">${arFmtMoney(r.vat_period_balance)}</td>
         </tr>`}
       </tbody>
     </table>
@@ -548,7 +561,7 @@ function buildConsolidatedTableHtml(companies) {
     .map((n) => {
       const id = `ar-note-${i}-${noteRows.length}`;
       noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message, bold: !!AR_NOTE_TYPES[n.type].bold });
-      return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${escapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
+      return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${arEscapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
     }).join('');
   const rowsHtml = companies.map((c, i) => {
     const r = c.report;
@@ -562,8 +575,8 @@ function buildConsolidatedTableHtml(companies) {
     const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
       <td class="ar-num">${i + 1}</td>
-      <td><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(c.name)}</span></td>
-      <td>${escapeHtml(c.vat || '')}</td>
+      <td><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${arEscapeHtml(c.name)}</span></td>
+      <td>${arEscapeHtml(c.vat || '')}</td>
       <td>${todayStr()}</td>
       <td>${ddmmyyyy(c.from)}</td>
       <td>${ddmmyyyy(c.to)}</td>
@@ -584,16 +597,16 @@ function buildConsolidatedTableHtml(companies) {
   const notesHtml = noteRows.length
     ? `<div style="margin-top:24px;">
       <div style="font-size:16px;font-weight:700;margin-bottom:4px;">Παρατηρήσεις</div>
-      <div style="font-size:11px;color:#475569;margin-bottom:6px;">${Object.values(AR_NOTE_TYPES).map((t) => `<b>${escapeHtml(t.mark)}</b> ${escapeHtml(t.label)}`).join(' &nbsp;·&nbsp; ')} &nbsp;·&nbsp; <b>Χ</b> στη στήλη ΦΠΑ: μη υπόχρεος ΦΠΑ</div>
+      <div style="font-size:11px;color:#475569;margin-bottom:6px;">${Object.values(AR_NOTE_TYPES).map((t) => `<b>${arEscapeHtml(t.mark)}</b> ${arEscapeHtml(t.label)}`).join(' &nbsp;·&nbsp; ')} &nbsp;·&nbsp; <b>Χ</b> στη στήλη ΦΠΑ: μη υπόχρεος ΦΠΑ</div>
       <table class="ar-consolidated-table"><thead><tr><th></th><th>Επωνυμία</th><th>Παρατηρήσεις</th></tr></thead><tbody>
         ${noteRows.map((n, k) => {
           // One block per client: the name cell spans all of its notes.
           if (k > 0 && noteRows[k - 1].name === n.name) {
-            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${escapeHtml(n.message)}</td></tr>`;
+            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arEscapeHtml(n.message)}</td></tr>`;
           }
           let span = 1;
           while (noteRows[k + span] && noteRows[k + span].name === n.name) span++;
-          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${escapeHtml(n.name)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${escapeHtml(n.message)}</td></tr>`;
+          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${arEscapeHtml(n.name)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arEscapeHtml(n.message)}</td></tr>`;
         }).join('')}
       </tbody></table>
     </div>`
@@ -605,7 +618,7 @@ function buildConsolidatedTableHtml(companies) {
   const legendRows = companies.map((c, i) => {
     const bits = arContactBits(c.vat);
     const address = ((window.__arContactByVat || {})[String(c.vat || '')] || {}).address || '';
-    return `<tr id="ar-contact-${i}"><td style="font-weight:600;white-space:nowrap;">${escapeHtml(c.name)}</td><td class="ar-mono">${escapeHtml(c.vat || '')}</td><td style="white-space:normal;">${escapeHtml(address) || '—'}</td><td>${bits.length ? bits.join(' &nbsp;·&nbsp; ') : '<span style="color:#94a3b8;">δεν υπάρχουν αποθηκευμένα στοιχεία</span>'}</td></tr>`;
+    return `<tr id="ar-contact-${i}"><td style="font-weight:600;white-space:nowrap;">${arEscapeHtml(c.name)}</td><td class="ar-mono">${arEscapeHtml(c.vat || '')}</td><td style="white-space:normal;">${arEscapeHtml(address) || '—'}</td><td>${bits.length ? bits.join(' &nbsp;·&nbsp; ') : '<span style="color:#94a3b8;">δεν υπάρχουν αποθηκευμένα στοιχεία</span>'}</td></tr>`;
   }).join('');
   const legendHtml = legendRows
     ? `<div style="margin-top:28px;">
@@ -661,7 +674,7 @@ function showManualInventoryModal(title, opening) {
       wrap.appendChild(input);
       const note = document.createElement('div');
       note.className = 'text-xs text-gray-500 mt-0.5';
-      note.textContent = 'Έναρξη: ' + fmtMoney((opening && opening[code] != null) ? opening[code] : 0) + ' €';
+      note.textContent = 'Έναρξη: ' + arFmtMoney((opening && opening[code] != null) ? opening[code] : 0) + ' €';
       wrap.appendChild(note);
       fields.appendChild(wrap);
     });
@@ -956,10 +969,10 @@ async function arBulkAadePrecheck(names, jobId) {
     showArOverlay('Έλεγχος ΑΑΔΕ...', label);
     setBulkCrossPageLabel(label);
     const body = { afm: vat, apply_vat: true, only_if_missing: true, defer_members: true };
-    let r = await postJson('/api/accounting_result/company_info', body);
-    if (!r.ok && !/TAXISnet/.test(r.error || '')) {
+    let r = await postJson('/api/accounting_result/company_info', body, 150000);
+    if (!r.ok && !/TAXISnet|χρόνος/.test(r.error || '')) {
       await new Promise((res) => setTimeout(res, 3000));
-      r = await postJson('/api/accounting_result/company_info', body);
+      r = await postJson('/api/accounting_result/company_info', body, 150000);
     }
     if (!r.ok) warnings.push(`${names[i]}: ${r.error || 'σφάλμα'}`);
     else if (r.needs_members || r.members_pending) needMembers.push(vat);
@@ -1029,16 +1042,16 @@ function arBuildCheckGroups(rows) {
 // Resolves to {groupKey: {companyName: choiceKey}} or null (cancelled).
 function showGroupedChecksModal(groups) {
   return new Promise((resolve) => {
-    const optionsHtml = (opts) => opts.map((o) => `<option value="${escapeHtml(o.key)}">${escapeHtml(o.label)}</option>`).join('');
+    const optionsHtml = (opts) => opts.map((o) => `<option value="${arEscapeHtml(o.key)}">${arEscapeHtml(o.label)}</option>`).join('');
     const sectionsHtml = groups.map((g) => {
       // «Όλες» offers only the options every row of the group has (the ΕΦΚΑ
       // exception reason differs per company type).
       const common = g.options(g.rows[0]).filter((o) => g.rows.every((r) => g.options(r).some((x) => x.key === o.key)));
       const trs = g.rows.map((r) => `<tr>
-          <td style="white-space:nowrap;">${escapeHtml(r.name)}</td>
+          <td style="white-space:nowrap;">${arEscapeHtml(r.name)}</td>
           <td>${arLegalKindBadge(r.legal_kind)}</td>
-          <td style="font-size:0.78rem;">${escapeHtml(g.finding(r))}</td>
-          <td><select class="ar-gc-select border rounded px-1 py-0.5 text-xs" data-group="${g.key}" data-name="${escapeHtml(r.name)}">${optionsHtml(g.options(r))}</select></td>
+          <td style="font-size:0.78rem;">${arEscapeHtml(g.finding(r))}</td>
+          <td><select class="ar-gc-select border rounded px-1 py-0.5 text-xs" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}">${optionsHtml(g.options(r))}</select></td>
         </tr>`).join('');
       return `<div class="mb-4">
         <div class="flex items-center justify-between gap-2 mb-1">
@@ -1165,14 +1178,14 @@ function showBulkNotesByTypeModal(results, opts) {
   const body = types.length
     ? types.map((t) => {
       const info = t === '__failed' ? { label: '❌ Δεν υπολογίστηκαν' } : (AR_NOTE_TYPES[t] || { label: t });
-      const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${escapeHtml(x.name)}</td><td style="font-size:0.78rem;">${escapeHtml(x.message)}</td></tr>`).join('');
-      return `<div class="mb-4"><div class="font-semibold text-sm mb-1">${escapeHtml(info.label)} — ${byType[t].length} εταιρίες</div>
+      const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${arEscapeHtml(x.name)}</td><td style="font-size:0.78rem;">${arEscapeHtml(x.message)}</td></tr>`).join('');
+      return `<div class="mb-4"><div class="font-semibold text-sm mb-1">${arEscapeHtml(info.label)} — ${byType[t].length} εταιρίες</div>
         <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Παρατήρηση</th></tr></thead><tbody>${trs}</tbody></table></div>`;
     }).join('')
     : '<p class="text-sm">Δεν βρέθηκαν διαφορές.</p>';
   const color = opts.kind === 'success' ? '#047857' : (opts.kind === 'error' ? '#b91c1c' : '#b45309');
   const summary = opts.message
-    ? `<div style="border-left:4px solid ${color};background:#f8fafc;padding:8px 10px;margin-bottom:12px;font-size:0.85rem;">${escapeHtml(opts.message)}</div>`
+    ? `<div style="border-left:4px solid ${color};background:#f8fafc;padding:8px 10px;margin-bottom:12px;font-size:0.85rem;">${arEscapeHtml(opts.message)}</div>`
     : '';
   const modal = document.createElement('div');
   modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
@@ -1251,9 +1264,9 @@ function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
   if (!notes || !notes.length) return '';
   const items = notes.map((n) => {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
-      ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" data-from="${escapeHtml(from || '')}" data-to="${escapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
+      ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${arEscapeHtml(name)}" data-year="${year}" data-legal-kind="${arEscapeHtml(legalKind || '')}" data-from="${arEscapeHtml(from || '')}" data-to="${arEscapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
       : '';
-    return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${escapeHtml(n.message)}${exceptionBtn}</li>`;
+    return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${arEscapeHtml(n.message)}${exceptionBtn}</li>`;
   }).join('');
   // Explicit disc bullets (Tailwind's preflight resets list-style to none)
   // so each note reads as its own line, on screen and in the PDF; the
@@ -1286,7 +1299,7 @@ function showDepreciationPickModal(entries) {
       cb.checked = true;
       cb.dataset.mark = e.mark;
       const span = document.createElement('span');
-      span.textContent = `MARK ${e.mark} — ${fmtMoney(e.amount)} €`;
+      span.textContent = `MARK ${e.mark} — ${arFmtMoney(e.amount)} €`;
       label.appendChild(cb);
       label.appendChild(span);
       fields.appendChild(label);
@@ -1475,7 +1488,7 @@ async function computeSingle() {
     // even read it, since nothing awaits in between on the common no-dialog
     // path. Repeat the same advisories here so they survive in the
     // persistent results banner too.
-    let resultMsg = 'Λογιστικό Αποτέλεσμα (Ατομικός): ολοκληρώθηκε — ' + name + ' (Φορολογητέα Κέρδη ' + fmtMoney(resp.report.taxable_result) + ').';
+    let resultMsg = 'Λογιστικό Αποτέλεσμα (Ατομικός): ολοκληρώθηκε — ' + name + ' (Φορολογητέα Κέρδη ' + arFmtMoney(resp.report.taxable_result) + ').';
     if (advisories.length) resultMsg += ' ' + advisories.join(' • ');
     showArResultsFlash(
       resultMsg,
@@ -1501,15 +1514,15 @@ function renderHistoryTable(entries) {
     const isBulk = e.mode === 'bulk';
     const deleteBtn = isBulk
       ? `<span class="text-xs text-gray-400" title="Τα αποτελέσματα μαζικού υπολογισμού διατηρούνται — δεν διαγράφονται μεμονωμένα εδώ.">🔒</span>`
-      : `<button type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 ar-history-delete-btn" data-id="${escapeHtml(e.id || '')}" data-vat="${escapeHtml(e.vat || '')}" title="Διαγραφή">🗑</button>`;
+      : `<button type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 ar-history-delete-btn" data-id="${arEscapeHtml(e.id || '')}" data-vat="${arEscapeHtml(e.vat || '')}" title="Διαγραφή">🗑</button>`;
     return `<tr>
-      <td>${escapeHtml(tsStr)}</td>
-      <td>${escapeHtml(ddmmyyyy(e.date_from))} – ${escapeHtml(ddmmyyyy(e.date_to))}</td>
-      <td>${escapeHtml(e.computed_by || '')}</td>
-      <td class="ar-num">${fmtMoney(e.taxable_result)}</td>
-      <td>${escapeHtml(isBulk ? 'Μαζικός' : 'Ατομικός')}</td>
+      <td>${arEscapeHtml(tsStr)}</td>
+      <td>${arEscapeHtml(ddmmyyyy(e.date_from))} – ${arEscapeHtml(ddmmyyyy(e.date_to))}</td>
+      <td>${arEscapeHtml(e.computed_by || '')}</td>
+      <td class="ar-num">${arFmtMoney(e.taxable_result)}</td>
+      <td>${arEscapeHtml(isBulk ? 'Μαζικός' : 'Ατομικός')}</td>
       <td style="white-space:nowrap;">
-        <button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-history-open-btn" data-id="${escapeHtml(e.id || '')}" data-vat="${escapeHtml(e.vat || '')}" data-name="${escapeHtml(e.credential_name || '')}">📂 Άνοιγμα</button>
+        <button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-history-open-btn" data-id="${arEscapeHtml(e.id || '')}" data-vat="${arEscapeHtml(e.vat || '')}" data-name="${arEscapeHtml(e.credential_name || '')}">📂 Άνοιγμα</button>
         ${deleteBtn}
       </td>
     </tr>`;
@@ -1782,6 +1795,33 @@ function startBulkCrossPageBanner(jobId, total, label) {
   try {
     sessionStorage.setItem('arBulkActiveJob', JSON.stringify({ jobId, total, startedAt: Date.now(), label: label || '', updatedAt: Date.now() }));
   } catch (_) {}
+  // Heartbeat: while THIS page's script is alive (it survives partial
+  // navigation) it keeps updatedAt fresh. A full page load / logout kills
+  // the script, the heartbeat stops, and base_01.js drops the label within
+  // seconds instead of showing a run that is no longer going.
+  // Our <body>-level column exists from the start, so base_01.js puts the
+  // progress flash there (it survives partial navigation) and not in the
+  // app-wide #flashContainer that each navigation replaces.
+  _arEnsureFlashContainer();
+  clearInterval(window.__arBulkHeartbeat);
+  window.__arBulkHeartbeat = setInterval(() => {
+    try {
+      const a = JSON.parse(sessionStorage.getItem('arBulkActiveJob') || 'null');
+      if (!a) { clearInterval(window.__arBulkHeartbeat); return; }
+      a.updatedAt = Date.now();
+      sessionStorage.setItem('arBulkActiveJob', JSON.stringify(a));
+    } catch (_) {}
+  }, 3000);
+  window.addEventListener('beforeunload', arBulkBeforeUnload);
+}
+
+// Only a FULL page load ends the browser-driven steps of a run (menu links
+// use partial navigation and keep it going) — warn before that happens.
+function arBulkBeforeUnload(e) {
+  if (!AR_BULK_RUNNING) return undefined;
+  e.preventDefault();
+  e.returnValue = 'Ο μαζικός υπολογισμός Λογιστικού Αποτελέσματος τρέχει — αν φύγεις από τη σελίδα θα διακοπεί.';
+  return e.returnValue;
 }
 
 // Label for the cross-page progress flash (static/js/base_01.js) while the
@@ -1809,6 +1849,8 @@ async function isBulkAbortRequested(jobId) {
 }
 
 function stopBulkCrossPageBanner() {
+  clearInterval(window.__arBulkHeartbeat);
+  window.removeEventListener('beforeunload', arBulkBeforeUnload);
   try {
     sessionStorage.removeItem('arBulkActiveJob');
     const el = document.getElementById('arBulkProgressFlash');
@@ -1825,6 +1867,10 @@ function _arEnsureFlashContainer() {
   if (!container) {
     container = document.createElement('div');
     container.id = 'arFlashContainer';
+    // Inline, not only in accounting_result.html's <style>: that style block
+    // is removed with the page on partial navigation, which dropped this
+    // container to the bottom of whatever page the user moved to.
+    container.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 10rem);right:1rem;z-index:100120;width:min(92vw,380px);margin:0;display:flex;flex-direction:column;gap:0.5rem;pointer-events:none;';
     document.body.appendChild(container);
   }
   _arStartFlashStacking();
@@ -1841,14 +1887,14 @@ function _arStartFlashStacking() {
   window.__arFlashStackTimer = setInterval(() => {
     const ours = document.getElementById('arFlashContainer');
     if (!ours || !ours.children.length) {
-      if (ours) ours.style.top = '';
+      if (ours) ours.style.top = 'calc(env(safe-area-inset-top, 0px) + 10rem)';
       clearInterval(window.__arFlashStackTimer);
       window.__arFlashStackTimer = null;
       return;
     }
     const app = document.getElementById('flashContainer');
     const hasApp = app && app.offsetHeight > 0 && app.children.length;
-    ours.style.top = hasApp ? (app.getBoundingClientRect().bottom + 8) + 'px' : '';
+    ours.style.top = hasApp ? (app.getBoundingClientRect().bottom + 8) + 'px' : 'calc(env(safe-area-inset-top, 0px) + 10rem)';
   }, 300);
 }
 
@@ -2034,7 +2080,7 @@ function renderBulkCompaniesSummary(companies) {
 
     const tdName = document.createElement('td'); tdName.textContent = c.name + (superscripts ? ' ' + superscripts : '');
     const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
-    const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = fmtMoney(c.report.taxable_result);
+    const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = arFmtMoney(c.report.taxable_result);
     const tdBtn = document.createElement('td'); tdBtn.appendChild(dlBtn);
     tr.append(tdName, tdVat, tdAmt, tdBtn);
     tbody.appendChild(tr);
@@ -2047,7 +2093,7 @@ function renderBulkCompaniesSummary(companies) {
     legend.innerHTML = Array.from(usedNoteNumbers).sort((a, b) => a - b).map((num) => {
       const type = AR_BULK_NOTE_TYPE_ORDER[num - 1];
       const sup = AR_BULK_NOTE_SUPERSCRIPTS[num - 1] || `[${num}]`;
-      return `<div>${sup} ${escapeHtml(AR_BULK_NOTE_TYPE_LEGEND[type] || '')}</div>`;
+      return `<div>${sup} ${arEscapeHtml(AR_BULK_NOTE_TYPE_LEGEND[type] || '')}</div>`;
     }).join('');
     container.appendChild(legend);
   }
@@ -2093,20 +2139,20 @@ async function showBulkRunsModal() {
   try {
     const res = await fetch('/api/accounting_result/bulk_runs');
     const data = await res.json();
-    if (!data.ok) { listEl.innerHTML = '<div class="text-sm text-red-600 p-2">Σφάλμα: ' + escapeHtml(data.error || '') + '</div>'; return; }
+    if (!data.ok) { listEl.innerHTML = '<div class="text-sm text-red-600 p-2">Σφάλμα: ' + arEscapeHtml(data.error || '') + '</div>'; return; }
     const batches = data.batches || [];
     if (!batches.length) { listEl.innerHTML = '<div class="text-sm text-gray-500 p-2">Δεν υπάρχουν ακόμα αποθηκευμένες μαζικές καταστάσεις.</div>'; return; }
     const rows = batches.map((b) => {
       const companies = b.companies || [];
       const okCount = companies.filter((c) => c.ok).length;
       return `<tr>
-        <td>${escapeHtml(_arBatchTimestamp(b.timestamp))}</td>
-        <td>${escapeHtml(ddmmyyyy(b.date_from))} – ${escapeHtml(ddmmyyyy(b.date_to))}${b.aborted ? ' <span class="text-amber-600">(διακόπηκε)</span>' : ''}</td>
-        <td>${escapeHtml(b.computed_by || '')}</td>
+        <td>${arEscapeHtml(_arBatchTimestamp(b.timestamp))}</td>
+        <td>${arEscapeHtml(ddmmyyyy(b.date_from))} – ${arEscapeHtml(ddmmyyyy(b.date_to))}${b.aborted ? ' <span class="text-amber-600">(διακόπηκε)</span>' : ''}</td>
+        <td>${arEscapeHtml(b.computed_by || '')}</td>
         <td>${okCount}/${companies.length}</td>
         <td style="white-space:nowrap;">
-          <button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-bulk-run-open-btn" data-id="${escapeHtml(b.id || '')}">📂 Άνοιγμα</button>
-          <button type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 ar-bulk-run-delete-btn" data-id="${escapeHtml(b.id || '')}">🗑</button>
+          <button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-bulk-run-open-btn" data-id="${arEscapeHtml(b.id || '')}">📂 Άνοιγμα</button>
+          <button type="button" class="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 ar-bulk-run-delete-btn" data-id="${arEscapeHtml(b.id || '')}">🗑</button>
         </td>
       </tr>`;
     }).join('');
@@ -2120,7 +2166,7 @@ async function showBulkRunsModal() {
       btn.addEventListener('click', () => deleteBulkRun(btn.dataset.id, showBulkRunsModal));
     });
   } catch (e) {
-    listEl.innerHTML = '<div class="text-sm text-red-600 p-2">Σφάλμα: ' + escapeHtml(String(e)) + '</div>';
+    listEl.innerHTML = '<div class="text-sm text-red-600 p-2">Σφάλμα: ' + arEscapeHtml(String(e)) + '</div>';
   }
 }
 
@@ -2154,7 +2200,7 @@ async function openBulkRun(batchId) {
       });
       const tdName = document.createElement('td'); tdName.textContent = c.name;
       const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
-      const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = fmtMoney(c.report.taxable_result);
+      const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = arFmtMoney(c.report.taxable_result);
       const tdBtn = document.createElement('td'); tdBtn.appendChild(dlBtn);
       tr.append(tdName, tdVat, tdAmt, tdBtn);
       tbody.appendChild(tr);
@@ -2245,6 +2291,9 @@ async function runBulk() {
   // «Διακοπή») stays up on every page from the first ΑΑΔΕ check to the end.
   const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   startBulkCrossPageBanner(jobId, names.length, `ξεκίνησε για ${names.length} εταιρίες…`);
+  // Manual-entry modals must outlive a partial navigation (which replaces
+  // #appShell) so they can still pop up on whatever page the user is on.
+  moveModalsToBody();
   try {
   const year = yearFromDMY(to);
   // Βήμα 1: ΑΑΔΕ (type/contact/ΦΠΑ/partners) BEFORE any check, so the ΕΦΚΑ
@@ -2464,11 +2513,11 @@ function renderSavedTable(companies) {
       ? '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>'
       : '<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:700;">—</span>';
     const gemiWarnBadge = c.members_gemi_warning
-      ? ` <span title="${escapeHtml(c.members_gemi_warning)}" style="cursor:help;">⚠</span>`
+      ? ` <span title="${arEscapeHtml(c.members_gemi_warning)}" style="cursor:help;">⚠</span>`
       : '';
     const credName = afmToCredentialName(afm);
     const actionCell = credName
-      ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${escapeHtml(credName)}">Υπολογισμός</button>`
+      ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${arEscapeHtml(credName)}">Υπολογισμός</button>`
       : `<button type="button" class="ar-saved-nomydata-btn" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.35rem;height:1.35rem;font-size:0.75rem;font-weight:800;cursor:pointer;line-height:1;" title="Δεν υπάρχουν κωδικοί myDATA για αυτή την εταιρία — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε τέτοιες εταιρίες (ξανά για καθαρισμό).">i</button>`;
     // One ΑΑΔΕ lookup for everything the registry page gives us — type,
     // address, email/κινητό/σταθερό AND ΦΠΑ/κατηγορία βιβλίων (same login,
@@ -2478,7 +2527,7 @@ function renderSavedTable(companies) {
     return `<tr${credName ? '' : ' data-no-mydata="1"'}>
       <td><input type="checkbox" class="ar-saved-cb" value="${afm}"></td>
       <td class="ar-mono">${afm}</td>
-      <td>${escapeHtml(c.name || '')}</td>
+      <td>${arEscapeHtml(c.name || '')}</td>
       <td>${typeBadge}${gemiWarnBadge}${typeDetectBtn}</td>
       <td class="ar-saved-vat text-xs" data-afm="${afm}">
         <span class="ar-saved-vat-label text-gray-400">…</span>
@@ -2527,7 +2576,7 @@ function vatAutoCheckFlashMessage(check, label) {
 // flash precisely because last year's report may not have required one.
 function inventoryObligationFlashMessage(obligation, label) {
   if (!obligation || obligation.reason !== 'turnover_threshold') return null;
-  return `Απογραφή λήξης (${label}): οι πωλήσεις εμπορευμάτων/προϊόντων έφτασαν ${fmtMoney(obligation.goods_products_revenue)}€ εντός της χρήσης, πάνω από το όριο των ${fmtMoney(obligation.threshold)}€ — η εταιρεία είναι πλέον υποχρεωμένη σε απογραφή λήξης, ακόμη κι αν πέρυσι δεν ήταν.`;
+  return `Απογραφή λήξης (${label}): οι πωλήσεις εμπορευμάτων/προϊόντων έφτασαν ${arFmtMoney(obligation.goods_products_revenue)}€ εντός της χρήσης, πάνω από το όριο των ${arFmtMoney(obligation.threshold)}€ — η εταιρεία είναι πλέον υποχρεωμένη σε απογραφή λήξης, ακόμη κι αν πέρυσι δεν ήταν.`;
 }
 
 // `books_category_mismatch` is non-null when the ΑΑΔΕ Μητρώο's own
@@ -2895,18 +2944,18 @@ function openSavedEditModal(afm) {
   const membersList = document.getElementById('arEditMembersList');
   membersWrap.style.display = hasMembers ? '' : 'none';
   membersList.innerHTML = hasMembers ? members.map((m, i) => {
-    const mname = escapeHtml(String(m.full_name || m.name || '').trim() || '—');
-    const mafm = escapeHtml(String(m.afm || '').trim() || '—');
-    const mrole = escapeHtml(String(m.role || '').trim());
+    const mname = arEscapeHtml(String(m.full_name || m.name || '').trim() || '—');
+    const mafm = arEscapeHtml(String(m.afm || '').trim() || '—');
+    const mrole = arEscapeHtml(String(m.role || '').trim());
     return `<div class="ar-edit-member-row" data-member-row="${i}">
       <div style="display:flex;justify-content:space-between;font-size:.72rem;color:#475569;margin-bottom:.3rem;">
         <span><strong>${mname}</strong> · ΑΦΜ ${mafm}</span>
         <span style="opacity:.75;">${mrole}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem;">
-        <input data-member-i="${i}" data-field="taxisnet_username" value="${escapeHtml(m.taxisnet_username || '')}" placeholder="TAXIS user">
-        <input data-member-i="${i}" data-field="taxisnet_password" value="${escapeHtml(m.taxisnet_password || '')}" placeholder="TAXIS pass">
-        <input data-member-i="${i}" data-field="amka" value="${escapeHtml(m.amka || '')}" placeholder="ΑΜΚΑ">
+        <input data-member-i="${i}" data-field="taxisnet_username" value="${arEscapeHtml(m.taxisnet_username || '')}" placeholder="TAXIS user">
+        <input data-member-i="${i}" data-field="taxisnet_password" value="${arEscapeHtml(m.taxisnet_password || '')}" placeholder="TAXIS pass">
+        <input data-member-i="${i}" data-field="amka" value="${arEscapeHtml(m.amka || '')}" placeholder="ΑΜΚΑ">
       </div>
     </div>`;
   }).join('') : '';
