@@ -61,9 +61,9 @@ var AR_BULK_RUNNING = false;
 
 function showArOverlay(title, message) {
   if (AR_BULK_RUNNING) {
-    const statusEl = document.getElementById('arBulkStatus');
-    if (statusEl && message) statusEl.textContent = String(message);
-    if (message) showArFlash(String(message), 'warning', 0);
+    // One progress flash only: the step detail goes into the cross-page
+    // «Διακοπή» flash instead of a second (yellow) one.
+    if (message) setBulkCrossPageLabel(String(message));
     return;
   }
   // Defensive re-move: the DOMContentLoaded-time moveModalsToBody() call can
@@ -139,7 +139,7 @@ async function arLoadContactCache() {
     const map = {};
     (resp.companies || []).forEach((e) => {
       const c = e.company || {};
-      if (c.afm) map[String(c.afm)] = { mobile: c.mobile || '', phone: c.phone || '', email: c.email || '' };
+      if (c.afm) map[String(c.afm)] = { mobile: c.mobile || '', phone: c.phone || '', email: c.email || '', address: c.address || '' };
     });
     window.__arContactByVat = map;
   } catch (_) { /* contact line just stays empty */ }
@@ -501,8 +501,12 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+// `innerHtml` may be a function: it's then built only AFTER the contact
+// cache below is loaded — building it up front (as an argument) ran before
+// the cache existed, which is why the contact legend/links went missing.
 async function exportHtmlAsPdf(innerHtml, filename, orientation, fitToOnePage) {
   await arLoadContactCache();
+  if (typeof innerHtml === 'function') innerHtml = innerHtml();
   showArOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
   try {
     const blob = await buildPdfBlob(innerHtml, orientation, fitToOnePage);
@@ -515,7 +519,7 @@ async function exportHtmlAsPdf(innerHtml, filename, orientation, fitToOnePage) {
 // One PDF per company, bundled into a single ZIP download (replaces the old
 // "one giant concatenated multi-page PDF" behaviour for "Λήψη PDF όλες").
 async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
-  await Promise.all([ensureHtml2Pdf(), ensureJsZip()]);
+  await Promise.all([ensureHtml2Pdf(), ensureJsZip(), arLoadContactCache()]);
   showArOverlay('Δημιουργία ZIP...', `Δημιουργία PDF για ${companies.length} εταιρίες...`);
   try {
     const zip = new window.JSZip();
@@ -534,6 +538,7 @@ async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
 }
 
 function buildConsolidatedTableHtml(companies) {
+  companies = (companies || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'el'));
   // Findings (report notes) become markers next to the affected cell —
   // * μισθοδοσία, ** ενοίκιο, *** ΕΦΚΑ on Δαπάνες, † on Αχαρακτ. — each
   // linking (inside the PDF) to its explanation in «Παρατηρήσεις» below.
@@ -556,7 +561,7 @@ function buildConsolidatedTableHtml(companies) {
     const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
       <td class="ar-num">${i + 1}</td>
-      <td>${arContactBits(c.vat).length ? `<span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(c.name)}</span>` : escapeHtml(c.name)}</td>
+      <td><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(c.name)}</span></td>
       <td>${escapeHtml(c.vat || '')}</td>
       <td>${todayStr()}</td>
       <td>${ddmmyyyy(c.from)}</td>
@@ -593,15 +598,18 @@ function buildConsolidatedTableHtml(companies) {
     </div>`
     : '';
 
+  // Every client gets a row (and its name above a link here), even with no
+  // contact details on file — an empty row says "nothing stored", instead of
+  // the client silently missing from the legend.
   const legendRows = companies.map((c, i) => {
     const bits = arContactBits(c.vat);
-    if (!bits.length) return '';
-    return `<tr id="ar-contact-${i}"><td style="font-weight:600;white-space:nowrap;">${escapeHtml(c.name)}</td><td class="ar-mono">${escapeHtml(c.vat || '')}</td><td>${bits.join(' &nbsp;·&nbsp; ')}</td></tr>`;
+    const address = ((window.__arContactByVat || {})[String(c.vat || '')] || {}).address || '';
+    return `<tr id="ar-contact-${i}"><td style="font-weight:600;white-space:nowrap;">${escapeHtml(c.name)}</td><td class="ar-mono">${escapeHtml(c.vat || '')}</td><td style="white-space:normal;">${escapeHtml(address) || '—'}</td><td>${bits.length ? bits.join(' &nbsp;·&nbsp; ') : '<span style="color:#94a3b8;">δεν υπάρχουν αποθηκευμένα στοιχεία</span>'}</td></tr>`;
   }).join('');
   const legendHtml = legendRows
     ? `<div style="margin-top:28px;">
       <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Υπόμνημα — Στοιχεία επικοινωνίας πελατών</div>
-      <table class="ar-consolidated-table"><thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Επικοινωνία</th></tr></thead><tbody>${legendRows}</tbody></table>
+      <table class="ar-consolidated-table"><thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Διεύθυνση</th><th>Επικοινωνία</th></tr></thead><tbody>${legendRows}</tbody></table>
     </div>`
     : '';
 
@@ -643,10 +651,17 @@ function showManualInventoryModal(title, opening) {
       input.type = 'number';
       input.step = '0.01';
       input.className = 'border rounded px-2 py-1 w-full text-sm';
-      input.value = (opening && opening[code] != null) ? opening[code] : 0;
+      // Closing stock is typed fresh; the opening (last year's declared
+      // closing) is shown underneath as a reference, not pre-filled.
+      input.value = '';
+      input.placeholder = '0,00';
       input.dataset.code = code;
       wrap.appendChild(label);
       wrap.appendChild(input);
+      const note = document.createElement('div');
+      note.className = 'text-xs text-gray-500 mt-0.5';
+      note.textContent = 'Έναρξη: ' + fmtMoney((opening && opening[code] != null) ? opening[code] : 0) + ' €';
+      wrap.appendChild(note);
       fields.appendChild(wrap);
     });
     modal.classList.remove('hidden');
@@ -1126,9 +1141,12 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
   return true;
 }
 
-// After a Μαζικός run: every finding (report note) grouped by kind, a row
-// per company — the «📋 Διαφορές ανά είδος» button of the results flash.
-function showBulkNotesByTypeModal(results) {
+// The Μαζικός result popup (appended to <body>, so it shows on whatever page
+// the user is on when the run ends): the summary, then every company that
+// wasn't computed and every finding (report note) grouped by kind, a row per
+// company, plus the download buttons. `opts` = {message, kind, zip, consolidated}.
+function showBulkNotesByTypeModal(results, opts) {
+  opts = opts || {};
   const byType = {};
   // Companies that got no result at all come first, with the reason.
   (results || []).forEach((r) => {
@@ -1150,16 +1168,26 @@ function showBulkNotesByTypeModal(results) {
         <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Παρατήρηση</th></tr></thead><tbody>${trs}</tbody></table></div>`;
     }).join('')
     : '<p class="text-sm">Δεν βρέθηκαν διαφορές.</p>';
+  const color = opts.kind === 'success' ? '#047857' : (opts.kind === 'error' ? '#b91c1c' : '#b45309');
+  const summary = opts.message
+    ? `<div style="border-left:4px solid ${color};background:#f8fafc;padding:8px 10px;margin-bottom:12px;font-size:0.85rem;">${escapeHtml(opts.message)}</div>`
+    : '';
   const modal = document.createElement('div');
   modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
   modal.setAttribute('data-managed', '1');
   modal.innerHTML = `
     <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
-      <div class="modal-warning-title">📋 Διαφορές ανά είδος</div>
-      <div class="modal-warning-body">${body}</div>
-      <div class="modal-warning-actions"><button type="button" class="modal-warning-btn" id="arNotesClose">Κλείσιμο</button></div>
+      <div class="modal-warning-title">${opts.message ? '🧮 Λογιστικό Αποτέλεσμα — Μαζικός' : '📋 Διαφορές ανά είδος'}</div>
+      <div class="modal-warning-body">${summary}${body}</div>
+      <div class="modal-warning-actions">
+        ${opts.zip ? '<button type="button" class="modal-warning-btn" id="arNotesZip">⬇ ZIP (ανά εταιρία)</button>' : ''}
+        ${opts.consolidated ? '<button type="button" class="modal-warning-btn" id="arNotesConsolidated">⬇ Συγκεντρωτικό PDF</button>' : ''}
+        <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arNotesClose">Κλείσιμο</button>
+      </div>
     </div>`;
   document.body.appendChild(modal);
+  if (opts.zip) modal.querySelector('#arNotesZip').addEventListener('click', opts.zip);
+  if (opts.consolidated) modal.querySelector('#arNotesConsolidated').addEventListener('click', opts.consolidated);
   const close = () => { document.removeEventListener('keydown', onKey); modal.remove(); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
@@ -1991,7 +2019,7 @@ function renderBulkCompaniesSummary(companies) {
     dlBtn.textContent = '⬇ PDF';
     dlBtn.addEventListener('click', () => {
       const cc = window.__arBulkCompanies[idx];
-      exportHtmlAsPdf(buildReportSectionHtml(cc.name, cc.vat, cc.from, cc.to, cc.report), 'Λογιστικό_Αποτέλεσμα_' + cc.name + '_' + periodSuffix(cc.from, cc.to), 'portrait', true);
+      exportHtmlAsPdf(() => buildReportSectionHtml(cc.name, cc.vat, cc.from, cc.to, cc.report), 'Λογιστικό_Αποτέλεσμα_' + cc.name + '_' + periodSuffix(cc.from, cc.to), 'portrait', true);
     });
     const noteNumbers = (c.notes || [])
       .map((n) => AR_BULK_NOTE_TYPE_ORDER.indexOf(n.type) + 1)
@@ -2117,7 +2145,7 @@ async function openBulkRun(batchId) {
       dlBtn.className = 'ar-bulk-dl-btn';
       dlBtn.textContent = '⬇ PDF';
       dlBtn.addEventListener('click', () => {
-        exportHtmlAsPdf(buildReportSectionHtml(c.name, c.vat, c.from, c.to, c.report), 'Λογιστικό_Αποτέλεσμα_' + c.name + '_' + periodSuffix(c.from, c.to), 'portrait', true);
+        exportHtmlAsPdf(() => buildReportSectionHtml(c.name, c.vat, c.from, c.to, c.report), 'Λογιστικό_Αποτέλεσμα_' + c.name + '_' + periodSuffix(c.from, c.to), 'portrait', true);
       });
       const tdName = document.createElement('td'); tdName.textContent = c.name;
       const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
@@ -2362,20 +2390,16 @@ async function runBulk() {
     hasWarningAdvisory = true;
     statusMsg += ` Έλεγχος ΑΑΔΕ (τύπος/επικοινωνία/ΦΠΑ) χωρίς επιτυχία: ${aadeWarnings.join(' · ')}.`;
   }
-  statusEl.textContent = statusMsg;
-  const hasNotes = errors.length > 0 || (bulkResp.results || []).some((r) => (r.notes || []).length);
+  // The outcome is a popup (on whatever page the user is on), not text
+  // left under the Μαζικός table.
+  statusEl.textContent = '';
   const needsAttention = !!(bulkResp.aborted || errors.length || hasWarningAdvisory);
-  showArResultsFlash(
-    'Λογιστικό Αποτέλεσμα (Μαζικός): ' + statusMsg,
-    needsAttention ? 'warning' : 'success',
-    {
-      zip: companies.length ? () => document.getElementById('arBulkPdfBtn').click() : null,
-      consolidated: companies.length ? () => document.getElementById('arBulkConsolidatedPdfBtn').click() : null,
-      notes: hasNotes ? () => showBulkNotesByTypeModal(bulkResp.results) : null,
-      sticky: needsAttention,
-    },
-  );
-  if (hasNotes) showBulkNotesByTypeModal(bulkResp.results);
+  showBulkNotesByTypeModal(bulkResp.results, {
+    message: statusMsg,
+    kind: needsAttention ? 'warning' : 'success',
+    zip: companies.length ? () => document.getElementById('arBulkPdfBtn').click() : null,
+    consolidated: companies.length ? () => document.getElementById('arBulkConsolidatedPdfBtn').click() : null,
+  });
   } catch (err) {
     // Without this, any unexpected exception anywhere above (e.g. a
     // network hiccup mid-flow) unwinds as a silent unhandled promise
@@ -3167,7 +3191,7 @@ function arInitPageHandlers() {
   document.getElementById('arSinglePdfBtn').addEventListener('click', () => {
     const s = window.__arSingleLastSection;
     if (!s) return;
-    exportHtmlAsPdf(buildReportSectionHtml(s.name, s.vat, s.from, s.to, s.report), 'Λογιστικό_Αποτέλεσμα_' + s.name + '_' + periodSuffix(s.from, s.to), 'portrait', true);
+    exportHtmlAsPdf(() => buildReportSectionHtml(s.name, s.vat, s.from, s.to, s.report), 'Λογιστικό_Αποτέλεσμα_' + s.name + '_' + periodSuffix(s.from, s.to), 'portrait', true);
   });
 
   document.getElementById('arExcelHintBtn').addEventListener('click', () => { moveModalsToBody(); document.getElementById('arExcelHintModal').classList.remove('hidden'); });
@@ -3193,7 +3217,7 @@ function arInitPageHandlers() {
       const p = window.__arBulkPeriod || {};
       const suffix = periodSuffix(p.from, p.to);
       exportHtmlAsPdf(
-        buildConsolidatedTableHtml(window.__arBulkCompanies),
+        () => buildConsolidatedTableHtml(window.__arBulkCompanies),
         'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''),
         'landscape',
       );
@@ -3227,7 +3251,7 @@ function arInitPageHandlers() {
       const b = AR_OPEN_BATCH.batch;
       const suffix = periodSuffix(b.date_from, b.date_to);
       exportHtmlAsPdf(
-        buildConsolidatedTableHtml(AR_OPEN_BATCH.companies),
+        () => buildConsolidatedTableHtml(AR_OPEN_BATCH.companies),
         'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''),
         'landscape',
       );
