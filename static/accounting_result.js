@@ -579,8 +579,16 @@ function buildConsolidatedTableHtml(companies) {
     ? `<div style="margin-top:24px;">
       <div style="font-size:16px;font-weight:700;margin-bottom:4px;">Παρατηρήσεις</div>
       <div style="font-size:11px;color:#475569;margin-bottom:6px;">${Object.values(AR_NOTE_TYPES).map((t) => `<b>${escapeHtml(t.mark)}</b> ${escapeHtml(t.label)}`).join(' &nbsp;·&nbsp; ')} &nbsp;·&nbsp; <b>Χ</b> στη στήλη ΦΠΑ: μη υπόχρεος ΦΠΑ</div>
-      <table class="ar-consolidated-table"><thead><tr><th></th><th>Επωνυμία</th><th>Παρατήρηση</th></tr></thead><tbody>
-        ${noteRows.map((n) => `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="font-weight:600;">${escapeHtml(n.name)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`).join('')}
+      <table class="ar-consolidated-table"><thead><tr><th></th><th>Επωνυμία</th><th>Παρατηρήσεις</th></tr></thead><tbody>
+        ${noteRows.map((n, k) => {
+          // One block per client: the name cell spans all of its notes.
+          if (k > 0 && noteRows[k - 1].name === n.name) {
+            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`;
+          }
+          let span = 1;
+          while (noteRows[k + span] && noteRows[k + span].name === n.name) span++;
+          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${escapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${escapeHtml(n.name)}</td><td style="white-space:normal;">${escapeHtml(n.message)}</td></tr>`;
+        }).join('')}
       </tbody></table>
     </div>`
     : '';
@@ -912,27 +920,42 @@ function arEfkaFindingText(check, legalKind) {
 
 // Step 1 of Μαζικός: before anything is checked, make sure every selected
 // company's type, contact details and ΦΠΑ are on file (one ΑΑΔΕ login each,
-// skipped when already stored) and — for companies — wait for the partners,
-// so the ΕΦΚΑ check counts months × partners and its dropdown only offers
-// the options that apply to that company type. Returns warning strings.
-async function arBulkAadePrecheck(names) {
+// skipped when already stored) and — for companies — their partners, so the
+// ΕΦΚΑ check counts months × partners and its dropdown only offers the
+// options that apply to that company type. All the profile logins run
+// FIRST; the (heavy, Playwright) partner fetches start only afterwards, one
+// at a time — running them next to the next companies' logins starved the
+// server and made those logins fail. Returns {warnings, aborted}.
+async function arBulkAadePrecheck(names, jobId) {
   const creds = window.AR_CREDENTIALS || [];
   const warnings = [];
-  const pending = [];
+  const needMembers = [];
   for (let i = 0; i < names.length; i++) {
+    if (await isBulkAbortRequested(jobId)) { hideArOverlay(); return { warnings, aborted: true }; }
     const cred = creds.find((c) => c.name === names[i]);
     const vat = cred && cred.vat;
     if (!vat) continue;
-    showArOverlay('Έλεγχος ΑΑΔΕ...', `Βήμα 1: τύπος εταιρίας, στοιχεία επικοινωνίας και ΦΠΑ — ${names[i]} (${i + 1}/${names.length}).`);
-    const r = await postJson('/api/accounting_result/company_info', { afm: vat, apply_vat: true, only_if_missing: true });
+    const label = `Βήμα 1/3 — ΑΑΔΕ (τύπος, επικοινωνία, ΦΠΑ): ${names[i]} (${i + 1}/${names.length})`;
+    showArOverlay('Έλεγχος ΑΑΔΕ...', label);
+    setBulkCrossPageLabel(label);
+    const body = { afm: vat, apply_vat: true, only_if_missing: true, defer_members: true };
+    let r = await postJson('/api/accounting_result/company_info', body);
+    if (!r.ok && !/TAXISnet/.test(r.error || '')) {
+      await new Promise((res) => setTimeout(res, 3000));
+      r = await postJson('/api/accounting_result/company_info', body);
+    }
     if (!r.ok) warnings.push(`${names[i]}: ${r.error || 'σφάλμα'}`);
-    else if (r.members_pending) pending.push(vat);
+    else if (r.needs_members || r.members_pending) needMembers.push(vat);
   }
-  if (pending.length) {
-    const deadline = Date.now() + 180000;
-    let left = pending;
+  if (needMembers.length) {
+    await postJson('/api/accounting_result/company_info/fetch_members', { afms: needMembers });
+    const deadline = Date.now() + 90000 * needMembers.length;
+    let left = needMembers;
     while (left.length && Date.now() < deadline) {
-      showArOverlay('Έλεγχος ΑΑΔΕ...', `Ανάκτηση εταίρων για ${left.length} εταιρίες (για τον έλεγχο ΕΦΚΑ: μήνες × εταίροι)...`);
+      if (await isBulkAbortRequested(jobId)) { hideArOverlay(); return { warnings, aborted: true }; }
+      const label = `Βήμα 1/3 — ανάκτηση εταίρων (για ΕΦΚΑ: μήνες × εταίροι): απομένουν ${left.length}`;
+      showArOverlay('Έλεγχος ΑΑΔΕ...', label);
+      setBulkCrossPageLabel(label);
       await new Promise((res) => setTimeout(res, 5000));
       try {
         const st = await (await fetch('/api/accounting_result/company_info/members_pending?afms=' + encodeURIComponent(left.join(',')))).json();
@@ -942,7 +965,7 @@ async function arBulkAadePrecheck(names) {
     if (left.length) warnings.push(`Οι εταίροι δεν ανακτήθηκαν έγκαιρα για ${left.length} εταιρίες — ο έλεγχος ΕΦΚΑ τους γίνεται ανά μήνα.`);
   }
   hideArOverlay();
-  return warnings;
+  return { warnings, aborted: false };
 }
 
 // Pre-check findings grouped by KIND (one table per απόθεμα/μισθοδοσία/
@@ -1107,6 +1130,12 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
 // per company — the «📋 Διαφορές ανά είδος» button of the results flash.
 function showBulkNotesByTypeModal(results) {
   const byType = {};
+  // Companies that got no result at all come first, with the reason.
+  (results || []).forEach((r) => {
+    const reason = r.error || (r.needs_payroll_input ? 'εκκρεμεί μισθοδοσία'
+      : r.needs_rent_input ? 'εκκρεμεί ενοίκιο' : r.needs_inventory_input ? 'εκκρεμεί απόθεμα λήξης' : '');
+    if (!r.ok || reason) (byType.__failed = byType.__failed || []).push({ name: r.credential_name, message: reason || 'σφάλμα' });
+  });
   (results || []).forEach((r) => {
     (r.notes || []).forEach((n) => {
       (byType[n.type] = byType[n.type] || []).push({ name: r.credential_name, message: n.message });
@@ -1115,7 +1144,7 @@ function showBulkNotesByTypeModal(results) {
   const types = Object.keys(byType);
   const body = types.length
     ? types.map((t) => {
-      const info = AR_NOTE_TYPES[t] || { label: t };
+      const info = t === '__failed' ? { label: '❌ Δεν υπολογίστηκαν' } : (AR_NOTE_TYPES[t] || { label: t });
       const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${escapeHtml(x.name)}</td><td style="font-size:0.78rem;">${escapeHtml(x.message)}</td></tr>`).join('');
       return `<div class="mb-4"><div class="font-semibold text-sm mb-1">${escapeHtml(info.label)} — ${byType[t].length} εταιρίες</div>
         <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Παρατήρηση</th></tr></thead><tbody>${trs}</tbody></table></div>`;
@@ -1192,11 +1221,15 @@ function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
   if (!notes || !notes.length) return '';
   const items = notes.map((n) => {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
-      ? ` <button type="button" class="ar-efka-exception-btn" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" data-from="${escapeHtml(from || '')}" data-to="${escapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
+      ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${escapeHtml(name)}" data-year="${year}" data-legal-kind="${escapeHtml(legalKind || '')}" data-from="${escapeHtml(from || '')}" data-to="${escapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
       : '';
-    return `<li>${escapeHtml(n.message)}${exceptionBtn}</li>`;
+    return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${escapeHtml(n.message)}${exceptionBtn}</li>`;
   }).join('');
-  return `<div class="ar-notes" style="margin-top:6px;"><strong>Σημειώσεις:</strong><ul style="margin:4px 0 0 18px;padding:0;">${items}</ul></div>`;
+  // Explicit disc bullets (Tailwind's preflight resets list-style to none)
+  // so each note reads as its own line, on screen and in the PDF; the
+  // exception button is web-only (data-html2canvas-ignore keeps it out of
+  // the exported PDF).
+  return `<div class="ar-notes" style="margin-top:6px;"><strong>Σημειώσεις:</strong><ul style="margin:4px 0 0 18px;padding:0;list-style-type:disc;">${items}</ul></div>`;
 }
 
 function bindReportNoteButtons(container) {
@@ -1713,10 +1746,34 @@ function initSavedDataTable() {
 // style as the E3 Bulk one and as fetch.py's bulk-download banner), driven
 // by a sessionStorage flag so it keeps showing (and stays abortable) even
 // if the user navigates away from this page while the run continues.
-function startBulkCrossPageBanner(jobId, total) {
+function startBulkCrossPageBanner(jobId, total, label) {
   try {
-    sessionStorage.setItem('arBulkActiveJob', JSON.stringify({ jobId, total, startedAt: Date.now() }));
+    sessionStorage.setItem('arBulkActiveJob', JSON.stringify({ jobId, total, startedAt: Date.now(), label: label || '', updatedAt: Date.now() }));
   } catch (_) {}
+}
+
+// Label for the cross-page progress flash (static/js/base_01.js) while the
+// run is in its browser-driven steps (ΑΑΔΕ/myDATA pre-check, choices), where
+// the server has no progress of its own to report yet.
+function setBulkCrossPageLabel(label) {
+  try {
+    const active = JSON.parse(sessionStorage.getItem('arBulkActiveJob') || 'null');
+    if (!active) return;
+    active.label = label;
+    active.updatedAt = Date.now();
+    sessionStorage.setItem('arBulkActiveJob', JSON.stringify(active));
+  } catch (_) {}
+  const span = document.querySelector('#arBulkProgressFlash span');
+  if (span) span.textContent = 'Λογιστικό Αποτέλεσμα — ' + label;
+}
+
+async function isBulkAbortRequested(jobId) {
+  try {
+    const d = await (await fetch('/api/accounting_result/bulk_progress/' + encodeURIComponent(jobId), { cache: 'no-store' })).json();
+    return !!(d && d.aborted);
+  } catch (_) {
+    return false;
+  }
 }
 
 function stopBulkCrossPageBanner() {
@@ -1738,7 +1795,29 @@ function _arEnsureFlashContainer() {
     container.id = 'arFlashContainer';
     document.body.appendChild(container);
   }
+  _arStartFlashStacking();
   return container;
+}
+
+// #arFlashContainer lives on <body> (so it survives partial navigation, unlike
+// the app-wide #flashContainer inside #appShell) but sits at the same
+// top-right spot — messages from both ended up drawn on top of each other.
+// While ours has anything in it, keep it placed right BELOW the app-wide one,
+// so all messages read as one column.
+function _arStartFlashStacking() {
+  if (window.__arFlashStackTimer) return;
+  window.__arFlashStackTimer = setInterval(() => {
+    const ours = document.getElementById('arFlashContainer');
+    if (!ours || !ours.children.length) {
+      if (ours) ours.style.top = '';
+      clearInterval(window.__arFlashStackTimer);
+      window.__arFlashStackTimer = null;
+      return;
+    }
+    const app = document.getElementById('flashContainer');
+    const hasApp = app && app.offsetHeight > 0 && app.children.length;
+    ours.style.top = hasApp ? (app.getBoundingClientRect().bottom + 8) + 'px' : '';
+  }, 300);
 }
 
 function showArFlash(message, type, ttl) {
@@ -1856,7 +1935,11 @@ function showArResultsFlash(message, kind, opts) {
   }
 
   clearTimeout(el.__arFlashTimer);
-  el.__arFlashTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, 15000);
+  // sticky: stays until closed (a run with errors/warnings — the reasons
+  // must not vanish before they've been read).
+  if (!(opts && opts.sticky)) {
+    el.__arFlashTimer = setTimeout(() => { try { el.remove(); } catch (_) {} }, 15000);
+  }
 }
 
 
@@ -2043,6 +2126,16 @@ async function openBulkRun(batchId) {
       tr.append(tdName, tdVat, tdAmt, tdBtn);
       tbody.appendChild(tr);
     });
+    (data.failed || []).forEach((f) => {
+      const tr = document.createElement('tr');
+      tr.style.background = '#fef2f2';
+      const tdName = document.createElement('td'); tdName.textContent = f.name || '';
+      const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = f.vat || '';
+      const tdErr = document.createElement('td'); tdErr.colSpan = 2; tdErr.style.color = '#b91c1c'; tdErr.style.fontSize = '0.8rem';
+      tdErr.textContent = '❌ Δεν υπολογίστηκε: ' + (f.error || '');
+      tr.append(tdName, tdVat, tdErr);
+      tbody.appendChild(tr);
+    });
     container.appendChild(table);
   } catch (e) {
     detailStatus.textContent = 'Σφάλμα: ' + String(e);
@@ -2115,12 +2208,24 @@ async function runBulk() {
 
   setBulkTableLocked(true);
   AR_BULK_RUNNING = true;
+  // One job id for the whole run: the cross-page progress flash (with
+  // «Διακοπή») stays up on every page from the first ΑΑΔΕ check to the end.
+  const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  startBulkCrossPageBanner(jobId, names.length, `ξεκίνησε για ${names.length} εταιρίες…`);
   try {
   const year = yearFromDMY(to);
   // Βήμα 1: ΑΑΔΕ (type/contact/ΦΠΑ/partners) BEFORE any check, so the ΕΦΚΑ
   // check below knows each company's type and partner count.
-  const aadeWarnings = await arBulkAadePrecheck(names);
-  showArOverlay('Λήψη δεδομένων από myDATA...', `Βήμα 2: προέλεγχος αποθεμάτων, μισθοδοσίας, ενοικίου και ΕΦΚΑ Μη-Μισθωτών για ${names.length} εταιρίες.`);
+  const pre = await arBulkAadePrecheck(names, jobId);
+  const aadeWarnings = pre.warnings;
+  if (pre.aborted) {
+    statusEl.textContent = 'Διακόπηκε από τον χρήστη.';
+    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): διακόπηκε από τον χρήστη.', 'warning', 8000);
+    return;
+  }
+  const step2 = `Βήμα 2/3 — προέλεγχος myDATA (απόθεμα, μισθοδοσία, ενοίκιο, ΕΦΚΑ) για ${names.length} εταιρίες`;
+  setBulkCrossPageLabel(step2);
+  showArOverlay('Λήψη δεδομένων από myDATA...', step2 + '.');
   const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
   hideArOverlay();
   if (!statusResp.ok) {
@@ -2138,6 +2243,7 @@ async function runBulk() {
   // entries one after the other.
   const groups = arBuildCheckGroups(statusResp.rows);
   if (groups.length) {
+    setBulkCrossPageLabel('αναμονή για τις επιλογές σου στο popup «Διαφορές προελέγχου»');
     const choices = await showGroupedChecksModal(groups);
     if (!choices) {
       statusEl.textContent = 'Ακυρώθηκε.';
@@ -2150,18 +2256,17 @@ async function runBulk() {
     }
   }
 
-  const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   window.__arBulkPeriod = { from, to };
   statusEl.textContent = '';
-  startBulkCrossPageBanner(jobId, names.length);
-  let bulkResp;
-  try {
-    bulkResp = await postJson('/api/accounting_result/bulk_compute', {
-      credential_names: names, date_from: from, date_to: to, job_id: jobId,
-    });
-  } finally {
-    stopBulkCrossPageBanner();
+  if (await isBulkAbortRequested(jobId)) {
+    statusEl.textContent = 'Διακόπηκε από τον χρήστη.';
+    return;
   }
+  setBulkCrossPageLabel(`Βήμα 3/3 — υπολογισμός ${names.length} εταιριών…`);
+  const bulkResp = await postJson('/api/accounting_result/bulk_compute', {
+    credential_names: names, date_from: from, date_to: to, job_id: jobId,
+  });
+  stopBulkCrossPageBanner();
   if (!bulkResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (bulkResp.error || '');
     showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα — ' + (bulkResp.error || ''), 'error');
@@ -2258,15 +2363,17 @@ async function runBulk() {
     statusMsg += ` Έλεγχος ΑΑΔΕ (τύπος/επικοινωνία/ΦΠΑ) χωρίς επιτυχία: ${aadeWarnings.join(' · ')}.`;
   }
   statusEl.textContent = statusMsg;
-  const hasNotes = (bulkResp.results || []).some((r) => (r.notes || []).length);
+  const hasNotes = errors.length > 0 || (bulkResp.results || []).some((r) => (r.notes || []).length);
+  const needsAttention = !!(bulkResp.aborted || errors.length || hasWarningAdvisory);
   showArResultsFlash(
     'Λογιστικό Αποτέλεσμα (Μαζικός): ' + statusMsg,
-    bulkResp.aborted ? 'warning' : (errors.length || hasWarningAdvisory ? 'warning' : 'success'),
-    companies.length ? {
-      zip: () => document.getElementById('arBulkPdfBtn').click(),
-      consolidated: () => document.getElementById('arBulkConsolidatedPdfBtn').click(),
+    needsAttention ? 'warning' : 'success',
+    {
+      zip: companies.length ? () => document.getElementById('arBulkPdfBtn').click() : null,
+      consolidated: companies.length ? () => document.getElementById('arBulkConsolidatedPdfBtn').click() : null,
       notes: hasNotes ? () => showBulkNotesByTypeModal(bulkResp.results) : null,
-    } : null,
+      sticky: needsAttention,
+    },
   );
   if (hasNotes) showBulkNotesByTypeModal(bulkResp.results);
   } catch (err) {
@@ -2279,6 +2386,7 @@ async function runBulk() {
     statusEl.textContent = 'Σφάλμα: ' + (err && err.message ? err.message : String(err));
     showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): μη αναμενόμενο σφάλμα — ' + (err && err.message ? err.message : String(err)), 'error');
   } finally {
+    stopBulkCrossPageBanner();
     AR_BULK_RUNNING = false;
     setBulkTableLocked(false);
   }

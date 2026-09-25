@@ -19032,8 +19032,12 @@ def api_accounting_result_bulk_compute():
                 "credential_name": r.get("credential_name"),
                 "vat": r.get("vat"),
                 "entry_id": r.get("entry_id"),
-                "ok": bool(r.get("ok")) and not r.get("needs_inventory_input"),
-                "error": r.get("error"),
+                "ok": bool(r.get("ok")) and bool(r.get("entry_id")),
+                "error": r.get("error") or (
+                    "εκκρεμεί μισθοδοσία" if r.get("needs_payroll_input")
+                    else "εκκρεμεί ενοίκιο" if r.get("needs_rent_input")
+                    else "εκκρεμεί απόθεμα λήξης" if r.get("needs_inventory_input") else None
+                ),
             } for r in results],
             aborted=aborted,
         )
@@ -19048,7 +19052,7 @@ def api_accounting_result_bulk_compute():
 def api_accounting_result_bulk_progress(job_id):
     try:
         from accounting_result import job_registry as ar_jobs
-        return jsonify({"ok": True, "progress": ar_jobs.get_progress(job_id)}), 200
+        return jsonify({"ok": True, "progress": ar_jobs.get_progress(job_id), "aborted": ar_jobs.is_abort_requested(job_id)}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -19090,8 +19094,10 @@ def api_accounting_result_bulk_run_open(batch_id):
             return jsonify({"ok": False, "error": "Δεν βρέθηκε αυτή η μαζική κατάσταση."}), 404
 
         companies = []
+        failed = []
         for c in (batch.get("companies") or []):
             if not c.get("ok") or not c.get("entry_id"):
+                failed.append({"name": c.get("credential_name"), "vat": c.get("vat") or "", "error": c.get("error") or "δεν υπολογίστηκε"})
                 continue
             vat = str(c.get("vat") or "")
             entry = ar_history.get_entry(_ar_history_path(vat), str(c.get("entry_id")))
@@ -19102,7 +19108,7 @@ def api_accounting_result_bulk_run_open(batch_id):
                 "from": entry.get("date_from"), "to": entry.get("date_to"),
                 "report": entry.get("report"),
             })
-        return jsonify({"ok": True, "batch": batch, "companies": companies}), 200
+        return jsonify({"ok": True, "batch": batch, "companies": companies, "failed": failed}), 200
     except Exception as e:
         log.exception("api_accounting_result_bulk_run_open failed")
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -21582,6 +21588,10 @@ _AR_INFO_STORE_LOCK = threading.Lock()
 # ΑΦΜ whose background members fetch (_ar_members_background) is still running
 # — lets the Μαζικός pre-check wait for the partner count the ΕΦΚΑ check needs.
 _AR_MEMBERS_PENDING: set = set()
+# One Playwright members fetch at a time: running several (or one next to the
+# ΑΑΔΕ logins of a Μαζικός pre-check) starved the server and made those
+# logins time out.
+_AR_MEMBERS_FETCH_LOCK = threading.Lock()
 
 
 def _ar_member_name_key(name: str) -> str:
@@ -21693,7 +21703,8 @@ def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> N
     inside the HTTP request and, together with the ΑΑΔΕ login, outlived the
     gateway timeout -> HTML 502), then merges the result into the store."""
     try:
-        members, members_by_year, gemi_warning = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
+        with _AR_MEMBERS_FETCH_LOCK:
+            members, members_by_year, gemi_warning = _ar_fetch_members_by_year(afm, taxis_user, taxis_pass)
         file_path = _credentials_store_file_path(grp)
         with _AR_INFO_STORE_LOCK:
             data, read_error = ({"companies": []}, None)
@@ -21765,6 +21776,9 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
     members_pending = (not is_individual) and (
         members_mode == "background" or (members_mode == "auto" and not entry.get("members_by_year"))
     )
+    # "defer": the caller starts the members fetch later (see
+    # /company_info/fetch_members), after every company's profile is in.
+    needs_members = (not is_individual) and members_mode == "defer" and not entry.get("members_by_year")
     co = entry.setdefault("company", {})
     co["legal_type"] = legal_type
     co["info_checked_at"] = datetime.datetime.utcnow().isoformat()
@@ -21811,6 +21825,7 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
         "ok": True, "afm": afm, "legal_type": legal_type, "address": co.get("address", ""),
         "email": co.get("email", ""), "mobile": co.get("mobile", ""), "phone": co.get("phone", ""),
         "members_count": len(members), "members_error": members_error, "members_pending": members_pending, "gemi_warning": members_gemi_warning,
+        "needs_members": needs_members,
     })
 
 
@@ -21840,9 +21855,12 @@ def api_accounting_result_company_info():
             has_contact = bool(co.get("email") or co.get("mobile") or co.get("phone"))
             if co.get("legal_type") and co.get("info_checked_at") and (has_contact or co.get("contact_checked_at")) \
                     and vat_profile_store_get(_ar_store_path(afm)):
+                is_company = "ατομικ" not in str(co.get("legal_type") or "").lower()
                 return jsonify({
                     "ok": True, "skipped": True, "afm": afm, "legal_type": co.get("legal_type"),
                     "members_pending": afm in _AR_MEMBERS_PENDING,
+                    "needs_members": bool(payload.get("defer_members")) and is_company
+                    and not entry.get("members_by_year") and afm not in _AR_MEMBERS_PENDING,
                 })
         taxis_user, taxis_pass = _ar_lookup_taxis_creds(afm)
         if not taxis_user or not taxis_pass:
@@ -21850,12 +21868,42 @@ def api_accounting_result_company_info():
 
         return _ar_company_info_fetch_and_save(
             afm, taxis_user, taxis_pass, grp,
-            members_mode=("background" if payload.get("refetch_members") else "auto"),
+            members_mode=("background" if payload.get("refetch_members") else ("defer" if payload.get("defer_members") else "auto")),
             apply_vat=bool(payload.get("apply_vat")),
         )
     except Exception as e:
         log.exception("api_accounting_result_company_info failed")
         return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
+
+
+@app.route("/api/accounting_result/company_info/fetch_members", methods=["POST"])
+@login_required
+def api_accounting_result_company_info_fetch_members():
+    """Start ONE background thread that fetches the members of each given
+    legal entity in turn (the Μαζικός pre-check calls this after all the
+    ΑΑΔΕ profiles are in, so the Playwright runs never overlap those logins)."""
+    from admin.auth import get_active_group
+    grp = get_active_group()
+    if not grp:
+        return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+    payload = request.get_json(silent=True) or {}
+    jobs = []
+    for a in payload.get("afms") or []:
+        afm = "".join(ch for ch in str(a) if ch.isdigit())
+        if len(afm) != 9 or afm in _AR_MEMBERS_PENDING:
+            continue
+        user, pw = _ar_lookup_taxis_creds(afm)
+        if user and pw:
+            _AR_MEMBERS_PENDING.add(afm)
+            jobs.append((afm, user, pw))
+
+    def _run():
+        for afm, user, pw in jobs:
+            _ar_members_background(afm, user, pw, grp)
+
+    if jobs:
+        threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "started": [j[0] for j in jobs]})
 
 
 @app.route("/api/accounting_result/company_info/members_pending", methods=["GET"])

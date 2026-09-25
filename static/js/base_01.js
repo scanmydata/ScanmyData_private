@@ -220,7 +220,10 @@
         if (el) try { el.remove(); } catch (_) {}
       }
       function renderBanner(active, text) {
-        var container = (typeof ensureFlashContainer === 'function') ? ensureFlashContainer() : null;
+        // Same column as Λογιστικό Αποτέλεσμα's own messages when that page's
+        // script is loaded (#arFlashContainer, on <body>), else the app-wide slot.
+        var container = document.getElementById('arFlashContainer');
+        if (!container) container = (typeof ensureFlashContainer === 'function') ? ensureFlashContainer() : null;
         if (!container) container = document.getElementById('flashContainer') || document.body;
         var el = document.getElementById(BANNER_ID);
         if (!el) {
@@ -276,6 +279,12 @@
               consecutiveEmpty = 0;
               var pct = (typeof p.percent === 'number') ? ' (' + p.percent + '%)' : '';
               renderBanner(active, 'Λογιστικό Αποτέλεσμα — ' + p.label + pct);
+            } else if (active.label && (Date.now() - (active.updatedAt || 0)) < 20 * 60 * 1000) {
+              // Browser-driven steps (ΑΑΔΕ/myDATA pre-check, choices): the page
+              // keeps active.label current; the server has no progress yet.
+              // The time guard drops a label left behind by a full reload.
+              consecutiveEmpty = 0;
+              renderBanner(active, 'Λογιστικό Αποτέλεσμα — ' + active.label);
             } else {
               // After ~5 empty polls (15s) + run started >30s ago, assume the
               // job finished (the originating tab clears sessionStorage on
