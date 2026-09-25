@@ -332,6 +332,26 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
         ldap_debug = {"error": str(_e)}
         logging.exception("getLdapInfo failed for afm=%s", target_afm)
 
+    # Activities (ΚΑΔ) — JSON list, confirmed live 2026-09-25:
+    # [{"kwdikos": "41001100", "drasthriothta": "ΜΟΝΟΚΑΤΟΙΚΙΕΣ", "eidos":
+    # "ΚΥΡΙΑ"|"ΔΕΥΤΕΡΕΥΟΥΣΑ", "hmenarxhs": .., "hmdiakophs": null, ...}].
+    # Feeds the απογραφή-λήξης check (ΠΟΛ.1019 activities, fuel stations).
+    kads: List[Dict[str, Any]] = []
+    if has_epix:
+        try:
+            raw = http.follow("GET", w + "/getMhtrwoDrastiriothtesEpixeir/" + target_afm + "?" + str(int(time.time() * 1000)))["text"]
+            for a in (json.loads(raw) if raw and raw.strip().startswith("[") else []):
+                if not isinstance(a, dict) or a.get("hmdiakophs"):
+                    continue
+                kads.append({
+                    "code": str(a.get("kwdikos") or "").strip(),
+                    "title": str(a.get("drasthriothta") or "").strip(),
+                    "main": "ΚΥΡΙΑ" in str(a.get("eidos") or "").upper(),
+                    "start": a.get("hmenarxhs") or "",
+                })
+        except Exception:
+            logging.exception("getMhtrwoDrastiriothtesEpixeir failed for afm=%s", target_afm)
+
     active = (
         not re.search(r"ΔΙΑΚΟΠ|ΑΝΕΝΕΡΓ", _tag(epix, "katastashepixeirhshs"), re.I)
         if has_epix else
@@ -346,6 +366,8 @@ def fetch_company_profile(username: str, password: str, afm: Optional[str] = Non
         "doy": doy,
         "active": active,
         "business_start": _tag(epix, "hmenarxhs"),
+        "legal_form": _tag(epix, "nomikhmorfh"),
+        "kads": kads,
         "address": format_address(guessed_address),
         "address_raw": guessed_address,
         "email": email,

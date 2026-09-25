@@ -571,6 +571,7 @@ function buildConsolidatedTableHtml(companies) {
     const expenseMarks = marksFor(c, i, 'expenses');
     const unclassifiedMarks = marksFor(c, i, 'unclassified');
     const vatMarks = marksFor(c, i, 'vat');
+    const stockMarks = marksFor(c, i, 'stock');
     // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
     const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
@@ -582,7 +583,7 @@ function buildConsolidatedTableHtml(companies) {
       <td>${ddmmyyyy(c.to)}</td>
       <td class="ar-num">${fmtAmountOrBlank(openingSum)}</td>
       <td class="ar-num">${fmtAmountOrBlank(purchasesSum)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(closingSum)}</td>
+      <td class="ar-num">${fmtAmountOrBlank(closingSum)}${stockMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.cogs_total)}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.expenses_total)}${expenseMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.sales_total)}</td>
@@ -932,6 +933,7 @@ var AR_NOTE_TYPES = {
   efka_self_employed_shortfall: { label: 'ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)', mark: '***', cell: 'expenses' },
   uncharacterized_last_quarter: { label: 'Αχαρακτήριστα παραστατικά (τελευταίο τρίμηνο)', mark: '†', cell: 'unclassified' },
   small_business_vat_limit: { label: 'Απαλλαγή ΦΠΑ μικρών επιχειρήσεων — έσοδα κοντά/πάνω από 10.000€', mark: '§', cell: 'vat', bold: true },
+  inventory_obligation: { label: 'Απογραφή λήξης (ν.4308 άρθ. 30 / ΠΟΛ.1019)', mark: '‡', cell: 'stock' },
 };
 
 function arLegalKindBadge(kind) {
@@ -1007,7 +1009,10 @@ function arBuildCheckGroups(rows) {
     {
       key: 'inventory', title: '📦 Απόθεμα λήξης',
       rows: ok.filter((r) => r.inventory_applicable && !r.closing_inventory_known),
-      finding: (r) => (r.inventory_obligation_reason === 'turnover_threshold' ? 'Νέα υποχρέωση (πωλήσεις > 150.000€) — δεν έχει καταχωρηθεί' : 'Δεν έχει καταχωρηθεί απόθεμα λήξης'),
+      finding: (r) => (r.inventory_new_obligation
+        ? 'ΝΕΑ υποχρέωση (έναρξη 0): ' + (r.inventory_obligation_message || '')
+        : (r.inventory_obligation_message && r.inventory_obligation_reason !== 'declared_prior_year'
+          ? r.inventory_obligation_message : 'Δεν έχει καταχωρηθεί απόθεμα λήξης')),
       options: () => [
         { key: 'manual', label: 'Χειροκίνητα' },
         { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
@@ -2037,15 +2042,16 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit'];
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation'];
 var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
   efka_self_employed_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών από τους μήνες της περιόδου — πιθανή οφειλή, έλεγξε ΚΕΑΟ (ή αποθήκευσε εξαίρεση από τον Ατομικό υπολογισμό).',
   uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
   small_business_vat_limit: 'Ειδικό καθεστώς μικρών επιχειρήσεων: τα έσοδα πλησιάζουν (≥80%) ή ξεπέρασαν το όριο απαλλαγής ΦΠΑ των 10.000€.',
+  inventory_obligation: 'Απογραφή λήξης: νέα υποχρέωση, ένδειξη απαλλαγής ΠΟΛ.1019, πρατήριο καυσίμων ή περίπτωση για έλεγχο (βλ. σημειώσεις της εταιρίας).',
 };
-var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵'];
+var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶'];
 
 function renderBulkCompaniesSummary(companies) {
   const container = document.getElementById('arBulkReportContainer');
@@ -2394,11 +2400,11 @@ async function runBulk() {
   // than one flash per company in a batch of many.
   let hasWarningAdvisory = false;
   const newlyObligated = (bulkResp.results || [])
-    .filter((r) => r.inventory_obligation && r.inventory_obligation.reason === 'turnover_threshold')
+    .filter((r) => r.inventory_obligation && r.inventory_obligation.new_obligation)
     .map((r) => r.credential_name);
   if (newlyObligated.length) {
     hasWarningAdvisory = true;
-    statusMsg += ` Νέα υποχρέωση απογραφής λήξης (υπέρβαση 150.000€ φέτος): ${newlyObligated.join(', ')}.`;
+    statusMsg += ` Νέα υποχρέωση απογραφής λήξης (δεν είχαν πέρσι — απόθεμα έναρξης 0): ${newlyObligated.join(', ')}.`;
   }
   const booksCategoryMismatches = (bulkResp.results || [])
     .map((r) => r.books_category_mismatch)
@@ -2568,15 +2574,19 @@ function vatAutoCheckFlashMessage(check, label) {
   return `ΦΠΑ (${label}): ο αυτόματος έλεγχος απέτυχε — ${check.error || 'σφάλμα'} (κάνε τον χειροκίνητα από τα Αποθηκευμένα).`;
 }
 
-// `inventory_obligation.reason === 'turnover_threshold'` means THIS
-// computation is the one that discovered the obligation: a Β/Γ-κατηγορίας
-// company whose Πωλήσεις Εμπορευμάτων+Προϊόντων crossed 150.000€ within the
-// period, even though it never declared a closing stock before (see
-// determine_inventory_obligation in accounting_result/engine.py) — worth a
-// flash precisely because last year's report may not have required one.
+// `inventory_obligation.new_obligation` means THIS computation is the one
+// that discovered the obligation (no closing stock declared last year) —
+// see _ar_determine_inventory_obligation in app.py.
 function inventoryObligationFlashMessage(obligation, label) {
-  if (!obligation || obligation.reason !== 'turnover_threshold') return null;
-  return `Απογραφή λήξης (${label}): οι πωλήσεις εμπορευμάτων/προϊόντων έφτασαν ${arFmtMoney(obligation.goods_products_revenue)}€ εντός της χρήσης, πάνω από το όριο των ${arFmtMoney(obligation.threshold)}€ — η εταιρεία είναι πλέον υποχρεωμένη σε απογραφή λήξης, ακόμη κι αν πέρυσι δεν ήταν.`;
+  // Απογραφή λήξης per ν.4308/2014 άρθ. 30 / ΠΟΛ.1019 (see
+  // accounting_result/inventory_rules.py): flashed when it's a NEW
+  // obligation, a case to review, a ΠΟΛ.1019 indication or a fuel station.
+  if (!obligation || !obligation.message) return null;
+  const notable = obligation.new_obligation
+    || ['REVIEW', 'LIKELY_EXEMPT_POL1019', 'FUEL_SPECIAL'].includes(obligation.status);
+  if (!notable) return null;
+  const extra = [obligation.transition_note].concat(obligation.warnings || []).filter(Boolean).join(' ');
+  return `Απογραφή λήξης (${label}): ${obligation.message}${extra ? ' ' + extra : ''}`;
 }
 
 // `books_category_mismatch` is non-null when the ΑΑΔΕ Μητρώο's own

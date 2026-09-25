@@ -18459,9 +18459,8 @@ def api_accounting_result_compute():
         # same AADE pull for this date_from..date_to instead of hitting it
         # twice for the same period.
         current_period_entries = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
-        book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
-        inventory_obligation = ar_engine.determine_inventory_obligation(
-            prior_entries, current_period_entries[0], book_category_for_inventory,
+        inventory_obligation = _ar_determine_inventory_obligation(
+            vat, path, cred, prior_entries, current_period_entries[0], date_from, date_to,
         )
         has_inventory = inventory_obligation["required"]
         dep_entries = ar_engine.depreciation_entries_from(prior_entries)
@@ -18599,6 +18598,9 @@ def api_accounting_result_compute():
         # "did it actually run and just find nothing, or silently skip?"
         # impossible to tell from the response alone.
         report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
+        inventory_note = _ar_inventory_obligation_note(inventory_obligation)
+        if inventory_note:
+            report_notes.append(inventory_note)
         small_business_note = _ar_small_business_note(path, report, date_from, date_to)
         if small_business_note:
             report_notes.append(small_business_note)
@@ -18747,8 +18749,7 @@ def api_accounting_result_inventory_bulk_status():
             current_entries = []
             if date_from and date_to:
                 current_entries, _u, _um = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
-            book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
-            obligation = ar_engine.determine_inventory_obligation(prior_entries, current_entries, book_category_for_inventory)
+            obligation = _ar_determine_inventory_obligation(vat, path, cred, prior_entries, current_entries, date_from, date_to)
             has_inventory = obligation["required"]
             dep_entries = ar_engine.depreciation_entries_from(prior_entries)
             # Same payroll monthly-completeness gate bulk_compute itself
@@ -18798,6 +18799,8 @@ def api_accounting_result_inventory_bulk_status():
                 "inventory_applicable": True,
                 "depreciation_ambiguous": len(dep_entries) > 1,
                 "inventory_obligation_reason": obligation["reason"],
+                "inventory_obligation_message": obligation["message"],
+                "inventory_new_obligation": obligation["new_obligation"],
                 "payroll_needs_input": payroll_res["needs_input"],
                 "payroll_check": payroll_res["payroll_check"],
                 "rent_needs_input": rent_res["needs_input"],
@@ -18894,9 +18897,8 @@ def api_accounting_result_bulk_compute():
             # Fetched once, reused by build_report below — see the single-
             # compute route's identical comment.
             current_period_entries = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
-            book_category_for_inventory = _ar_resolve_book_category_for_inventory_check(cred, path)
-            inventory_obligation = ar_engine.determine_inventory_obligation(
-                prior_entries, current_period_entries[0], book_category_for_inventory,
+            inventory_obligation = _ar_determine_inventory_obligation(
+                vat, path, cred, prior_entries, current_period_entries[0], date_from, date_to,
             )
             has_inventory = inventory_obligation["required"]
             # Same blocking pattern as the inventory check just below - the
@@ -18973,6 +18975,9 @@ def api_accounting_result_bulk_compute():
                 efka_note = _ar_efka_self_employed_note(path, year, current_period_entries[0], date_from, date_to)
                 if efka_note:
                     report_notes.append(efka_note)
+                inventory_note = _ar_inventory_obligation_note(inventory_obligation)
+                if inventory_note:
+                    report_notes.append(inventory_note)
                 small_business_note = _ar_small_business_note(path, report, date_from, date_to)
                 if small_business_note:
                     report_notes.append(small_business_note)
@@ -19373,6 +19378,19 @@ def _friendly_net_error(exc: Exception) -> Optional[str]:
     return None
 
 
+def _ar_store_registry_facts(co: Dict[str, Any], prof: Dict[str, Any]) -> None:
+    """ΚΑΔ list, legal form and business start from a fetch_company_profile()
+    result — the facts the απογραφή-λήξης check needs (see
+    accounting_result/inventory_rules.py). "kads" is written even when empty
+    so a record is known to have been checked."""
+    if "kads" in prof:
+        co["kads"] = prof.get("kads") or []
+    if prof.get("legal_form"):
+        co["legal_form"] = prof["legal_form"]
+    if prof.get("business_start"):
+        co["business_start"] = prof["business_start"]
+
+
 def _ar_store_company_record(vat: str) -> Dict[str, Any]:
     """The {company:..., members:...} entry for `vat` in the group's shared
     e3_company_credentials_store.json ({} when not there)."""
@@ -19438,6 +19456,7 @@ def _ar_store_save_profile_info_locked(vat: str, prof: Dict[str, Any], file_path
     kind = str(prof.get("kind") or "")
     if kind:
         co["legal_type"] = "Ατομική" if kind in ("ΑΤΟΜΙΚΗ ΕΠΙΧΕΙΡΗΣΗ", "ΙΔΙΩΤΗΣ") else "Νομικό Πρόσωπο"
+    _ar_store_registry_facts(co, prof)
     for key in ("address", "email", "mobile", "phone", "doy"):
         if prof.get(key) and not co.get(key):
             co[key] = prof[key]
@@ -19517,6 +19536,70 @@ def _ar_ensure_vat_profile_checked(vat: str) -> Optional[Dict[str, Any]]:
     if ok:
         return {"ok": True, "vat_subject": (body.get("profile") or {}).get("vat_subject"), "error": None}
     return {"ok": False, "vat_subject": None, "error": body.get("error")}
+
+
+def _ar_determine_inventory_obligation(vat: str, path: str, cred: Optional[Dict[str, Any]], prior_entries: list,
+                                       current_entries: list, date_from: str, date_to: str) -> Dict[str, Any]:
+    """Απογραφή λήξης: required or not, and why — accounting_result/
+    inventory_rules.check_inventory_obligation (ν.4308/2014 άρθ. 30, ΠΟΛ.1019)
+    fed with the ΑΑΔΕ registry facts in the shared store (ΚΑΔ, legal form,
+    business start) and this period's myDATA entries. A company that already
+    declared a closing stock last year keeps being asked for one (it may
+    continue voluntarily, R9) — the rule's verdict is then only advisory."""
+    from accounting_result import engine as ar_engine
+    from accounting_result import inventory_rules as ar_inv_rules
+    co = (_ar_store_company_record(vat).get("company")) or {}
+    did_prev = ar_engine.company_tracks_inventory(prior_entries)
+    d_from, d_to = ar_engine.parse_date(date_from), ar_engine.parse_date(date_to)
+    business_start = ar_engine.parse_date(co.get("business_start") or "")
+    has_goods_activity = ar_engine.goods_products_revenue(current_entries) > 0 or any(
+        str(r.get("code") or "").strip() in ("102", "202", "302", "313") and abs(float(r.get("amount") or 0)) > 0.005
+        for r in current_entries or []
+    )
+    rule = ar_inv_rules.check_inventory_obligation(
+        book_category=_ar_resolve_book_category_for_inventory_check(cred, path),
+        legal_form=str(co.get("legal_form") or ""),
+        kads=co.get("kads") or [],
+        period_start=d_from, period_end=d_to,
+        business_start=business_start if (business_start and d_from and business_start > d_from) else None,
+        entries=current_entries, has_goods_activity=has_goods_activity,
+        did_inventory_prev_year=did_prev,
+    )
+    if "kads" not in co:
+        rule["warnings"].append("Δεν έχουν ληφθεί ακόμη οι ΚΑΔ από την ΑΑΔΕ (🔄 στα Αποθηκευμένα) — η ΠΟΛ.1019 δεν ελέγχθηκε.")
+    return {
+        "required": True if did_prev else bool(rule["required"]),
+        "reason": "declared_prior_year" if did_prev else rule["status"],
+        "status": rule["status"],
+        # A NEW obligation: not declared last year, required now (R8α: opening = 0).
+        "new_obligation": (not did_prev) and bool(rule["required"]),
+        "message": rule["message"],
+        "transition_note": rule.get("transition_note"),
+        "warnings": rule["warnings"],
+        "category_id": rule.get("category_id"),
+        "matched_kads": rule.get("matched_kads"),
+        "goods_products_revenue": rule["goods_sales"],
+        "goods_annual": rule["goods_annual"],
+        "retail_share": rule["retail_share"],
+        "threshold": ar_inv_rules.GOODS_THRESHOLD_EUR,
+    }
+
+
+def _ar_inventory_obligation_note(obligation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Report note (bullet) for the απογραφή decision whenever it isn't the
+    plain "tracked last year, tracked again" case: a new obligation, a
+    ΠΟΛ.1019 indication, a case needing review, a fuel station, or an
+    exemption after a year with inventory."""
+    status = obligation.get("status")
+    if obligation.get("reason") == "declared_prior_year" and status not in ("EXEMPT_THRESHOLD", "EXEMPT_POL1019", "LIKELY_EXEMPT_POL1019"):
+        return None
+    if status == "EXEMPT_THRESHOLD" and not obligation.get("transition_note"):
+        return None
+    parts = [obligation.get("message") or ""]
+    if obligation.get("transition_note"):
+        parts.append(obligation["transition_note"])
+    parts += obligation.get("warnings") or []
+    return {"type": "inventory_obligation", "status": status, "message": "Απογραφή λήξης: " + " ".join(p for p in parts if p)}
 
 
 def _ar_resolve_book_category_for_inventory_check(cred: Optional[Dict[str, Any]], path: str) -> str:
@@ -21842,6 +21925,7 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
         co["phone"] = prof["phone"]
     if prof.get("doy"):
         co["doy"] = prof["doy"]
+    _ar_store_registry_facts(co, prof)
     if not co.get("name") and prof.get("name"):
         co["name"] = prof["name"]
     if is_individual:
@@ -21901,7 +21985,7 @@ def api_accounting_result_company_info():
             co = entry.get("company") or {}
             has_contact = bool(co.get("email") or co.get("mobile") or co.get("phone"))
             if co.get("legal_type") and co.get("info_checked_at") and (has_contact or co.get("contact_checked_at")) \
-                    and "vat_entry_mode" in vat_profile_store_get(_ar_store_path(afm)):
+                    and "vat_entry_mode" in vat_profile_store_get(_ar_store_path(afm)) and "kads" in co:
                 # ("vat_entry_mode" missing = ΦΠΑ detected before the regime
                 # fields were stored -> one refresh, so the small-business
                 # check applies.)
