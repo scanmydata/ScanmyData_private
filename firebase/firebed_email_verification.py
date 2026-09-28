@@ -9,6 +9,7 @@ import os
 import secrets
 import hashlib
 import json
+from urllib.parse import quote as _urlquote
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
 from firebase_admin import auth as firebase_auth
@@ -42,12 +43,27 @@ class FirebedEmailVerification:
         Υποστηρίζει Render deployment, Flask request context, και fallbacks
         """
         try:
-            # 1. Προσπάθησε να πάρεις από Flask request context
+            # 1. Προσπάθησε να πάρεις από Flask request context — ΠΡΟΣΟΧΗ: request.url_root
+            # ΔΕΝ είναι proxy-aware (δεν υπάρχει ProxyFix middleware στην app), οπότε πίσω
+            # από το reverse proxy του Coolify έδινε λάθος scheme (http αντί https) ή/και
+            # λάθος host, με αποτέλεσμα το link του email να μην είναι έγκυρο για τον χρήστη
+            # (ίδιο πρόβλημα που το app.py ήδη λύνει αλλού με _preferred_request_scheme/
+            # _build_external_url — εδώ αναπαράγουμε την ίδια λογική τοπικά, χωρίς εισαγωγή
+            # από το app.py, για να αποφύγουμε κυκλικό import).
             try:
                 from flask import request
                 if request and hasattr(request, 'url_root'):
-                    base_url = request.url_root.rstrip('/')
-                    logger.info(f"Using Flask request base URL: {base_url}")
+                    forwarded_proto = (request.headers.get('X-Forwarded-Proto') or '').split(',')[0].strip()
+                    forwarded_host = (request.headers.get('X-Forwarded-Host') or '').split(',')[0].strip()
+                    override = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
+                    if override:
+                        base_url = override.rstrip('/')
+                        logger.info(f"Using PUBLIC_BASE_URL/RENDER_EXTERNAL_URL base URL: {base_url}")
+                        return base_url
+                    scheme = forwarded_proto or request.scheme
+                    host = forwarded_host or request.host
+                    base_url = f"{scheme}://{host}"
+                    logger.info(f"Using Flask request base URL (proxy-aware): {base_url}")
                     return base_url
             except (ImportError, RuntimeError):
                 # Εκτός Flask context ή δεν είναι διαθέσιμη
@@ -172,7 +188,12 @@ class FirebedEmailVerification:
             
             # Verification URL
             base_url = FirebedEmailVerification.get_base_url()
-            verify_url = f"{base_url}/firebase-auth/verify-email?token={token}"
+            # url-encoded: the raw base64 token contains '+' (and sometimes '/'),
+            # and an unencoded '+' in a query string is decoded back as a SPACE by
+            # Werkzeug/Flask — silently corrupting the token on click, which is
+            # exactly what made every link "invalid" regardless of the recipient
+            # or email client. quote(..., safe='') encodes '+', '/' and '=' too.
+            verify_url = f"{base_url}/firebase-auth/verify-email?token={_urlquote(token, safe='')}"
             
             # Greek subject and body
             subject = "✅ Επιβεβαίωση Email - ScanmyData Account"
@@ -397,7 +418,8 @@ ScanmyData Team
             
             # Reset URL
             base_url = FirebedEmailVerification.get_base_url()
-            reset_url = f"{base_url}/firebase-auth/reset-password?token={token}"
+            # Same url-encoding fix as send_signup_verification_email above.
+            reset_url = f"{base_url}/firebase-auth/reset-password?token={_urlquote(token, safe='')}"
             
             subject = "🔐 Επαναφορά Κωδικού - ScanmyData Account"
             
