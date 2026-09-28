@@ -189,30 +189,20 @@ def signup():
             return redirect(url_for('auth.signup'))
 
         # Try to register user in Firebase (if enabled). If successful, store firebase_uid.
+        # NOTE: this used to also run a chunk of forgot-password-only logic
+        # (local_user lookup + 'forgot_password_request_received' activity log)
+        # that had clearly been pasted in here by mistake — it referenced an
+        # `email` variable that doesn't exist in this function (the form field
+        # is `username`), so it raised a NameError on every single signup,
+        # swallowed by the bare except below BEFORE FirebaseAuthHandler.
+        # register_user ever ran. Every signup therefore silently stayed
+        # local-only (firebase_uid always None): no verification email was
+        # ever sent, and forgot-password could never work for these accounts
+        # either (Firebase's own reset-link generation needs a Firebase user
+        # to exist first). Fixed by dropping the dead block so registration
+        # actually runs.
         firebase_uid = None
         try:
-            # Check if user exists locally (do not expose this to the end-user)
-            try:
-                from models import User
-                from sqlalchemy import or_
-                local_user = User.query.filter(or_(User.email == email, User.username == email)).first()
-                user_exists = bool(local_user)
-            except Exception:
-                local_user = None
-                user_exists = False
-            # Log that a forgot-password request was received (will not reveal existence to user)
-            try:
-                from utils import log_user_activity
-                log_user_activity(
-                    user_id=email,
-                    group_name='system',
-                    action='forgot_password_request_received',
-                    details={'email': email, 'user_exists': user_exists, 'description': 'Αίτημα επαναφοράς λησμονημένου κωδικού (λήφθηκε)'} ,
-                    user_email=email,
-                    user_username=email
-                )
-            except Exception:
-                pass
             success, uid, err = FirebaseAuthHandler.register_user(username, password, display_name=username)
             if success and uid:
                 firebase_uid = uid
@@ -1781,6 +1771,32 @@ def forgot_password():
         try:
             # Use Firebase to generate password reset link and let Firebase handle sending.
             ok, link_or_err = FirebaseAuthHandler.generate_password_reset_link(email)
+            if not ok:
+                # Firebase's own reset-link generation needs a Firebase user to
+                # already exist for this email — it fails for every account
+                # created while the /signup bug above stayed local-only (and
+                # for any other local-only account). If a local User with this
+                # email/username DOES exist, register it in Firebase now (a
+                # random throwaway password — the reset link the user is about
+                # to receive lets them set their real one) and retry, instead
+                # of silently leaving these users unable to ever reset their
+                # password.
+                try:
+                    from sqlalchemy import or_
+                    local_user = User.query.filter(or_(User.email == email, User.username == email)).first()
+                    if local_user and not local_user.firebase_uid:
+                        temp_password = secrets.token_urlsafe(18)
+                        success, uid, reg_err = FirebaseAuthHandler.register_user(
+                            local_user.email or email, temp_password, display_name=local_user.username
+                        )
+                        if success and uid:
+                            local_user.firebase_uid = uid
+                            db.session.commit()
+                            ok, link_or_err = FirebaseAuthHandler.generate_password_reset_link(local_user.email or email)
+                        else:
+                            current_app.logger.warning(f"Lazy Firebase registration for forgot-password failed ({email}): {reg_err}")
+                except Exception:
+                    current_app.logger.exception(f"Lazy Firebase registration for forgot-password errored ({email})")
             if ok:
                 try:
                     from firebase.firebed_email_verification import FirebedEmailVerification
@@ -1810,7 +1826,7 @@ def forgot_password():
                             user_id=email,
                             group_name='system',
                             action='forgot_password_request',
-                            details={'email': email, 'sent': False, 'link': reset_link, 'description': 'Καταγραφή συνδέσμου επαναφοράς (fallback)'},
+                            details={'email': email, 'sent': False, 'link': link_or_err, 'description': 'Καταγραφή συνδέσμου επαναφοράς (fallback)'},
                             user_email=email,
                             user_username=email
                         )

@@ -7935,6 +7935,108 @@ def api_save_receipt():
         current_app.logger.exception("api_save_receipt error: %s", e)
         return jsonify(ok=False, error=str(e)), 500
 
+def _discover_client_db_candidates(target_base: str):
+    """Every client_db* file under target_base and its imports/Imports
+    subfolder, excluding backups, as (size, path, ext) sorted largest-first.
+    Same search rule upload_client_db already uses to pick its merge target;
+    factored out so delete_client_db can find the exact same file(s)."""
+    search_dirs = [target_base]
+    seen = {os.path.normcase(os.path.abspath(target_base))}
+    for sub in ('imports', 'Imports'):
+        sub_dir = os.path.join(target_base, sub)
+        key = os.path.normcase(os.path.abspath(sub_dir))
+        if os.path.isdir(sub_dir) and key not in seen:
+            search_dirs.append(sub_dir)
+            seen.add(key)
+    candidates = []
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            if not name.startswith('client_db'):
+                continue
+            if '.bak.' in name or name.endswith('.bak') or '_bak_' in name:
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext in ALLOWED_CLIENT_EXT:
+                full = os.path.join(d, name)
+                try:
+                    sz = os.path.getsize(full)
+                except OSError:
+                    sz = 0
+                candidates.append((sz, full, ext))
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates
+
+
+@app.route('/delete_client_db', methods=['POST'])
+@monitor_resources('delete_client_db')
+def delete_client_db():
+    """Delete the group's client_db (Συναλλασσόμενοι) — the 'Διαγραφή βάσης'
+    button next to the upload form. Admin-only, same as upload. Never
+    hard-deletes: every matching client_db* file (root + imports/) is
+    rotated to a timestamped .bak, same convention/retention _prune_backups
+    already applies to upload_client_db's own backups, so an accidental
+    delete is always recoverable from the Αντίγραφα ασφαλείας tab.
+    client_db.meta.json is removed too, so the UI immediately reflects
+    "no client_db" instead of stale counts."""
+    try:
+        from admin.auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return jsonify(success=False, message='Δεν επιλέχθηκε ενεργή ομάδα.'), 403
+        if not getattr(current_user, 'is_authenticated', False) or current_user.role_for_group(grp) != 'admin':
+            return jsonify(success=False, message='Απαιτούνται δικαιώματα διαχειριστή για αυτή την ενέργεια.'), 403
+    except Exception:
+        return jsonify(success=False, message='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
+
+    try:
+        target_base = get_group_base_dir()
+        candidates = _discover_client_db_candidates(target_base)
+        if not candidates:
+            return jsonify(success=False, message='Δεν βρέθηκε αρχείο συναλλασσομένων (client_db) για διαγραφή.'), 404
+
+        def _unique_backup_path(dir_: str, base_name: str) -> str:
+            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
+            cand = os.path.join(dir_, f"{base_name}.bak.{ts}")
+            n = 1
+            while os.path.exists(cand):
+                cand = os.path.join(dir_, f"{base_name}.bak.{ts}-{n}")
+                n += 1
+            return cand
+
+        removed = []
+        for _sz, path, _ext in candidates:
+            try:
+                bak = _unique_backup_path(os.path.dirname(path), os.path.basename(path))
+                os.rename(path, bak)
+                removed.append(os.path.basename(path))
+            except Exception:
+                log.exception('Failed to archive client_db file %s during delete_client_db', path)
+
+        if not removed:
+            return jsonify(success=False, message='Αποτυχία διαγραφής — δοκίμασε ξανά.'), 500
+
+        _prune_backups(target_base, 'client_db')
+
+        meta_path = _client_meta_path(target_base)
+        try:
+            if os.path.exists(meta_path):
+                os.remove(meta_path)
+        except Exception:
+            log.exception('Failed to remove client_db.meta.json after delete_client_db')
+
+        return jsonify(
+            success=True,
+            message=f'Διαγράφηκε η βάση συναλλασσομένων ({", ".join(removed)}). Κρατήθηκε αντίγραφο ασφαλείας.',
+            removed=removed
+        ), 200
+    except Exception:
+        log.exception('Unhandled exception in delete_client_db')
+        return jsonify(success=False, message='Εσωτερικό σφάλμα server.'), 500
+
+
 @app.route('/upload_client_db', methods=['POST'])
 @monitor_resources('upload_client_db')
 def upload_client_db():
@@ -7964,11 +8066,20 @@ def upload_client_db():
         if not f or not getattr(f, 'filename', '').strip():
             return jsonify(success=False, message='Δεν επιλέχθηκε αρχείο.'), 400
 
-        uploaded_original_name = secure_filename(f.filename)
-        _, ext = os.path.splitext(uploaded_original_name)
+        # Η επέκταση παίρνεται ΠΡΩΤΑ από το αρχικό όνομα, πριν το secure_filename():
+        # το secure_filename() αφαιρεί κάθε μη-ASCII χαρακτήρα, οπότε ένα καθαρά
+        # ελληνικό όνομα (π.χ. "τεστ.xls") γινόταν μόνο "xls" — ΧΩΡΙΣ την τελεία —
+        # και η επέκταση χανόταν εντελώς, απορρίπτοντας ένα απολύτως έγκυρο .xls
+        # ως "μη επιτρεπτή επέκταση". Το αρχείο αποθηκεύεται πάντα ως
+        # client_db{ext} οπότε το αρχικό όνομα (uploaded_original_name) χρειάζεται
+        # μόνο για εμφάνιση/metadata, όχι ως πραγματικό filesystem path.
+        raw_filename = (f.filename or '').strip()
+        _, ext = os.path.splitext(raw_filename)
         ext = ext.lower()
         if ext not in ALLOWED_CLIENT_EXT:
             return jsonify(success=False, message='Μη επιτρεπτή επέκταση. Χρήση .xlsx, .xls ή .csv'), 400
+        safe_base = secure_filename(os.path.splitext(raw_filename)[0])
+        uploaded_original_name = f"{safe_base or 'client_file'}{ext}"
 
         # Resolve target group base once.
         target_base = get_group_base_dir()
@@ -7993,6 +8104,28 @@ def upload_client_db():
                 success=False,
                 message='Λείπουν υποχρεωτικές στήλες.',
                 missing_columns=missing,
+                detected_columns=sorted(list(headers_set))
+            ), 400
+
+        # Ο κωδικός συναλλασσομένου (custid) δεν έχει σταθερή θέση/ονομασία
+        # στήλης ανάμεσα σε διαφορετικά αρχεία εξαγωγής (π.χ. σε ένα αρχείο
+        # είναι η 2η στήλη με τίτλο "Κωδ. Συναλλασσόμενου", σε άλλο αλλού με
+        # παραλλαγή όπως "Κωδ. Πελάτη"/"Κωδικός"). Χρησιμοποιούμε τον ίδιο
+        # ανεκτικό (τίτλος-βασισμένο, όχι θέση-βασισμένο) εντοπισμό με
+        # _make_temp_client_db_with_new_ids αντί για exact match, ώστε να μην
+        # απορρίπτουμε ένα σωστό αρχείο μόνο επειδή η στήλη είναι αλλού.
+        try:
+            _afm_col_detected, _custid_col_detected = _detect_cols(df_upload)
+        except Exception:
+            _afm_col_detected, _custid_col_detected = (None, None)
+        if not _custid_col_detected:
+            return jsonify(
+                success=False,
+                message=(
+                    'Δεν βρέθηκε στήλη με τον κωδικό συναλλασσομένου (π.χ. "Κωδ. Συναλλασσόμενου") '
+                    'στο αρχείο — η θέση ή η ακριβής ονομασία της στήλης μπορεί να διαφέρει ανά αρχείο, '
+                    'αλλά πρέπει να υπάρχει μία τέτοια στήλη. Έλεγξε τις επικεφαλίδες του αρχείου και ξαναδοκίμασε.'
+                ),
                 detected_columns=sorted(list(headers_set))
             ), 400
 
