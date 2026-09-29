@@ -18567,12 +18567,62 @@ def _ar_apply_income_tax(report: Dict[str, Any], vat: str, year: int, enabled: b
         from accounting_result import history_store as ar_history
         from accounting_result.engine import parse_date as _ar_parse_date
         entries = ar_history.get_history(_ar_history_path(vat), limit=0, include_report=True)
+        aade_prev = None
+        if prev_advance_override in (None, ""):
+            aade_prev = _ar_prev_advance_from_aade(vat, year, report.get("legal_kind"))
         report["income_tax"] = ar_income_tax.build_income_tax_block(
             report.get("taxable_result") or 0.0, report.get("legal_kind"), year,
-            entries, _ar_parse_date, prev_advance_override,
+            entries, _ar_parse_date, prev_advance_override, aade_prev,
         )
     except Exception:
         log.exception("income tax computation failed for vat=%s", vat)
+
+
+_AR_PREV_ADVANCE_RETRY_SECONDS = 12 * 3600
+
+
+def _ar_prev_advance_from_aade(vat: str, year: int, legal_kind: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Previous-year advance from ΑΑΔΕ (εκκαθαριστικό for natural persons,
+    δήλωση Ν for legal entities — e3/checks/aade_prev_advance.py), cached per
+    company/year in data/<group>/accounting_result/prev_advance/<ΑΦΜ>.json:
+    a found amount is kept for good (the assessed advance doesn't change), a
+    failure is retried after 12h (e.g. the return wasn't cleared yet). None
+    when the company has no stored TAXISnet credentials."""
+    path = group_path("accounting_result", "prev_advance", f"{secure_filename(str(vat))}.json")
+    cache: Dict[str, Any] = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                cache = json.load(f) or {}
+    except Exception:
+        cache = {}
+    hit = cache.get(str(year))
+    now = time.time()
+    if isinstance(hit, dict):
+        if hit.get("ok") or now - float(hit.get("checked_ts") or 0) < _AR_PREV_ADVANCE_RETRY_SECONDS:
+            return hit
+    user, pw = _ar_lookup_taxis_creds(vat)
+    if not user or not pw:
+        return None
+    try:
+        from e3.checks.aade_prev_advance import fetch_prev_year_advance as _aade_prev_advance
+        from accounting_result.income_tax import company_type_from_legal_kind
+        company_type = company_type_from_legal_kind(legal_kind) if legal_kind else "unknown"
+        result = _aade_prev_advance(user, pw, str(vat).strip(), int(year), company_type)
+    except Exception as e:
+        result = {"ok": False, "error": _friendly_net_error(e) or str(e)}
+    result["checked_ts"] = now
+    result["fetched_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    cache[str(year)] = result
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        log.exception("could not cache prev-year advance for vat=%s", vat)
+    return result
 
 
 @app.route("/api/accounting_result/compute", methods=["POST"])

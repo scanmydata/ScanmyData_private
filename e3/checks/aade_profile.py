@@ -128,7 +128,9 @@ class _HyperHttp:
         self._store(url, resp)
         return resp
 
-    def follow(self, method: str, url: str, form: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def follow_raw(self, method: str, url: str, form: Optional[Dict[str, str]] = None):
+        """Like follow(), but returns (final_url, final requests.Response) so
+        binary bodies (PDFs) can be read from .content."""
         res = self._once(method, url, form)
         loc = res.headers.get("Location")
         cur = url
@@ -138,6 +140,10 @@ class _HyperHttp:
             res = self._once("GET", cur)
             loc = res.headers.get("Location")
             hops += 1
+        return cur, res
+
+    def follow(self, method: str, url: str, form: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        cur, res = self.follow_raw(method, url, form)
         return {"url": cur, "status": res.status_code, "text": res.text}
 
 

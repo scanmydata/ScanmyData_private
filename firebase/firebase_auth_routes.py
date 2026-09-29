@@ -491,13 +491,30 @@ def firebase_login():
         success, uid, error = FirebaseAuthHandler.login_user(firebase_email, password)
         
         if not success:
+            # Every non-credential failure (server can't reach Firebase — DNS/
+            # network —, missing FIREBASE_API_KEY, Firebase disabled, Google
+            # 5xx) used to fall through to "wrong email or password", which
+            # sent users chasing a password that was actually fine. Only a
+            # real credential rejection says that now; everything else says
+            # what actually happened, and the raw reason goes to the log.
+            logger.warning("Firebase login failed for %s: %s", firebase_email, error)
             low = str(error or '').lower()
             if any(tok in low for tok in ('not found', 'no user', 'user-not-found', 'no such')):
                 friendly = 'Δεν βρέθηκε λογαριασμός με αυτό το email. Ελέγξτε το email ή δημιουργήστε νέο λογαριασμό.'
             elif 'too many' in low or 'temporarily' in low or 'blocked' in low:
                 friendly = 'Πάρα πολλές αποτυχημένες προσπάθειες. Δοκιμάστε ξανά σε λίγο ή επαναφέρετε τον κωδικό σας.'
-            else:
+            elif 'invalid email or password' in low or 'invalid_password' in low or 'invalid_login_credentials' in low:
                 friendly = 'Λάθος email ή κωδικός πρόσβασης. Ελέγξτε τα στοιχεία σας και δοκιμάστε ξανά.'
+            elif 'disabled' in low:
+                friendly = 'Ο λογαριασμός έχει απενεργοποιηθεί. Επικοινωνήστε με τον διαχειριστή.'
+            elif any(tok in low for tok in ('resolve', 'nameresolution', 'connection', 'max retries', 'timed out', 'timeout', 'ssl')):
+                friendly = ('Ο server δεν μπόρεσε να επικοινωνήσει με την υπηρεσία σύνδεσης (Firebase) — '
+                            'πρόβλημα δικτύου/DNS στον server, όχι στους κωδικούς σας. Δοκιμάστε ξανά σε λίγο.')
+            elif any(tok in low for tok in ('not enabled', 'not properly configured', 'server error', 'api key', 'api_key')):
+                friendly = ('Η υπηρεσία σύνδεσης (Firebase) δεν είναι σωστά ρυθμισμένη στον server — '
+                            'επικοινωνήστε με τον διαχειριστή (δεν φταίνε οι κωδικοί σας).')
+            else:
+                friendly = f'Αποτυχία σύνδεσης ({error or "άγνωστο σφάλμα"}). Δοκιμάστε ξανά ή επικοινωνήστε με τον διαχειριστή.'
             return render_template(
                 'auth/login.html',
                 login_error=friendly,

@@ -213,11 +213,18 @@ function arPrevAdvanceSourceText(t) {
   const info = t.prev_advance_info || {};
   const period = info.date_from && info.date_to ? `${ddmmyyyy(info.date_from)}–${ddmmyyyy(info.date_to)}` : '';
   const partial = info.partial_period ? ', μερική περίοδος' : '';
+  // When ΑΑΔΕ was tried and failed, say so next to the fallback source.
+  const aadeFail = t.prev_advance_aade_error ? ` — ΑΑΔΕ: ${t.prev_advance_aade_error}` : '';
   switch (t.prev_advance_source) {
     case 'manual': return 'χειροκίνητη καταχώρηση';
-    case 'history': return `από τον υπολογισμό ${period}${partial}`;
-    case 'history_derived': return `εκτίμηση από το φορολογητέο του υπολογισμού ${period}${partial}`;
-    default: return `δεν βρέθηκε υπολογισμός του ${(t.year || 0) - 1} στο ιστορικό`;
+    case 'aade': {
+      const form = info.form === 'N' ? 'δήλωση Ν' : 'εκκαθαριστικό';
+      const warn = info.consistent === false ? ', ⚠ έλεγξε το ποσό' : '';
+      return `από την ΑΑΔΕ — ${form} φορ. έτους ${info.fiscal_year || ((t.year || 0) - 1)}${warn}`;
+    }
+    case 'history': return `από τον υπολογισμό ${period}${partial}${aadeFail}`;
+    case 'history_derived': return `εκτίμηση από το φορολογητέο του υπολογισμού ${period}${partial}${aadeFail}`;
+    default: return `δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό${aadeFail}`;
   }
 }
 
@@ -647,7 +654,8 @@ function buildConsolidatedTableHtml(companies) {
     const bal = Number(t.balance || 0);
     const balCell = bal < 0 ? `<span style="color:#15803d;">−${arFmtMoney(Math.abs(bal))}</span>` : arFmtMoney(bal);
     const prevMark = t.prev_advance_source === 'not_found' ? '<sup style="color:#b45309;font-weight:700;">?</sup>'
-      : (t.prev_advance_source === 'history_derived' ? '<sup style="color:#475569;">≈</sup>' : '');
+      : (t.prev_advance_source === 'history_derived' ? '<sup style="color:#475569;">≈</sup>'
+        : (t.prev_advance_source === 'aade' ? '<sup style="color:#15803d;font-weight:700;">Α</sup>' : ''));
     return `<td class="ar-num">${arFmtMoney(t.tax)}</td>
       <td class="ar-num">${arFmtMoney(t.advance)}</td>
       <td class="ar-num">${arFmtMoney(t.prev_advance)}${prevMark}</td>
@@ -745,7 +753,7 @@ function buildConsolidatedTableHtml(companies) {
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος: εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). <b>≈</b> προκαταβολή προηγ. έτους εκτιμημένη από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε περσινός υπολογισμός στο ιστορικό (0).</div>` : ''}
+    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος: εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>` : ''}
     ${notesHtml}
     ${legendHtml}
   </div>`;

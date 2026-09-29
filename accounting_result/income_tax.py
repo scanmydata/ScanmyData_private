@@ -169,14 +169,20 @@ def fetch_prev_year_advance(entries: Iterable[Dict[str, Any]], year: int, compan
 def build_income_tax_block(taxable: float, legal_kind: Optional[str], year: int,
                            history_entries: Iterable[Dict[str, Any]],
                            parse_date: Callable[[Any], Any],
-                           prev_advance_override: Any = None) -> Dict[str, Any]:
+                           prev_advance_override: Any = None,
+                           aade_prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Ό,τι μπαίνει ως report["income_tax"]: υπολογισμός + από πού ήρθε η
-    προκαταβολή του προηγούμενου έτους (χειροκίνητα / ιστορικό / δεν βρέθηκε)."""
+    προκαταβολή του προηγούμενου έτους, με σειρά προτεραιότητας:
+    χειροκίνητα -> ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) -> ιστορικό -> δεν βρέθηκε."""
     company_type = company_type_from_legal_kind(legal_kind)
     prev_info: Optional[Dict[str, Any]] = None
     if prev_advance_override not in (None, ""):
         prev_amount = _num(prev_advance_override)
         prev_source = "manual"
+    elif aade_prev and aade_prev.get("ok") and aade_prev.get("amount") is not None:
+        prev_amount = _num(aade_prev["amount"])
+        prev_source = "aade"
+        prev_info = {k: aade_prev.get(k) for k in ("form", "fiscal_year", "consistent", "afm_matched", "fetched_at")}
     else:
         prev_info = fetch_prev_year_advance(history_entries, year, company_type, parse_date)
         prev_amount = prev_info["amount"] if prev_info else 0.0
@@ -185,4 +191,6 @@ def build_income_tax_block(taxable: float, legal_kind: Optional[str], year: int,
     block["company_type_assumed"] = legal_kind not in ("sole_proprietor", "legal_entity")
     block["prev_advance_source"] = prev_source
     block["prev_advance_info"] = prev_info
+    if aade_prev and not aade_prev.get("ok") and prev_source != "manual":
+        block["prev_advance_aade_error"] = aade_prev.get("error")
     return block

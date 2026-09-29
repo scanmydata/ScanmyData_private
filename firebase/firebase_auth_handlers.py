@@ -168,7 +168,10 @@ class FirebaseAuthHandler:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('message', '')
                 
-                if error_msg == 'INVALID_PASSWORD':
+                # INVALID_LOGIN_CREDENTIALS is what Firebase returns for BOTH a
+                # wrong password and an unknown email once email-enumeration
+                # protection is on (the default for newer projects).
+                if error_msg in ('INVALID_PASSWORD', 'INVALID_LOGIN_CREDENTIALS'):
                     logger.warning(f"Invalid password for user: {email}")
                     return False, None, "Invalid email or password"
                 elif error_msg == 'EMAIL_NOT_FOUND':

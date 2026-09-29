@@ -268,13 +268,13 @@
       </div>
 
       <div class="flex flex-col gap-1">
-        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Υπολογισμός φόρου εισοδήματος πάνω στο Φορολογητέο Αποτέλεσμα (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (ανάκτηση από τον πιο πρόσφατο υπολογισμό του προηγούμενου έτους στο ιστορικό)">
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Υπολογισμός φόρου εισοδήματος πάνω στο Φορολογητέο Αποτέλεσμα (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (από την ΑΑΔΕ — εκκαθαριστικό ή δήλωση Ν — αλλιώς από το ιστορικό υπολογισμών)">
           <input id="arSingleIncomeTax" type="checkbox" class="ar-income-tax-toggle rounded">
           Φόρος εισοδήματος
         </label>
         <input id="arSinglePrevAdvance" type="text" inputmode="decimal" autocomplete="off"
                placeholder="Προκαταβολή προηγ. έτους (αυτόματα)"
-               title="Προαιρετικό: αν το συμπληρώσεις, χρησιμοποιείται αντί για την αυτόματη ανάκτηση από το ιστορικό"
+               title="Προαιρετικό: αν το συμπληρώσεις, χρησιμοποιείται αντί για την αυτόματη ανάκτηση (ΑΑΔΕ / ιστορικό)"
                class="hidden border rounded px-2 py-1 text-xs w-56">
       </div>
 
@@ -304,7 +304,7 @@
           <label class="block text-xs text-gray-600 mb-1">Έως</label>
           <input id="arBulkTo" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
         </div>
-        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Υπολογισμός φόρου εισοδήματος ανά εταιρία (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (ανάκτηση από το ιστορικό κάθε εταιρίας)">
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Υπολογισμός φόρου εισοδήματος ανά εταιρία (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (από την ΑΑΔΕ — εκκαθαριστικό ή δήλωση Ν — αλλιώς από το ιστορικό κάθε εταιρίας)">
           <input id="arBulkIncomeTax" type="checkbox" class="ar-income-tax-toggle rounded">
           Φόρος εισοδήματος
         </label>
