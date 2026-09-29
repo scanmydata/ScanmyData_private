@@ -163,6 +163,74 @@ def append_bulk_batch(
     return batch
 
 
+def upsert_bulk_batch(path: str, batch: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert or replace (by id) one bulk-run index entry. Used to write the
+    run's index at its START and refresh it after every company, so a run
+    whose HTTP request dies midway (gateway timeout, restart) still leaves a
+    retrievable/deletable folder instead of orphaned per-company entries."""
+    batches = [b for b in _read(path) if b.get("id") != batch.get("id")]
+    batches.append(batch)
+    batches.sort(key=lambda b: str(b.get("timestamp") or ""), reverse=True)
+    if len(batches) > _MAX_BULK_BATCHES:
+        batches = batches[:_MAX_BULK_BATCHES]
+    _write(path, batches)
+    return batch
+
+
+def recover_orphan_bulk_batches(path: str, history_dir: str, gap_minutes: int = 30) -> int:
+    """Re-index mode="bulk" company-history entries that no bulk-run folder
+    references (runs whose index was never written because the request died
+    before the end, or folders deleted index-only). Entries are grouped into
+    one recovered folder per run: same period, consecutive timestamps no
+    more than `gap_minutes` apart. Returns how many folders were added."""
+    batches = _read(path)
+    referenced = {str(c.get("entry_id")) for b in batches for c in (b.get("companies") or []) if c.get("entry_id")}
+    orphans: List[Dict[str, Any]] = []
+    if os.path.isdir(history_dir):
+        for fname in os.listdir(history_dir):
+            if not fname.endswith(".json"):
+                continue
+            for e in _read(os.path.join(history_dir, fname)):
+                if e.get("mode") == "bulk" and e.get("id") and str(e.get("id")) not in referenced:
+                    orphans.append(e)
+    if not orphans:
+        return 0
+    orphans.sort(key=lambda e: str(e.get("timestamp") or ""))
+    groups: List[List[Dict[str, Any]]] = []
+    for e in orphans:
+        g = groups[-1] if groups else None
+        if g:
+            last = g[-1]
+            same_period = (last.get("date_from"), last.get("date_to")) == (e.get("date_from"), e.get("date_to"))
+            try:
+                gap = (datetime.fromisoformat(str(e.get("timestamp"))) - datetime.fromisoformat(str(last.get("timestamp")))).total_seconds()
+            except Exception:
+                gap = gap_minutes * 60 + 1
+            # The same company showing up again means a new run started.
+            repeat = any(str(x.get("vat")) == str(e.get("vat")) for x in g)
+            if same_period and gap <= gap_minutes * 60 and not repeat:
+                g.append(e)
+                continue
+        groups.append([e])
+    for g in groups:
+        batches.append({
+            "id": "recovered-" + str(g[0].get("id")),
+            "timestamp": g[0].get("timestamp"),
+            "date_from": g[0].get("date_from"),
+            "date_to": g[0].get("date_to"),
+            "computed_by": g[0].get("computed_by"),
+            "aborted": False,
+            "recovered": True,
+            "companies": [{
+                "credential_name": e.get("credential_name"), "vat": e.get("vat"),
+                "entry_id": e.get("id"), "ok": True, "error": None,
+            } for e in g],
+        })
+    batches.sort(key=lambda b: str(b.get("timestamp") or ""), reverse=True)
+    _write(path, batches)
+    return len(groups)
+
+
 def get_bulk_batches(path: str, limit: int = 30) -> List[Dict[str, Any]]:
     batches = _read(path)
     return batches[:limit] if limit else batches

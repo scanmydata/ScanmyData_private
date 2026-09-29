@@ -131,7 +131,9 @@ def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str,
     resume_guard_marks = set()
 
     while True:
-        resp = requests.get(URL_REQUEST_DOCS, params=params_docs, headers=headers)
+        # Explicit timeout (as RequestE3Info/RequestVatInfo already have): a hung
+        # AADE response would otherwise block the calling request forever.
+        resp = requests.get(URL_REQUEST_DOCS, params=params_docs, headers=headers, timeout=60)
         if debug: print(f"[RequestDocs] Status: {resp.status_code}")
         if resp.status_code != 200:
             raise RuntimeError(f"RequestDocs HTTP {resp.status_code}: {(resp.text or '')[:1000]}")

@@ -54,7 +54,18 @@ def _read(path: str) -> Dict[str, Any]:
         data = json.loads(raw)
     except Exception as e:
         raise InventoryStoreCorruptError(f"Corrupt inventory file at {path}: {e}") from e
-    if not isinstance(data, dict) or not isinstance(data.get("years"), dict):
+    if not isinstance(data, dict):
+        raise InventoryStoreCorruptError(f"Malformed inventory file at {path}")
+    # The same per-company file is shared with vat_profile_store /
+    # compliance_notes_store, so a company whose file so far only holds
+    # e.g. {"vat_profile": ...} (the ΦΠΑ auto-check runs before any
+    # inventory is ever asked for — exactly the "new inventory obligation"
+    # case) simply has no inventory years yet. That used to be rejected as
+    # "malformed", so saving its first closing stock failed and the UI
+    # reported it as «Ακυρώθηκε». Only a PRESENT-but-wrong "years" is bad.
+    if "years" not in data:
+        data["years"] = {}
+    elif not isinstance(data.get("years"), dict):
         raise InventoryStoreCorruptError(f"Malformed inventory file at {path}")
     return data
 

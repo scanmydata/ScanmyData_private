@@ -18578,16 +18578,24 @@ def _ar_apply_income_tax(report: Dict[str, Any], vat: str, year: int, enabled: b
         log.exception("income tax computation failed for vat=%s", vat)
 
 
-_AR_PREV_ADVANCE_RETRY_SECONDS = 12 * 3600
+_AR_PREV_ADVANCE_RETRY_SECONDS = 12 * 3600          # login/network trouble
+_AR_PREV_ADVANCE_NOT_FOUND_RETRY_SECONDS = 7 * 86400  # nothing filed/cleared yet
+
+
+def _ar_prev_advance_retry_after(hit: Dict[str, Any]) -> float:
+    err = str(hit.get("error") or "").lower()
+    transient = any(k in err for k in ("σύνδεσ", "δικτύ", "dns", "timeout", "χρόνος", "connection", "resolve", "ssl"))
+    return _AR_PREV_ADVANCE_RETRY_SECONDS if transient else _AR_PREV_ADVANCE_NOT_FOUND_RETRY_SECONDS
 
 
 def _ar_prev_advance_from_aade(vat: str, year: int, legal_kind: Optional[str]) -> Optional[Dict[str, Any]]:
     """Previous-year advance from ΑΑΔΕ (εκκαθαριστικό for natural persons,
     δήλωση Ν for legal entities — e3/checks/aade_prev_advance.py), cached per
     company/year in data/<group>/accounting_result/prev_advance/<ΑΦΜ>.json:
-    a found amount is kept for good (the assessed advance doesn't change), a
-    failure is retried after 12h (e.g. the return wasn't cleared yet). None
-    when the company has no stored TAXISnet credentials."""
+    a found amount is fetched ONCE and kept for good (the assessed advance is
+    final), so later computations never log in to TAXISnet for it again; a
+    failure is retried after 12h (login/network) or 7 days (nothing filed/
+    cleared yet). None when the company has no stored TAXISnet credentials."""
     path = group_path("accounting_result", "prev_advance", f"{secure_filename(str(vat))}.json")
     cache: Dict[str, Any] = {}
     try:
@@ -18599,7 +18607,7 @@ def _ar_prev_advance_from_aade(vat: str, year: int, legal_kind: Optional[str]) -
     hit = cache.get(str(year))
     now = time.time()
     if isinstance(hit, dict):
-        if hit.get("ok") or now - float(hit.get("checked_ts") or 0) < _AR_PREV_ADVANCE_RETRY_SECONDS:
+        if hit.get("ok") or now - float(hit.get("checked_ts") or 0) < _ar_prev_advance_retry_after(hit):
             return hit
     user, pw = _ar_lookup_taxis_creds(vat)
     if not user or not pw:
@@ -18810,6 +18818,9 @@ def api_accounting_result_compute():
         small_business_note = _ar_small_business_note(path, report, date_from, date_to)
         if small_business_note:
             report_notes.append(small_business_note)
+        vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
+        if vat_inflow_note:
+            report_notes.append(vat_inflow_note)
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
@@ -19055,6 +19066,27 @@ def api_accounting_result_upload_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _ar_bulk_batch_save(batch: Dict[str, Any], results: List[Dict[str, Any]], aborted: bool = False) -> None:
+    """Upsert the run's folder with the per-company outcome so far."""
+    try:
+        from accounting_result import history_store as ar_history
+        batch["aborted"] = bool(aborted)
+        batch["companies"] = [{
+            "credential_name": r.get("credential_name"),
+            "vat": r.get("vat"),
+            "entry_id": r.get("entry_id"),
+            "ok": bool(r.get("ok")) and bool(r.get("entry_id")),
+            "error": r.get("error") or (
+                "εκκρεμεί μισθοδοσία" if r.get("needs_payroll_input")
+                else "εκκρεμεί ενοίκιο" if r.get("needs_rent_input")
+                else "εκκρεμεί απόθεμα λήξης" if r.get("needs_inventory_input") else None
+            ),
+        } for r in results]
+        ar_history.upsert_bulk_batch(_ar_bulk_runs_path(), batch)
+    except Exception:
+        log.exception("could not save bulk-run folder %s", batch.get("id"))
+
+
 @app.route("/api/accounting_result/bulk_compute", methods=["POST"])
 def api_accounting_result_bulk_compute():
     try:
@@ -19076,7 +19108,21 @@ def api_accounting_result_bulk_compute():
         total = len(names)
         aborted = False
         results = []
+        # The run's «αποθηκευμένα μαζικά» folder exists from the start and is
+        # refreshed after every company, so a request that dies midway
+        # (gateway timeout on a long run) still leaves it findable/deletable
+        # — it used to be written only at the very end.
+        import uuid as _uuid
+        bulk_batch = {
+            "id": _uuid.uuid4().hex,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "date_from": date_from, "date_to": date_to,
+            "computed_by": _ar_computed_by(), "aborted": False, "companies": [],
+        }
+        _ar_bulk_batch_save(bulk_batch, results)
         for idx, name in enumerate(names):
+            if results:
+                _ar_bulk_batch_save(bulk_batch, results)
             if job_id and ar_jobs.is_abort_requested(job_id):
                 aborted = True
                 break
@@ -19191,6 +19237,9 @@ def api_accounting_result_bulk_compute():
                 small_business_note = _ar_small_business_note(path, report, date_from, date_to)
                 if small_business_note:
                     report_notes.append(small_business_note)
+                vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
+                if vat_inflow_note:
+                    report_notes.append(vat_inflow_note)
                 uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
                 if uncharacterized_note:
                     report_notes.append(uncharacterized_note)
@@ -19243,26 +19292,9 @@ def api_accounting_result_bulk_compute():
             ar_jobs.clear_progress(job_id)
             ar_jobs.clear_abort(job_id)
 
-        # Retained index of the whole run ("folder of saved bulk runs") —
-        # the per-company results already live in each company's own
-        # history (mode="bulk", never individually deletable), but there
-        # was no way to find "the bulk run from <date>" again as a group.
-        from accounting_result import history_store as ar_history
-        ar_history.append_bulk_batch(
-            _ar_bulk_runs_path(), date_from, date_to, _ar_computed_by(),
-            companies=[{
-                "credential_name": r.get("credential_name"),
-                "vat": r.get("vat"),
-                "entry_id": r.get("entry_id"),
-                "ok": bool(r.get("ok")) and bool(r.get("entry_id")),
-                "error": r.get("error") or (
-                    "εκκρεμεί μισθοδοσία" if r.get("needs_payroll_input")
-                    else "εκκρεμεί ενοίκιο" if r.get("needs_rent_input")
-                    else "εκκρεμεί απόθεμα λήξης" if r.get("needs_inventory_input") else None
-                ),
-            } for r in results],
-            aborted=aborted,
-        )
+        # Final state of the run's folder (written from the start and after
+        # every company — see _ar_bulk_batch_save).
+        _ar_bulk_batch_save(bulk_batch, results, aborted=aborted)
 
         return jsonify({"ok": True, "results": results, "aborted": aborted}), 200
     except Exception as e:
@@ -19297,6 +19329,17 @@ def api_accounting_result_bulk_runs():
     a past run again without remembering which company/date to search."""
     try:
         from accounting_result import history_store as ar_history
+        # Folders for bulk results that never got one (older runs whose
+        # request died before the index was written) — recovered once, then
+        # they open/delete like any other run.
+        try:
+            recovered = ar_history.recover_orphan_bulk_batches(
+                _ar_bulk_runs_path(), group_path("accounting_result", "history"),
+            )
+            if recovered:
+                log.info("accounting_result: recovered %d orphan bulk run folder(s)", recovered)
+        except Exception:
+            log.exception("orphan bulk-run recovery failed (listing continues)")
         batches = ar_history.get_bulk_batches(_ar_bulk_runs_path(), limit=30)
         return jsonify({"ok": True, "batches": batches}), 200
     except Exception as e:
@@ -19996,6 +20039,63 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 _AR_SMALL_BUSINESS_LIMIT = 10000.0
+
+
+def _ar_unclassified_vat_inflow_note(report: Dict[str, Any], aade_user: str, aade_key: str) -> Optional[Dict[str, Any]]:
+    """ΦΠΑ εισροών (RequestVatInfo boxes 381-386) only counts purchase/expense
+    documents the company has CHARACTERIZED — myDATA fills those VAT boxes
+    from the recipient's own characterization. For VAT-subject companies this
+    adds what the total would be if the still-uncharacterized received
+    documents of the same ΦΠΑ period were counted too: uncharacterized marks
+    (RequestE3Info, same rule as the report's «Αχαρακτήριστα») matched to the
+    received documents (RequestDocs) for their VAT amount. None when there's
+    nothing uncharacterized with VAT in that period (or ΦΠΑ doesn't apply)."""
+    if report.get("vat_applicable") is False or not report.get("vat_period_from") or not report.get("vat_period_to"):
+        return None
+    try:
+        from accounting_result import engine as ar_engine
+        vf, vt = report["vat_period_from"], report["vat_period_to"]
+        _cls, _un_net, un_marks = ar_engine.fetch_and_split_e3_entries(vf, vt, aade_user, aade_key)
+        marks = {str(m.get("mark")) for m in (un_marks or []) if m.get("mark")}
+        if not marks:
+            return None
+        from fetch import _fetch_request_docs
+        rows, _transmitted = _fetch_request_docs("0", ar_engine.to_ddmmyyyy(vf), ar_engine.to_ddmmyyyy(vt), aade_user, aade_key)
+        extra = 0.0
+        docs = set()
+        for r in rows or []:
+            mk = str(r.get("mark") or "").strip()
+            if mk not in marks:
+                continue
+            amount = abs(float(r.get("totalVatAmount") or 0.0))
+            if re.search(r"\b(5\.1|5\.2|11\.4)\b", str(r.get("type") or "")):
+                amount = -amount  # πιστωτικά
+            extra += amount
+            docs.add(mk)
+        extra = round(extra, 2)
+        if not docs or not extra:
+            return None
+        inflow = float(report.get("vat_inflow") or 0.0)
+        new_inflow = round(inflow + extra, 2)
+        new_balance = round(float(report.get("vat_outflow") or 0.0) - new_inflow, 2)
+        highlight = f"{_ar_gr_money(new_inflow)}€"
+        return {
+            "type": "unclassified_vat_inflow",
+            "message": (
+                f"ΦΠΑ εισροών: το ποσό {_ar_gr_money(inflow)}€ αφορά ΜΟΝΟ τα χαρακτηρισμένα παραστατικά αγορών/εξόδων. "
+                f"Υπάρχουν {len(docs)} αχαρακτήριστα παραστατικά αγορών/εξόδων στην περίοδο ΦΠΑ με ΦΠΑ {_ar_gr_money(extra)}€ — "
+                f"αν ληφθούν υπόψη, το νέο σύνολο ΦΠΑ εισροών θα ήταν {highlight} "
+                f"(υπόλοιπο περιόδου {_ar_gr_money(new_balance)}€)."
+            ),
+            "highlight": highlight,
+            "extra_vat": extra,
+            "new_vat_inflow": new_inflow,
+            "new_vat_balance": new_balance,
+            "docs": len(docs),
+        }
+    except Exception:
+        log.exception("unclassified VAT-inflow note failed")
+        return None
 
 
 def _ar_small_business_note(path: str, report: Dict[str, Any], date_from: str, date_to: str) -> Optional[Dict[str, Any]]:

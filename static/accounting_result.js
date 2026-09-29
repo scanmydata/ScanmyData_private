@@ -378,7 +378,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
         </tr>
         <tr>
           <td>% μεικτό εμπορικό αποτέλεσμα επί πωλήσεων</td><td class="ar-num">${fmtPct(r.pct_gross_on_sales)}</td>
-          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">Μείον ΦΠΑ Εισροών</td><td class="ar-num">${arFmtMoney(r.vat_inflow)}</td>`}
+          ${r.vat_applicable === false ? '<td></td><td></td>' : `<td class="ar-label">Μείον ΦΠΑ Εισροών*</td><td class="ar-num">${arFmtMoney(r.vat_inflow)}</td>`}
         </tr>
         <tr>
           <td>% αποτελέσματα παροχής υπ. επί εσόδων Π/Υ</td><td class="ar-num">${fmtPct(r.pct_services)}</td>
@@ -395,6 +395,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
         </tr>`}
       </tbody>
     </table>
+    ${r.vat_applicable === false ? '' : '<div style="font-size:11px;color:#475569;margin-top:2px;">* ΦΠΑ εισροών: μόνο από τα <b>χαρακτηρισμένα</b> παραστατικά αγορών/εξόδων στο myDATA — τα αχαρακτήριστα δεν περιλαμβάνονται (αν υπάρχουν, το σύνολο μαζί τους φαίνεται στις σημειώσεις).</div>'}
     ${unresolvedNote}
     ${methodologyNote}
   </div>`;
@@ -669,7 +670,7 @@ function buildConsolidatedTableHtml(companies) {
     .filter((n) => AR_NOTE_TYPES[n.type] && AR_NOTE_TYPES[n.type].cell === cell)
     .map((n) => {
       const id = `ar-note-${i}-${noteRows.length}`;
-      noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message, bold: !!AR_NOTE_TYPES[n.type].bold });
+      noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message, highlight: n.highlight, bold: !!AR_NOTE_TYPES[n.type].bold });
       return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${arEscapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
     }).join('');
   const rowsHtml = companies.map((c, i) => {
@@ -713,11 +714,11 @@ function buildConsolidatedTableHtml(companies) {
         ${noteRows.map((n, k) => {
           // One block per client: the name cell spans all of its notes.
           if (k > 0 && noteRows[k - 1].name === n.name) {
-            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arEscapeHtml(n.message)}</td></tr>`;
+            return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arNoteMessageHtml(n)}</td></tr>`;
           }
           let span = 1;
           while (noteRows[k + span] && noteRows[k + span].name === n.name) span++;
-          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${arEscapeHtml(n.name)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arEscapeHtml(n.message)}</td></tr>`;
+          return `<tr id="${n.id}"><td style="color:#b91c1c;font-weight:700;text-align:center;">${arEscapeHtml(n.mark)}</td><td rowspan="${span}" style="font-weight:600;vertical-align:top;">${arEscapeHtml(n.name)}</td><td style="white-space:normal;${n.bold ? 'font-weight:700;' : ''}">${arNoteMessageHtml(n)}</td></tr>`;
         }).join('')}
       </tbody></table>
     </div>`
@@ -817,6 +818,14 @@ function showManualInventoryModal(title, opening) {
   });
 }
 
+// The resolve*ForCompany helpers return true (saved), false (the user
+// cancelled) or null (the save itself failed — already flashed here with
+// the server's reason, so it's never mistaken for a cancel).
+function arResolveSaveFailed(what, name, resp) {
+  showArFlash(`${what} (${name}): η αποθήκευση απέτυχε — ${(resp && resp.error) || 'άγνωστο σφάλμα'}`, 'error', 12000);
+  return null;
+}
+
 async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, dateTo) {
   const choice = await showModalChoice(
     `Άγνωστο απόθεμα λήξης — ${name} (${year})`,
@@ -839,7 +848,7 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
   const resp = await postJson('/api/accounting_result/inventory/resolve', {
     credential_name: name, year, method: choice, value, date_from: dateFrom, date_to: dateTo,
   });
-  return !!resp.ok;
+  return resp.ok ? true : arResolveSaveFailed('Απόθεμα λήξης', name, resp);
 }
 
 // ---------------- Payroll monthly-completeness resolution ----------------
@@ -988,7 +997,7 @@ async function resolvePayrollForCompany(name, year, dateFrom, dateTo, payrollChe
   const resp = await postJson('/api/accounting_result/payroll/resolve', {
     credential_name: name, year, resolution, monthly_totals: monthlyTotals,
   });
-  return !!resp.ok;
+  return resp.ok ? true : arResolveSaveFailed('Μισθοδοσία', name, resp);
 }
 
 // ---------------- Rent monthly-completeness resolution ----------------
@@ -1030,7 +1039,7 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
   const resp = await postJson('/api/accounting_result/rent/resolve', {
     credential_name: name, year, resolution, monthly_totals: monthlyTotals,
   });
-  return !!resp.ok;
+  return resp.ok ? true : arResolveSaveFailed('Ενοίκιο', name, resp);
 }
 
 // ---------------- Μαζικός pre-check: ΑΑΔΕ + grouped-by-type resolution ----------------
@@ -1045,7 +1054,18 @@ var AR_NOTE_TYPES = {
   uncharacterized_last_quarter: { label: 'Αχαρακτήριστα παραστατικά (τελευταίο τρίμηνο)', mark: '†', cell: 'unclassified' },
   small_business_vat_limit: { label: 'Απαλλαγή ΦΠΑ μικρών επιχειρήσεων — έσοδα κοντά/πάνω από 10.000€', mark: '§', cell: 'vat', bold: true },
   inventory_obligation: { label: 'Απογραφή λήξης (ν.4308 άρθ. 30 / ΠΟΛ.1019)', mark: '‡', cell: 'stock' },
+  unclassified_vat_inflow: { label: 'ΦΠΑ εισροών χωρίς τα αχαρακτήριστα αγορών/εξόδων', mark: '◊', cell: 'vat' },
 };
+
+// A note's message as HTML, with its `highlight` part (e.g. the new ΦΠΑ
+// εισροών total) in bold — on screen, in the individual PDF and in the
+// consolidated «Παρατηρήσεις».
+function arNoteMessageHtml(n) {
+  const msg = arEscapeHtml(n && n.message);
+  if (!n || !n.highlight) return msg;
+  const hl = arEscapeHtml(n.highlight);
+  return msg.split(hl).join(`<b>${hl}</b>`);
+}
 
 function arLegalKindBadge(kind) {
   if (kind === 'sole_proprietor') return '<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:0 0.45rem;font-size:0.7rem;font-weight:700;">Ατομική</span>';
@@ -1242,9 +1262,10 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
       if (!value) return false;
     }
     if (statusEl) statusEl.textContent = `Απόθεμα λήξης — ${name}...`;
-    await postJson('/api/accounting_result/inventory/resolve', {
+    const invResp = await postJson('/api/accounting_result/inventory/resolve', {
       credential_name: name, year, method, value, date_from: dateFrom, date_to: dateTo,
     });
+    if (!invResp.ok) arResolveSaveFailed('Απόθεμα λήξης', name, invResp);
   }
   for (const kind of ['payroll', 'rent']) {
     for (const [name, choice] of Object.entries(choices[kind] || {})) {
@@ -1255,7 +1276,8 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
         if (!values) return false;
         if (!values.__continue && Object.keys(values).length) { resolution = 'manual'; monthlyTotals = values; }
       }
-      await postJson(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals });
+      const kindResp = await postJson(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals });
+      if (!kindResp.ok) arResolveSaveFailed(kind === 'payroll' ? 'Μισθοδοσία' : 'Ενοίκιο', name, kindResp);
     }
   }
   for (const [name, choice] of Object.entries(choices.efka || {})) {
@@ -1287,14 +1309,14 @@ function showBulkNotesByTypeModal(results, opts) {
   });
   (results || []).forEach((r) => {
     (r.notes || []).forEach((n) => {
-      (byType[n.type] = byType[n.type] || []).push({ name: r.credential_name, message: n.message });
+      (byType[n.type] = byType[n.type] || []).push({ name: r.credential_name, message: n.message, highlight: n.highlight });
     });
   });
   const types = Object.keys(byType);
   const body = types.length
     ? types.map((t) => {
       const info = t === '__failed' ? { label: '❌ Δεν υπολογίστηκαν' } : (AR_NOTE_TYPES[t] || { label: t });
-      const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${arEscapeHtml(x.name)}</td><td style="font-size:0.78rem;">${arEscapeHtml(x.message)}</td></tr>`).join('');
+      const trs = byType[t].map((x) => `<tr><td style="white-space:nowrap;">${arEscapeHtml(x.name)}</td><td style="font-size:0.78rem;">${arNoteMessageHtml(x)}</td></tr>`).join('');
       return `<div class="mb-4"><div class="font-semibold text-sm mb-1">${arEscapeHtml(info.label)} — ${byType[t].length} εταιρίες</div>
         <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Παρατήρηση</th></tr></thead><tbody>${trs}</tbody></table></div>`;
     }).join('')
@@ -1382,7 +1404,7 @@ function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
       ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${arEscapeHtml(name)}" data-year="${year}" data-legal-kind="${arEscapeHtml(legalKind || '')}" data-from="${arEscapeHtml(from || '')}" data-to="${arEscapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
       : '';
-    return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${arEscapeHtml(n.message)}${exceptionBtn}</li>`;
+    return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${arNoteMessageHtml(n)}${exceptionBtn}</li>`;
   }).join('');
   // Explicit disc bullets (Tailwind's preflight resets list-style to none)
   // so each note reads as its own line, on screen and in the PDF; the
@@ -1483,6 +1505,18 @@ async function computeSingle() {
     prev_advance_override: arPrevAdvanceOverride(),
   };
 
+  // A popup cancelled by the user -> «Ακυρώθηκε» (status + flash); a save
+  // that FAILED (resolved === null, already flashed with the reason) must
+  // not be reported as a cancel.
+  const stopResolve = (resolved, step) => {
+    if (resolved === null) {
+      statusEl.textContent = 'Σφάλμα αποθήκευσης (' + step + ') — δες το μήνυμα.';
+      return;
+    }
+    statusEl.textContent = 'Ακυρώθηκε.';
+    showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): ακυρώθηκε — ' + step + '.', 'warning', 7000);
+  };
+
   try {
     showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 1: έλεγχος αποσβέσεων, μισθοδοσίας, ενοικίου και απογραφής.');
     let resp = await postJson('/api/accounting_result/compute', body);
@@ -1512,7 +1546,7 @@ async function computeSingle() {
       hideArOverlay();
       const sel = await resolveDepreciationChoice(resp.depreciation_entries);
       if (!sel) {
-        statusEl.textContent = 'Ακυρώθηκε.';
+        stopResolve(false, 'επιλογή αποσβέσεων');
         return;
       }
       body.depreciation_selection = sel;
@@ -1529,7 +1563,7 @@ async function computeSingle() {
       hideArOverlay();
       const resolved = await resolvePayrollForCompany(name, resp.year, from, to, resp.payroll_check);
       if (!resolved) {
-        statusEl.textContent = 'Ακυρώθηκε.';
+        stopResolve(resolved, 'μισθοδοσία');
         return;
       }
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 3: επεξεργασία μισθοδοσίας, συνέχεια με ενοίκιο/απογραφή.');
@@ -1545,7 +1579,7 @@ async function computeSingle() {
       hideArOverlay();
       const resolved = await resolveRentForCompany(name, resp.year, from, to, resp.rent_check);
       if (!resolved) {
-        statusEl.textContent = 'Ακυρώθηκε.';
+        stopResolve(resolved, 'ενοίκιο');
         return;
       }
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 4: επεξεργασία ενοικίου, συνέχεια με απογραφή.');
@@ -1576,7 +1610,7 @@ async function computeSingle() {
       hideArOverlay();
       const resolved = await resolveInventoryForCompany(name, resp.vat, resp.year, resp.opening_inventory, from, to);
       if (!resolved) {
-        statusEl.textContent = 'Ακυρώθηκε.';
+        stopResolve(resolved, 'απόθεμα λήξης');
         return;
       }
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 5: επεξεργασία απογραφής και τελικός υπολογισμός αποτελέσματος.');
@@ -2160,7 +2194,7 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation'];
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation', 'unclassified_vat_inflow'];
 var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
@@ -2168,8 +2202,9 @@ var AR_BULK_NOTE_TYPE_LEGEND = {
   uncharacterized_last_quarter: 'Αχαρακτήριστα παραστατικά άνω του 25% του συνόλου στο τελευταίο τρίμηνο — παρέδωσε τα στον λογιστή για χαρακτηρισμό/καταχώρηση.',
   small_business_vat_limit: 'Ειδικό καθεστώς μικρών επιχειρήσεων: τα έσοδα πλησιάζουν (≥80%) ή ξεπέρασαν το όριο απαλλαγής ΦΠΑ των 10.000€.',
   inventory_obligation: 'Απογραφή λήξης: νέα υποχρέωση, ένδειξη απαλλαγής ΠΟΛ.1019, πρατήριο καυσίμων ή περίπτωση για έλεγχο (βλ. σημειώσεις της εταιρίας).',
+  unclassified_vat_inflow: 'ΦΠΑ εισροών: μετράει μόνο τα χαρακτηρισμένα παραστατικά αγορών/εξόδων — υπάρχουν αχαρακτήριστα με ΦΠΑ στην περίοδο (δες το νέο σύνολο στις παρατηρήσεις).',
 };
-var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶'];
+var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷'];
 
 function renderBulkCompaniesSummary(companies) {
   const container = document.getElementById('arBulkReportContainer');
@@ -2280,7 +2315,7 @@ async function showBulkRunsModal() {
       const okCount = companies.filter((c) => c.ok).length;
       return `<tr>
         <td>${arEscapeHtml(_arBatchTimestamp(b.timestamp))}</td>
-        <td>${arEscapeHtml(ddmmyyyy(b.date_from))} – ${arEscapeHtml(ddmmyyyy(b.date_to))}${b.aborted ? ' <span class="text-amber-600">(διακόπηκε)</span>' : ''}</td>
+        <td>${arEscapeHtml(ddmmyyyy(b.date_from))} – ${arEscapeHtml(ddmmyyyy(b.date_to))}${b.aborted ? ' <span class="text-amber-600">(διακόπηκε)</span>' : ''}${b.recovered ? ' <span class="text-gray-500" title="Αποτελέσματα παλιότερου μαζικού που δεν είχαν καταχωρηθεί σε φάκελο — ομαδοποιήθηκαν αυτόματα ανά εκτέλεση">(ανακτήθηκε)</span>' : ''}</td>
         <td>${arEscapeHtml(b.computed_by || '')}</td>
         <td>${okCount}/${companies.length}</td>
         <td style="white-space:nowrap;">
@@ -2462,11 +2497,13 @@ async function runBulk() {
     const choices = await showGroupedChecksModal(groups);
     if (!choices) {
       statusEl.textContent = 'Ακυρώθηκε.';
+      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — διαφορές προελέγχου.', 'warning', 7000);
       return;
     }
     const applied = await applyGroupedChecks(choices, statusResp.rows, year, from, to, statusEl);
     if (!applied) {
       statusEl.textContent = 'Ακυρώθηκε.';
+      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — χειροκίνητη καταχώρηση.', 'warning', 7000);
       return;
     }
   }
