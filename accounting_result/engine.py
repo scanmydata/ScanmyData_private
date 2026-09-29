@@ -100,7 +100,7 @@ from epsilon_bridges.epsilon_bridge_g_category import (
 )
 from g_category_helpers import is_g_category_active
 from e3.checks.fetch_e3 import fetch_e3_entries
-from accounting_result.fetch_vat import fetch_vat_totals
+from accounting_result.fetch_vat import fetch_vat_details, fetch_vat_totals  # noqa: F401
 
 
 STOCK_CODES = ["20", "21", "23", "24", "25", "26", "27", "28"]
@@ -830,13 +830,15 @@ def build_report(
     # doesn't apply to it).
     if vat_applicable:
         vat_period_from, vat_period_to = compute_vat_declaration_period(vat_period_type)
-        vat_outflow, vat_inflow = fetch_vat_totals(
+        vat_details = fetch_vat_details(
             vat, to_ddmmyyyy(vat_period_from), to_ddmmyyyy(vat_period_to), aade_user, aade_key,
         )
+        vat_outflow, vat_inflow = vat_details["outflow"], vat_details["inflow"]
         vat_period_balance = round(vat_outflow - vat_inflow, 2)
     else:
         vat_period_from = vat_period_to = None
         vat_outflow = vat_inflow = vat_period_balance = None
+        vat_details = {}
 
     if current_period_entries is not None:
         # Already fetched by the caller (e.g. to evaluate
@@ -986,6 +988,11 @@ def build_report(
         "vat_prior_credit": None,  # v1: not derivable, see module docstring
         "vat_state_payments": None,  # v1: not derivable, see module docstring
         "vat_period_balance": vat_period_balance,
+        # VatInfo «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381/361» — received documents not yet
+        # characterized, so NOT part of vat_inflow above.
+        "vat_inflow_unclassified": vat_details.get("unclassified_vat"),
+        "vat_inflow_unclassified_net": vat_details.get("unclassified_net"),
+        "vat_inflow_unclassified_docs": vat_details.get("unclassified_docs"),
         "vat_applicable": vat_applicable,
         "vat_period_from": vat_period_from,
         "vat_period_to": vat_period_to,

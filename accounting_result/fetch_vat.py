@@ -84,13 +84,41 @@ def _extract_pagination_cursors(root) -> Dict[str, str]:
     return cursors
 
 
+def _unclassified_box(lname: str) -> str:
+    """"361"/"381" for VatInfo's «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 361/381» fields (net value
+    / VAT of received documents the company hasn't characterized yet — the
+    same columns the myDATA web platform exports as «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 361»
+    and «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381»), else "". Matched loosely on the element
+    name (e.g. VatUnclassified381) so a naming variant doesn't silently drop
+    them."""
+    low = lname.lower()
+    if "unclassified" not in low and "unclass" not in low:
+        return ""
+    if "381" in low:
+        return "381"
+    if "361" in low:
+        return "361"
+    return ""
+
+
 def fetch_vat_totals(
     vat: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False,
 ) -> Tuple[float, float]:
-    """Returns (vat_outflow, vat_inflow) — total net ΦΠΑ εκροών/εισροών for the
-    period, summed across every non-cancelled invoice AADE has on file for
-    `vat`, regardless of myDATA characterization status. `date_from`/`date_to`
-    must already be dd/mm/yyyy (use engine.to_ddmmyyyy)."""
+    """Returns (vat_outflow, vat_inflow) — see fetch_vat_details."""
+    d = fetch_vat_details(vat, date_from, date_to, aade_user, aade_key, debug=debug)
+    return d["outflow"], d["inflow"]
+
+
+def fetch_vat_details(
+    vat: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False,
+) -> Dict[str, float]:
+    """ΦΠΑ εκροών/εισροών for the period from RequestVatInfo, summed across
+    every non-cancelled invoice AADE has on file for `vat`. `inflow` (boxes
+    381-386) only reflects CHARACTERIZED purchase/expense documents;
+    `unclassified_vat`/`unclassified_net` are VatInfo's own «ΜΗ
+    ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381/361» amounts for the not-yet-characterized ones
+    (credit notes already come signed), `unclassified_docs` how many marks
+    carry them. `date_from`/`date_to` must be dd/mm/yyyy."""
     headers = {"aade-user-id": aade_user, "Ocp-Apim-Subscription-Key": aade_key}
     params = {
         "entityVatNumber": vat,
@@ -101,6 +129,9 @@ def fetch_vat_totals(
 
     ekroon = 0.0
     eisroon = 0.0
+    unclassified_vat = 0.0
+    unclassified_net = 0.0
+    unclassified_docs = 0
     seen_marks = set()
 
     while True:
@@ -137,6 +168,22 @@ def fetch_vat_totals(
             for field in _INPUT_TAX_FIELDS:
                 eisroon += _to_float(_find_text_by_localnames(node, {field}))
 
+            doc_unclassified = False
+            for sub in node.iter():
+                box = _unclassified_box(_local_name(sub.tag))
+                if not box:
+                    continue
+                amount = _to_float(sub.text)
+                if not amount:
+                    continue
+                doc_unclassified = True
+                if box == "381":
+                    unclassified_vat += amount
+                else:
+                    unclassified_net += amount
+            if doc_unclassified:
+                unclassified_docs += 1
+
         cursors = _extract_pagination_cursors(root)
         next_partition_key = cursors.get("nextPartitionKey") or ""
         next_row_key = cursors.get("nextRowKey") or ""
@@ -162,4 +209,10 @@ def fetch_vat_totals(
 
         break
 
-    return round(ekroon, 2), round(eisroon, 2)
+    return {
+        "outflow": round(ekroon, 2),
+        "inflow": round(eisroon, 2),
+        "unclassified_vat": round(unclassified_vat, 2),
+        "unclassified_net": round(unclassified_net, 2),
+        "unclassified_docs": unclassified_docs,
+    }

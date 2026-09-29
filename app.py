@@ -20041,61 +20041,39 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 _AR_SMALL_BUSINESS_LIMIT = 10000.0
 
 
-def _ar_unclassified_vat_inflow_note(report: Dict[str, Any], aade_user: str, aade_key: str) -> Optional[Dict[str, Any]]:
+def _ar_unclassified_vat_inflow_note(report: Dict[str, Any], aade_user: str = "", aade_key: str = "") -> Optional[Dict[str, Any]]:
     """ΦΠΑ εισροών (RequestVatInfo boxes 381-386) only counts purchase/expense
-    documents the company has CHARACTERIZED — myDATA fills those VAT boxes
-    from the recipient's own characterization. For VAT-subject companies this
-    adds what the total would be if the still-uncharacterized received
-    documents of the same ΦΠΑ period were counted too: uncharacterized marks
-    (RequestE3Info, same rule as the report's «Αχαρακτήριστα») matched to the
-    received documents (RequestDocs) for their VAT amount. None when there's
-    nothing uncharacterized with VAT in that period (or ΦΠΑ doesn't apply)."""
-    if report.get("vat_applicable") is False or not report.get("vat_period_from") or not report.get("vat_period_to"):
+    documents the company has CHARACTERIZED. RequestVatInfo itself also
+    carries «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381» (VAT of received documents not yet
+    characterized — the same column the myDATA platform's VatInfo export
+    shows), captured by engine.build_report as vat_inflow_unclassified: this
+    note says what the ΦΠΑ εισροών total would be including them. None when
+    there's nothing uncharacterized in the ΦΠΑ period (or ΦΠΑ doesn't apply).
+    (aade_user/aade_key kept for call compatibility — no extra AADE call.)"""
+    if report.get("vat_applicable") is False or report.get("vat_inflow") is None:
         return None
-    try:
-        from accounting_result import engine as ar_engine
-        vf, vt = report["vat_period_from"], report["vat_period_to"]
-        _cls, _un_net, un_marks = ar_engine.fetch_and_split_e3_entries(vf, vt, aade_user, aade_key)
-        marks = {str(m.get("mark")) for m in (un_marks or []) if m.get("mark")}
-        if not marks:
-            return None
-        from fetch import _fetch_request_docs
-        rows, _transmitted = _fetch_request_docs("0", ar_engine.to_ddmmyyyy(vf), ar_engine.to_ddmmyyyy(vt), aade_user, aade_key)
-        extra = 0.0
-        docs = set()
-        for r in rows or []:
-            mk = str(r.get("mark") or "").strip()
-            if mk not in marks:
-                continue
-            amount = abs(float(r.get("totalVatAmount") or 0.0))
-            if re.search(r"\b(5\.1|5\.2|11\.4)\b", str(r.get("type") or "")):
-                amount = -amount  # πιστωτικά
-            extra += amount
-            docs.add(mk)
-        extra = round(extra, 2)
-        if not docs or not extra:
-            return None
-        inflow = float(report.get("vat_inflow") or 0.0)
-        new_inflow = round(inflow + extra, 2)
-        new_balance = round(float(report.get("vat_outflow") or 0.0) - new_inflow, 2)
-        highlight = f"{_ar_gr_money(new_inflow)}€"
-        return {
-            "type": "unclassified_vat_inflow",
-            "message": (
-                f"ΦΠΑ εισροών: το ποσό {_ar_gr_money(inflow)}€ αφορά ΜΟΝΟ τα χαρακτηρισμένα παραστατικά αγορών/εξόδων. "
-                f"Υπάρχουν {len(docs)} αχαρακτήριστα παραστατικά αγορών/εξόδων στην περίοδο ΦΠΑ με ΦΠΑ {_ar_gr_money(extra)}€ — "
-                f"αν ληφθούν υπόψη, το νέο σύνολο ΦΠΑ εισροών θα ήταν {highlight} "
-                f"(υπόλοιπο περιόδου {_ar_gr_money(new_balance)}€)."
-            ),
-            "highlight": highlight,
-            "extra_vat": extra,
-            "new_vat_inflow": new_inflow,
-            "new_vat_balance": new_balance,
-            "docs": len(docs),
-        }
-    except Exception:
-        log.exception("unclassified VAT-inflow note failed")
+    extra = round(float(report.get("vat_inflow_unclassified") or 0.0), 2)
+    if not extra:
         return None
+    docs = int(report.get("vat_inflow_unclassified_docs") or 0)
+    inflow = float(report.get("vat_inflow") or 0.0)
+    new_inflow = round(inflow + extra, 2)
+    new_balance = round(float(report.get("vat_outflow") or 0.0) - new_inflow, 2)
+    highlight = f"{_ar_gr_money(new_inflow)}€"
+    return {
+        "type": "unclassified_vat_inflow",
+        "message": (
+            f"ΦΠΑ εισροών: το ποσό {_ar_gr_money(inflow)}€ αφορά ΜΟΝΟ τα χαρακτηρισμένα παραστατικά αγορών/εξόδων. "
+            f"Υπάρχουν {docs} αχαρακτήριστα παραστατικά αγορών/εξόδων στην περίοδο ΦΠΑ με ΦΠΑ {_ar_gr_money(extra)}€ "
+            f"(myDATA «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381») — αν ληφθούν υπόψη, το νέο σύνολο ΦΠΑ εισροών θα ήταν {highlight} "
+            f"(υπόλοιπο περιόδου {_ar_gr_money(new_balance)}€)."
+        ),
+        "highlight": highlight,
+        "extra_vat": extra,
+        "new_vat_inflow": new_inflow,
+        "new_vat_balance": new_balance,
+        "docs": docs,
+    }
 
 
 def _ar_small_business_note(path: str, report: Dict[str, Any], date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
