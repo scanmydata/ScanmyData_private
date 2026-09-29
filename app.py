@@ -18745,6 +18745,7 @@ def api_accounting_result_compute():
                     "year": year,
                     "legal_kind": _ar_legal_kind(path, vat),
                     "efka_message": _efka_pre.get("message"),
+                    "efka_finding": _efka_pre.get("finding"),
                     "vat_auto_check": vat_auto_check,
                     "books_category_mismatch": books_category_mismatch,
                     "inventory_obligation": inventory_obligation,
@@ -18818,6 +18819,13 @@ def api_accounting_result_compute():
         small_business_note = _ar_small_business_note(path, report, date_from, date_to)
         if small_business_note:
             report_notes.append(small_business_note)
+        _ar_apply_prev_vat_period(report, vat)
+        prev_vat_note = _ar_prev_vat_note(report)
+        if prev_vat_note:
+            report_notes.append(prev_vat_note)
+        declared_note = _ar_vat_declared_check_note(report)
+        if declared_note:
+            report_notes.append(declared_note)
         vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
         if vat_inflow_note:
             report_notes.append(vat_inflow_note)
@@ -19237,6 +19245,13 @@ def api_accounting_result_bulk_compute():
                 small_business_note = _ar_small_business_note(path, report, date_from, date_to)
                 if small_business_note:
                     report_notes.append(small_business_note)
+                _ar_apply_prev_vat_period(report, vat)
+                prev_vat_note = _ar_prev_vat_note(report)
+                if prev_vat_note:
+                    report_notes.append(prev_vat_note)
+                declared_note = _ar_vat_declared_check_note(report)
+                if declared_note:
+                    report_notes.append(declared_note)
                 vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
                 if vat_inflow_note:
                     report_notes.append(vat_inflow_note)
@@ -20041,6 +20056,105 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 _AR_SMALL_BUSINESS_LIMIT = 10000.0
 
 
+def _ar_apply_prev_vat_period(report: Dict[str, Any], vat: str) -> None:
+    """Previous Φ2 period (month/quarter before the report's ΦΠΑ period) from
+    ΑΑΔΕ — e3/checks/aade_vat_prev.py. Runs on EVERY computation (no cache:
+    a newer amending declaration may have been filed since). A credit
+    («Ποσό για Έκπτωση» of the effective declaration) fills the report's
+    «Μείον Πιστ.Υπόλ.Προηγ.Περ.» and is offset against this period's
+    balance; a debit / missing declaration becomes a note (_ar_prev_vat_note)."""
+    if report.get("vat_applicable") is False or not report.get("vat_period_from") or report.get("vat_outflow") is None:
+        return
+    user, pw = _ar_lookup_taxis_creds(vat)
+    if not user or not pw:
+        report["vat_prev_period"] = {"ok": False, "error": "δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία"}
+        return
+    try:
+        from e3.checks.aade_vat_prev import fetch_vat_periods
+        both = fetch_vat_periods(user, pw, datetime.date.fromisoformat(str(report["vat_period_from"])[:10]))
+    except Exception as e:
+        log.exception("previous VAT period fetch failed for vat=%s", vat)
+        both = {"ok": False, "error": _friendly_net_error(e) or str(e)}
+    if not both.get("ok"):
+        report["vat_prev_period"] = {"ok": False, "error": both.get("error")}
+        return
+    res = both.get("previous") or {"ok": False, "error": "δεν βρέθηκε προηγούμενη περίοδος Φ2"}
+    report["vat_prev_period"] = res
+    # The examined period itself, when a declaration was already filed for it
+    # — cross-checked against myDATA by _ar_vat_declared_check_note.
+    report["vat_current_declared"] = both.get("current")
+    if res.get("ok") and res.get("result") == "Πιστωτική" and (res.get("amount_for_deduction") or 0) > 0:
+        credit = round(float(res["amount_for_deduction"]), 2)
+        report["vat_prior_credit"] = credit
+        report["vat_period_balance"] = round(float(report.get("vat_outflow") or 0.0) - float(report.get("vat_inflow") or 0.0) - credit, 2)
+
+
+def _ar_prev_vat_note(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Note for a DEBIT (or not-submitted / pending) previous ΦΠΑ period."""
+    prev = report.get("vat_prev_period") or {}
+    if not prev.get("ok"):
+        return None
+    period = prev.get("period") or f"{prev.get('period_from')} – {prev.get('period_to')}"
+    if prev.get("status") == "NOT_SUBMITTED":
+        return {"type": "vat_prev_period", "message": f"ΦΠΑ προηγούμενης περιόδου ({period}): ΔΕΝ έχει υποβληθεί δήλωση Φ2 στο TAXISnet."}
+    if prev.get("status") == "PENDING" and not prev.get("result"):
+        return {"type": "vat_prev_period", "message": f"ΦΠΑ προηγούμενης περιόδου ({period}): η δήλωση Φ2 είναι σε εκκρεμότητα (όχι οριστική)."}
+    if prev.get("result") == "Χρεωστική":
+        due = prev.get("total_due") or prev.get("lump_sum") or prev.get("first_installment")
+        amount = f"{_ar_gr_money(due)}€" if due is not None else "—"
+        pay_by = f", πληρωτέο έως {prev['pay_by']}" if prev.get("pay_by") else ""
+        kind = f" ({prev['type']})" if prev.get("type") else ""
+        return {
+            "type": "vat_prev_period",
+            "message": (f"ΦΠΑ προηγούμενης περιόδου ({period}): ΧΡΕΩΣΤΙΚΗ δήλωση{kind} — ποσό οφειλής {amount}{pay_by}. "
+                        "Βεβαιώσου ότι έχει εξοφληθεί/ρυθμιστεί."),
+            "highlight": amount if due is not None else None,
+        }
+    return None
+
+
+def _ar_vat_declared_check_note(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """When the examined ΦΠΑ period already has an effective Φ2 on TAXISnet,
+    compare its declared outcome (payable / credit) with the myDATA-derived
+    balance of the report (after any previous-period credit). A difference
+    over 1€ means the declaration doesn't match myDATA — an amending
+    declaration may be needed. Also records report["vat_declared_check"]
+    (match or not) for the report's ΦΠΑ block."""
+    cur = report.get("vat_current_declared") or {}
+    if not cur.get("ok") or not cur.get("result") or report.get("vat_period_balance") is None:
+        return None
+    from e3.checks.aade_vat_prev import declared_balance
+    declared = declared_balance(cur)
+    if declared is None:
+        return None
+    mydata = round(float(report.get("vat_period_balance") or 0.0), 2)
+    diff = round(mydata - declared, 2)
+    period = cur.get("period") or f"{cur.get('period_from')} – {cur.get('period_to')}"
+    fmt = lambda v: (f"πιστωτικό {_ar_gr_money(abs(v))}€" if v < 0 else f"χρεωστικό {_ar_gr_money(v)}€")
+    report["vat_declared_check"] = {
+        "period": period, "declared": declared, "mydata": mydata, "difference": diff,
+        "match": abs(diff) <= 1.0, "type": cur.get("type"), "submitted_at": cur.get("submitted_at"),
+    }
+    if abs(diff) <= 1.0:
+        return None
+    hint = ""
+    unclassified = float(report.get("vat_inflow_unclassified") or 0.0)
+    if unclassified and abs((mydata - unclassified) - declared) <= 1.0:
+        hint = (" Η διαφορά εξηγείται από τα αχαρακτήριστα παραστατικά αγορών/εξόδων "
+                f"(ΦΠΑ {_ar_gr_money(unclassified)}€) — χαρακτήρισέ τα στο myDATA.")
+    diff_text = f"διαφορά {_ar_gr_money(abs(diff))}€"
+    return {
+        "type": "vat_declared_mismatch",
+        "message": (
+            f"ΦΠΑ περιόδου {period}: η υποβληθείσα δήλωση Φ2 ({cur.get('type') or 'δήλωση'}"
+            f"{', ' + cur['submitted_at'] if cur.get('submitted_at') else ''}) δίνει {fmt(declared)}, "
+            f"ενώ από το myDATA προκύπτει {fmt(mydata)} — {diff_text}. "
+            "Πιθανή ανάγκη τροποποιητικής δήλωσης ΦΠΑ (ή διόρθωσης/χαρακτηρισμού στο myDATA)." + hint
+        ),
+        "highlight": diff_text,
+    }
+
+
 def _ar_unclassified_vat_inflow_note(report: Dict[str, Any], aade_user: str = "", aade_key: str = "") -> Optional[Dict[str, Any]]:
     """ΦΠΑ εισροών (RequestVatInfo boxes 381-386) only counts purchase/expense
     documents the company has CHARACTERIZED. RequestVatInfo itself also
@@ -20058,15 +20172,19 @@ def _ar_unclassified_vat_inflow_note(report: Dict[str, Any], aade_user: str = ""
     docs = int(report.get("vat_inflow_unclassified_docs") or 0)
     inflow = float(report.get("vat_inflow") or 0.0)
     new_inflow = round(inflow + extra, 2)
-    new_balance = round(float(report.get("vat_outflow") or 0.0) - new_inflow, 2)
-    highlight = f"{_ar_gr_money(new_inflow)}€"
+    prior_credit = float(report.get("vat_prior_credit") or 0.0)
+    new_balance = round(float(report.get("vat_outflow") or 0.0) - new_inflow - prior_credit, 2)
+    balance_text = (f"πιστωτικό υπόλοιπο περιόδου {_ar_gr_money(abs(new_balance))}€" if new_balance < 0
+                    else f"υπόλοιπο περιόδου {_ar_gr_money(new_balance)}€")
+    credit_text = f", μετά τον συμψηφισμό πιστωτικού προηγ. περιόδου {_ar_gr_money(prior_credit)}€" if prior_credit else ""
+    highlight = balance_text
     return {
         "type": "unclassified_vat_inflow",
         "message": (
             f"ΦΠΑ εισροών: το ποσό {_ar_gr_money(inflow)}€ αφορά ΜΟΝΟ τα χαρακτηρισμένα παραστατικά αγορών/εξόδων. "
             f"Υπάρχουν {docs} αχαρακτήριστα παραστατικά αγορών/εξόδων στην περίοδο ΦΠΑ με ΦΠΑ {_ar_gr_money(extra)}€ "
-            f"(myDATA «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381») — αν ληφθούν υπόψη, το νέο σύνολο ΦΠΑ εισροών θα ήταν {highlight} "
-            f"(υπόλοιπο περιόδου {_ar_gr_money(new_balance)}€)."
+            f"(myDATA «ΜΗ ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ 381») — αν ληφθούν υπόψη, το νέο σύνολο ΦΠΑ εισροών θα ήταν {_ar_gr_money(new_inflow)}€ "
+            f"και το {balance_text}{credit_text}."
         ),
         "highlight": highlight,
         "extra_vat": extra,
@@ -20158,11 +20276,19 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
         }
     if ar_compliance.get_efka_self_employed_check(path, year).get("reason"):
         return None
+    found = int(check.get("found_months") or 0)
+    finding = (
+        f"Δεν βρέθηκε καμία εγγραφή πληρωμής ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007) στο myDATA — 0 από {check['expected_months']} αναμενόμενες{basis}"
+        if found == 0 else
+        f"Βρέθηκαν {found} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007){basis}"
+    )
     return {
         "type": "efka_self_employed_shortfall",
+        "found_months": found,
+        "expected_months": check.get("expected_months"),
+        "finding": finding + ".",
         "message": (
-            f"Βρέθηκαν {check['found_months']} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές "
-            f"ΕΦΚΑ Μη-Μισθωτών{basis} στην περίοδο — πιθανόν να υπάρχει ακόμα οφειλή, έλεγξε το ΚΕΑΟ της επιχείρησης "
+            f"{finding} στην περίοδο — πιθανόν να υπάρχει ακόμα οφειλή, έλεγξε το ΚΕΑΟ της επιχείρησης "
             "(ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη)."
         ),
     }

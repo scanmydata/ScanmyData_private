@@ -255,6 +255,35 @@ function arIncomeTaxSectionHtml(t) {
     <div style="font-size:11px;color:#475569;margin-top:2px;">Εκτίμηση επί του φορολογητέου της περιόδου — δεν περιλαμβάνει παρακρατήσεις, μειώσεις κλίμακας (ηλικία/τέκνα) ή μειώσεις προκαταβολής.${assumed}</div>`;
 }
 
+// Previous Φ2 period (from ΑΑΔΕ, every computation) + the cross-check of an
+// already-filed declaration for the examined period.
+function arVatPeriodInfoHtml(r) {
+  if (!r || r.vat_applicable === false) return '';
+  const lines = [];
+  const p = r.vat_prev_period;
+  if (p && p.ok) {
+    const per = p.period || `${p.period_from || ''} – ${p.period_to || ''}`;
+    let what;
+    if (p.status === 'NOT_SUBMITTED') what = 'δεν έχει υποβληθεί δήλωση';
+    else if (p.result === 'Πιστωτική') {
+      what = `Πιστωτική — για έκπτωση ${arFmtMoney(p.amount_for_deduction || 0)}€` + (p.amount_for_refund ? `, για επιστροφή ${arFmtMoney(p.amount_for_refund)}€` : '') + ' (συμψηφίστηκε)';
+    } else if (p.result === 'Χρεωστική') what = `Χρεωστική — ${arFmtMoney(p.total_due != null ? p.total_due : (p.lump_sum || p.first_installment))}€`;
+    else if (p.result) what = p.result;
+    else what = 'σε εκκρεμότητα';
+    const decl = p.type ? ` · ${arEscapeHtml(p.type)}${p.submitted_at ? ' ' + arEscapeHtml(p.submitted_at) : ''}` : '';
+    lines.push(`Προηγ. περίοδος ΦΠΑ (${arEscapeHtml(per)}), από ΑΑΔΕ: ${arEscapeHtml(what)}${decl}`);
+  } else if (p && p.error) {
+    lines.push(`Προηγ. περίοδος ΦΠΑ: δεν ελέγχθηκε (${arEscapeHtml(p.error)})`);
+  }
+  const c = r.vat_declared_check;
+  if (c) {
+    lines.push(c.match
+      ? `✔ Η υποβληθείσα Φ2 της περιόδου (${arEscapeHtml(c.period)}) συμφωνεί με το myDATA.`
+      : `<b style="color:#b91c1c;">≠ Η υποβληθείσα Φ2 (${arEscapeHtml(c.period)}) διαφέρει από το myDATA κατά ${arFmtMoney(Math.abs(c.difference))}€ — δες σημειώσεις.</b>`);
+  }
+  return lines.length ? `<div style="font-size:11px;color:#475569;margin-top:2px;">${lines.join('<br>')}</div>` : '';
+}
+
 function buildReportSectionHtml(name, vat, from, to, r) {
   const stockRowsHtml = r.stock_rows.map((row) => `
     <tr>
@@ -391,10 +420,11 @@ function buildReportSectionHtml(name, vat, from, to, r) {
         </tr>
         <tr class="ar-total-row">
           <td></td><td></td>
-          <td class="ar-label">Χρεωστικό Υπόλοιπο Περιόδου</td><td class="ar-num">${arFmtMoney(r.vat_period_balance)}</td>
+          <td class="ar-label">${Number(r.vat_period_balance) < 0 ? 'Πιστωτικό Υπόλοιπο Περιόδου' : 'Χρεωστικό Υπόλοιπο Περιόδου'}</td><td class="ar-num">${r.vat_period_balance == null ? arFmtMoney(null) : arFmtMoney(Math.abs(r.vat_period_balance))}</td>
         </tr>`}
       </tbody>
     </table>
+    ${arVatPeriodInfoHtml(r)}
     ${r.vat_applicable === false ? '' : '<div style="font-size:11px;color:#475569;margin-top:2px;">* ΦΠΑ εισροών: μόνο από τα <b>χαρακτηρισμένα</b> παραστατικά αγορών/εξόδων στο myDATA — τα αχαρακτήριστα δεν περιλαμβάνονται (αν υπάρχουν, το σύνολο μαζί τους φαίνεται στις σημειώσεις).</div>'}
     ${unresolvedNote}
     ${methodologyNote}
@@ -1055,6 +1085,8 @@ var AR_NOTE_TYPES = {
   small_business_vat_limit: { label: 'Απαλλαγή ΦΠΑ μικρών επιχειρήσεων — έσοδα κοντά/πάνω από 10.000€', mark: '§', cell: 'vat', bold: true },
   inventory_obligation: { label: 'Απογραφή λήξης (ν.4308 άρθ. 30 / ΠΟΛ.1019)', mark: '‡', cell: 'stock' },
   unclassified_vat_inflow: { label: 'ΦΠΑ εισροών χωρίς τα αχαρακτήριστα αγορών/εξόδων', mark: '◊', cell: 'vat' },
+  vat_prev_period: { label: 'ΦΠΑ προηγούμενης περιόδου (χρεωστική / χωρίς δήλωση)', mark: '▲', cell: 'vat' },
+  vat_declared_mismatch: { label: 'Διαφορά myDATA με την υποβληθείσα Φ2 (πιθανή τροποποιητική)', mark: '≠', cell: 'vat', bold: true },
 };
 
 // A note's message as HTML, with its `highlight` part (e.g. the new ΦΠΑ
@@ -1358,7 +1390,9 @@ var AR_EFKA_EXCEPTION_OPTIONS = [
 // (per month or as a lump sum), like payroll/rent.
 var AR_EFKA_MANUAL_OPTION = { key: 'manual_totals', label: 'Καταχώρηση συνόλων ΕΦΚΑ (χειροκίνητα, ανά μήνα ή σύνολο)' };
 
-async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom, dateTo) {
+// `finding`: what the myDATA check actually found (e.g. «Βρέθηκαν 3 από 9…» or
+// «Δεν βρέθηκε καμία εγγραφή…») — shown at the top of the dialog.
+async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom, dateTo, finding) {
   // Only offer the one reason that actually matches this company's known
   // type (from the ΑΑΔΕ Μητρώο auto-detect — see report.legal_kind) instead
   // of always showing both; when it's not known yet, fall back to both
@@ -1366,7 +1400,7 @@ async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom,
   const options = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !legalKind || o.legalKind === legalKind);
   const choice = await showModalChoice(
     `Εξαίρεση ΕΦΚΑ Μη-Μισθωτών — ${name} (${year})`,
-    'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
+    (finding ? finding + ' ' : '') + 'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
     [...(options.length ? options : AR_EFKA_EXCEPTION_OPTIONS), AR_EFKA_MANUAL_OPTION],
   );
   if (!choice) return false;
@@ -1402,7 +1436,7 @@ function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
   if (!notes || !notes.length) return '';
   const items = notes.map((n) => {
     const exceptionBtn = n.type === 'efka_self_employed_shortfall'
-      ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${arEscapeHtml(name)}" data-year="${year}" data-legal-kind="${arEscapeHtml(legalKind || '')}" data-from="${arEscapeHtml(from || '')}" data-to="${arEscapeHtml(to || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
+      ? ` <button type="button" class="ar-efka-exception-btn" data-html2canvas-ignore="true" data-name="${arEscapeHtml(name)}" data-year="${year}" data-legal-kind="${arEscapeHtml(legalKind || '')}" data-from="${arEscapeHtml(from || '')}" data-to="${arEscapeHtml(to || '')}" data-finding="${arEscapeHtml(n.finding || '')}" style="font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid #ccc;background:#fff;cursor:pointer;">🔧 εξαίρεση / σύνολα</button>`
       : '';
     return `<li style="display:list-item;list-style-type:disc;margin-bottom:2px;">${arNoteMessageHtml(n)}${exceptionBtn}</li>`;
   }).join('');
@@ -1416,7 +1450,7 @@ function renderReportNotesHtml(notes, name, year, legalKind, from, to) {
 function bindReportNoteButtons(container) {
   container.querySelectorAll('.ar-efka-exception-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year, btn.dataset.legalKind || null, btn.dataset.from || '', btn.dataset.to || '');
+      await resolveEfkaSelfEmployedException(btn.dataset.name, btn.dataset.year, btn.dataset.legalKind || null, btn.dataset.from || '', btn.dataset.to || '', btn.dataset.finding || '');
     });
   });
 }
@@ -1595,7 +1629,7 @@ async function computeSingle() {
       hideArOverlay();
       // Asked before the final computation; resolved or cancelled, it is not
       // asked again (efka_skip) — a cancel just leaves the standing note.
-      await resolveEfkaSelfEmployedException(name, resp.year, resp.legal_kind || null, from, to);
+      await resolveEfkaSelfEmployedException(name, resp.year, resp.legal_kind || null, from, to, resp.efka_finding || '');
       body.efka_skip = true;
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Επεξεργασία ΕΦΚΑ Μη-Μισθωτών, συνέχεια με απογραφή και τελικό υπολογισμό.');
       resp = await postJson('/api/accounting_result/compute', body);
@@ -2194,7 +2228,7 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation', 'unclassified_vat_inflow'];
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation', 'unclassified_vat_inflow', 'vat_prev_period', 'vat_declared_mismatch'];
 var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
@@ -2203,8 +2237,10 @@ var AR_BULK_NOTE_TYPE_LEGEND = {
   small_business_vat_limit: 'Ειδικό καθεστώς μικρών επιχειρήσεων: τα έσοδα πλησιάζουν (≥80%) ή ξεπέρασαν το όριο απαλλαγής ΦΠΑ των 10.000€.',
   inventory_obligation: 'Απογραφή λήξης: νέα υποχρέωση, ένδειξη απαλλαγής ΠΟΛ.1019, πρατήριο καυσίμων ή περίπτωση για έλεγχο (βλ. σημειώσεις της εταιρίας).',
   unclassified_vat_inflow: 'ΦΠΑ εισροών: μετράει μόνο τα χαρακτηρισμένα παραστατικά αγορών/εξόδων — υπάρχουν αχαρακτήριστα με ΦΠΑ στην περίοδο (δες το νέο σύνολο στις παρατηρήσεις).',
+  vat_prev_period: 'ΦΠΑ προηγούμενης περιόδου: χρεωστική δήλωση (έλεγξε την εξόφληση) ή δεν έχει υποβληθεί/οριστικοποιηθεί δήλωση Φ2.',
+  vat_declared_mismatch: 'Η ήδη υποβληθείσα Φ2 της περιόδου διαφέρει από τα στοιχεία του myDATA — πιθανή ανάγκη τροποποιητικής.',
 };
-var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷'];
+var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
 function renderBulkCompaniesSummary(companies) {
   const container = document.getElementById('arBulkReportContainer');
