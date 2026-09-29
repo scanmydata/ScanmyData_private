@@ -170,6 +170,84 @@ function arContactLineHtml(vat) {
   return bits.length ? '<div style="font-weight:400;font-size:0.8rem;color:#475569;">' + bits.join(' &nbsp;·&nbsp; ') + '</div>' : '';
 }
 
+// ---------------- Φόρος εισοδήματος (optional, user toggle) ----------------
+// Checkbox state is remembered per toggle (per-viewer convenience only).
+var AR_INCOME_TAX_PREF_PREFIX = 'ar_income_tax_enabled:';
+
+function arIncomeTaxEnabled(id) {
+  const el = document.getElementById(id);
+  return !!(el && el.checked);
+}
+
+// Optional manual previous-year advance (Ατομικός only): accepts 1.234,56 or 1234.56.
+function arPrevAdvanceOverride() {
+  const el = document.getElementById('arSinglePrevAdvance');
+  if (!el || el.classList.contains('hidden')) return null;
+  let raw = String(el.value || '').trim().replace(/\s|€/g, '');
+  if (!raw) return null;
+  if (raw.indexOf(',') !== -1) raw = raw.replace(/\./g, '').replace(',', '.');
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function arSyncPrevAdvanceInput() {
+  const input = document.getElementById('arSinglePrevAdvance');
+  if (input) input.classList.toggle('hidden', !arIncomeTaxEnabled('arSingleIncomeTax'));
+}
+
+function arInitIncomeTaxToggles() {
+  document.querySelectorAll('.ar-income-tax-toggle').forEach((cb) => {
+    try {
+      const saved = localStorage.getItem(AR_INCOME_TAX_PREF_PREFIX + cb.id);
+      if (saved !== null) cb.checked = saved === '1';
+    } catch (_) { /* storage unavailable: default unchecked */ }
+    cb.onchange = () => {
+      try { localStorage.setItem(AR_INCOME_TAX_PREF_PREFIX + cb.id, cb.checked ? '1' : '0'); } catch (_) { /* ignore */ }
+      arSyncPrevAdvanceInput();
+    };
+  });
+  arSyncPrevAdvanceInput();
+}
+
+function arPrevAdvanceSourceText(t) {
+  const info = t.prev_advance_info || {};
+  const period = info.date_from && info.date_to ? `${ddmmyyyy(info.date_from)}–${ddmmyyyy(info.date_to)}` : '';
+  const partial = info.partial_period ? ', μερική περίοδος' : '';
+  switch (t.prev_advance_source) {
+    case 'manual': return 'χειροκίνητη καταχώρηση';
+    case 'history': return `από τον υπολογισμό ${period}${partial}`;
+    case 'history_derived': return `εκτίμηση από το φορολογητέο του υπολογισμού ${period}${partial}`;
+    default: return `δεν βρέθηκε υπολογισμός του ${(t.year || 0) - 1} στο ιστορικό`;
+  }
+}
+
+function arIncomeTaxSectionHtml(t) {
+  if (!t) return '';
+  const isLegal = t.company_type === 'legal' || t.company_type === 'bank';
+  const typeLabel = isLegal
+    ? 'Νομικό πρόσωπο / οντότητα — 22%'
+    : `Φυσικό πρόσωπο — κλίμακα ${t.year >= 2026 ? '9/20/26/34/39/44%' : '9/22/28/36/44%'}`;
+  const advPct = Math.round((t.advance_rate || 0) * 100);
+  const balance = Number(t.balance || 0);
+  const balanceLabel = balance > 0 ? 'Χρεωστικό Υπόλοιπο Φόρου (πληρωμή)'
+    : (balance < 0 ? 'Πιστωτικό Υπόλοιπο Φόρου (επιστροφή)' : 'Υπόλοιπο Φόρου');
+  const assumed = t.company_type_assumed
+    ? ' Ο τύπος επιχείρησης δεν είναι γνωστός — θεωρήθηκε φυσικό πρόσωπο.'
+    : '';
+  return `
+    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">Φόρος Εισοδήματος (εκτίμηση)</div>
+    <table class="ar-report-table" style="margin-top:4px;">
+      <tbody>
+        <tr><td class="ar-label">Φορολογητέο Αποτέλεσμα</td><td class="ar-num">${arFmtMoney(t.taxable)}</td></tr>
+        <tr><td class="ar-label">Φόρος Εισοδήματος (${arEscapeHtml(typeLabel)})</td><td class="ar-num">${arFmtMoney(t.tax)}</td></tr>
+        <tr><td class="ar-label">Πλέον: Προκαταβολή Τρέχοντος Έτους (${advPct}%)</td><td class="ar-num">${arFmtMoney(t.advance)}</td></tr>
+        <tr><td class="ar-label">Μείον: Προκαταβολή Προηγούμενου Έτους <span style="font-weight:400;color:#475569;">(${arEscapeHtml(arPrevAdvanceSourceText(t))})</span></td><td class="ar-num">${t.prev_advance ? '−' + arFmtMoney(t.prev_advance) : arFmtMoney(0)}</td></tr>
+        <tr class="ar-total-row"><td class="ar-label">${balanceLabel}</td><td class="ar-num">${arFmtMoney(Math.abs(balance))}</td></tr>
+      </tbody>
+    </table>
+    <div style="font-size:11px;color:#475569;margin-top:2px;">Εκτίμηση επί του φορολογητέου της περιόδου — δεν περιλαμβάνει παρακρατήσεις, μειώσεις κλίμακας (ηλικία/τέκνα) ή μειώσεις προκαταβολής.${assumed}</div>`;
+}
+
 function buildReportSectionHtml(name, vat, from, to, r) {
   const stockRowsHtml = r.stock_rows.map((row) => `
     <tr>
@@ -281,6 +359,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
         </tr>
       </tbody>
     </table>
+    ${arIncomeTaxSectionHtml(r.income_tax)}
 
     ${r.vat_applicable !== false && r.vat_period_from && r.vat_period_to ? `
     <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${arEscapeHtml(ddmmyyyy(r.vat_period_from))} – ${arEscapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
@@ -437,6 +516,14 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
     // covers the cold-start case without meaningfully slowing anything down.
     try { await document.fonts.ready; } catch (_) {}
     await new Promise((r) => setTimeout(r, 250));
+    // Content wider than the fixed container (e.g. the consolidated table
+    // with its optional income-tax columns) would overflow and be cut off:
+    // widen the container to the content instead, so the whole thing is
+    // captured and html2pdf scales it down to the page width.
+    if (container.scrollWidth > container.clientWidth) {
+      container.style.width = container.scrollWidth + 'px';
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const capturedWidth = container.scrollWidth;
     const capturedHeight = container.scrollHeight;
     const worker = window.html2pdf().from(container).set({
@@ -552,6 +639,20 @@ async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
 
 function buildConsolidatedTableHtml(companies) {
   companies = (companies || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'el'));
+  // Income-tax columns only when the run computed it for at least one company.
+  const withIncomeTax = companies.some((c) => c.report && c.report.income_tax);
+  const taxCells = (t) => {
+    if (!withIncomeTax) return '';
+    if (!t) return '<td class="ar-num">—</td><td class="ar-num">—</td><td class="ar-num">—</td><td class="ar-num">—</td>';
+    const bal = Number(t.balance || 0);
+    const balCell = bal < 0 ? `<span style="color:#15803d;">−${arFmtMoney(Math.abs(bal))}</span>` : arFmtMoney(bal);
+    const prevMark = t.prev_advance_source === 'not_found' ? '<sup style="color:#b45309;font-weight:700;">?</sup>'
+      : (t.prev_advance_source === 'history_derived' ? '<sup style="color:#475569;">≈</sup>' : '');
+    return `<td class="ar-num">${arFmtMoney(t.tax)}</td>
+      <td class="ar-num">${arFmtMoney(t.advance)}</td>
+      <td class="ar-num">${arFmtMoney(t.prev_advance)}${prevMark}</td>
+      <td class="ar-num" style="font-weight:700;">${balCell}</td>`;
+  };
   // Findings (report notes) become markers next to the affected cell —
   // * μισθοδοσία, ** ενοίκιο, *** ΕΦΚΑ on Δαπάνες, † on Αχαρακτ. — each
   // linking (inside the PDF) to its explanation in «Παρατηρήσεις» below.
@@ -590,6 +691,7 @@ function buildConsolidatedTableHtml(companies) {
       <td class="ar-num"></td>
       <td class="ar-num">${fmtAmountOrBlank(-Math.abs(r.unclassified_net || 0))}${unclassifiedMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.taxable_result)}</td>
+      ${taxCells(r.income_tax)}
       <td class="ar-num"></td>
       <td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}${vatMarks}</td>
     </tr>`;
@@ -639,10 +741,11 @@ function buildConsolidatedTableHtml(companies) {
         <th>Κωδ.</th><th>Επωνυμία</th><th>ΑΦΜ</th><th>Ημερ. Υπολ.</th><th>Από</th><th>Έως</th>
         <th>Απ. Έναρξης</th><th>Αγορές Χρ.</th><th>Απ. Τέλους</th><th>Κόστος Πωλ.</th><th>Δαπάνες</th>
         <th>Ακ. Έσοδα Βιβ.</th><th>Ακ. Έσοδα Αυτ.</th><th>Εκκρεμ. myDATA (Αχαρακτ.)</th>
-        <th>Φορολογητέα Κέρδη</th><th>Τελ. Κέρδη Β.Α.</th><th>ΦΠΑ</th>
+        <th>Φορολογητέα Κέρδη</th>${withIncomeTax ? '<th>Φόρος Εισοδ.</th><th>Προκ. Τρέχ.</th><th>Προκ. Προηγ.</th><th>Υπόλ. Φόρου</th>' : ''}<th>Τελ. Κέρδη Β.Α.</th><th>ΦΠΑ</th>
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
+    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος: εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). <b>≈</b> προκαταβολή προηγ. έτους εκτιμημένη από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε περσινός υπολογισμός στο ιστορικό (0).</div>` : ''}
     ${notesHtml}
     ${legendHtml}
   </div>`;
@@ -1368,6 +1471,8 @@ async function computeSingle() {
   const body = {
     credential_name: name, date_from: from, date_to: to,
     excel_group_totals: window.__arSingleExcelTotals || null,
+    income_tax: arIncomeTaxEnabled('arSingleIncomeTax'),
+    prev_advance_override: arPrevAdvanceOverride(),
   };
 
   try {
@@ -1494,6 +1599,11 @@ async function computeSingle() {
     // path. Repeat the same advisories here so they survive in the
     // persistent results banner too.
     let resultMsg = 'Λογιστικό Αποτέλεσμα (Ατομικός): ολοκληρώθηκε — ' + name + ' (Φορολογητέα Κέρδη ' + arFmtMoney(resp.report.taxable_result) + ').';
+    const incomeTax = resp.report.income_tax;
+    if (incomeTax) {
+      const bal = Number(incomeTax.balance || 0);
+      resultMsg += ` Φόρος εισοδήματος ${arFmtMoney(incomeTax.tax)} · ${bal < 0 ? 'πιστωτικό' : 'χρεωστικό'} υπόλοιπο ${arFmtMoney(Math.abs(bal))} (προκαταβολή προηγ. έτους: ${arPrevAdvanceSourceText(incomeTax)}).`;
+    }
     if (advisories.length) resultMsg += ' ' + advisories.join(' • ');
     showArResultsFlash(
       resultMsg,
@@ -2066,7 +2176,9 @@ function renderBulkCompaniesSummary(companies) {
   // "Incorrect column count" warning. Same border/header/hover look, kept
   // as a separate selector in accounting_result.html's <style>.
   summaryTable.className = 'ar-bulk-summary-table';
-  summaryTable.innerHTML = '<thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Φορολογητέα Κέρδη</th><th></th></tr></thead><tbody></tbody>';
+  const withIncomeTax = companies.some((c) => c.report && c.report.income_tax);
+  summaryTable.innerHTML = '<thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Φορολογητέα Κέρδη</th>'
+    + (withIncomeTax ? '<th>Υπόλοιπο Φόρου</th>' : '') + '<th></th></tr></thead><tbody></tbody>';
   const tbody = summaryTable.querySelector('tbody');
   companies.forEach((c, idx) => {
     const tr = document.createElement('tr');
@@ -2088,7 +2200,14 @@ function renderBulkCompaniesSummary(companies) {
     const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
     const tdAmt = document.createElement('td'); tdAmt.className = 'ar-num'; tdAmt.textContent = arFmtMoney(c.report.taxable_result);
     const tdBtn = document.createElement('td'); tdBtn.appendChild(dlBtn);
-    tr.append(tdName, tdVat, tdAmt, tdBtn);
+    tr.append(tdName, tdVat, tdAmt);
+    if (withIncomeTax) {
+      const t = c.report.income_tax;
+      const tdTax = document.createElement('td'); tdTax.className = 'ar-num';
+      tdTax.textContent = t ? (Number(t.balance) < 0 ? '−' + arFmtMoney(Math.abs(t.balance)) + ' (επιστροφή)' : arFmtMoney(t.balance)) : '—';
+      tr.append(tdTax);
+    }
+    tr.append(tdBtn);
     tbody.appendChild(tr);
   });
   container.appendChild(summaryTable);
@@ -2353,6 +2472,7 @@ async function runBulk() {
   setBulkCrossPageLabel(`Βήμα 3/3 — υπολογισμός ${names.length} εταιριών…`);
   const bulkResp = await postJson('/api/accounting_result/bulk_compute', {
     credential_names: names, date_from: from, date_to: to, job_id: jobId,
+    income_tax: arIncomeTaxEnabled('arBulkIncomeTax'),
   });
   stopBulkCrossPageBanner();
   if (!bulkResp.ok) {
@@ -3247,6 +3367,7 @@ function arInitPageHandlers() {
   document.getElementById('arTabBulkBtn').addEventListener('click', () => showArTab('bulk'));
   document.getElementById('arTabSavedBtn').addEventListener('click', () => showArTab('saved'));
 
+  arInitIncomeTaxToggles();
   document.getElementById('arSingleComputeBtn').addEventListener('click', computeSingle);
   document.getElementById('arSingleExcelFile').addEventListener('change', (e) => uploadSingleExcel(e.target.files[0]));
   document.getElementById('arSingleCredential').addEventListener('change', (e) => {

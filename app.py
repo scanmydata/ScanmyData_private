@@ -18552,6 +18552,29 @@ def _ar_year_from_date(date_str: str) -> int:
     return d.year if d else datetime.datetime.now().year
 
 
+def _ar_apply_income_tax(report: Dict[str, Any], vat: str, year: int, enabled: bool,
+                         prev_advance_override: Any = None) -> None:
+    """Optional «Φόρος εισοδήματος» block (user toggle, Ατομικός & Μαζικός):
+    tax on the report's Φορολογητέο Αποτέλεσμα by company type, this year's
+    advance, and the PREVIOUS year's advance fetched from this company's own
+    computation history (see accounting_result/income_tax.py). Must run
+    before the report is appended to history, so next year's fetch finds
+    this year's advance stored as-is. No-op when disabled."""
+    if not enabled:
+        return
+    try:
+        from accounting_result import income_tax as ar_income_tax
+        from accounting_result import history_store as ar_history
+        from accounting_result.engine import parse_date as _ar_parse_date
+        entries = ar_history.get_history(_ar_history_path(vat), limit=0, include_report=True)
+        report["income_tax"] = ar_income_tax.build_income_tax_block(
+            report.get("taxable_result") or 0.0, report.get("legal_kind"), year,
+            entries, _ar_parse_date, prev_advance_override,
+        )
+    except Exception:
+        log.exception("income tax computation failed for vat=%s", vat)
+
+
 @app.route("/api/accounting_result/compute", methods=["POST"])
 def api_accounting_result_compute():
     try:
@@ -18746,6 +18769,10 @@ def api_accounting_result_compute():
         # _ar_ensure_vat_profile_checked); lets the frontend's ΕΦΚΑ
         # Μη-Μισθωτών exception modal show only the one reason that applies.
         report["legal_kind"] = _ar_legal_kind(path, vat)
+        _ar_apply_income_tax(
+            report, vat, year, bool(payload.get("income_tax")),
+            payload.get("prev_advance_override"),
+        )
         from accounting_result import compliance_notes_store as _ar_cn_efka
         _ar_cn_efka.clear_efka_check(path, year)
 
@@ -19121,6 +19148,7 @@ def api_accounting_result_bulk_compute():
                 report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
 
                 report["legal_kind"] = _ar_legal_kind(path, vat)
+                _ar_apply_income_tax(report, vat, year, bool(payload.get("income_tax")))
                 from accounting_result import compliance_notes_store as _ar_cn_efka
                 _ar_cn_efka.clear_efka_check(path, year)
 
