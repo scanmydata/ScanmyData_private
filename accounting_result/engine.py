@@ -28,14 +28,18 @@ accounts):
     always read revenue off this exact range — the per-activity codes
     161/261/361/461 documented in e3_field_map.py are Ε3-*form* aggregation
     targets, not tags that ever appear on a live classified entry). 561
-    ("Πωλήσεις αγαθών και υπηρεσιών") mixes goods and services together, so
-    it's split into 70 (Πωλήσεις Εμπορευμάτων) vs 73 (Πωλήσεις Υπηρεσιών) using
-    the entry's classification_category text ("ΥΠΗΡΕΣ..."), falling back to
-    invoice_type ("2.x" = AADE services-invoice type) — myDATA has no other
-    per-entry goods-vs-services signal, so this is a best-effort split, not an
-    exact one. 563/564/565 (credit interest/FX gains/investment income)->76
-    (Έσοδα Κεφαλαίων), 568 (κέρδη επιμέτρησης εύλογη αξία)->77, 570 (ασυνήθη
-    έσοδα)->81. 562/566/567/569 have no confident GLS home and are left out.
+    ("Πωλήσεις αγαθών και υπηρεσιών") mixes goods, products and services, so
+    it's split by the entry's myDATA income classification CATEGORY, which
+    RequestE3Info returns as a code (never Greek text): category1_1 -> 70
+    (Πωλήσεις Εμπορευμάτων), category1_2 -> 71 (Πωλήσεις Προϊόντων),
+    category1_3 -> 73 (Πωλήσεις Υπηρεσιών). Only for any other category does
+    the older heuristic run as a fallback (category text "ΥΠΗΡΕΣ..." or
+    invoice_type "2.x" -> 73, else 70). All the remaining Ζ1 income codes are
+    included so the total matches the E3 page's Ζ1 (560) sum: 562 (λοιπά
+    συνήθη έσοδα)->74, 563/564/565 (τόκοι/συναλλαγματικές/συμμετοχές)->76
+    (Έσοδα Κεφαλαίων), 566 (κέρδη διάθεσης μη κυκλοφορούντων)->81, 567
+    (αναστροφή προβλέψεων)->82, 568 (κέρδη επιμέτρησης)->77, 569 (φόρος
+    εισοδήματος - έσοδα)->81, 570 (ασυνήθη έσοδα)->81.
   - Stock purchases: 102 (αγορές εμπορευμάτων, εμπορική)->20, 202/302 (αγορές
     πρώτων υλών, παραγωγική/αγροτική)->24, 313 (αγορές ζώων-φυτών)->27 (Βιολ.
     Περ. Στοιχ.).
@@ -159,7 +163,29 @@ EXTRA_SALES_LABELS = {
 # no other per-entry goods-vs-services signal.
 _SALES_TOTAL_CODE = "561"
 _SERVICE_TYPE_RE = re.compile(r"^\s*2(\.\d+)?\b")
-_INCOME_DIRECT_TO_GLS = {"563": "76", "564": "76", "565": "76", "568": "77", "570": "81"}
+# myDATA στέλνει στο V_Class_Category ΚΩΔΙΚΟ (category1_*), ποτέ ελληνικό κείμενο
+# (βλ. docs/MYDATA_API_v2.0.1_OVERVIEW.md) — γι' αυτό ο παλιός έλεγχος «ΥΠΗΡΕΣ»
+# δεν έπιανε ποτέ και τα προϊόντα (71) δεν εμφανίζονταν καθόλου. Η κατηγορία
+# χαρακτηρισμού είναι το ΑΚΡΙΒΕΣ σήμα εμπορεύματα/προϊόντα/υπηρεσίες:
+#   category1_1 Έσοδα από Πώληση Εμπορευμάτων -> 70
+#   category1_2 Έσοδα από Πώληση Προϊόντων     -> 71
+#   category1_3 Έσοδα από Παροχή Υπηρεσιών     -> 73
+# Άλλη κατηγορία -> ο προηγούμενος κανόνας (κείμενο/τύπος 2.x) ως fallback.
+_SALES_CATEGORY_TO_GLS = {"CATEGORY1_1": "70", "CATEGORY1_2": "71", "CATEGORY1_3": "73"}
+# Όλοι οι κωδικοί εσόδων 561-570 (Πίνακας Ζ1 του Ε3, όπως τους αθροίζει η σελίδα
+# Ε3) ώστε το σύνολο πωλήσεων/εσόδων να ταυτίζεται με το Ε3. Πριν έλειπαν οι
+# 562/566/567/569.
+_INCOME_DIRECT_TO_GLS = {
+    "562": "74",   # Λοιπά συνήθη έσοδα                  -> 74 Επιχορηγ. & διάφ. έσοδα πωλ.
+    "563": "76",   # Πιστωτικοί τόκοι                    -> 76 Έσοδα κεφαλαίων
+    "564": "76",   # Πιστωτικές συναλλαγματικές          -> 76
+    "565": "76",   # Έσοδα συμμετοχών                    -> 76
+    "566": "81",   # Κέρδη από διάθεση μη κυκλοφορούντων -> 81 Έκτακτα έσοδα
+    "567": "82",   # Κέρδη από αναστροφή προβλέψεων      -> 82 Έσοδα προηγ. χρήσεων
+    "568": "77",   # Κέρδη από επιμέτρηση                -> 77
+    "569": "81",   # Φόρος εισοδήματος - έσοδα           -> 81
+    "570": "81",   # Ασυνήθη έσοδα και κέρδη             -> 81
+}
 _STOCK_PURCHASE_TO_GLS = {"102": "20", "202": "24", "302": "24", "313": "27"}
 _PRODUCTION_EXPENSE_CODES = {"105", "212", "317"}
 _CAPEX_CODES = {"802", "822", "842", "862", "882"}
@@ -442,7 +468,12 @@ def build_sales_groups(classified_entries: List[dict]) -> Dict[str, float]:
             continue
 
         if code == _SALES_TOTAL_CODE:
-            category = str(row.get("classification_category") or "").upper()
+            category = str(row.get("classification_category") or "").strip().upper()
+            by_category = _SALES_CATEGORY_TO_GLS.get(category)
+            if by_category:
+                add(by_category, amount)
+                continue
+            # Fallback: ο προηγούμενος κανόνας (κείμενο κατηγορίας / τύπος 2.x).
             invoice_type = str(row.get("invoice_type") or "")
             is_service = "ΥΠΗΡΕΣ" in category or bool(_SERVICE_TYPE_RE.match(invoice_type))
             add("73" if is_service else "70", amount)

@@ -169,6 +169,18 @@ function arContactLineHtml(vat) {
   const bits = arContactBits(vat);
   return bits.length ? '<div style="font-weight:400;font-size:0.8rem;color:#475569;">' + bits.join(' &nbsp;·&nbsp; ') + '</div>' : '';
 }
+// PDF ατομικού: μεγαλύτερα στοιχεία επικοινωνίας (και η διεύθυνση, αφού δεν
+// υπάρχουν πια τα στοιχεία λογιστή στην κεφαλίδα).
+function arContactBlockPdfHtml(vat) {
+  const c = (window.__arContactByVat || {})[String(vat || '')] || {};
+  const bits = arContactBits(vat);
+  const lines = [];
+  if (c.address) lines.push('Διεύθυνση: ' + arEscapeHtml(c.address));
+  if (bits.length) lines.push(bits.join(' &nbsp;·&nbsp; '));
+  return lines.length
+    ? '<div style="font-weight:500;font-size:0.95rem;color:#1f2937;line-height:1.45;margin-top:2px;">' + lines.join('<br>') + '</div>'
+    : '';
+}
 
 // ---------------- Φόρος εισοδήματος (optional, user toggle) ----------------
 // Checkbox state is remembered per toggle (per-viewer convenience only).
@@ -242,11 +254,11 @@ function arIncomeTaxSectionHtml(t) {
     ? ' Ο τύπος επιχείρησης δεν είναι γνωστός — θεωρήθηκε φυσικό πρόσωπο.'
     : '';
   return `
-    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">Φόρος Εισοδήματος (εκτίμηση)</div>
+    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">Φόρος Εισοδήματος Επαγγελματικής Δραστηριότητας (εκτίμηση)</div>
     <table class="ar-report-table" style="margin-top:4px;">
       <tbody>
         <tr><td class="ar-label">Φορολογητέο Αποτέλεσμα</td><td class="ar-num">${arFmtMoney(t.taxable)}</td></tr>
-        <tr><td class="ar-label">Φόρος Εισοδήματος (${arEscapeHtml(typeLabel)})</td><td class="ar-num">${arFmtMoney(t.tax)}</td></tr>
+        <tr><td class="ar-label">Φόρος Εισοδήματος Επαγγελματικής Δραστηριότητας (${arEscapeHtml(typeLabel)})</td><td class="ar-num">${arFmtMoney(t.tax)}</td></tr>
         <tr><td class="ar-label">Πλέον: Προκαταβολή Τρέχοντος Έτους (${advPct}%)</td><td class="ar-num">${arFmtMoney(t.advance)}</td></tr>
         <tr><td class="ar-label">Μείον: Προκαταβολή Προηγούμενου Έτους <span style="font-weight:400;color:#475569;">(${arEscapeHtml(arPrevAdvanceSourceText(t))})</span></td><td class="ar-num">${t.prev_advance ? '−' + arFmtMoney(t.prev_advance) : arFmtMoney(0)}</td></tr>
         <tr class="ar-total-row"><td class="ar-label">${balanceLabel}</td><td class="ar-num">${arFmtMoney(Math.abs(balance))}</td></tr>
@@ -284,7 +296,8 @@ function arVatPeriodInfoHtml(r) {
   return lines.length ? `<div style="font-size:11px;color:#475569;margin-top:2px;">${lines.join('<br>')}</div>` : '';
 }
 
-function buildReportSectionHtml(name, vat, from, to, r) {
+function buildReportSectionHtml(name, vat, from, to, r, opts) {
+  const forPdf = !!(opts && opts.pdf);
   const stockRowsHtml = r.stock_rows.map((row) => `
     <tr>
       <td class="ar-label">${arEscapeHtml(row.code)} ${arEscapeHtml(row.label)}</td>
@@ -336,10 +349,15 @@ function buildReportSectionHtml(name, vat, from, to, r) {
 
   return `
   <div class="ar-report-section">
+    ${forPdf ? `
+    <div class="ar-report-header">
+      <div class="ar-company-block" style="font-size:1.15rem;">${arEscapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${arEscapeHtml(vat || '')})</span>${arContactBlockPdfHtml(vat)}</div>
+      <div style="text-align:right;white-space:nowrap;"><strong>Ημερομηνία: ${todayStr()}</strong></div>
+    </div>` : `
     <div class="ar-report-header">
       <div class="ar-company-block">${arEscapeHtml(name)} <span class="ar-vat">(ΑΦΜ: ${arEscapeHtml(vat || '')})</span>${arContactLineHtml(vat)}</div>
       <div style="text-align:right;">Στοιχεία Λογιστή: ${arEscapeHtml(window.AR_ACCOUNTANT_NAME || '')}<br><strong>Ημερομηνία: ${todayStr()}</strong></div>
-    </div>
+    </div>`}
     <div class="ar-report-title">Λογιστικό Αποτέλεσμα</div>
     <div class="ar-report-period">Από: ${ddmmyyyy(from)}&nbsp;&nbsp;Έως: ${ddmmyyyy(to)}</div>
 
@@ -395,7 +413,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
         </tr>
       </tbody>
     </table>
-    ${arIncomeTaxSectionHtml(r.income_tax)}
+    ${forPdf ? '' : arIncomeTaxSectionHtml(r.income_tax)}
 
     ${r.vat_applicable !== false && r.vat_period_from && r.vat_period_to ? `
     <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${arEscapeHtml(ddmmyyyy(r.vat_period_from))} – ${arEscapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
@@ -426,6 +444,7 @@ function buildReportSectionHtml(name, vat, from, to, r) {
     </table>
     ${arVatPeriodInfoHtml(r)}
     ${r.vat_applicable === false ? '' : '<div style="font-size:11px;color:#475569;margin-top:2px;">* ΦΠΑ εισροών: μόνο από τα <b>χαρακτηρισμένα</b> παραστατικά αγορών/εξόδων στο myDATA — τα αχαρακτήριστα δεν περιλαμβάνονται (αν υπάρχουν, το σύνολο μαζί τους φαίνεται στις σημειώσεις).</div>'}
+    ${forPdf ? arIncomeTaxSectionHtml(r.income_tax) : ''}
     ${unresolvedNote}
     ${methodologyNote}
   </div>`;
@@ -628,6 +647,133 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
   }
 }
 
+// ---------------- PDF ατομικού: μεγαλύτερα γράμματα + 2η σελίδα αν χρειαστεί ----------------
+// Η προηγούμενη απόδοση (1000px πλάτος, όλα συμπιεσμένα σε ΜΙΑ σελίδα) έβγαζε
+// μικρά γράμματα. Εδώ: στενότερο πλάτος απόδοσης (-> μεγαλύτερη κλίμακα στο A4),
+// μικρά περιθώρια δεξιά/αριστερά, και νέα σελίδα όπου χρειάζεται — το κόψιμο
+// γίνεται ΑΝΑΜΕΣΑ σε γραμμές πίνακα / ενότητες, ποτέ μέσα σε γραμμή.
+var AR_INDIVIDUAL_PDF = { widthPx: 800, marginXmm: 5, marginYmm: 7 };
+
+async function buildIndividualPdfBlob(innerHtml) {
+  await ensureHtml2Pdf();
+  const cfg = AR_INDIVIDUAL_PDF;
+  const container = document.createElement('div');
+  container.style.width = cfg.widthPx + 'px';
+  container.style.background = '#fff';
+  container.style.color = '#111';
+  container.style.padding = '4px';
+  container.innerHTML = innerHtml;
+  document.body.appendChild(container);
+  try {
+    try { await document.fonts.ready; } catch (_) {}
+    await new Promise((r) => setTimeout(r, 250));
+    if (container.scrollWidth > container.clientWidth) {
+      container.style.width = container.scrollWidth + 'px';
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const capturedWidth = container.scrollWidth;
+    const capturedHeight = container.scrollHeight;
+
+    // Επιτρεπτά σημεία αλλαγής σελίδας (px από την κορυφή): τέλος κάθε γραμμής
+    // πίνακα, κάθε στοιχείου λίστας σημειώσεων και κάθε ενότητας της αναφοράς.
+    const top0 = container.getBoundingClientRect().top;
+    const breaks = [];
+    const sectionBreaks = [];   // όρια ολόκληρων ενοτήτων (πίνακας/σημειώσεις) — προτιμώνται
+    container.querySelectorAll('tr, li, .ar-report-section > *').forEach((el) => {
+      const b = Math.round(el.getBoundingClientRect().bottom - top0);
+      if (b > 0 && b < capturedHeight) breaks.push(b);
+    });
+    container.querySelectorAll('.ar-report-section > *').forEach((el) => {
+      // κόψιμο ΠΡΙΝ από την ενότητα = ο πίνακας περνά ολόκληρος στην επόμενη σελίδα.
+      // Πίνακας με επικεφαλίδα ακριβώς από πάνω: κόβουμε πριν από την επικεφαλίδα
+      // (αυτή δίνει ήδη το δικό της όριο), ώστε να μη μείνει ορφανή.
+      const prev = el.previousElementSibling;
+      if (el.tagName === 'TABLE' && prev && prev.tagName === 'DIV' && !prev.querySelector('table')
+          && prev.getBoundingClientRect().height < 40) return;
+      const t = Math.round(el.getBoundingClientRect().top - top0);
+      if (t > 0 && t < capturedHeight) sectionBreaks.push(t);
+    });
+    breaks.sort((a, b) => a - b);
+    sectionBreaks.sort((a, b) => a - b);
+
+    const worker = window.html2pdf().from(container).set({
+      margin: 0,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth, height: capturedHeight, scrollX: 0, scrollY: 0 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['legacy'] },
+    });
+    const canvas = await worker.toCanvas().get('canvas');
+    const pdf = await worker.toPdf().get('pdf');
+
+    const pageW = 210, pageH = 297;
+    const usableW = pageW - 2 * cfg.marginXmm;
+    const usableH = pageH - 2 * cfg.marginYmm;
+    const mmPerPx = usableW / capturedWidth;
+    const pagePx = usableH / mmPerPx;          // πόσα CSS px χωράνε σε μία σελίδα
+    const canvasPerPx = canvas.width / capturedWidth;
+
+    const slices = [];
+    let start = 0;
+    while (start < capturedHeight - 1) {
+      const limit = start + pagePx;
+      let end = capturedHeight;
+      if (limit < capturedHeight) {
+        // 1) όριο ενότητας στο κάτω τέταρτο της σελίδας (ο πίνακας δεν κόβεται)
+        const sectionCands = sectionBreaks.filter((b) => b > start + pagePx * 0.75 && b <= limit);
+        // 2) αλλιώς ανάμεσα σε γραμμές πίνακα / σημειώσεις
+        const candidates = breaks.filter((b) => b > start + pagePx * 0.4 && b <= limit);
+        end = sectionCands.length ? sectionCands[sectionCands.length - 1]
+          : (candidates.length ? candidates[candidates.length - 1] : Math.floor(limit));
+      }
+      slices.push([start, end]);
+      start = end;
+    }
+
+    while (pdf.internal.getNumberOfPages() > 1) pdf.deletePage(pdf.internal.getNumberOfPages());
+    slices.forEach(([s, e], i) => {
+      if (i > 0) pdf.addPage('a4', 'portrait');
+      pdf.setPage(i + 1);
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      const part = document.createElement('canvas');
+      part.width = canvas.width;
+      part.height = Math.max(1, Math.round((e - s) * canvasPerPx));
+      const ctx = part.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, part.width, part.height);
+      ctx.drawImage(canvas, 0, Math.round(s * canvasPerPx), canvas.width, part.height, 0, 0, part.width, part.height);
+      pdf.addImage(part.toDataURL('image/jpeg', 0.98), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (e - s) * mmPerPx);
+    });
+    return pdf.output('blob');
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
+// c = {name, vat, from, to, report}. Νέα απόδοση πρώτα· αν αποτύχει, η
+// προηγούμενη (όλα σε μία σελίδα) ως fallback.
+async function arIndividualPdfBlob(c) {
+  const html = buildReportSectionHtml(c.name, c.vat, c.from, c.to, c.report, { pdf: true });
+  try {
+    return await buildIndividualPdfBlob(html);
+  } catch (e) {
+    console.warn('Individual PDF (paged) failed — falling back to single-page render', e);
+    return await buildPdfBlob(html, 'portrait', true);
+  }
+}
+
+async function exportIndividualPdf(c) {
+  await arLoadContactCache();
+  showArOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
+  try {
+    const blob = await arIndividualPdfBlob(c);
+    downloadBlob(blob, safeFilename('Λογιστικό_Αποτέλεσμα_' + c.name + '_' + periodSuffix(c.from, c.to)) + '.pdf');
+  } finally {
+    hideArOverlay();
+  }
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -664,7 +810,7 @@ async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
     for (let i = 0; i < companies.length; i++) {
       const c = companies[i];
       if (statusEl) statusEl.textContent = `Δημιουργία PDF ${i + 1}/${companies.length} — ${c.name}...`;
-      const blob = await buildPdfBlob(buildReportSectionHtml(c.name, c.vat, c.from, c.to, c.report), 'portrait', true);
+      const blob = await arIndividualPdfBlob(c);
       const suffix = periodSuffix(c.from, c.to);
       zip.file(safeFilename('Λογιστικό_Αποτέλεσμα_' + c.name + (suffix ? '_' + suffix : '')) + '.pdf', blob);
     }
@@ -780,11 +926,11 @@ function buildConsolidatedTableHtml(companies) {
         <th>Κωδ.</th><th>Επωνυμία</th><th>ΑΦΜ</th><th>Ημερ. Υπολ.</th><th>Από</th><th>Έως</th>
         <th>Απ. Έναρξης</th><th>Αγορές Χρ.</th><th>Απ. Τέλους</th><th>Κόστος Πωλ.</th><th>Δαπάνες</th>
         <th>Ακ. Έσοδα Βιβ.</th><th>Ακ. Έσοδα Αυτ.</th><th>Εκκρεμ. myDATA (Αχαρακτ.)</th>
-        <th>Φορολογητέα Κέρδη</th>${withIncomeTax ? '<th>Φόρος Εισοδ.</th><th>Προκ. Τρέχ.</th><th>Προκ. Προηγ.</th><th>Υπόλ. Φόρου</th>' : ''}<th>Τελ. Κέρδη Β.Α.</th><th>ΦΠΑ</th>
+        <th>Φορολογητέα Κέρδη</th>${withIncomeTax ? '<th>Φόρος Εισ. Επαγγ. (εκτ.)</th><th>Προκ. Τρέχ.</th><th>Προκ. Προηγ.</th><th>Υπόλ. Φόρου</th>' : ''}<th>Τελ. Κέρδη Β.Α.</th><th>ΦΠΑ</th>
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος: εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>` : ''}
+    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση): εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>` : ''}
     ${notesHtml}
     ${legendHtml}
   </div>`;
@@ -1678,7 +1824,7 @@ async function computeSingle() {
     const incomeTax = resp.report.income_tax;
     if (incomeTax) {
       const bal = Number(incomeTax.balance || 0);
-      resultMsg += ` Φόρος εισοδήματος ${arFmtMoney(incomeTax.tax)} · ${bal < 0 ? 'πιστωτικό' : 'χρεωστικό'} υπόλοιπο ${arFmtMoney(Math.abs(bal))} (προκαταβολή προηγ. έτους: ${arPrevAdvanceSourceText(incomeTax)}).`;
+      resultMsg += ` Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση) ${arFmtMoney(incomeTax.tax)} · ${bal < 0 ? 'πιστωτικό' : 'χρεωστικό'} υπόλοιπο ${arFmtMoney(Math.abs(bal))} (προκαταβολή προηγ. έτους: ${arPrevAdvanceSourceText(incomeTax)}).`;
     }
     if (advisories.length) resultMsg += ' ' + advisories.join(' • ');
     showArResultsFlash(
@@ -2267,7 +2413,7 @@ function renderBulkCompaniesSummary(companies) {
     dlBtn.textContent = '⬇ PDF';
     dlBtn.addEventListener('click', () => {
       const cc = window.__arBulkCompanies[idx];
-      exportHtmlAsPdf(() => buildReportSectionHtml(cc.name, cc.vat, cc.from, cc.to, cc.report), 'Λογιστικό_Αποτέλεσμα_' + cc.name + '_' + periodSuffix(cc.from, cc.to), 'portrait', true);
+      exportIndividualPdf(cc);
     });
     const noteNumbers = (c.notes || [])
       .map((n) => AR_BULK_NOTE_TYPE_ORDER.indexOf(n.type) + 1)
@@ -2400,7 +2546,7 @@ async function openBulkRun(batchId) {
       dlBtn.className = 'ar-bulk-dl-btn';
       dlBtn.textContent = '⬇ PDF';
       dlBtn.addEventListener('click', () => {
-        exportHtmlAsPdf(() => buildReportSectionHtml(c.name, c.vat, c.from, c.to, c.report), 'Λογιστικό_Αποτέλεσμα_' + c.name + '_' + periodSuffix(c.from, c.to), 'portrait', true);
+        exportIndividualPdf(c);
       });
       const tdName = document.createElement('td'); tdName.textContent = c.name;
       const tdVat = document.createElement('td'); tdVat.className = 'ar-mono'; tdVat.textContent = c.vat || '';
@@ -3466,7 +3612,7 @@ function arInitPageHandlers() {
   document.getElementById('arSinglePdfBtn').addEventListener('click', () => {
     const s = window.__arSingleLastSection;
     if (!s) return;
-    exportHtmlAsPdf(() => buildReportSectionHtml(s.name, s.vat, s.from, s.to, s.report), 'Λογιστικό_Αποτέλεσμα_' + s.name + '_' + periodSuffix(s.from, s.to), 'portrait', true);
+    exportIndividualPdf(s);
   });
 
   document.getElementById('arExcelHintBtn').addEventListener('click', () => { moveModalsToBody(); document.getElementById('arExcelHintModal').classList.remove('hidden'); });
