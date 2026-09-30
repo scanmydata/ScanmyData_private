@@ -501,12 +501,39 @@ def _run_manual_job(app, action: str, folders: List[str], force: bool) -> None:
     from firebase import firebase_config as fc
     results: List[Dict[str, Any]] = []
     done = 0
+    job_started = time.time()
+    base: Dict[str, Any] = {}
+    transfer: Dict[str, Any] = {}
+    last_write = [0.0, None]  # [χρόνος τελευταίας εγγραφής, τελευταία φάση]
+
+    def _sink(info: Dict[str, Any]) -> None:
+        # Πρόοδος μεταφοράς από drive_storage (φάση, αρχεία x/y, bytes, τρέχον αρχείο).
+        transfer.update(info)
+        transfer["updated_at"] = time.time()
+        now = time.time()
+        phase = info.get("phase")
+        if phase == last_write[1] and now - last_write[0] < 0.7:
+            return
+        last_write[0], last_write[1] = now, phase
+        _write_manual(dict(base, transfer=dict(transfer)))
+
+    try:
+        from firebase import drive_storage as _ds
+        _set_sink = _ds.set_transfer_progress_sink
+    except Exception:
+        _set_sink = None
+
     for folder in folders:
-        _write_manual({"status": "running", "action": action, "force": force,
-                       "total": len(folders), "done": done, "current_group": folder,
-                       "results": results})
+        transfer.clear()
+        transfer.update({"phase": "compare", "group": folder, "started_at": time.time()})
+        base = {"status": "running", "action": action, "force": force,
+                "total": len(folders), "done": done, "current_group": folder,
+                "results": results, "started_at": job_started}
+        _write_manual(dict(base, transfer=dict(transfer)))
         ok = False
         err = None
+        if _set_sink:
+            _set_sink(_sink)
         try:
             with app.app_context():
                 if action == "push":
@@ -516,11 +543,22 @@ def _run_manual_job(app, action: str, folders: List[str], force: bool) -> None:
         except Exception as e:
             err = str(e)
             logger.warning("manual %s failed for %s: %s", action, folder, e)
-        results.append({"folder": folder, "ok": ok, "error": err})
+        finally:
+            if _set_sink:
+                _set_sink(None)
+        results.append({
+            "folder": folder, "ok": ok, "error": err,
+            "files": int(transfer.get("files_done") or 0),
+            "files_total": int(transfer.get("files_total") or 0),
+            "bytes": int(transfer.get("bytes_done") or 0),
+            "failed": int(transfer.get("failed") or 0),
+            "deleted": int(transfer.get("deleted") or 0),
+            "seconds": round(time.time() - float(transfer.get("started_at") or time.time()), 1),
+        })
         done += 1
     _write_manual({"status": "done", "action": action, "force": force,
                    "total": len(folders), "done": done, "current_group": None,
-                   "results": results, "finished_at": time.time()})
+                   "results": results, "started_at": job_started, "finished_at": time.time()})
     logger.info("manual %s job complete — %d groups", action, done)
 
 

@@ -159,6 +159,15 @@ def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str,
 
             vatissuer, Name_issuer = extract_issuer_info(invoice, ns)
 
+            # UID ΑΑΔΕ + εγκατάσταση εκδότη: πολλοί πάροχοι (impact, vs.gr, megasoft)
+            # έχουν το UID μέσα στο URL/QR, οπότε η Αναζήτηση βρίσκει τοπικά το
+            # παραστατικό χωρίς scraping (scraper/fast_resolve.py).
+            uid_val = _safe_strip(invoice.findtext("ns:uid", default="", namespaces=ns) or invoice.findtext("uid") or "")
+            issuer_el = invoice.find("ns:issuer", ns)
+            branch_val = ""
+            if issuer_el is not None:
+                branch_val = _safe_strip(issuer_el.findtext("ns:branch", default="", namespaces=ns) or issuer_el.findtext("branch") or "")
+
             # Extract paymentMethodDetails type
             payment_method_type = ""
             payment_methods = invoice.findall(".//ns:paymentMethods/ns:paymentMethodDetails", ns)
@@ -206,6 +215,10 @@ def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str,
                     "Name_issuer": Name_issuer,
                     "paymentMethodType": payment_method_type
                 }
+                if uid_val:
+                    row["uid"] = uid_val.upper()
+                if branch_val:
+                    row["branch"] = branch_val
                 sig = _doc_signature(row)
                 if sig not in seen_signatures:
                     seen_signatures.add(sig)

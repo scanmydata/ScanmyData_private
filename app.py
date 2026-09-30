@@ -1578,6 +1578,74 @@ def log_request_complete(response):
     return response
 
 
+# Flash μηνύματα από AJAX/JSON αιτήματα: ένα flash() μέσα σε endpoint που
+# απαντά JSON έμενε στο session μέχρι την επόμενη ΠΛΗΡΗ σελίδα (π.χ. «Διαγράφηκαν
+# ... mark(s)» που εμφανιζόταν στο logout). Τα μηνύματα που προστέθηκαν σε ΑΥΤΟ
+# το αίτημα μεταφέρονται στο header X-App-Flash, και το base (flash_center.js)
+# τα δείχνει αμέσως στη σελίδα που έκανε το αίτημα.
+def _drop_stale_flashes_on_logout(sender, user=None, **extra):
+    """Σε ΚΑΘΕ αποσύνδεση (admin/auth, firebase logout, logout μετά από sync,
+    αυτόματη λόγω αδράνειας) πετάμε flash που δεν αποδόθηκαν ποτέ — π.χ. τα
+    «Διαγράφηκαν … mark(s)» εμφανίζονταν στη σελίδα σύνδεσης. Το «Έχετε
+    αποσυνδεθεί» μπαίνει ΜΕΤΑ το logout_user(), άρα διατηρείται."""
+    try:
+        session.pop("_flashes", None)
+    except Exception:
+        pass
+
+
+try:
+    from flask_login import user_logged_out as _user_logged_out_signal
+    _user_logged_out_signal.connect(_drop_stale_flashes_on_logout, app, weak=False)
+except Exception:
+    log.debug("could not connect user_logged_out flash cleanup", exc_info=True)
+
+
+@app.before_request
+def _flash_mark_request_start():
+    try:
+        from flask import g as _fg
+        _fg._flash_count_at_start = len(session.get("_flashes") or [])
+    except Exception:
+        pass
+
+
+@app.after_request
+def _flash_ajax_to_header(response):
+    try:
+        if response.status_code in (301, 302, 303, 305, 307, 308):
+            return response  # η σελίδα-προορισμός θα τα αποδώσει κανονικά
+        mimetype = (response.mimetype or "").lower()
+        if mimetype == "text/html":
+            return response  # σελίδα (ή partial-nav) που τα αποδίδει μόνη της
+        is_ajax = (
+            mimetype == "application/json"
+            or request.headers.get("X-Requested-With", "").lower() == "xmlhttprequest"
+            or "application/json" in (request.headers.get("Accept") or "").lower()
+        )
+        if not is_ajax:
+            return response  # π.χ. κανονική λήψη αρχείου: κρατάμε τη συμπεριφορά
+        flashes = session.get("_flashes") or []
+        if not flashes:
+            return response
+        from flask import g as _fg
+        start = int(getattr(_fg, "_flash_count_at_start", 0) or 0)
+        start = max(0, min(start, len(flashes)))
+        new_items = flashes[start:]
+        if not new_items:
+            return response
+        if start:
+            session["_flashes"] = flashes[:start]
+        else:
+            session.pop("_flashes", None)
+        from urllib.parse import quote as _q
+        payload = [[str(c or "info"), str(m or "")] for c, m in new_items]
+        response.headers["X-App-Flash"] = _q(json.dumps(payload, ensure_ascii=False), safe="")
+    except Exception:
+        log.debug("flash→header transfer failed", exc_info=True)
+    return response
+
+
 @app.before_request
 def session_heartbeat():
     """Lightweight heartbeat to update user's last_active_at when they have an active session.
@@ -9783,6 +9851,19 @@ def _set_fetch_progress_state(fetch_key: str, status: str, percent: int, message
         fetch_progress_state[key] = payload
 
 
+def _with_progress_age(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Προσθέτει age_seconds (από το updated_at) ώστε ο client να μη δείχνει
+    ξανά «Η λήψη ολοκληρώθηκε» για λήψη που τελείωσε πριν από ώρες."""
+    try:
+        ts = datetime.datetime.fromisoformat(str(state.get("updated_at") or ""))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=datetime.timezone.utc)
+        state["age_seconds"] = max(0, int((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()))
+    except Exception:
+        pass
+    return state
+
+
 def _get_fetch_progress_state(fetch_key: str) -> Dict[str, Any]:
     key = str(fetch_key or "").strip()
     if not key:
@@ -9791,7 +9872,7 @@ def _get_fetch_progress_state(fetch_key: str) -> Dict[str, Any]:
         current = fetch_progress_state.get(key)
         if not current:
             return {"status": "not_started", "percent": 0, "message": ""}
-        return dict(current)
+        return _with_progress_age(dict(current))
 
 
 bulk_fetch_progress_lock = threading.Lock()
@@ -9826,7 +9907,7 @@ def _get_bulk_fetch_progress(job_id: str) -> Dict[str, Any]:
         cur = bulk_fetch_progress_state.get(key)
         if not cur:
             return {"status": "not_started", "percent": 0, "message": ""}
-        return dict(cur)
+        return _with_progress_age(dict(cur))
 
 
 def _is_bulk_fetch_stop_requested(job_id: str) -> bool:
@@ -10522,17 +10603,11 @@ def fetch():
             except Exception:
                 log.exception("Fetch error (background)")
                 _set_fetch_progress_state(fetch_key, "error", 100, "Σφάλμα κατά τη λήψη. Ελέγξτε τα logs.")
-            # broadcast notification for any listening clients
-            try:
-                selected_name = str(selected or '').strip()
-                vat_text = str(vat or '').strip()
-                target_text = selected_name and vat_text and f"{selected_name} (ΑΦΜ {vat_text})" or (selected_name or (vat_text and f"ΑΦΜ {vat_text}") or "άγνωστος πελάτης")
-                if completed_ok:
-                    global_notifications.append(f"Λήψη ολοκληρώθηκε για {target_text}: {added_docs} έγγραφα, {added_summaries} συνοψίσεις.")
-                else:
-                    global_notifications.append(f"Λήψη απέτυχε για {target_text}. Δείτε τα logs.")
-            except Exception:
-                pass
+            # Δεν γίνεται πλέον broadcast στο global_notifications: η λίστα ήταν
+            # κοινή για ΟΛΟΥΣ τους χρήστες του server (έβλεπαν ολοκληρώσεις
+            # λήψεων άλλων ομάδων) και έβγαζε δεύτερο/τρίτο «Λήψη ολοκληρώθηκε».
+            # Το τελικό μήνυμα το δείχνει μία φορά, σε όποια σελίδα κι αν είναι
+            # ο χρήστης, ο global poller προόδου (static/js/base_06.js).
 
         # spawn thread and return early.  capture the current group directory
         # so the worker can continue to write to the same location.
@@ -11142,7 +11217,26 @@ def search():
         if re.match(r'^https?:/', mark, re.I):
             input_is_url = True
         
+        local_invoice_hit = None
         if input_is_url:
+            # Διόρθωση URL που «χάλασε» στο σκανάρισμα (χαμένοι χαρακτήρες/Shift) και
+            # γρήγορη διαδρομή: αν το URL κουβαλάει UID ΑΑΔΕ ή MARK (impact, vs.gr,
+            # megasoft, primer…) και το παραστατικό έχει ήδη κατέβει με τη «Λήψη»,
+            # το MARK βρίσκεται τοπικά χωρίς κανένα αίτημα στον πάροχο.
+            _scan_original_url = mark  # όπως ήρθε — fallback αν το διορθωμένο δεν δώσει MARK
+            try:
+                from scraper.fast_resolve import repair_scanned_url, find_cached_invoice_for_url
+                mark = repair_scanned_url(mark)
+                if vat:
+                    local_invoice_hit = find_cached_invoice_for_url(
+                        mark, json_read(group_path(f"{vat}_invoices.json")) or []
+                    )
+                    if local_invoice_hit:
+                        log.info("search: URL resolved locally via UID/MARK -> %s", local_invoice_hit.get("mark"))
+            except Exception:
+                log.exception("search: fast URL resolve failed for %s", mark)
+                local_invoice_hit = None
+
             domain = urlparse(mark).netloc.lower()
 
             # --- NEW: αν είναι ενεργό "Αποδείξεις" αλλά το URL είναι "τιμολογιακό", δείξε warning και ΜΗ συνεχίσεις ---
@@ -11162,101 +11256,117 @@ def search():
                     "Η εισαγωγή μπλοκάρεται — βάλε URL απόδειξης ή άλλαξε σε «Τιμολόγια»."
                 )
             else:
-                scraped_afm = None
-                scraped_marks = []
-                try:
-                    if "wedoconnect" in domain:
-                        scraped_marks, scraped_afm = scrape_wedoconnect(mark)
-                        # Cleanup: ensure marks are valid 15-digit strings
-                        if scraped_marks:
-                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                    elif "etimologiera.gr" in domain:
-                        # React SPA → read the AADE summary from /api/invoice/preview/<uuid>
-                        # («Σύνοψη ΑΑΔΕ»). Returns the customer (counterpart) AFM so the
-                        # "ΑΦΜ vs ενεργός πελάτης" check matches when the client is the recipient.
-                        scraped_marks, scraped_afm_et = scrape_etimologiera(mark)
-                        if scraped_marks:
-                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_et
-                    elif "mydatapi.aade.gr" in domain:
-                        data = scrape_mydatapi(mark)
-                        mark_val = data.get("MARK", "N/A")
-                        scraped_marks = [mark_val] if mark_val != "N/A" and len(str(mark_val).strip()) == 15 else []
-                        scraped_afm = data.get("ΑΦΜ Πελάτη")
-                    elif "einvoice.s1ecos.gr" in domain:
-                        scraped_marks, scraped_afm = scrape_einvoice(mark)
-                        # Cleanup: ensure marks are valid 15-digit strings
-                        if scraped_marks:
-                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                    elif "einvoice.impact.gr" in domain or "impact.gr" in domain or "eskap.gr" in domain:
-                        # ESKAP embeds a mydatapi QRInfo URL like Impact -> same scraper.
-                        mark_val, scraped_afm_impact = scrape_impact(mark)
-                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_impact
-                    elif "epsilonnet.gr" in domain:
-                        mark_val, scraped_afm_eps, _ = scrape_epsilon(mark)
-                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_eps
-                    elif "e-invoicing.pegcloud.io" in domain:
-                        mark_val, scraped_afm_peg = scrape_pegcloud(mark)
-                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_peg
-                    elif "e-invoicing.gr" in domain:
-                        eg_res = scrape_einvoicing_gr(mark, return_meta=True)
-                        eg_meta = {}
-                        if isinstance(eg_res, (tuple, list)) and len(eg_res) >= 3 and isinstance(eg_res[2], dict):
-                            mark_val, scraped_afm_eg, eg_meta = eg_res[0], eg_res[1], eg_res[2]
-                        elif isinstance(eg_res, (tuple, list)) and len(eg_res) >= 2:
-                            mark_val, scraped_afm_eg = eg_res[0], eg_res[1]
+                # Πρώτα με το διορθωμένο URL· αν δεν βγει MARK, ξανά με το URL όπως
+                # ήρθε (η προηγούμενη συμπεριφορά μένει fallback).
+                _url_attempts = [mark]
+                if _scan_original_url and _scan_original_url != mark:
+                    _url_attempts.append(_scan_original_url)
+                _error_before_scrape = error
+                for _attempt_url in _url_attempts:
+                    mark = _attempt_url
+                    domain = urlparse(mark).netloc.lower()
+                    error = _error_before_scrape
+                    scraped_afm = None
+                    scraped_marks = []
+                    try:
+                        if local_invoice_hit:
+                            scraped_marks = [str(local_invoice_hit.get("mark") or "").strip()]
+                            scraped_marks = [m for m in scraped_marks if len(m) == 15]
+                            scraped_afm = str(local_invoice_hit.get("AFM_counterpart") or "").strip() or None
+                        elif "wedoconnect" in domain:
+                            scraped_marks, scraped_afm = scrape_wedoconnect(mark)
+                            # Cleanup: ensure marks are valid 15-digit strings
+                            if scraped_marks:
+                                scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        elif "etimologiera.gr" in domain:
+                            # React SPA → read the AADE summary from /api/invoice/preview/<uuid>
+                            # («Σύνοψη ΑΑΔΕ»). Returns the customer (counterpart) AFM so the
+                            # "ΑΦΜ vs ενεργός πελάτης" check matches when the client is the recipient.
+                            scraped_marks, scraped_afm_et = scrape_etimologiera(mark)
+                            if scraped_marks:
+                                scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_et
+                        elif "mydatapi.aade.gr" in domain:
+                            data = scrape_mydatapi(mark)
+                            mark_val = data.get("MARK", "N/A")
+                            scraped_marks = [mark_val] if mark_val != "N/A" and len(str(mark_val).strip()) == 15 else []
+                            scraped_afm = data.get("ΑΦΜ Πελάτη")
+                        elif "einvoice.s1ecos.gr" in domain:
+                            scraped_marks, scraped_afm = scrape_einvoice(mark)
+                            # Cleanup: ensure marks are valid 15-digit strings
+                            if scraped_marks:
+                                scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        elif "einvoice.impact.gr" in domain or "impact.gr" in domain or "eskap.gr" in domain:
+                            # ESKAP embeds a mydatapi QRInfo URL like Impact -> same scraper.
+                            mark_val, scraped_afm_impact = scrape_impact(mark)
+                            scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_impact
+                        elif "epsilonnet.gr" in domain:
+                            mark_val, scraped_afm_eps, _ = scrape_epsilon(mark)
+                            scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_eps
+                        elif "e-invoicing.pegcloud.io" in domain:
+                            mark_val, scraped_afm_peg = scrape_pegcloud(mark)
+                            scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_peg
+                        elif "e-invoicing.gr" in domain:
+                            eg_res = scrape_einvoicing_gr(mark, return_meta=True)
+                            eg_meta = {}
+                            if isinstance(eg_res, (tuple, list)) and len(eg_res) >= 3 and isinstance(eg_res[2], dict):
+                                mark_val, scraped_afm_eg, eg_meta = eg_res[0], eg_res[1], eg_res[2]
+                            elif isinstance(eg_res, (tuple, list)) and len(eg_res) >= 2:
+                                mark_val, scraped_afm_eg = eg_res[0], eg_res[1]
+                            else:
+                                mark_val, scraped_afm_eg = None, None
+
+                            scrape_url_is_receipt = bool((eg_meta or {}).get("is_receipt"))
+                            scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_eg
+
+                            # Invoice flow guard: e-invoicing URL αντιστοιχεί σε απόδειξη λιανικής
+                            if scrape_url_is_receipt and not expect_receipt:
+                                modal_warning = (
+                                    "Το URL αντιστοιχεί σε Απόδειξη Λιανικής, όχι σε Τιμολόγιο. "
+                                    "Η εισαγωγή στο flow Τιμολογίων μπλοκάρεται — άλλαξε σε «Αποδείξεις»."
+                                )
+                                flash("Εντοπίστηκε απόδειξη λιανικής. Χρησιμοποίησε flow «Αποδείξεις».", "warning")
+                                scraped_afm = None
+                                scraped_marks = []
+                        elif "vs.gr" in domain:
+                            scraped_marks, scraped_afm_vs = scrape_vsgr(mark)
+                            # Cleanup: ensure marks are valid 15-digit strings
+                            if scraped_marks:
+                                scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_vs
+                        elif "megasoft" in domain or "invoicelink" in domain:
+                            scraped_marks, scraped_afm_mg = scrape_megasoft(mark)
+                            if scraped_marks:
+                                scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                            if not scraped_afm:
+                                scraped_afm = scraped_afm_mg
                         else:
-                            mark_val, scraped_afm_eg = None, None
-
-                        scrape_url_is_receipt = bool((eg_meta or {}).get("is_receipt"))
-                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_eg
-
-                        # Invoice flow guard: e-invoicing URL αντιστοιχεί σε απόδειξη λιανικής
-                        if scrape_url_is_receipt and not expect_receipt:
-                            modal_warning = (
-                                "Το URL αντιστοιχεί σε Απόδειξη Λιανικής, όχι σε Τιμολόγιο. "
-                                "Η εισαγωγή στο flow Τιμολογίων μπλοκάρεται — άλλαξε σε «Αποδείξεις»."
-                            )
-                            flash("Εντοπίστηκε απόδειξη λιανικής. Χρησιμοποίησε flow «Αποδείξεις».", "warning")
-                            scraped_afm = None
-                            scraped_marks = []
-                    elif "vs.gr" in domain:
-                        scraped_marks, scraped_afm_vs = scrape_vsgr(mark)
-                        # Cleanup: ensure marks are valid 15-digit strings
-                        if scraped_marks:
-                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_vs
-                    elif "megasoft" in domain or "invoicelink" in domain:
-                        scraped_marks, scraped_afm_mg = scrape_megasoft(mark)
-                        if scraped_marks:
-                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
-                        if not scraped_afm:
-                            scraped_afm = scraped_afm_mg
-                    else:
-                        # fallback try receipt detector
-                        if detect_and_scrape_receipt:
-                            try:
-                                rd = detect_and_scrape_receipt(mark)
-                                if isinstance(rd, dict) and rd.get("MARK"):
-                                    scraped_marks = [str(rd.get("MARK"))]
-                                    scraped_afm = rd.get("issuer_vat") or rd.get("issuer_afm")
-                            except Exception:
-                                log.exception("Receipt detect_and_scrape failed for URL %s", mark)
-                        if not scraped_marks:
-                            flash("Άγνωστο URL για scraping.", "error")
-                except Exception as e:
-                    log.exception("Scraping failed for URL %s", mark)
-                    error = f"Αποτυχία ανάγνωσης URL: {str(e)}"
+                            # fallback try receipt detector
+                            if detect_and_scrape_receipt:
+                                try:
+                                    rd = detect_and_scrape_receipt(mark)
+                                    if isinstance(rd, dict) and rd.get("MARK"):
+                                        scraped_marks = [str(rd.get("MARK"))]
+                                        scraped_afm = rd.get("issuer_vat") or rd.get("issuer_afm")
+                                except Exception:
+                                    log.exception("Receipt detect_and_scrape failed for URL %s", mark)
+                            if not scraped_marks:
+                                flash("Άγνωστο URL για scraping.", "error")
+                    except Exception as e:
+                        log.exception("Scraping failed for URL %s", mark)
+                        error = f"Αποτυχία ανάγνωσης URL: {str(e)}"
+                    if scraped_marks or local_invoice_hit or modal_warning:
+                        break
 
                 if scraped_afm and vat and str(scraped_afm).strip() != str(vat).strip():
                     modal_warning = f"Το URL επιστρέφει ΑΦΜ {scraped_afm}, διαφορετικό από τον ενεργό πελάτη {vat}."
@@ -23956,6 +24066,9 @@ def api_admin_drive_sync_status():
                 'warmup': _wu.get_public_state(),
                 'manual_job': _wu.get_manual_state(),
                 'manual_running': _wu.manual_job_running(),
+                # Ώρα server: ο πίνακας υπολογίζει «ενημερώθηκε πριν N δευτ.»
+                # χωρίς να επηρεάζεται από το ρολόι του browser.
+                'server_time': time.time(),
             },
         })
     except Exception as e:

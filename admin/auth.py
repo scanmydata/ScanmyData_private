@@ -408,6 +408,9 @@ def logout():
             pass
 
     logout_user()
+    # Παλιά flash που δεν αποδόθηκαν ποτέ (π.χ. από AJAX ενέργειες) δεν πρέπει
+    # να εμφανιστούν στη σελίδα σύνδεσης μετά την αποσύνδεση.
+    session.pop('_flashes', None)
     flash('Έχετε αποσυνδεθεί.', 'info')
     # clear any active client/credential selection and active group from session to avoid stale state
     session.pop('active_credential', None)

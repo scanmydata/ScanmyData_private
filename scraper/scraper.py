@@ -12,6 +12,23 @@ try:
 except Exception:
     run_schema_ai_fallback = None
 
+# Γενική γρήγορη επίλυση (διόρθωση URL scanner, γρήγορο megasoft) — βλ. fast_resolve.py
+try:
+    from .fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+except ImportError:
+    try:
+        from fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+    except ImportError:
+        repair_scanned_url = lambda u: u  # noqa: E731
+        resolve_megasoft_mydatapi = lambda *a, **k: None  # noqa: E731
+        is_mydatapi_url = lambda u: "mydatapi.aade.gr" in str(u or "").lower() and "qrinfo" in str(u or "").lower()  # noqa: E731
+
+
+def _is_blazor_page(html):
+    """InvoiceLink (Megasoft) = Blazor Server: τα δεδομένα έρχονται μόνο μέσω SignalR."""
+    h = str(html or "")
+    return "<!--Blazor:" in h or "_framework/blazor" in h
+
 # attempt to load a .env file if present so that environment variables can be
 # configured via that file; repeated import will be idempotent.
 try:
@@ -48,6 +65,10 @@ def _normalize_url(url: str) -> str:
     url = str(url).strip()
     # Διόρθωση λάθους protocol: https:/ → https://
     url = re.sub(r'^(https?):/([^/])', r'\1://\2', url)
+    try:
+        url = repair_scanned_url(url)
+    except Exception:
+        pass
     return url
 
 HEADERS = {
@@ -1682,6 +1703,11 @@ def scrape_megasoft(url):
 
     soup = BeautifulSoup(html, "html.parser")
     mydatapi_url = _extract_mydatapi_url_from_text(html, base)
+    blazor = _is_blazor_page(html)
+    if not mydatapi_url and blazor and _use_browser_fallback():
+        # Blazor Server (InvoiceLink): κανένα στατικό HTTP candidate δεν δίνει ποτέ
+        # το link· γρήγορο κλικ + σύλληψη window.open (~4s αντί ~14s).
+        mydatapi_url = resolve_megasoft_mydatapi(url, budget_s=15)
     if not mydatapi_url:
         parsed = urlparse(url)
         qrcode_value = parse_qs(parsed.query).get("QrCode", [""])[0]

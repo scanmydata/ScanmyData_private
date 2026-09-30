@@ -610,7 +610,7 @@
     } catch (_) {}
     const runningLike = (type === 'info') && !terminalByMessage;
     if (!runningLike) {
-      showFetchFlash(String(message || (type === 'error' ? 'Σφάλμα κατά τη λήψη.' : 'Η λήψη ολοκληρώθηκε.')) + who, type === 'error' ? 'error' : 'success');
+      showFetchFlash(String(message || (type === 'error' ? 'Σφάλμα κατά τη λήψη.' : 'Η λήψη ολοκληρώθηκε.')) + who, type === 'error' ? 'error' : 'success', mode);
       return;
     }
     const fullMessage = (mode === 'bulk' ? 'Μαζική λήψη: ' : 'Πρόοδος λήψης: ') + pct + '%' + who + ' — ' + (message || 'Σε εξέλιξη...');
@@ -739,6 +739,19 @@
     const credential = String(q.get('credential') || '').trim();
     const vat = String(q.get('vat') || '').trim();
 
+    if (status === 'running' || status === 'stopping') window.__singleFetchSawRunning = true;
+    // Η κατάσταση «ολοκληρώθηκε» μένει στον server· χωρίς αυτόν τον έλεγχο κάθε
+    // επίσκεψη στη σελίδα Λήψης ξανάβγαζε το «Η λήψη ολοκληρώθηκε: …» μιας παλιάς λήψης.
+    const staleTerminal = !window.__singleFetchSawRunning
+      && typeof window.__isStaleFetchTerminal === 'function'
+      && window.__isStaleFetchTerminal(data);
+    if (staleTerminal) {
+      setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
+      clearFetchProgressFlash('single');
+      window.__singleFetchTerminalFlashed = true;
+      return { status, percent, message };
+    }
+
     try {
       if (typeof window.__setGlobalFetchProgressTarget === 'function') {
         window.__setGlobalFetchProgressTarget({ credential, vat });
@@ -762,14 +775,14 @@
       // Terminal flash once per fetch cycle (see the overlap guard in the poller).
       if (!window.__singleFetchTerminalFlashed) {
         window.__singleFetchTerminalFlashed = true;
-        showFetchFlash(message || 'Η λήψη ολοκληρώθηκε.', 'success');
+        showFetchFlash(message || 'Η λήψη ολοκληρώθηκε.', 'success', 'single');
       }
     } else if (status === 'error') {
       setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
       try { if (typeof window.__clearGlobalFetchProgressTarget === 'function') window.__clearGlobalFetchProgressTarget(); } catch (_) {}
       if (!window.__singleFetchTerminalFlashed) {
         window.__singleFetchTerminalFlashed = true;
-        showFetchFlash(message || 'Σφάλμα κατά τη λήψη.', 'error');
+        showFetchFlash(message || 'Σφάλμα κατά τη λήψη.', 'error', 'single');
       }
     } else {
       setFetchSubmitRunning(false, 'Εκκίνηση λήψης παραστατικών');
@@ -783,6 +796,7 @@
     clearFetchProgressPolling();
     // New fetch cycle -> allow exactly one terminal (completed/error) flash.
     window.__singleFetchTerminalFlashed = false;
+    window.__singleFetchSawRunning = false;
 
     // Guard against overlapping ticks: setInterval fires every 1500ms regardless
     // of whether the previous (async) tick has resolved. On completion a slow tick
@@ -909,7 +923,7 @@
       setBulkStatusText(msg || 'Η μαζική λήψη ολοκληρώθηκε.');
       if (!window.__bulkFetchTerminalFlashed) {
         window.__bulkFetchTerminalFlashed = true;
-        showFetchFlash(msg || 'Η μαζική λήψη ολοκληρώθηκε.', 'success');
+        showFetchFlash(msg || 'Η μαζική λήψη ολοκληρώθηκε.', 'success', 'bulk');
       }
     } else if (status === 'stopped') {
       saveBulkFetchJobId('');
@@ -918,7 +932,7 @@
       setBulkStatusText(msg || 'Η μαζική λήψη διακόπηκε.');
       if (!window.__bulkFetchTerminalFlashed) {
         window.__bulkFetchTerminalFlashed = true;
-        showFetchFlash(msg || 'Η μαζική λήψη διακόπηκε.', 'success');
+        showFetchFlash(msg || 'Η μαζική λήψη διακόπηκε.', 'success', 'bulk');
       }
     } else if (status === 'error') {
       saveBulkFetchJobId('');
@@ -927,7 +941,7 @@
       setBulkStatusText(msg || 'Σφάλμα στη μαζική λήψη.');
       if (!window.__bulkFetchTerminalFlashed) {
         window.__bulkFetchTerminalFlashed = true;
-        showFetchFlash(msg || 'Σφάλμα στη μαζική λήψη.', 'error');
+        showFetchFlash(msg || 'Σφάλμα στη μαζική λήψη.', 'error', 'bulk');
       }
     } else {
       saveBulkFetchJobId('');
@@ -974,17 +988,27 @@
     window.__registerPageCleanup(cleanupFetchPage);
   }
 
-  function showFetchFlash(message, type) {
+  function showFetchFlash(message, type, mode) {
     if (!message) return;
     const kind = String(type || 'success').toLowerCase();
     const cls = kind === 'error' ? 'flash-error' : 'flash-success';
+    const isBulk = mode ? mode === 'bulk' : !!bulkFetchRunning;
+    const credential = String(credentialSelect?.value || '').trim();
+    const vat = String((document.getElementById('vat_input')?.value || '')).trim();
     const currentState = {
-      mode: bulkFetchRunning ? 'bulk' : 'single',
+      mode: isBulk ? 'bulk' : 'single',
       status: kind === 'error' ? 'error' : 'completed',
-      credential: String(credentialSelect?.value || '').trim(),
-      vat: String((document.getElementById('vat_input')?.value || '')).trim(),
+      credential: credential,
+      vat: vat,
       job_id: String(bulkFetchJobId || '')
     };
+    // Ίδιο κείμενο (με τον πελάτη) και ΙΔΙΟ element με το τελικό μήνυμα του
+    // global poller (base_06.js): πριν έβγαιναν δύο μηνύματα, ένα με και ένα
+    // χωρίς «[πελάτης - ΑΦΜ]».
+    const who = (!isBulk && (credential || vat) && String(message).indexOf('[') === -1)
+      ? (' [' + [credential, vat].filter(Boolean).join(' - ') + ']')
+      : '';
+    message = String(message) + who;
     try {
       if (typeof window.__isFetchFlashDismissed === 'function' && window.__isFetchFlashDismissed(currentState)) {
         return;
@@ -992,10 +1016,15 @@
       clearFetchProgressFlash();
       const container = getFlashContainerNode();
       if (!container) return;
-      let banner = document.getElementById('fetchFinalFlashMessage');
+      try {
+        const legacy = document.getElementById('fetchFinalFlashMessage');
+        if (legacy) legacy.remove();
+      } catch (_) {}
+      const bannerId = isBulk ? 'bulkFetchFinalFlash' : 'singleFetchFinalFlash';
+      let banner = document.getElementById(bannerId);
       if (!banner) {
         banner = document.createElement('div');
-        banner.id = 'fetchFinalFlashMessage';
+        banner.id = bannerId;
         banner.setAttribute('data-flash', '');
         container.prepend(banner);
       }

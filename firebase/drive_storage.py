@@ -563,6 +563,29 @@ def _compute_drive_rel_path(file_path: str, source_dir: str) -> Optional[str]:
 # Public API — mirrors firebase_config
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# Αναφορά προόδου μεταφοράς (admin «Συγχρονισμός Απομακρυσμένης Βάσης»):
+# ο caller (π.χ. startup_warmup._run_manual_job) ορίζει ένα sink στο δικό του
+# thread και push/pull αναφέρουν φάση, αρχεία x/y, bytes, τρέχον αρχείο.
+# Χωρίς sink δεν αλλάζει τίποτα στη συμπεριφορά.
+# ---------------------------------------------------------------------------
+_transfer_progress_local = threading.local()
+
+
+def set_transfer_progress_sink(fn: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+    _transfer_progress_local.sink = fn
+
+
+def _report_transfer(**info: Any) -> None:
+    fn = getattr(_transfer_progress_local, "sink", None)
+    if not fn:
+        return
+    try:
+        fn(info)
+    except Exception:
+        logger.debug("transfer progress sink failed", exc_info=True)
+
+
 def drive_push_group_files(
     group_name: str,
     local_data_root: str = None,
@@ -604,6 +627,39 @@ def drive_push_group_files(
         upload_candidates: List[str] = []
         delete_candidates: List[str] = []
         local_rel_paths = set()
+
+        # Προ-καταμέτρηση για ποσοστά (μόνο τοπικά stat — καμία κλήση στο Drive).
+        planned_files = 0
+        planned_bytes = 0
+        try:
+            for _r, _d, _fs in os.walk(source_dir):
+                for _n in _fs:
+                    _fp = os.path.join(_r, _n)
+                    _rel = _compute_drive_rel_path(_fp, source_dir)
+                    if _rel is None:
+                        continue
+                    _ex = index.get(_rel)
+                    if smart_sync and (not force) and _ex:
+                        try:
+                            _rm = float((_ex.get("appProperties") or {}).get("local_mtime") or 0)
+                        except Exception:
+                            _rm = 0.0
+                        try:
+                            _lm = os.path.getmtime(_fp)
+                        except Exception:
+                            _lm = time.time()
+                        if _rm and _lm <= _rm:
+                            continue
+                    planned_files += 1
+                    try:
+                        planned_bytes += os.path.getsize(_fp)
+                    except Exception:
+                        pass
+        except Exception:
+            logger.debug("[DRIVE PUSH] pre-count failed", exc_info=True)
+        _report_transfer(phase="upload", group=group_name, files_done=0, files_total=planned_files,
+                         bytes_done=0, bytes_total=planned_bytes, failed=0, current=None,
+                         remote_files=len(index))
 
         for root, _dirs, files in os.walk(source_dir):
             for fname in files:
@@ -656,6 +712,9 @@ def drive_push_group_files(
                     )
                     files_uploaded += 1
                     bytes_uploaded += len(raw)
+                    _report_transfer(phase="upload", group=group_name, files_done=files_uploaded + files_failed,
+                                     files_total=planned_files, bytes_done=bytes_uploaded,
+                                     bytes_total=planned_bytes, failed=files_failed, current=rel_path)
                     index[rel_path] = {
                         "id": res.get("id"),
                         "modifiedTime": res.get("modifiedTime"),
@@ -667,8 +726,15 @@ def drive_push_group_files(
                 except HttpError as e:
                     files_failed += 1
                     logger.error("[DRIVE PUSH] upload failed for %s: %s", rel_path, e)
+                    _report_transfer(phase="upload", group=group_name, files_done=files_uploaded + files_failed,
+                                     files_total=planned_files, bytes_done=bytes_uploaded,
+                                     bytes_total=planned_bytes, failed=files_failed, current=rel_path,
+                                     last_error=str(e)[:200])
 
         # Delete remote files no longer present locally.
+        _report_transfer(phase="delete", group=group_name, files_done=files_uploaded + files_failed,
+                         files_total=planned_files, bytes_done=bytes_uploaded, bytes_total=planned_bytes,
+                         failed=files_failed, current=None)
         for rel_path, meta in list(index.items()):
             if rel_path in local_rel_paths:
                 continue
@@ -685,6 +751,9 @@ def drive_push_group_files(
             "[DRIVE PUSH] group=%s uploaded=%d deleted=%d failed=%d bytes=%d",
             group_name, files_uploaded, files_deleted, files_failed, bytes_uploaded,
         )
+        _report_transfer(phase="done", group=group_name, files_done=files_uploaded + files_failed,
+                         files_total=planned_files, bytes_done=bytes_uploaded, bytes_total=planned_bytes,
+                         failed=files_failed, deleted=files_deleted, current=None)
 
         if dry_run:
             return {
@@ -960,6 +1029,15 @@ def drive_pull_group_to_local(
 
         total_items = max(1, len(download_plan))
         _set_progress("syncing", 5, f"Λήψη αρχείων… (0/{total_items})")
+        planned_bytes = 0
+        for _t in download_plan:
+            try:
+                planned_bytes += int((index.get(_t["rel_path"]) or {}).get("size") or 0)
+            except Exception:
+                pass
+        _report_transfer(phase="download", group=group_name, files_done=0, files_total=len(download_plan),
+                         bytes_done=0, bytes_total=planned_bytes, failed=0, current=None,
+                         remote_files=len(index))
 
         def _materialize(task: Dict[str, Any]) -> int:
             """Download + decrypt + write one file. Returns bytes downloaded.
@@ -1000,6 +1078,9 @@ def drive_pull_group_to_local(
                         files_failed += 1
                         logger.error("[DRIVE PULL] Failed to materialize %s: %s", task["rel_path"], e)
                     processed += 1
+                    _report_transfer(phase="download", group=group_name, files_done=processed,
+                                     files_total=len(download_plan), bytes_done=bytes_downloaded,
+                                     bytes_total=planned_bytes, failed=files_failed, current=task["rel_path"])
                     # Map work to the 5–95% band; the final 95–100% covers marker writes.
                     pct = 5 + int((processed / total_items) * 90)
                     if pct - last_reported_pct >= 2:
@@ -1010,6 +1091,9 @@ def drive_pull_group_to_local(
             "[DRIVE PULL] group=%s created=%d failed=%d bytes=%d -> %s",
             group_name, files_created, files_failed, bytes_downloaded, target_dir,
         )
+        _report_transfer(phase="done", group=group_name, files_done=processed,
+                         files_total=len(download_plan), bytes_done=bytes_downloaded,
+                         bytes_total=planned_bytes, failed=files_failed, current=None)
 
         # Collapse any root+imports client_db split into a single canonical root file.
         _consolidate_root_imports(target_dir)

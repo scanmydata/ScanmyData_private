@@ -485,7 +485,11 @@
         el.appendChild(btn);
 
         const ttlAttr = parseInt(el.getAttribute('data-ttl') || AUTO_TTL, 10);
-        if (ttlAttr > 0) setTimeout(()=>{ try{ el.remove(); }catch(_){ } }, ttlAttr);
+        if (ttlAttr > 0 && !el.__appFlashTimer) {
+          // Κοινός timer με το flash_center.js (ανανέωση διπλότυπου = νέος χρόνος).
+          if (typeof window.__appFlashArmTtl === 'function') window.__appFlashArmTtl(el, ttlAttr);
+          else setTimeout(()=>{ try{ el.remove(); }catch(_){ } }, ttlAttr);
+        }
       }
 
       document.querySelectorAll('.flash-banner').forEach(makeDismissable);

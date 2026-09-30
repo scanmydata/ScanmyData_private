@@ -68,6 +68,33 @@
        survive partial navigation. Lives OUTSIDE #appShell so swapPage()'s
        innerHTML replacement does not remove it. -->
   <div id="globalStickyBannerHost" style="position:fixed;top:0;left:0;right:0;z-index:9990;pointer-events:none;"></div>
+  <!-- Flash Messages Container — ΕΚΤΟΣ #appShell: επιβιώνει του partial navigation
+       (τα server flash μιας σελίδας που έρχεται με partial nav τα μεταφέρει το
+       swapPage μέσω window.__appFlashAdoptFrom). -->
+  <div class="space-y-2 mb-4" id="flashContainer">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat, msg in messages %}
+          {% set normalized = (cat or '')|lower %}
+          {% if normalized in ['error', 'danger'] %}
+            {% set flash_class = 'flash-error' %}
+          {% elif normalized in ['warning'] %}
+            {% set flash_class = 'flash-warning' %}
+          {% elif normalized in ['info'] %}
+            {% set flash_class = 'flash-info' %}
+          {% else %}
+            {% set flash_class = 'flash-success' %}
+          {% endif %}
+          <div class="flash-banner {{ flash_class }}" role="alert" data-flash data-ttl="6000">{{ msg|safe }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+  </div>
+  <script src="{{ url_for('static', filename='js/flash_center.js') }}"></script>
+  {# base_06 (global poller προόδου λήψης) φορτώνεται ΜΙΑ φορά, εκτός #appShell:
+     μέσα στο shell ξανα-εκτελούνταν σε κάθε partial nav και οι pollers
+     πολλαπλασιάζονταν (διπλά «Η λήψη ολοκληρώθηκε»). #}
+  <script src="{{ url_for('static', filename='js/base_06.js') }}"></script>
   <div class="container">
     <div id="appShell">
     <header class="mb-6">
@@ -213,26 +240,8 @@
     <!-- Side Menu Overlay (uses backdrop blur) -->
     <div id="sideMenuOverlay" class="hidden fixed inset-0 bg-black/10 backdrop-blur-sm opacity-0 invisible z-40 transition-all duration-300"></div>
 
-    <!-- Flash Messages Container (always present for JavaScript to use) -->
-    <div class="space-y-2 mb-4" id="flashContainer">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          {% for cat, msg in messages %}
-            {% set normalized = (cat or '')|lower %}
-            {% if normalized in ['error', 'danger'] %}
-              {% set flash_class = 'flash-error' %}
-            {% elif normalized in ['warning'] %}
-              {% set flash_class = 'flash-warning' %}
-            {% elif normalized in ['info'] %}
-              {% set flash_class = 'flash-info' %}
-            {% else %}
-              {% set flash_class = 'flash-success' %}
-            {% endif %}
-            <div class="flash-banner {{ flash_class }}" role="alert" data-flash data-ttl="6000">{{ msg|safe }}</div>
-          {% endfor %}
-        {% endif %}
-      {% endwith %}
-    </div>
+    {# Το #flashContainer βρίσκεται πλέον ΕΚΤΟΣ #appShell (αμέσως μετά το <body>),
+       ώστε τα μηνύματα να μη χάνονται σε partial navigation. #}
 
     {% if current_user.is_authenticated and not active_credential %}
     <div class="missing-customer-warning p-4 mb-4 rounded-r-lg" id="globalNoCredentialBanner">
@@ -259,8 +268,6 @@
 
     {% block content %}{% endblock %}
 
-    <script src="{{ url_for('static', filename='js/base_06.js') }}"></script>
-    
     <!-- FOOTER -->
     <footer class="mt-8 pt-6 pb-4 border-t border-gray-200 dark:border-gray-700">
       <div class="text-center text-sm text-gray-500 dark:text-gray-400">

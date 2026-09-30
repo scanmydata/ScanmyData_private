@@ -1,5 +1,12 @@
     // Global notifications + global fetch-progress banner (cross-page, partial-reload resilient)
     (function(){
+      // Μία μόνο εκτέλεση ανά φόρτωση σελίδας: μια δεύτερη (π.χ. από παλιό cached
+      // base.html που το είχε μέσα στο #appShell) θα διπλασίαζε τους pollers.
+      if (window.__globalFetchPollerInit) return;
+      window.__globalFetchPollerInit = true;
+      // Τερματική κατάσταση (ολοκληρώθηκε/σφάλμα) δείχνεται μόνο αν είναι
+      // πρόσφατη ή αν την είδαμε να τρέχει — όχι για λήψη που τελείωσε πριν από ώρες.
+      const TERMINAL_FRESH_SECONDS = 120;
       const FETCH_TARGET_KEY = 'scanmydata:fetchProgressTarget:v1';
       const FETCH_SNAPSHOT_KEY = 'scanmydata:fetchProgressSnapshot:v1';
       const FETCH_FLASH_ID = 'globalFetchProgressFlash';
@@ -531,6 +538,16 @@
         } catch (_) {}
       }
 
+      function isStaleTerminal(data, prevSnap){
+        const status = String((data && data.status) || '');
+        if (!['completed', 'error', 'stopped'].includes(status)) return false;
+        const prevStatus = String((prevSnap && prevSnap.status) || '');
+        if (['running', 'stopping'].includes(prevStatus)) return false;
+        const age = Number(data && data.age_seconds);
+        return Number.isFinite(age) && age > TERMINAL_FRESH_SECONDS;
+      }
+      window.__isStaleFetchTerminal = function(data){ return isStaleTerminal(data, null); };
+
       async function pollGlobalFetchProgress(){
         const target = readFetchTarget();
         if (target && !readJson(FETCH_TARGET_KEY)) {
@@ -578,6 +595,11 @@
             vat: target.vat,
           };
 
+          if (isStaleTerminal(data, readFetchSnapshot())) {
+            clearFetchTarget();
+            setFetchSnapshot(null);
+            return;
+          }
           setFetchSnapshot(state);
           upsertGlobalFetchProgressFlash(state);
 
@@ -629,6 +651,11 @@
             total_customers: Number(data.total_customers || 0),
           };
 
+          if (isStaleTerminal(data, readBulkFetchSnapshot())) {
+            clearBulkFetchTarget();
+            setBulkFetchSnapshot(null);
+            return;
+          }
           setBulkFetchSnapshot(state);
           upsertGlobalFetchProgressFlash(state);
 

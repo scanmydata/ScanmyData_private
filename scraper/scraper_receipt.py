@@ -14,6 +14,23 @@ try:
 except Exception:
     run_schema_ai_fallback = None
 
+# Γενική γρήγορη επίλυση (διόρθωση URL scanner, γρήγορο megasoft) — βλ. fast_resolve.py
+try:
+    from .fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+except ImportError:
+    try:
+        from fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+    except ImportError:
+        repair_scanned_url = lambda u: u  # noqa: E731
+        resolve_megasoft_mydatapi = lambda *a, **k: None  # noqa: E731
+        is_mydatapi_url = lambda u: "mydatapi.aade.gr" in str(u or "").lower() and "qrinfo" in str(u or "").lower()  # noqa: E731
+
+
+def _is_blazor_page(html):
+    """InvoiceLink (Megasoft) = Blazor Server: τα δεδομένα έρχονται μόνο μέσω SignalR."""
+    h = str(html or "")
+    return "<!--Blazor:" in h or "_framework/blazor" in h
+
 # try to reuse classification helper defined in analysis variant
 try:
     from .scraper_receipt_analysis import _refine_doc_type
@@ -1229,6 +1246,17 @@ def scrape_impact(url, timeout=15, debug=False):
     erp_url = _extract_erp_redirect(soup, r.url)
 
     # Αν έχουμε erp_url, ακολούθησέ το και, αν πάει σε mydata, τρέξε scrape_mydatapi
+    if erp_url and is_mydatapi_url(erp_url):
+        # Το κουμπί δείχνει ήδη στο myDATA: ένα μόνο αίτημα (πριν κατεβαινε δύο φορές).
+        try:
+            sub = scrape_mydatapi(erp_url, timeout=timeout, debug=debug)
+            if any(sub.get(k) for k in ("issuer_vat", "issue_date", "total_amount", "MARK")):
+                sub["source"] = "Impact->MyData"
+                return sub
+        except Exception as e:
+            if debug: print("impact mydatapi error:", e)
+        # αποτυχία της νέας διαδρομής -> συνεχίζει η παλιά (follow + scrape) ως fallback
+
     if erp_url:
         try:
             r2 = sess.get(erp_url, timeout=timeout, allow_redirects=True)
@@ -2160,7 +2188,25 @@ def _maybe_apply_ai_fallback(url, result, timeout=20, debug=False, error_hint=""
 def detect_and_scrape(url, timeout=20, debug=False):
     """
     Convenience wrapper: detect source from URL and call appropriate scraper.
+    Πρώτα με το URL διορθωμένο από σφάλματα σκαναρίσματος (fast_resolve)· αν δεν
+    δώσει στοιχεία, ξανά με το URL όπως ήρθε (η προηγούμενη συμπεριφορά = fallback).
     """
+    plain = _normalize_url(url)
+    try:
+        repaired = repair_scanned_url(plain) or plain
+    except Exception:
+        repaired = plain
+    result, error_hint = _detect_and_scrape_core(repaired, timeout=timeout, debug=debug)
+    used = repaired
+    if repaired != plain and not _result_has_min_payload(result):
+        result2, hint2 = _detect_and_scrape_core(plain, timeout=timeout, debug=debug)
+        if _result_has_min_payload(result2):
+            result, error_hint, used = result2, hint2, plain
+    return _maybe_apply_ai_fallback(used, result, timeout=timeout, debug=debug, error_hint=error_hint)
+
+
+def _detect_and_scrape_core(url, timeout=20, debug=False):
+    """Η αρχική ανίχνευση παρόχου (χωρίς AI fallback). Επιστρέφει (result, error_hint)."""
     url = _normalize_url(url)
     parsed = urlparse(url)
     domain = (parsed.netloc or "").lower()
@@ -2229,7 +2275,7 @@ def detect_and_scrape(url, timeout=20, debug=False):
         error_hint = f"detect_and_scrape exception: {exc}"
         result = None
 
-    return _maybe_apply_ai_fallback(url, result, timeout=timeout, debug=debug, error_hint=error_hint)
+    return result, error_hint
 
 # if run as script, quick demo input
 if __name__ == "__main__":

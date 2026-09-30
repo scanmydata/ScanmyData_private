@@ -16,6 +16,23 @@ try:
 except Exception:
     run_schema_ai_fallback = None
 
+# Γενική γρήγορη επίλυση (διόρθωση URL scanner, γρήγορο megasoft) — βλ. fast_resolve.py
+try:
+    from .fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+except ImportError:
+    try:
+        from fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+    except ImportError:
+        repair_scanned_url = lambda u: u  # noqa: E731
+        resolve_megasoft_mydatapi = lambda *a, **k: None  # noqa: E731
+        is_mydatapi_url = lambda u: "mydatapi.aade.gr" in str(u or "").lower() and "qrinfo" in str(u or "").lower()  # noqa: E731
+
+
+def _is_blazor_page(html):
+    """InvoiceLink (Megasoft) = Blazor Server: τα δεδομένα έρχονται μόνο μέσω SignalR."""
+    h = str(html or "")
+    return "<!--Blazor:" in h or "_framework/blazor" in h
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -30,6 +47,18 @@ MARK_RE = re.compile(r"\b\d{15}\b")
 VAT_RE = re.compile(r"\b\d{9}\b")
 AMOUNT_RE = re.compile(r"(-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)")
 DATE_PATTERNS = [r"(\d{4}-\d{2}-\d{2})", r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})", r"(\d{4}\/\d{2}\/\d{2})"]
+
+def _browser_allowed_for(url):
+    """Ίδιο gate με τον γενικό browser fallback του scraper.py (MYDATA_USE_BROWSER)."""
+    try:
+        try:
+            from .scraper import _use_browser_fallback
+        except ImportError:
+            from scraper import _use_browser_fallback
+        return bool(_use_browser_fallback())
+    except Exception:
+        return False
+
 
 def _normalize_url(url: str) -> str:
     """
@@ -1844,6 +1873,17 @@ def scrape_impact(url, timeout=15, debug=False):
     erp_url = _extract_erp_redirect(soup, r.url)
 
     # Αν έχουμε erp_url, ακολούθησέ το και, αν πάει σε mydata, τρέξε scrape_mydatapi
+    if erp_url and is_mydatapi_url(erp_url):
+        # Το κουμπί δείχνει ήδη στο myDATA: ένα μόνο αίτημα (πριν κατεβαινε δύο φορές).
+        try:
+            sub = scrape_mydatapi(erp_url, timeout=timeout, debug=debug)
+            if any(sub.get(k) for k in ("issuer_vat", "issue_date", "total_amount", "MARK")):
+                sub["source"] = "Impact->MyData"
+                return sub
+        except Exception as e:
+            if debug: print("impact mydatapi error:", e)
+        # αποτυχία της νέας διαδρομής -> συνεχίζει η παλιά (follow + scrape) ως fallback
+
     if erp_url:
         try:
             r2 = sess.get(erp_url, timeout=timeout, allow_redirects=True)
@@ -2562,6 +2602,47 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     return out
 
 
+def _peppol_bt_fields(lines):
+    """Στοιχεία ΕΚΔΟΤΗ από οπτικοποίηση PEPPOL/EN16931 (ετικέτες «(ΒΤ-nn)»,
+    με ελληνικά ή λατινικά Β/Τ): BT-27 επωνυμία, BT-31 ΑΦΜ πωλητή, BT-1 αριθμός
+    (στην ΑΑΔΕ μορφή «ΑΦΜ|ημερ|εγκ|τύπος|σειρά|ΑΑ»), BT-2 ημερομηνία, ET-8 είδος."""
+    out = {}
+
+    def _value(code, letters="BΒ"):
+        pat = re.compile(r"\(\s*[" + letters + r"][TΤ]-" + code + r"\s*\)\s*$", re.I)
+        for i, ln in enumerate(lines):
+            if pat.search(ln):
+                for nxt in lines[i + 1:i + 3]:
+                    if not re.search(r"\(\s*[BΒE][TΤ]-\d+\s*\)", nxt):
+                        return nxt.strip()
+                return None
+        return None
+
+    name = _value("27")
+    if name and name != "-":
+        out["issuer_name"] = name
+    vat = _value("31") or ""
+    m = re.search(r"(\d{9})", vat)
+    if m:
+        out["issuer_vat"] = m.group(1)
+    bt1 = _value("1") or ""
+    parts = bt1.split("|")
+    if len(parts) >= 6 and re.fullmatch(r"\d{9}", parts[0].strip()):
+        out["progressive_aa"] = parts[-1].strip()
+        out.setdefault("issuer_vat", parts[0].strip())
+    elif bt1 and bt1 != "-":
+        out["progressive_aa"] = bt1
+    bt2 = _value("2") or ""
+    m = re.search(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})", bt2)
+    if m:
+        out["issue_date"] = _norm_date_to_ddmmyyyy(m.group(0).replace("-", "/"))
+    et8 = _value("8", letters="EΕ") or ""
+    m = re.search(r"\(([^)]+)\)", et8)
+    if m and not re.search(r"\d", m.group(1)):
+        out["doc_type"] = m.group(1).strip()
+    return out
+
+
 def scrape_vsgr(url, timeout=15, debug=False):
     """
     VS.gr invoice pages (including retail receipt cases).
@@ -2651,18 +2732,59 @@ def scrape_vsgr(url, timeout=15, debug=False):
     if m_mark:
         out["MARK"] = m_mark.group(0)
 
-    for row in soup.find_all("tr"):
-        row_text = row.get_text(" ", strip=True)
-        if re.search(r"Αναγνωριστικό\s*ΦΠΑ\s*Αγοραστή.*ΒΤ-48", row_text, re.I):
-            spans = row.find_all(["span", "td", "div"])
-            for span in reversed(spans):
-                txt = span.get_text(" ", strip=True)
-                m_vat = re.search(r"(\d{9})", txt)
-                if m_vat:
-                    out["issuer_vat"] = m_vat.group(1)
+    # Κεφαλίδα PEPPOL (πριν από «Στοιχεία Πελάτη») = στοιχεία ΕΚΔΟΤΗ. Παλιότερα
+    # εδώ έμπαινε το ΑΦΜ αγοραστή (BT-48 / 2ο ΑΦΜ της σελίδας) στο issuer_vat,
+    # ενώ η διαδρομή μέσω myDATA δίνει σωστά τον εκδότη.
+    lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
+    for key, val in _peppol_bt_fields(lines).items():
+        if val and not out.get(key):
+            out[key] = val
+    cust_idx = next((i for i, ln in enumerate(lines) if re.match(r"^Στοιχεία\s+Πελάτη", ln, re.I)), None)
+    header = lines[:cust_idx] if cust_idx else []
+    for i, ln in enumerate(header[:-1]):
+        if re.fullmatch(r"Α\.?\s*Φ\.?\s*Μ\.?\s*:?", ln, re.I) and re.fullmatch(r"\d{9}", header[i + 1]):
+            out["issuer_vat"] = header[i + 1]
+            break
+    for i, ln in enumerate(header[:-1]):
+        if re.search(r"Οπτικοποίησης\s+PEPPOL", ln, re.I):
+            out["issuer_name"] = header[i + 1]
+            break
+    di = next((i for i, ln in enumerate(header) if re.fullmatch(r"Ημερομηνία\s+Έκδοσης", ln, re.I)), None)
+    if di is not None:
+        vals = header[di + 1:]
+        date_i = next((j for j, v in enumerate(vals) if re.match(r"\d{1,2}/\d{1,2}/\d{4}", v)), None)
+        if date_i is not None:
+            out["issue_date"] = _norm_date_to_ddmmyyyy(vals[date_i][:10])
+            if date_i >= 1 and re.fullmatch(r"\d+", vals[date_i - 1]):
+                out["progressive_aa"] = vals[date_i - 1]
+            type_lines = []
+            for v in vals[:date_i]:
+                if re.fullmatch(r"[\d\-]+", v):
                     break
-            if out["issuer_vat"]:
-                break
+                type_lines.append(v)
+            if type_lines:
+                doc_type = type_lines[0]
+                for cont in type_lines[1:]:
+                    if cont.startswith("-"):
+                        doc_type += " " + cont
+                    else:
+                        break
+                out["doc_type"] = doc_type
+
+    # Fallback: η προηγούμενη λογική αυτούσια, μόνο όταν το νέο parse δεν βρήκε ΑΦΜ.
+    if not out["issuer_vat"]:
+        for row in soup.find_all("tr"):
+            row_text = row.get_text(" ", strip=True)
+            if re.search(r"Αναγνωριστικό\s*ΦΠΑ\s*Αγοραστή.*ΒΤ-48", row_text, re.I):
+                spans = row.find_all(["span", "td", "div"])
+                for span in reversed(spans):
+                    txt = span.get_text(" ", strip=True)
+                    m_vat = re.search(r"(\d{9})", txt)
+                    if m_vat:
+                        out["issuer_vat"] = m_vat.group(1)
+                        break
+                if out["issuer_vat"]:
+                    break
 
     if not out["issuer_vat"] and not _looks_like_retail_receipt(page_text):
         all_vats = re.findall(r"\b(\d{9})\b", page_text)
@@ -2671,12 +2793,14 @@ def scrape_vsgr(url, timeout=15, debug=False):
         elif all_vats:
             out["issuer_vat"] = all_vats[0]
 
-    m_dt = re.search(r"(?:Είδος\s*Παραστατικού|Type|Document|Invoice\s*Type)[\s:]*([^\n<]+)", page_text, re.I)
-    if m_dt:
-        out["doc_type"] = m_dt.group(1).strip()
-    m_date = re.search(r"(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4})", page_text)
-    if m_date:
-        out["issue_date"] = _norm_date_to_ddmmyyyy(m_date.group(1))
+    if not out["doc_type"]:
+        m_dt = re.search(r"(?:Είδος\s*Παραστατικού|Type|Document|Invoice\s*Type)[\s:]*([^\n<]+)", page_text, re.I)
+        if m_dt:
+            out["doc_type"] = m_dt.group(1).strip()
+    if not out["issue_date"]:
+        m_date = re.search(r"(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4})", page_text)
+        if m_date:
+            out["issue_date"] = _norm_date_to_ddmmyyyy(m_date.group(1))
 
     # Prefer explicit BG-22 totals when present.
     for tr in soup.find_all("tr"):
@@ -2960,6 +3084,11 @@ def scrape_megasoft(url, timeout=20, debug=False):
 
     # Preferred path: follow "Προβολή μέσω myDATA" target and reuse myDATA scraper
     mydatapi_url = _extract_mydatapi_url_from_text(html, base_url=url)
+    blazor = _is_blazor_page(html)
+    if not mydatapi_url and blazor and _browser_allowed_for(url):
+        # Blazor Server: κανένα στατικό HTTP candidate δεν δίνει ποτέ το link·
+        # γρήγορο κλικ + σύλληψη window.open (~4s αντί ~14s του γενικού fallback).
+        mydatapi_url = resolve_megasoft_mydatapi(url, budget_s=max(8, timeout), debug=debug)
     if not mydatapi_url:
         parsed = urlparse(url)
         qrcode_value = parse_qs(parsed.query).get("QrCode", [""])[0]
@@ -4996,7 +5125,25 @@ def _refine_doc_type(target, page_text):
 def detect_and_scrape(url, timeout=20, debug=False):
     """
     Convenience wrapper: detect source from URL and call appropriate scraper.
+    Πρώτα με το URL διορθωμένο από σφάλματα σκαναρίσματος (fast_resolve)· αν δεν
+    δώσει στοιχεία, ξανά με το URL όπως ήρθε (η προηγούμενη συμπεριφορά = fallback).
     """
+    plain = _normalize_url(url)
+    try:
+        repaired = repair_scanned_url(plain) or plain
+    except Exception:
+        repaired = plain
+    result, error_hint = _detect_and_scrape_core(repaired, timeout=timeout, debug=debug)
+    used = repaired
+    if repaired != plain and not _analysis_result_has_min_payload(result):
+        result2, hint2 = _detect_and_scrape_core(plain, timeout=timeout, debug=debug)
+        if _analysis_result_has_min_payload(result2):
+            result, error_hint, used = result2, hint2, plain
+    return _maybe_apply_ai_fallback_analysis(used, result, timeout=timeout, debug=debug, error_hint=error_hint)
+
+
+def _detect_and_scrape_core(url, timeout=20, debug=False):
+    """Η αρχική ανίχνευση παρόχου (χωρίς AI fallback). Επιστρέφει (result, error_hint)."""
     url = _normalize_url(url)
     parsed = urlparse(url)
     domain = (parsed.netloc or "").lower()
@@ -5056,7 +5203,7 @@ def detect_and_scrape(url, timeout=20, debug=False):
         error_hint = f"detect_and_scrape exception: {exc}"
         result = None
 
-    return _maybe_apply_ai_fallback_analysis(url, result, timeout=timeout, debug=debug, error_hint=error_hint)
+    return result, error_hint
 
 # if run as script, quick demo input
 if __name__ == "__main__":

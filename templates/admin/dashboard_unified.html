@@ -2537,7 +2537,8 @@ async function loadDriveSyncStatus() {
     const json = await res.json();
     if (!json.success) throw new Error(json.error || 'load failed');
     _renderWarmup(json.data.warmup);
-    _renderJob(json.data.manual_job, json.data.manual_running);
+    _renderJob(json.data.manual_job, json.data.manual_running, json.data.server_time);
+    if (json.data.manual_running && !_driveJobPoll) _startJobPolling();
   } catch (err) {
     const el = document.getElementById('drive-warmup-status');
     if (el) el.textContent = '⚠️ Αδυναμία φόρτωσης κατάστασης: ' + err.message;
@@ -2563,22 +2564,100 @@ function _renderWarmup(w) {
   el.innerHTML = txt;
 }
 
-function _renderJob(job, running) {
+function _fmtBytes(n) {
+  n = Number(n || 0);
+  if (n < 1024) return Math.round(n) + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+function _fmtSecs(s) {
+  s = Math.max(0, Math.round(Number(s || 0)));
+  if (s < 60) return s + ' δευτ.';
+  const m = Math.floor(s / 60);
+  return m + ' λεπ. ' + (s % 60) + ' δευτ.';
+}
+
+function _escHtml(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Ποσοστό της τρέχουσας ομάδας: bytes όταν είναι γνωστά, αλλιώς αρχεία.
+function _transferFraction(t) {
+  if (!t) return 0;
+  if (t.phase === 'done' || t.phase === 'delete') return 1;
+  const bt = Number(t.bytes_total || 0), ft = Number(t.files_total || 0);
+  if (bt > 0) return Math.min(1, Number(t.bytes_done || 0) / bt);
+  if (ft > 0) return Math.min(1, Number(t.files_done || 0) / ft);
+  return t.phase === 'compare' ? 0 : 1;  // τίποτα προς μεταφορά = ολοκληρωμένο
+}
+
+function _renderJob(job, running, serverTime) {
   const el = document.getElementById('drive-job-status');
   if (!el) return;
-  if (!job || job.status === 'idle' || (!running && job.status !== 'done')) {
-    if (job && job.status === 'done') { /* show summary below */ } else { el.classList.add('hidden'); return; }
+  const now = Number(serverTime || 0) || (Date.now() / 1000);
+  const interrupted = !!(job && job.status === 'running' && !running);
+  if (!job || job.status === 'idle' || (!running && job.status !== 'done' && !interrupted)) {
+    el.classList.add('hidden');
+    return;
   }
   el.classList.remove('hidden');
-  let txt = '<strong>' + (job.action === 'push' ? '⬆️ Push' : '⬇️ Pull') + (job.force ? ' (force)' : '') + ':</strong> ';
-  txt += (job.status === 'running' ? 'σε εξέλιξη ' : 'ολοκληρώθηκε ') + (job.done || 0) + '/' + (job.total || 0);
-  if (job.current_group) txt += ' — ' + job.current_group;
+  const isPush = job.action === 'push';
+  const t = job.transfer || null;
+  const total = Number(job.total || 0), done = Number(job.done || 0);
+  const overall = job.status === 'done' ? 100
+    : Math.round(total ? ((done + (job.status === 'running' && running ? _transferFraction(t) : 0)) / total) * 100 : 0);
+
+  let html = '<div class="flex items-center justify-between gap-2"><strong>' + (isPush ? '⬆️ Push (server → Drive)' : '⬇️ Pull (Drive → server)') +
+             (job.force ? ' (force)' : '') + '</strong><span class="font-bold">' + overall + '%</span></div>';
+  html += '<div style="height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin:6px 0 8px">' +
+          '<div style="height:100%;width:' + overall + '%;background:' + (interrupted ? '#dc2626' : (job.status === 'done' ? '#059669' : '#0284c7')) + ';transition:width .4s"></div></div>';
+  html += 'Ομάδες: <strong>' + done + '/' + total + '</strong>';
+  if (job.started_at) html += ' · διάρκεια ' + _fmtSecs((job.finished_at || now) - job.started_at);
+
+  if (job.status === 'running' && job.current_group) {
+    html += '<br>Τρέχουσα ομάδα: <span class="font-semibold text-sky-700">' + _escHtml(job.current_group) + '</span>';
+    if (t) {
+      const phaseLabel = {compare: 'σύγκριση με το Drive', upload: 'ανέβασμα αρχείων', download: 'κατέβασμα αρχείων',
+                          delete: 'διαγραφή αρχείων που δεν υπάρχουν πια τοπικά', done: 'ολοκλήρωση'}[t.phase] || (t.phase || '—');
+      html += ' — ' + phaseLabel;
+      if (t.files_total != null && t.phase !== 'compare') {
+        html += '<br>Αρχεία: <strong>' + (t.files_done || 0) + '/' + (t.files_total || 0) + '</strong>';
+        if (t.bytes_total) {
+          html += ' · ' + _fmtBytes(t.bytes_done) + ' / ' + _fmtBytes(t.bytes_total);
+          const el_s = now - Number(t.started_at || now);
+          if (el_s > 1 && t.bytes_done) html += ' · ' + _fmtBytes(t.bytes_done / el_s) + '/s';
+        }
+        if (Number(t.files_total || 0) === 0 && t.phase !== 'compare') html += ' <span class="text-emerald-700">(τίποτα νέο — ήδη ενημερωμένο)</span>';
+        if (t.failed) html += ' · <span class="text-red-600">αποτυχίες: ' + t.failed + '</span>';
+      }
+      if (t.current) html += '<br><span class="text-gray-600">Τελευταίο αρχείο: ' + _escHtml(t.current) + '</span>';
+      if (t.last_error) html += '<br><span class="text-red-600">Τελευταίο σφάλμα: ' + _escHtml(t.last_error) + '</span>';
+    }
+    const lastUpdate = Number((t && t.updated_at) || job.updated_at || 0);
+    if (lastUpdate) {
+      const age = now - lastUpdate;
+      html += '<br><span class="' + (age > 60 ? 'text-amber-700 font-semibold' : 'text-gray-500') + '">Τελευταία ενημέρωση προόδου πριν ' + _fmtSecs(age) +
+              (age > 60 ? ' — καμία πρόοδος για πάνω από 1 λεπτό (πιθανό backoff/όριο Drive ή μεγάλο αρχείο)' : '') + '</span>';
+    }
+  }
+  if (interrupted) {
+    html += '<br><span class="text-red-600 font-semibold">Η εργασία δεν τρέχει πια (πιθανή επανεκκίνηση του server) — ξεκίνησέ τη ξανά.</span>';
+  }
   if (job.status === 'done' && Array.isArray(job.results)) {
     const fails = job.results.filter(r => !r.ok);
-    txt += fails.length ? '<br><span class="text-red-600">Αποτυχίες: ' + fails.map(f => f.folder).join(', ') + '</span>'
-                        : '<br><span class="text-emerald-700">Όλες οι ομάδες ΟΚ.</span>';
+    html += fails.length ? '<br><span class="text-red-600">Αποτυχίες: ' + fails.map(f => _escHtml(f.folder) + (f.error ? ' (' + _escHtml(f.error) + ')' : '')).join(', ') + '</span>'
+                         : '<br><span class="text-emerald-700">Όλες οι ομάδες ΟΚ.</span>';
+    html += '<div class="mt-1 text-xs text-gray-600">' + job.results.map(r =>
+      '• ' + _escHtml(r.folder) + ': ' + (r.files || 0) + (r.files_total != null ? '/' + r.files_total : '') + ' αρχεία' +
+      (r.bytes ? ', ' + _fmtBytes(r.bytes) : '') + (r.deleted ? ', ' + r.deleted + ' διαγραφές' : '') +
+      (r.failed ? ', <span class="text-red-600">' + r.failed + ' αποτυχίες</span>' : '') +
+      (r.seconds != null ? ' σε ' + _fmtSecs(r.seconds) : '')
+    ).join('<br>') + '</div>';
+    if (job.finished_at) html += '<div class="text-xs text-gray-500 mt-1">Ολοκληρώθηκε πριν ' + _fmtSecs(now - job.finished_at) + '</div>';
   }
-  el.innerHTML = txt;
+  el.innerHTML = html;
 }
 
 async function checkDriveSync() {
@@ -2647,10 +2726,10 @@ function _startJobPolling() {
       const res = await fetch('/admin/api/drive-sync/status');
       const json = await res.json();
       if (!json.success) return;
-      _renderJob(json.data.manual_job, json.data.manual_running);
+      _renderJob(json.data.manual_job, json.data.manual_running, json.data.server_time);
       if (!json.data.manual_running) { clearInterval(_driveJobPoll); _driveJobPoll = null; }
     } catch (e) { /* keep polling */ }
-  }, 2000);
+  }, 1500);
 }
 
 // ==================== INITIALIZATION ====================

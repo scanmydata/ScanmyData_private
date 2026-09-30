@@ -31,7 +31,17 @@
         });
         el.appendChild(btn);
 
-        if (AUTO_HIDE_MS > 0) setTimeout(()=>{ try{ el.remove(); }catch(_){ } }, AUTO_HIDE_MS);
+        // Σεβασμός του data-ttl των flash banners. Αυτός ο observer «κερδίζει»
+        // (δημιουργείται πριν από του base_01) για τα δυναμικά μηνύματα, οπότε
+        // χωρίς αυτό όσα showFlash(…, ttl) δεν είχαν δικό τους timer έμεναν για πάντα.
+        const ttlAttr = el.getAttribute('data-ttl');
+        const ttl = ttlAttr === null ? 0 : parseInt(ttlAttr, 10);
+        if (el.classList.contains('flash-banner') && ttl > 0 && !el.__appFlashTimer) {
+          if (typeof window.__appFlashArmTtl === 'function') window.__appFlashArmTtl(el, ttl);
+          else el.__appFlashTimer = setTimeout(()=>{ try{ el.remove(); }catch(_){ } }, ttl);
+        } else if (AUTO_HIDE_MS > 0) {
+          setTimeout(()=>{ try{ el.remove(); }catch(_){ } }, AUTO_HIDE_MS);
+        }
       }
 
       function scan(root=document){
@@ -256,7 +266,7 @@
     })();
     
     (function(){
-      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/e3_check', '/terms', '/privacy', '/accounting_result']);
+      const ALLOWED_PATHS = new Set(['/', '/fetch', '/credentials', '/search', '/e3_check', '/terms', '/privacy', '/accounting_result', '/afm_rules']);
       let navInFlight = null;
       let pageCaptureTimer = null;
 
@@ -1492,6 +1502,18 @@
           window.location.href = url.toString();
           return;
         }
+
+        // Τα server flash που απέδωσε η νέα σελίδα (ήδη αφαιρεμένα από το session)
+        // βρίσκονται στο δικό της #flashContainer, εκτός #appShell: μεταφορά τους
+        // στο ζωντανό container, αλλιώς χάνονταν.
+        try {
+          if (typeof window.__appFlashAdoptFrom === 'function') window.__appFlashAdoptFrom(doc);
+        } catch (_) {}
+        // Κάποιες σελίδες (π.χ. Αναζήτηση) ορίζουν δικό τους global showFlash·
+        // πριν τρέξουν τα scripts της επόμενης σελίδας επιστρέφουμε στο κοινό.
+        try {
+          if (typeof window.__appShowFlash === 'function') window.showFlash = window.__appShowFlash;
+        } catch (_) {}
 
         try {
           const nextActiveVat = String(doc.body?.dataset?.activeVat || '').trim();
