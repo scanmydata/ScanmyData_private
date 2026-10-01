@@ -14,14 +14,29 @@ except Exception:
 
 # Γενική γρήγορη επίλυση (διόρθωση URL scanner, γρήγορο megasoft) — βλ. fast_resolve.py
 try:
-    from .fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+    from .fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url, parse_provider_page
 except ImportError:
     try:
-        from fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url
+        from fast_resolve import repair_scanned_url, resolve_megasoft_mydatapi, is_mydatapi_url, parse_provider_page
     except ImportError:
+        parse_provider_page = lambda html: {"mark": None, "uid": None, "mydatapi_url": None}  # noqa: E731
         repair_scanned_url = lambda u: u  # noqa: E731
         resolve_megasoft_mydatapi = lambda *a, **k: None  # noqa: E731
         is_mydatapi_url = lambda u: "mydatapi.aade.gr" in str(u or "").lower() and "qrinfo" in str(u or "").lower()  # noqa: E731
+
+
+def _get_with_retry(sess, url, attempts=((5, 9), (5, 12), (5, 18)), **kw):
+    """GET με σύντομα timeouts και επανάληψη: ο server του e-invoicing.gr κάποιες φορές
+    «κρεμάει» 15-40s ενώ την επόμενη απαντά σε 2-4s (βλ. και 3η προσπάθεια για τα ~18s)."""
+    last = None
+    for to in attempts:
+        try:
+            r = sess.get(url, timeout=to, **kw)
+            r.raise_for_status()
+            return r
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise last
 
 
 def _is_blazor_page(html):
@@ -939,10 +954,9 @@ def scrape_pegcloud(url):
     """
     sess = requests.Session()
     sess.headers.update(HEADERS)
-    
+
     try:
-        r = sess.get(url, timeout=15)
-        r.raise_for_status()
+        r = _get_with_retry(sess, url)
         r.encoding = 'utf-8'
     except Exception as e:
         print(f"[RequestError] {e}")
@@ -950,6 +964,26 @@ def scrape_pegcloud(url):
     
     html = r.text
     soup = BeautifulSoup(html, "html.parser")
+
+    # ΝΕΟ (πρώτα): το κουμπί «Προβολή myDATA» είναι απλό <a href> προς mydatapi QRInfo
+    # (και η σελίδα έχει «Αναγνωριστικό» = UID, «Μ.Αρ.Κ.»). Το mydatapi δίνει σωστά τον ΑΦΜ
+    # πελάτη — ο παλιός κανόνας «2ο 9ψήφιο» έπιανε τον εκδότη (π.χ. πελάτης με ΑΦΜ εξωτερικού).
+    try:
+        page = parse_provider_page(html)
+        myd = page.get("mydatapi_url")
+        if myd:
+            data = scrape_mydatapi(myd, debug=False)
+            d_mark = str((data or {}).get("MARK") or "").strip()
+            if re.fullmatch(r"\d{15}", d_mark):
+                d_afm = str((data or {}).get("ΑΦΜ Πελάτη") or "").strip()
+                if d_afm in ("", "N/A"):
+                    d_afm = None
+                return d_mark, d_afm
+        if page.get("mark"):
+            # δεν απάντησε το mydatapi: το MARK της σελίδας + παλιός κανόνας για ΑΦΜ (παρακάτω)
+            pass
+    except Exception as e:
+        print(f"[pegcloud fast] {e}")
     
     # 1) MARK - Αναζήτηση "Μ.Αρ.Κ.:" 
     mark = None
@@ -1088,14 +1122,27 @@ def scrape_einvoicing_gr(url, return_meta=False):
     
     # Πρώτα, φόρτωσε τη σελίδα για να ψάξεις myDATA URL / κουμπί
     try:
-        r_initial = sess.get(url, timeout=15)
-        r_initial.raise_for_status()
+        r_initial = _get_with_retry(sess, url)
     except Exception as e:
         print(f"[RequestError] {e}")
         return None, None
     
     html_initial = _response_text(r_initial)
     soup_initial = BeautifulSoup(html_initial, "html.parser")
+
+    # ΝΕΟ (πρώτα): η σελίδα έχει ήδη «M.AR.K», «UID» και το κουμπί «Παραστατικό (ΑΑΔΕ)».
+    # Παίρνουμε το MARK κατευθείαν και μόνο τον ΑΦΜ πελάτη/είδος από το mydatapi (HTTP).
+    # Αν κάτι λείπει, συνεχίζει η παλιά ροή παρακάτω αυτούσια.
+    try:
+        _pg = parse_provider_page(html_initial)
+        if _pg.get("mark"):
+            _fast_afm, _fast_receipt, _fast_dt = None, False, ""
+            if _pg.get("mydatapi_url"):
+                _m2, _a2, _rc2, _dt2 = _try_mydatapi_extract(_pg["mydatapi_url"])
+                _fast_afm, _fast_receipt, _fast_dt = _a2, _rc2, _dt2
+            return _pack(_pg["mark"], _fast_afm, is_receipt=_fast_receipt, doc_type=_fast_dt)
+    except Exception as e:
+        print(f"[e-invoicing.gr fast] {e}")
 
     # 0) Ψάξε πρώτα για κουμπί "Παραστατικό (ΑΑΔΕ)" που οδηγεί σε mydatapi
     # Αυτό είναι το προτιμητέο, γιατί δίνει πρώσβαση στο mydatapi flow

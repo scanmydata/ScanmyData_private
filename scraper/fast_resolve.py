@@ -49,6 +49,41 @@ def is_mydatapi_url(url: str) -> bool:
 # --------------------------------------------------------------------------- #
 # 1) Διόρθωση URL από scanner
 # --------------------------------------------------------------------------- #
+_KNOWN_PROVIDER_HOST_PARTS = (
+    "impact.gr", "vs.gr", "megasoft", "invoicelink", "mydatapi", "aade.gr", "pegcloud", "wedoconnect",
+    "s1ecos", "eskap", "epsilonnet", "etimologiera", "primer", "e-invoicing.gr",
+)
+
+
+def _is_subsequence(small: str, big: str) -> bool:
+    it = iter(big)
+    return all(ch in it for ch in small)
+
+
+def _looks_like_garbled_einvoicing_host(host: str) -> bool:
+    """«oig.gr», «e-invoicin.gr», «einvoicing.gr»… (χαμένοι χαρακτήρες από scanner)."""
+    h = (host or "").lower().split(":")[0]
+    if h.startswith("www."):
+        h = h[4:]
+    if not h.endswith(".gr") or len(h) < 5 or any(k in h for k in _KNOWN_PROVIDER_HOST_PARTS):
+        return False
+    return _is_subsequence(h, "e-invoicing.gr")
+
+
+def einvoicing_url_is_truncated(url: str) -> bool:
+    """True όταν το URL είναι e-invoicing.gr αλλά το <uuid> έχει κοπεί (ανεπανόρθωτο)."""
+    try:
+        p = urlparse(repair_scanned_url(url))
+    except Exception:
+        return False
+    if not (p.netloc or "").lower().endswith("e-invoicing.gr"):
+        return False
+    path = p.path or ""
+    if "/edocuments/" not in path.lower() and "viewinvoice" not in path.lower():
+        return False
+    return not _UUID_TOKEN_RE.search(path + "/")
+
+
 def repair_scanned_url(url: str) -> str:
     """Επιστρέφει το URL διορθωμένο (ή αμετάβλητο όταν δεν αναγνωρίζεται)."""
     if not url:
@@ -65,6 +100,12 @@ def repair_scanned_url(url: str) -> str:
     host = (p.netloc or "").lower()
     path = p.path or ""
     query = p.query or ""
+
+    # e-invoicing.gr: ο host χάνει χαρακτήρες (``oig.gr``) αλλά το path κουβαλάει
+    # το χαρακτηριστικό <uuid>_<token> -> επαναφορά του host (χωρίς να αγγίζουμε γνωστούς παρόχους).
+    if _looks_like_garbled_einvoicing_host(host) and _UUID_TOKEN_RE.search(path + "/"):
+        host = "e-invoicing.gr"
+        path = path if path.lower().startswith("/edocuments/viewinvoice") else "/x" + path
 
     # Impact: ο host χάνει το «ein» και το path θέλει ΚΕΦΑΛΑΙΑ (με πεζά ο server
     # δίνει κενή σελίδα χωρίς στοιχεία).
@@ -152,6 +193,29 @@ def extract_url_ids(url: str) -> Dict[str, Optional[str]]:
     m = _MARK_RE.search(path) or _MARK_RE.search(p.query or "")
     if m and not is_mydatapi_url(url):
         out["mark"] = m.group(1)
+    return out
+
+
+_PAGE_MARK_RE = re.compile(r"(?:M\.?\s*AR\.?\s*K|Μ\.?\s*Αρ\.?\s*Κ|MARK)\.?\s*[:：]?\s*(\d{15})(?!\d)", re.I)
+_PAGE_UID_RE = re.compile(r"(?:UID|Αναγνωριστικό)\s*[:：]?\s*([0-9a-f]{40})(?![0-9a-f])", re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def parse_provider_page(html: str) -> Dict[str, Optional[str]]:
+    """Στατικά πεδία μιας σελίδας παρόχου (e-invoicing.gr, pegcloud): MARK, UID και
+    το link «Παραστατικό (ΑΑΔΕ)» / «Προβολή myDATA» (mydatapi QRInfo)."""
+    out: Dict[str, Optional[str]] = {"mark": None, "uid": None, "mydatapi_url": None}
+    h = str(html or "")
+    text = re.sub(r"\s+", " ", _TAG_RE.sub(" ", h))
+    m = _PAGE_MARK_RE.search(text)
+    if m:
+        out["mark"] = m.group(1)
+    m = _PAGE_UID_RE.search(text)
+    if m:
+        out["uid"] = m.group(1).upper()
+    m = MYDATAPI_RE.search(h.replace("&amp;", "&"))
+    if m:
+        out["mydatapi_url"] = m.group(0)
     return out
 
 

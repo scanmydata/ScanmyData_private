@@ -696,22 +696,55 @@ async function buildIndividualPdfBlob(innerHtml) {
     breaks.sort((a, b) => a - b);
     sectionBreaks.sort((a, b) => a - b);
 
+    // Στην εφαρμογή (Bootstrap/Tailwind) το html2canvas μέσα στο html2pdf
+    // μετατοπίζει την απόδοση ~7-8px προς τα δεξιά, οπότε το δεξί άκρο (πλαίσια
+    // πινάκων, ημερομηνία) έβγαινε εκτός canvas και κοβόταν. Άρα: σύλληψη σε
+    // φαρδύτερη περιοχή (+EXTRA px) ώστε να μη χάνεται τίποτα, και μετά κόβουμε
+    // στα ΠΡΑΓΜΑΤΙΚΑ όρια του περιεχομένου (πρώτο/τελευταίο μη λευκό pixel) —
+    // ανεξάρτητα από το πόση είναι η μετατόπιση.
+    const EXTRA = 48;
+    const pxToMm = 25.4 / 96;
+    const captureWmm = Math.max(210, Math.ceil((capturedWidth + EXTRA) * pxToMm) + 6);
     const worker = window.html2pdf().from(container).set({
       margin: 0,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth, height: capturedHeight, scrollX: 0, scrollY: 0 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth + EXTRA, height: capturedHeight, scrollX: 0, scrollY: 0 },
+      jsPDF: { unit: 'mm', format: [captureWmm, Math.max(297, captureWmm + 1)], orientation: 'portrait' },
       pagebreak: { mode: ['legacy'] },
     });
     const canvas = await worker.toCanvas().get('canvas');
+    // Ίδιο έγγραφο jsPDF: προσθέτουμε σελίδες A4 για τα κομμάτια και στο τέλος
+    // σβήνουμε τις αρχικές (φαρδιές) σελίδες της σύλληψης.
     const pdf = await worker.toPdf().get('pdf');
+    const capturePages = pdf.internal.getNumberOfPages();
+
+    const canvasPerPx = canvas.width / (capturedWidth + EXTRA);
+    // Οριζόντια όρια περιεχομένου στο canvas.
+    let minX = canvas.width, maxX = -1;
+    try {
+      const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let y = 0; y < canvas.height; y += 3) {
+        const row = y * canvas.width * 4;
+        for (let x = 0; x < minX; x++) {
+          const i = row + x * 4;
+          if (img[i] < 245 || img[i + 1] < 245 || img[i + 2] < 245) { minX = x; break; }
+        }
+        for (let x = canvas.width - 1; x > maxX; x--) {
+          const i = row + x * 4;
+          if (img[i] < 245 || img[i + 1] < 245 || img[i + 2] < 245) { maxX = x; break; }
+        }
+      }
+    } catch (_) { /* αν δεν διαβάζεται το canvas, κρατάμε όλο το πλάτος */ }
+    if (maxX < minX) { minX = 0; maxX = canvas.width - 1; }
+    const padC = Math.round(2 * canvasPerPx);
+    const srcX = Math.max(0, minX - padC);
+    const srcW = Math.min(canvas.width, maxX + padC + 1) - srcX;
 
     const pageW = 210, pageH = 297;
     const usableW = pageW - 2 * cfg.marginXmm;
     const usableH = pageH - 2 * cfg.marginYmm;
-    const mmPerPx = usableW / capturedWidth;
-    const pagePx = usableH / mmPerPx;          // πόσα CSS px χωράνε σε μία σελίδα
-    const canvasPerPx = canvas.width / capturedWidth;
+    const mmPerPx = usableW / (srcW / canvasPerPx);  // mm ανά CSS px (πλάτος = περιεχόμενο)
+    const pagePx = usableH / mmPerPx;               // πόσα CSS px χωράνε σε μία σελίδα
 
     const slices = [];
     let start = 0;
@@ -730,21 +763,20 @@ async function buildIndividualPdfBlob(innerHtml) {
       start = end;
     }
 
-    while (pdf.internal.getNumberOfPages() > 1) pdf.deletePage(pdf.internal.getNumberOfPages());
-    slices.forEach(([s, e], i) => {
-      if (i > 0) pdf.addPage('a4', 'portrait');
-      pdf.setPage(i + 1);
+    slices.forEach(([s, e]) => {
+      pdf.addPage('a4', 'portrait');   // η νέα σελίδα γίνεται και τρέχουσα
       pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, pageW, pageH, 'F');
       const part = document.createElement('canvas');
-      part.width = canvas.width;
+      part.width = srcW;
       part.height = Math.max(1, Math.round((e - s) * canvasPerPx));
       const ctx = part.getContext('2d');
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, part.width, part.height);
-      ctx.drawImage(canvas, 0, Math.round(s * canvasPerPx), canvas.width, part.height, 0, 0, part.width, part.height);
+      ctx.drawImage(canvas, srcX, Math.round(s * canvasPerPx), srcW, part.height, 0, 0, part.width, part.height);
       pdf.addImage(part.toDataURL('image/jpeg', 0.98), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (e - s) * mmPerPx);
     });
+    for (let k = 0; k < capturePages; k++) pdf.deletePage(1);
     return pdf.output('blob');
   } finally {
     document.body.removeChild(container);

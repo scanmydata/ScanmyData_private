@@ -11217,6 +11217,10 @@ def search():
         if re.match(r'^https?:/', mark, re.I):
             input_is_url = True
         
+        try:
+            from scraper.fast_resolve import einvoicing_url_is_truncated as _einvoicing_truncated
+        except Exception:
+            _einvoicing_truncated = lambda _u: False  # noqa: E731
         local_invoice_hit = None
         if input_is_url:
             # Διόρθωση URL που «χάλασε» στο σκανάρισμα (χαμένοι χαρακτήρες/Shift) και
@@ -11313,6 +11317,9 @@ def search():
                             scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                             if not scraped_afm:
                                 scraped_afm = scraped_afm_peg
+                        elif "e-invoicing.gr" in domain and _einvoicing_truncated(mark):
+                            # URL κομμένο από scanner (λείπει μέρος του uuid): ανεπανόρθωτο, μην περιμένεις timeout
+                            error = "Το URL του e-invoicing.gr είναι ελλιπές (κόπηκε στο σκανάρισμα). Σκάναρε ξανά το QR."
                         elif "e-invoicing.gr" in domain:
                             eg_res = scrape_einvoicing_gr(mark, return_meta=True)
                             eg_meta = {}
