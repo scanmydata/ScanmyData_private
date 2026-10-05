@@ -96,16 +96,26 @@ def _merge_custom_accounts_g(settings: Dict[str, Any], credential: Optional[Dict
 # Chart of Accounts (Λογιστικό Σχέδιο) - ΝΕΟΣ ΚΩΔΙΚΑΣ
 # ============================================================================
 
-def _load_chart_of_accounts(base_dir: str = "data") -> Optional[pd.DataFrame]:
+def _load_chart_of_accounts(base_dir: str = "data", vat: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
-    Φορτώνει το λογιστικό σχέδιο (group-wide).
+    Φορτώνει το λογιστικό σχέδιο Γ κατηγορίας.
+    ΝΕΟ: πρώτα το ειδικό σχέδιο του credential (vat) — coa/<ΑΦΜ>_G.xlsx — αλλιώς το κοινό της ομάδας.
     Επιστρέφει DataFrame με στήλες: Κωδικός, Περιγραφή, Ποσοστό ΦΠΑ, Λογαριασμός ΦΠΑ
     """
     logger = logging.getLogger(__name__)
-    
-    # Ένα αρχείο για όλη την ομάδα
+
+    # Ένα αρχείο για όλη την ομάδα (fallback)
     coa_path = os.path.join(base_dir, 'chart_of_accounts_g.xlsx')
-    
+    if vat:
+        try:
+            import coa_store
+            _p, _scope = coa_store.resolve_coa_path(base_dir, 'G', vat)
+            if _p:
+                coa_path = _p
+                logger.info(f"[Chart of Accounts] Using {_scope} chart of accounts: {coa_path}")
+        except Exception:
+            logger.exception("[Chart of Accounts] credential-specific resolve failed; using group file")
+
     if not os.path.exists(coa_path):
         logger.debug(f"[Chart of Accounts] No chart of accounts file found in {base_dir}")
         return None
@@ -458,7 +468,7 @@ def build_preview_rows_for_ui_g(
     else:
         coa_base_dir = "data"
     
-    coa_df = _load_chart_of_accounts(coa_base_dir)
+    coa_df = _load_chart_of_accounts(coa_base_dir, vat)
     if coa_df is not None:
         logger.info(f"[Γ Category] Chart of Accounts loaded with {len(coa_df)} accounts from {coa_base_dir}")
     else:

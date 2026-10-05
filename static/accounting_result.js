@@ -90,7 +90,19 @@ function showArOverlay(title, message) {
     overlay.setAttribute('aria-hidden', 'false');
   }
   if (AR_OVERLAY_TIMEOUT) clearTimeout(AR_OVERLAY_TIMEOUT);
-  AR_OVERLAY_TIMEOUT = setTimeout(hideArOverlay, 90000);
+  AR_OVERLAY_TIMEOUT = setTimeout(hideArOverlay, 300000);
+}
+
+// Αμέσως μόλις ο χρήστης διαλέξει σε popup, δείξε overlay (ή, σε Μαζικό, το cross-page
+// banner) ΠΡΙΝ φύγει το αίτημα αποθήκευσης — αλλιώς, ανάμεσα στο κλείσιμο του popup
+// και στο επόμενο «Βήμα», η σελίδα φαίνεται να μην κάνει τίποτα.
+async function arPostWithOverlay(url, body, message) {
+  showArOverlay('Καταχώρηση επιλογής...', message || 'Αποθήκευση της επιλογής σου — μια στιγμή...');
+  try {
+    return await postJson(url, body);
+  } finally {
+    hideArOverlay();
+  }
 }
 
 function hideArOverlay() {
@@ -1053,9 +1065,9 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
     if (!value) return false;
   }
 
-  const resp = await postJson('/api/accounting_result/inventory/resolve', {
+  const resp = await arPostWithOverlay('/api/accounting_result/inventory/resolve', {
     credential_name: name, year, method: choice, value, date_from: dateFrom, date_to: dateTo,
-  });
+  }, `Καταχώρηση αποθέματος λήξης — ${name}...`);
   return resp.ok ? true : arResolveSaveFailed('Απόθεμα λήξης', name, resp);
 }
 
@@ -1202,9 +1214,9 @@ async function resolvePayrollForCompany(name, year, dateFrom, dateTo, payrollChe
     }
   }
 
-  const resp = await postJson('/api/accounting_result/payroll/resolve', {
+  const resp = await arPostWithOverlay('/api/accounting_result/payroll/resolve', {
     credential_name: name, year, resolution, monthly_totals: monthlyTotals,
-  });
+  }, `Καταχώρηση μισθοδοσίας — ${name}...`);
   return resp.ok ? true : arResolveSaveFailed('Μισθοδοσία', name, resp);
 }
 
@@ -1244,9 +1256,9 @@ async function resolveRentForCompany(name, year, dateFrom, dateTo, rentCheck) {
     }
   }
 
-  const resp = await postJson('/api/accounting_result/rent/resolve', {
+  const resp = await arPostWithOverlay('/api/accounting_result/rent/resolve', {
     credential_name: name, year, resolution, monthly_totals: monthlyTotals,
-  });
+  }, `Καταχώρηση ενοικίου — ${name}...`);
   return resp.ok ? true : arResolveSaveFailed('Ενοίκιο', name, resp);
 }
 
@@ -1281,6 +1293,13 @@ function arLegalKindBadge(kind) {
   if (kind === 'sole_proprietor') return '<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;border-radius:9999px;padding:0 0.45rem;font-size:0.7rem;font-weight:700;">Ατομική</span>';
   if (kind === 'legal_entity') return '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:9999px;padding:0 0.45rem;font-size:0.7rem;font-weight:700;">Εταιρία</span>';
   return '<span style="color:#94a3b8;">—</span>';
+}
+
+// Η αποθηκευμένη εξαίρεση δεν σιωπά τον έλεγχο (γίνεται σε κάθε υπολογισμό) — φαίνεται στο εύρημα.
+function arEfkaSavedReasonText(reasonKey) {
+  if (!reasonKey) return '';
+  const o = AR_EFKA_EXCEPTION_OPTIONS.find((x) => x.key === reasonKey);
+  return ' — αποθηκευμένη εξαίρεση: ' + (o ? o.label : reasonKey);
 }
 
 function arEfkaFindingText(check, legalKind) {
@@ -1376,10 +1395,11 @@ function arBuildCheckGroups(rows) {
     {
       key: 'efka', title: '🧾 ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)',
       rows: ok.filter((r) => r.efka_shortfall),
-      finding: (r) => arEfkaFindingText(r.efka_check, r.legal_kind),
+      finding: (r) => arEfkaFindingText(r.efka_check, r.legal_kind) + arEfkaSavedReasonText(r.efka_saved_reason),
       options: (r) => {
         const applicable = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !r.legal_kind || o.legalKind === r.legal_kind);
-        return [{ key: '', label: 'Σημείωση στην αναφορά (έλεγξε ΚΕΑΟ)' }, ...applicable, AR_EFKA_MANUAL_OPTION];
+        // Κενό κλειδί = συνέχεια με τα τρέχοντα: τίποτα δεν αλλάζει/αποθηκεύεται, η σημείωση ΚΕΑΟ μένει στην αναφορά.
+        return [{ key: '', label: 'Συνέχεια με τα τρέχοντα στοιχεία' }, ...applicable, AR_EFKA_MANUAL_OPTION];
       },
     },
   ].filter((g) => g.rows.length);
@@ -1465,6 +1485,8 @@ async function arAskMonthlyTotals(kind, name, dateFrom, dateTo) {
 // one company at a time. false = the user cancelled a form (stop the run).
 async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusEl) {
   const rowByName = new Map((rows || []).map((r) => [r.name, r]));
+  // Αμέσως, πριν το πρώτο αίτημα αποθήκευσης (Μαζικός: στο cross-page banner).
+  showArOverlay('Εφαρμογή επιλογών...', 'Εφαρμογή των επιλογών σου στον προέλεγχο...');
   for (const [name, method] of Object.entries(choices.inventory || {})) {
     let value = null;
     if (method === 'manual') {
@@ -1472,9 +1494,9 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
       if (!value) return false;
     }
     if (statusEl) statusEl.textContent = `Απόθεμα λήξης — ${name}...`;
-    const invResp = await postJson('/api/accounting_result/inventory/resolve', {
+    const invResp = await arPostWithOverlay('/api/accounting_result/inventory/resolve', {
       credential_name: name, year, method, value, date_from: dateFrom, date_to: dateTo,
-    });
+    }, `Καταχώρηση αποθέματος λήξης — ${name}...`);
     if (!invResp.ok) arResolveSaveFailed('Απόθεμα λήξης', name, invResp);
   }
   for (const kind of ['payroll', 'rent']) {
@@ -1486,7 +1508,8 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
         if (!values) return false;
         if (!values.__continue && Object.keys(values).length) { resolution = 'manual'; monthlyTotals = values; }
       }
-      const kindResp = await postJson(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals });
+      const kindResp = await arPostWithOverlay(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals },
+        `Καταχώρηση ${kind === 'payroll' ? 'μισθοδοσίας' : 'ενοικίου'} — ${name}...`);
       if (!kindResp.ok) arResolveSaveFailed(kind === 'payroll' ? 'Μισθοδοσία' : 'Ενοίκιο', name, kindResp);
     }
   }
@@ -1496,9 +1519,11 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
       const values = await arAskMonthlyTotals('efka', name, dateFrom, dateTo);
       if (!values) return false;
       if (values.__continue || !Object.keys(values).length) continue;
-      await postJson('/api/accounting_result/efka_self_employed/resolve_totals', { credential_name: name, year, monthly_totals: values });
+      await arPostWithOverlay('/api/accounting_result/efka_self_employed/resolve_totals', { credential_name: name, year, monthly_totals: values },
+        `Καταχώρηση συνόλων ΕΦΚΑ — ${name}...`);
     } else {
-      await postJson('/api/accounting_result/efka_self_employed/resolve', { credential_name: name, year, reason: choice });
+      await arPostWithOverlay('/api/accounting_result/efka_self_employed/resolve', { credential_name: name, year, reason: choice },
+        `Καταχώρηση εξαίρεσης ΕΦΚΑ — ${name}...`);
     }
   }
   return true;
@@ -1567,10 +1592,13 @@ var AR_EFKA_EXCEPTION_OPTIONS = [
 // Always offered, whatever the company type: key in the totals by hand
 // (per month or as a lump sum), like payroll/rent.
 var AR_EFKA_MANUAL_OPTION = { key: 'manual_totals', label: 'Καταχώρηση συνόλων ΕΦΚΑ (χειροκίνητα, ανά μήνα ή σύνολο)' };
+// Όπως στη μισθοδοσία/ενοίκιο: προχωράς χωρίς να αποθηκευτεί τίποτα (η σημείωση ΚΕΑΟ μένει στην αναφορά).
+// Αντίθετα με τις 2 εξαιρέσεις παραπάνω, που αποθηκεύονται.
+var AR_EFKA_CONTINUE_OPTION = { key: 'continue', label: 'Συνέχεια με τα τρέχοντα στοιχεία' };
 
 // `finding`: what the myDATA check actually found (e.g. «Βρέθηκαν 3 από 9…» or
 // «Δεν βρέθηκε καμία εγγραφή…») — shown at the top of the dialog.
-async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom, dateTo, finding) {
+async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom, dateTo, finding, savedReasonLabel) {
   // Only offer the one reason that actually matches this company's known
   // type (from the ΑΑΔΕ Μητρώο auto-detect — see report.legal_kind) instead
   // of always showing both; when it's not known yet, fall back to both
@@ -1578,10 +1606,17 @@ async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom,
   const options = AR_EFKA_EXCEPTION_OPTIONS.filter((o) => !legalKind || o.legalKind === legalKind);
   const choice = await showModalChoice(
     `Εξαίρεση ΕΦΚΑ Μη-Μισθωτών — ${name} (${year})`,
-    (finding ? finding + ' ' : '') + 'Γιατί δεν θεωρείτε την εταιρία υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; Η επιλογή αποθηκεύεται και η σημείωση δεν θα ξαναεμφανιστεί για αυτό το έτος.',
-    [...(options.length ? options : AR_EFKA_EXCEPTION_OPTIONS), AR_EFKA_MANUAL_OPTION],
+    (finding ? finding + ' ' : '') +
+    (savedReasonLabel ? `Υπάρχει αποθηκευμένη εξαίρεση: ${savedReasonLabel}. ` : '') +
+    'Ο έλεγχος ΕΦΚΑ/ΚΕΑΟ γίνεται σε κάθε υπολογισμό. Γιατί δεν θεωρείτε την επιχείρηση υπόχρεη σε ΕΦΚΑ Μη-Μισθωτών; ' +
+    'Οι δύο εξαιρέσεις αποθηκεύονται· «Συνέχεια με τα τρέχοντα στοιχεία» δεν αποθηκεύει τίποτα και αφήνει τη σημείωση ΚΕΑΟ στην αναφορά.',
+    [...(options.length ? options : AR_EFKA_EXCEPTION_OPTIONS), AR_EFKA_MANUAL_OPTION, AR_EFKA_CONTINUE_OPTION],
   );
   if (!choice) return false;
+  if (choice === 'continue') {
+    showArFlash(`ΕΦΚΑ Μη-Μισθωτών (${name}): συνέχεια με τα τρέχοντα στοιχεία — δεν αποθηκεύτηκε εξαίρεση.`, 'success', 4000);
+    return true;
+  }
   if (choice === 'manual_totals') {
     if (!dateFrom || !dateTo) {
       showArFlash('Δεν βρέθηκε η περίοδος — ξαναϋπολόγισε την εταιρία και δοκίμασε ξανά.', 'warning', 6000);
@@ -1594,16 +1629,16 @@ async function resolveEfkaSelfEmployedException(name, year, legalKind, dateFrom,
     hideArOverlay();
     const values = await showManualPayrollModal(`Μηνιαία σύνολα ΕΦΚΑ Μη-Μισθωτών — ${name}`, monthsInRange(dateFrom, dateTo), prefillResp.ok ? prefillResp.monthly_totals : null);
     if (!values || values.__continue || !Object.keys(values).length) return false;
-    const r = await postJson('/api/accounting_result/efka_self_employed/resolve_totals', {
+    const r = await arPostWithOverlay('/api/accounting_result/efka_self_employed/resolve_totals', {
       credential_name: name, year, monthly_totals: values,
-    });
+    }, `Καταχώρηση συνόλων ΕΦΚΑ — ${name}...`);
     if (r.ok) showArFlash(`Αποθηκεύτηκαν τα σύνολα ΕΦΚΑ για ${name} — πάτησε ξανά «Υπολογισμός» για να εφαρμοστούν στο αποτέλεσμα.`, 'success', 8000);
     else showArFlash('Σφάλμα αποθήκευσης συνόλων ΕΦΚΑ: ' + (r.error || ''), 'error', 7000);
     return !!r.ok;
   }
-  const resp = await postJson('/api/accounting_result/efka_self_employed/resolve', {
+  const resp = await arPostWithOverlay('/api/accounting_result/efka_self_employed/resolve', {
     credential_name: name, year, reason: choice,
-  });
+  }, `Καταχώρηση εξαίρεσης ΕΦΚΑ — ${name}...`);
   if (resp.ok) showArFlash(`Αποθηκεύτηκε η εξαίρεση ΕΦΚΑ Μη-Μισθωτών για ${name}.`, 'success', 5000);
   return !!resp.ok;
 }
@@ -1715,6 +1750,7 @@ async function computeSingle() {
     excel_group_totals: window.__arSingleExcelTotals || null,
     income_tax: arIncomeTaxEnabled('arSingleIncomeTax'),
     prev_advance_override: arPrevAdvanceOverride(),
+    fresh: true, // νέος υπολογισμός: οι έλεγχοι μισθοδοσίας/ενοικίου/ΕΦΚΑ ξαναρωτούν (σβήνει παλιές επιλογές)
   };
 
   // A popup cancelled by the user -> «Ακυρώθηκε» (status + flash); a save
@@ -1732,6 +1768,7 @@ async function computeSingle() {
   try {
     showArOverlay('Λήψη δεδομένων από myDATA...', 'Βήμα 1: έλεγχος αποσβέσεων, μισθοδοσίας, ενοικίου και απογραφής.');
     let resp = await postJson('/api/accounting_result/compute', body);
+    delete body.fresh; // μόνο το πρώτο αίτημα είναι «νέο»· οι επαναλήψεις μετά από popup όχι
     if (!resp.ok) {
       statusEl.textContent = 'Σφάλμα: ' + (resp.error || '');
       showArFlash('Λογιστικό Αποτέλεσμα (' + name + '): σφάλμα — ' + (resp.error || ''), 'error');
@@ -1807,7 +1844,7 @@ async function computeSingle() {
       hideArOverlay();
       // Asked before the final computation; resolved or cancelled, it is not
       // asked again (efka_skip) — a cancel just leaves the standing note.
-      await resolveEfkaSelfEmployedException(name, resp.year, resp.legal_kind || null, from, to, resp.efka_finding || '');
+      await resolveEfkaSelfEmployedException(name, resp.year, resp.legal_kind || null, from, to, resp.efka_finding || '', resp.efka_saved_reason_label || '');
       body.efka_skip = true;
       showArOverlay('Λήψη δεδομένων από myDATA...', 'Επεξεργασία ΕΦΚΑ Μη-Μισθωτών, συνέχεια με απογραφή και τελικό υπολογισμό.');
       resp = await postJson('/api/accounting_result/compute', body);

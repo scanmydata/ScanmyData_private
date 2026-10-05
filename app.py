@@ -8197,6 +8197,21 @@ def upload_client_db():
                 detected_columns=sorted(list(headers_set))
             ), 400
 
+        # ΝΕΟ: έλεγχος περιεχομένου (ΑΦΜ, διπλότυποι, κωδικοί) — τα ευρήματα επιστρέφονται στο UI.
+        try:
+            import coa_store
+            client_validation = coa_store.validate_clients_df(df_upload)
+        except Exception:
+            log.exception('[Client DB Upload] content validation failed (continuing)')
+            client_validation = None
+        if client_validation and not client_validation.get('ok'):
+            return jsonify(success=False, message=client_validation['errors'][0]['message'],
+                           detected_columns=sorted(list(headers_set)), validation=client_validation), 400
+        if str(request.form.get('dry_run') or '').strip().lower() in ('1', 'true', 'yes'):
+            return jsonify(success=True, dry_run=True, message='Έλεγχος αρχείου χωρίς αποθήκευση.',
+                           source_rows=int(len(df_upload)), detected_columns=sorted(list(headers_set)),
+                           validation=client_validation), 200
+
         # Determine existing client_db file (if any).
         # ΣΗΜΑΝΤΙΚΟ: ο drive-backup επαναφέρει συχνά το client_db μέσα σε
         # υποφάκελο imports/ αντί για τη ρίζα της ομάδας. Ψάξε ΚΑΙ εκεί, αλλιώς
@@ -8399,12 +8414,40 @@ def upload_client_db():
             total_clients=int(total_clients),
             source_rows=int(merge_source_rows),
             new_clients=int(new_clients),
-            existing_clients=int(updated_clients)
+            existing_clients=int(updated_clients),
+            validation=client_validation
         ), 200
 
     except Exception:
         log.exception('Unhandled exception in upload_client_db')
         return jsonify(success=False, message='Εσωτερικό σφάλμα server.'), 500
+
+
+_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+
+@app.get('/templates/chart_of_accounts.xlsx')
+def download_chart_of_accounts_template():
+    """Πρότυπο Excel λογιστικού σχεδίου (?category=B|G) με οδηγίες και παράδειγμα."""
+    from flask_login import current_user
+    if not getattr(current_user, 'is_authenticated', False):
+        return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
+    import coa_store
+    category = coa_store.norm_category(request.args.get('category'))
+    name = f"Προτυπο_Λογιστικου_Σχεδιου_{'Γ' if category == 'G' else 'Β'}_Κατηγοριας.xlsx"
+    return send_file(io.BytesIO(coa_store.build_coa_template_bytes(category)), mimetype=_XLSX_MIME,
+                     as_attachment=True, download_name=name)
+
+
+@app.get('/templates/client_db.xlsx')
+def download_client_db_template():
+    """Πρότυπο Excel συναλλασσομένων (client_db) με οδηγίες και παράδειγμα."""
+    from flask_login import current_user
+    if not getattr(current_user, 'is_authenticated', False):
+        return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
+    import coa_store
+    return send_file(io.BytesIO(coa_store.build_clients_template_bytes()), mimetype=_XLSX_MIME,
+                     as_attachment=True, download_name='Προτυπο_Συναλλασσομενων.xlsx')
 
 
 @app.route('/upload_chart_of_accounts', methods=['POST'])
@@ -8479,26 +8522,67 @@ def _upload_chart_of_accounts_impl(category='G'):
             log.exception("Failed to read chart of accounts file")
             return jsonify(ok=False, error=f'Σφάλμα ανάγνωσης: {e}'), 500
 
-        # Έλεγχος απαιτούμενων στηλών
-        required_cols = {'Κωδικός', 'Περιγραφή', 'Ποσοστό ΦΠΑ', 'Λογαριασμός ΦΠΑ'}
+        # Έλεγχος απαιτούμενων στηλών + πλήρης έλεγχος περιεχομένου (coa_store)
+        import coa_store
+        scope = (request.form.get('scope') or 'group').strip().lower()
+        dry_run = str(request.form.get('dry_run') or '').strip().lower() in ('1', 'true', 'yes')
         headers_set = {str(h).strip() for h in df.columns}
         log.info("[CoA Upload] Columns found: %s", sorted(headers_set))
-        missing = required_cols - headers_set
-        if missing:
-            log.warning("[CoA Upload] Missing columns: %s", missing)
+        validation = coa_store.validate_coa_df(df, category)
+        if not validation['ok']:
+            missing = sorted(coa_store.COA_REQUIRED[category] - headers_set)
+            log.warning("[CoA Upload] Validation failed: %s", validation['errors'])
             return jsonify(
-                ok=False, 
-                error=f'Λείπουν υποχρεωτικές στήλες: {", ".join(sorted(missing))}',
-                missing_columns=sorted(list(missing)),
-                detected_columns=sorted(list(headers_set))
+                ok=False,
+                error=validation['errors'][0]['message'],
+                missing_columns=missing,
+                detected_columns=sorted(list(headers_set)),
+                validation=validation,
             ), 400
-        
+
         account_count = len(df)
         if account_count == 0:
             log.warning("[CoA Upload] File has no accounts")
             return jsonify(ok=False, error='Το αρχείο δεν περιέχει λογαριασμούς.'), 400
 
         log.info("[CoA Upload] Validation passed: %d accounts", account_count)
+
+        if dry_run:
+            return jsonify(ok=True, dry_run=True, category=category, account_count=account_count,
+                           detected_columns=sorted(list(headers_set)), validation=validation), 200
+
+        # ΝΕΟ: ειδικό λογιστικό σχέδιο ανά credential (ΑΦΜ). Το κοινό σχέδιο ομάδας παραμένει όπως πριν.
+        if scope == 'credential':
+            cred_vat = coa_store.safe_vat(vat)
+            if not cred_vat or not any(coa_store.safe_vat(c.get('vat')) == cred_vat for c in (load_credentials() or [])):
+                return jsonify(ok=False, error='Δεν βρέθηκε credential με αυτό το ΑΦΜ στην ενεργή ομάδα.'), 400
+            cred_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
+            os.makedirs(cred_base, exist_ok=True)
+            f.stream.seek(0)
+            cred_meta = coa_store.store_credential_coa(
+                cred_base, category, cred_vat, f.stream.read(),
+                {
+                    'original_filename': filename,
+                    'account_count': account_count,
+                    'columns': sorted(list(headers_set)),
+                    'validation': {'warnings': len(validation['warnings']), 'stats': validation['stats']},
+                },
+                keep_backups=BACKUP_RETENTION,
+            )
+            log.info("[CoA Upload %s] Saved credential-specific plan for VAT %s", category, cred_vat)
+            return jsonify(
+                ok=True,
+                message=f'Το λογιστικό σχέδιο {category_label} αποθηκεύτηκε για το credential {cred_vat}.',
+                scope='credential',
+                vat=cred_vat,
+                filename=filename,
+                original_filename=filename,
+                uploaded_at=cred_meta.get('uploaded_at'),
+                account_count=account_count,
+                category=category,
+                detected_columns=sorted(list(headers_set)),
+                validation=validation,
+            ), 200
 
         # --- BACKUP SYSTEM (όπως το client_db) ---
         # ΣΗΜΑΝΤΙΚΟ: Το CoA είναι GROUP-WIDE, όχι per-VAT!
@@ -8570,7 +8654,9 @@ def _upload_chart_of_accounts_impl(category='G'):
             uploaded_at=uploaded_at,
             account_count=account_count,
             category=category,
-            detected_columns=sorted(list(headers_set))
+            detected_columns=sorted(list(headers_set)),
+            scope='group',
+            validation=validation,
         ), 200
 
     except Exception:
@@ -8607,10 +8693,18 @@ def _remove_chart_of_accounts_impl(category='G'):
 
     try:
         target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
+        # ΝΕΟ: scope=credential + vat -> αφαιρείται μόνο το ειδικό σχέδιο του credential
+        _payload = request.get_json(silent=True) or request.form or {}
+        if str(_payload.get('scope') or '').strip().lower() == 'credential':
+            import coa_store
+            if not coa_store.safe_vat(_payload.get('vat')):
+                return jsonify(ok=False, error='Λείπει το ΑΦΜ του credential.'), 400
+            coa_store.remove_coa(target_base, category, _payload.get('vat'))
+            return jsonify(ok=True, scope='credential'), 200
         # Category-specific file
         dest_path = os.path.join(target_base, dest_name)
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
-        
+
         if os.path.exists(dest_path):
             os.remove(dest_path)
         if os.path.exists(meta_path):
@@ -8653,14 +8747,20 @@ def _get_chart_of_accounts_status_impl(category='G'):
         # Category-specific file
         dest_path = os.path.join(target_base, dest_name)
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
-        
+
+        # ΝΕΟ: κατάσταση και του ειδικού σχεδίου credential (?vat=...) + ποιο είναι σε χρήση
+        import coa_store
+        _cs = coa_store.coa_status(target_base, category, (request.args.get('vat') or '').strip())
+        scope_extra = dict(credential=_cs['credential'], effective=_cs['effective'],
+                           effective_exists=bool(_cs['effective']))
+
         log.info("[CoA Status %s] Checking: %s", category, dest_path)
         log.info("[CoA Status %s] Metadata path: %s", category, meta_path)
-        
+
         if not os.path.exists(dest_path):
             log.info("[CoA Status %s] File not found: %s", category, dest_path)
-            return jsonify(ok=True, exists=False, category=category), 200
-        
+            return jsonify(ok=True, exists=False, category=category, **scope_extra), 200
+
         # Load metadata
         meta = {}
         if os.path.exists(meta_path):
@@ -8682,7 +8782,8 @@ def _get_chart_of_accounts_status_impl(category='G'):
             category=category,
             filename=meta.get('filename', dest_name),
             uploaded_at=meta.get('uploaded_at', ''),
-            account_count=account_count
+            account_count=account_count,
+            **scope_extra
         ), 200
 
     except Exception:
@@ -8707,15 +8808,32 @@ def _get_coa_file_path(category: str):
         base = get_group_base_dir() if 'get_group_base_dir' in globals() else os.path.join(BASE_DIR, 'data')
     return os.path.join(base, dest_name)
 
-def _load_coa_rows(category: str):
+_COA_PATH_CACHE = {}
+
+
+def _resolve_coa_file(category: str, vat=None):
+    """(path, scope): ΝΕΟ πρώτα το ειδικό σχέδιο του credential (vat), αλλιώς το κοινό της ομάδας."""
+    group_file = _get_coa_file_path(category)
+    if vat:
+        try:
+            import coa_store
+            p, scope = coa_store.resolve_coa_path(os.path.dirname(group_file), category, vat)
+            if p:
+                return p, scope
+        except Exception:
+            log.exception("coa resolve failed (falling back to group file)")
+    return group_file, ('group' if os.path.exists(group_file) else None)
+
+
+def _load_coa_rows(category: str, vat=None):
     """
     Return list of dicts {code, name} for chart of accounts of given category.
     Applies basic format filtering per category.
-    Caches by file mtime.
+    Caches by file path + mtime. Με vat: πρώτα το σχέδιο του credential, αλλιώς της ομάδας.
     """
     category = 'G' if str(category).upper().startswith('G') else 'B'
-    cache = _COA_CACHE[category]
-    path = _get_coa_file_path(category)
+    path, _scope = _resolve_coa_file(category, vat)
+    cache = _COA_PATH_CACHE.setdefault(path, {'mtime': None, 'rows': None, 'path': path})
     cache['path'] = path
     if not os.path.exists(path):
         cache['mtime'] = None
@@ -8832,9 +8950,10 @@ def api_coa_search():
     except Exception:
         limit = 20
 
-    # Load rows (cached)
-    rows = _load_coa_rows(category)
-    path = _COA_CACHE[category]['path']
+    # Load rows (cached) — cred_vat = ΑΦΜ credential (το «vat» εδώ είναι ο συντελεστής ΦΠΑ)
+    cred_vat = (request.args.get('cred_vat') or '').strip()
+    rows = _load_coa_rows(category, cred_vat)
+    path = _resolve_coa_file(category, cred_vat)[0]
     if not path or not os.path.exists(path):
         return jsonify({'ok': True, 'exists': False, 'results': [], 'total': 0})
 
@@ -12335,6 +12454,14 @@ def custom_categories_save():
     # Validate account codes exist in chart_of_accounts.xlsx (Β ή Γ ανάλογα με κατηγορία)
     chart_filename = 'chart_of_accounts_g.xlsx' if book_category in ('Γ', 'G') else 'chart_of_accounts_b.xlsx'
     chart_path = os.path.join(get_group_base_dir(), chart_filename)
+    try:
+        # ΝΕΟ: ειδικό σχέδιο του credential (αν υπάρχει) πριν από το κοινό της ομάδας
+        import coa_store
+        _cp, _cscope = coa_store.resolve_coa_path(get_group_base_dir(), 'G' if book_category in ('Γ', 'G') else 'B', vat)
+        if _cp:
+            chart_path = _cp
+    except Exception:
+        current_app.logger.exception("coa resolve failed in custom_categories_save (using group file)")
     if os.path.exists(chart_path):
         try:
             df = pd.read_excel(chart_path, dtype=str)
@@ -18771,6 +18898,10 @@ def api_accounting_result_compute():
         from accounting_result import inventory_store as ar_inventory
         from accounting_result import engine as ar_engine
         path = _ar_store_path(vat)
+        if payload.get("fresh"):
+            # Νέος υπολογισμός (όχι επανάληψη μετά από popup): οι έλεγχοι μισθοδοσίας/
+            # ενοικίου/ΕΦΚΑ ξαναρωτούν πάντα — καμία παλιά, αχρησιμοποίητη επιλογή.
+            _ar_clear_stale_resolutions(path, year)
 
         # ΦΠΑ first, then the rest of the computation - see
         # _ar_ensure_vat_profile_checked's docstring. A no-op (returns
@@ -18863,6 +18994,8 @@ def api_accounting_result_compute():
                     "legal_kind": _ar_legal_kind(path, vat),
                     "efka_message": _efka_pre.get("message"),
                     "efka_finding": _efka_pre.get("finding"),
+                    "efka_saved_reason": _efka_pre.get("saved_reason") or "",
+                    "efka_saved_reason_label": _efka_pre.get("saved_reason_label") or "",
                     "vat_auto_check": vat_auto_check,
                     "books_category_mismatch": books_category_mismatch,
                     "inventory_obligation": inventory_obligation,
@@ -19086,6 +19219,9 @@ def api_accounting_result_inventory_bulk_status():
                 continue
 
             path = _ar_store_path(vat)
+            # Κάθε μαζικός υπολογισμός ξεκινά με νέο έλεγχο μισθοδοσίας/ενοικίου/ΕΦΚΑ
+            # (βλ. _ar_clear_stale_resolutions) — οι επιλογές του popup δίνονται ΜΕΤΑ από εδώ.
+            _ar_clear_stale_resolutions(path, year)
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
             # Same 150.000€ turnover trigger as the actual bulk_compute run
             # (see determine_inventory_obligation) — pre-flagged here too so
@@ -19131,6 +19267,7 @@ def api_accounting_result_inventory_bulk_status():
                     "rent_needs_input": rent_res["needs_input"],
                     "rent_check": rent_res["rent_check"],
                     "efka_shortfall": efka_shortfall,
+                    "efka_saved_reason": (_efka_note_pre or {}).get("saved_reason") or "",
                     "legal_kind": legal_kind,
                     "efka_check": efka_check,
                 })
@@ -19152,6 +19289,7 @@ def api_accounting_result_inventory_bulk_status():
                 "rent_needs_input": rent_res["needs_input"],
                 "rent_check": rent_res["rent_check"],
                 "efka_shortfall": efka_shortfall,
+                "efka_saved_reason": (_efka_note_pre or {}).get("saved_reason") or "",
                 "legal_kind": legal_kind,
                 "efka_check": efka_check,
             })
@@ -20363,17 +20501,38 @@ def _ar_efka_basis_text(check: Dict[str, Any]) -> str:
     return ""
 
 
+def _ar_clear_stale_resolutions(path: str, year: int) -> None:
+    """Σβήνει επιλογές μισθοδοσίας/ενοικίου που έμειναν αχρησιμοποίητες από
+    προηγούμενη προσπάθεια (ο χρήστης διάλεξε «Συνέχεια με τα τρέχοντα»/σύνολα και μετά
+    ακύρωσε ή απέτυχε ο υπολογισμός). Οι επιλογές αυτές είναι μιας χρήσης: καταναλώνονται
+    μόνο από υπολογισμό που ολοκληρώθηκε, αλλιώς ο έλεγχος δεν θα ξαναρωτούσε στην επόμενη
+    φορά. ΔΕΝ αγγίζει τα σύνολα ΕΦΚΑ: αποθηκεύονται και από το κουμπί της αναφοράς για να εφαρμοστούν στον επόμενο υπολογισμό. Καλείται στην ΑΡΧΗ ενός νέου υπολογισμού (όχι στην επανάληψη μετά από popup)."""
+    from accounting_result import compliance_notes_store as ar_cn
+    for fn in (ar_cn.clear_payroll_check, ar_cn.clear_rent_check):
+        try:
+            fn(path, year)
+        except Exception:
+            log.exception("clear stale resolution failed (%s)", getattr(fn, "__name__", fn))
+
+
+_AR_EFKA_REASON_LABELS = {
+    "sole_prop_also_employed": "Ατομική επιχ. — ο πελάτης είναι παράλληλα μισθωτός",
+    "company_partners_exempt": "Εταιρία — οι εταίροι έχουν δικές τους ατομικές επιχειρήσεις",
+}
+
+
 def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
     """Non-blocking counterpart of _ar_payroll_resolution for ΕΦΚΑ
     Μη-Μισθωτών (Ε3 code 585/007): unlike payroll, a shortfall here never
     blocks the computation — it's surfaced as a standing note in the
-    report's Σημειώσεις ("may still owe it — check ΚΕΑΟ") every time, unless
-    the accountant has saved an exception reason for this company/year (see
+    report's Σημειώσεις ("may still owe it — check ΚΕΑΟ") every time. A saved
+    exception reason for this company/year (see
     compliance_notes_store.set_efka_self_employed_check) — e.g. a sole
     proprietorship whose owner is also employed elsewhere, or a company
     whose partners are exempt because their own ΕΦΚΑ is tracked under their
-    personal sole proprietorships. Returns None when there's nothing to
-    note (no shortfall, or an exception is on file)."""
+    personal sole proprietorships — no longer silences the check: the note
+    is still returned (with saved_reason/saved_reason_label) so the check runs
+    on EVERY computation. Returns None only when there's no shortfall."""
     from accounting_result import engine as ar_engine
     from accounting_result import compliance_notes_store as ar_compliance
 
@@ -20391,15 +20550,16 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
                 f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(manual_total)}€)."
             ),
         }
-    if ar_compliance.get_efka_self_employed_check(path, year).get("reason"):
-        return None
+    # Ο έλεγχος γίνεται ΣΕ ΚΑΘΕ υπολογισμό: μια αποθηκευμένη εξαίρεση δεν τον σιωπά
+    # πια, απλώς αναφέρεται στο εύρημα (και προεπιλέγεται από τον χρήστη στο popup).
+    saved_reason = str(ar_compliance.get_efka_self_employed_check(path, year).get("reason") or "")
     found = int(check.get("found_months") or 0)
     finding = (
         f"Δεν βρέθηκε καμία εγγραφή πληρωμής ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007) στο myDATA — 0 από {check['expected_months']} αναμενόμενες{basis}"
         if found == 0 else
         f"Βρέθηκαν {found} από {check['expected_months']} αναμενόμενες μηνιαίες πληρωμές ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007){basis}"
     )
-    return {
+    note = {
         "type": "efka_self_employed_shortfall",
         "found_months": found,
         "expected_months": check.get("expected_months"),
@@ -20409,6 +20569,16 @@ def _ar_efka_self_employed_note(path: str, year: int, current_entries: list, dat
             "(ή αποθήκευσε εξαίρεση αν δεν είναι υπόχρεη)."
         ),
     }
+    if saved_reason:
+        label = _AR_EFKA_REASON_LABELS.get(saved_reason, saved_reason)
+        note["saved_reason"] = saved_reason
+        note["saved_reason_label"] = label
+        note["finding"] = f"{finding} — αποθηκευμένη εξαίρεση: {label}."
+        note["message"] = (
+            f"{finding} στην περίοδο — υπάρχει αποθηκευμένη εξαίρεση ({label}), "
+            "αλλά ο έλεγχος ΕΦΚΑ/ΚΕΑΟ γίνεται σε κάθε υπολογισμό: έλεγξε το ΚΕΑΟ αν η εξαίρεση δεν ισχύει πια."
+        )
+    return note
 
 
 def _ar_last_quarter_uncharacterized_note(vat: str, date_from: str, date_to: str, aade_user: str, aade_key: str) -> Optional[Dict[str, Any]]:
