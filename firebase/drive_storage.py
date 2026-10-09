@@ -51,6 +51,13 @@ ROOT_FOLDER_NAME = "Scanmydata_data"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_FILE = os.path.join(os.getcwd(), "drive_token.json")
 FOLDER_MIME = "application/vnd.google-apps.folder"
+_DRIVE_HTTP_TIMEOUT = 300
+# Αρχεία πάνω από αυτό ανεβαίνουν σε κομμάτια (resumable) — ένα αίτημα των εκατοντάδων MB δεν χωρούσε στο timeout.
+_RESUMABLE_THRESHOLD = 8 * 1024 * 1024
+_RESUMABLE_CHUNK = 8 * 1024 * 1024
+# Το απομακρυσμένο activity.log μένει «κυλιόμενο»: πάνω από το όριο κρατιέται μόνο το τελευταίο κομμάτι.
+_REMOTE_LOG_LIMIT = 4 * 1024 * 1024
+_REMOTE_LOG_KEEP = 1 * 1024 * 1024
 
 # Credentials are shared across threads; service objects are per-thread.
 # httplib2.Http sockets can enter bad SSL states under concurrent use, so we
@@ -164,7 +171,15 @@ def _service():
     # Reuse the per-thread service object; rebuild on demand after SSL errors.
     svc = getattr(_thread_local, "drive_service", None)
     if svc is None:
-        svc = build("drive", "v3", credentials=_drive_creds, cache_discovery=False)
+        try:
+            # Timeout 300s αντί για το προεπιλεγμένο 60s: μεγάλα αρχεία/λίστες Drive έπεφταν σε
+            # «The read operation timed out» και τα push της ομάδας αποτύγχαναν ολόκληρα.
+            import httplib2
+            import google_auth_httplib2
+            http = google_auth_httplib2.AuthorizedHttp(_drive_creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT))
+            svc = build("drive", "v3", http=http, cache_discovery=False)
+        except ImportError:
+            svc = build("drive", "v3", credentials=_drive_creds, cache_discovery=False)
         _thread_local.drive_service = svc
     return svc
 
@@ -474,7 +489,11 @@ def _cipher():
 def _upload_bytes(parent_id: str, name: str, raw: bytes, mtime: float, *, existing_id: Optional[str] = None) -> Dict[str, Any]:
     svc = _service()
     body = io.BytesIO(raw)
-    media = MediaIoBaseUpload(body, mimetype="application/octet-stream", resumable=False)
+    big = len(raw) > _RESUMABLE_THRESHOLD
+    media = MediaIoBaseUpload(
+        body, mimetype="application/octet-stream", resumable=big,
+        **({"chunksize": _RESUMABLE_CHUNK} if big else {}),
+    )
     iso_mtime = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     metadata = {
         "modifiedTime": iso_mtime,
@@ -482,19 +501,34 @@ def _upload_bytes(parent_id: str, name: str, raw: bytes, mtime: float, *, existi
     }
     if existing_id:
         # Update in place — keeps the file id stable.
-        return _call_with_retry(svc.files().update(
+        req = svc.files().update(
             fileId=existing_id,
             body=metadata,
             media_body=media,
             fields="id, modifiedTime, size",
-        ).execute)
-    metadata["name"] = name
-    metadata["parents"] = [parent_id]
-    return _call_with_retry(svc.files().create(
-        body=metadata,
-        media_body=media,
-        fields="id, modifiedTime, size",
-    ).execute)
+        )
+    else:
+        metadata["name"] = name
+        metadata["parents"] = [parent_id]
+        req = svc.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id, modifiedTime, size",
+        )
+    if not big:
+        return _call_with_retry(req.execute)
+    resp = None
+    while resp is None:   # κάθε κομμάτι ξαναδοκιμάζεται ξεχωριστά
+        _status, resp = _call_with_retry(req.next_chunk)
+    return resp
+
+
+def _download_tail(file_id: str, size: int, keep: int) -> bytes:
+    """Μόνο τα τελευταία `keep` bytes ενός αρχείου Drive (Range) — χωρίς να κατεβάσουμε ολόκληρο το αρχείο."""
+    req = _service().files().get_media(fileId=file_id)
+    start = max(0, int(size) - int(keep))
+    req.headers["Range"] = f"bytes={start}-{int(size) - 1}"
+    return _call_with_retry(req.execute)
 
 
 def _download_bytes(file_id: str) -> bytes:
@@ -546,6 +580,11 @@ def _compute_drive_rel_path(file_path: str, source_dir: str) -> Optional[str]:
     """Return the Drive-relative path for a local file, or None to skip."""
     fname = os.path.basename(file_path)
     if fname.startswith(".") or fname in ("files_json", "fiscal_meta_json"):
+        return None
+    # Τα logs (το activity.log της ομάδας φτάνει εκατοντάδες MB) δεν συγχρονίζονται ως αρχεία: το
+    # απομακρυσμένο activity.log συντηρείται από το drive_log_activity. Πριν ανέβαιναν κρυπτογραφημένα
+    # ολόκληρα σε κάθε push και έριχναν το push της ομάδας με «The read operation timed out».
+    if fname in ("activity.log", "error.log"):
         return None
     if re.match(r"^epsilon_invoices\.(json|xlsx|xls)$", fname, re.IGNORECASE):
         # Legacy AFM-less epsilon files are skipped, same as firebase backend.
@@ -723,7 +762,7 @@ def drive_push_group_files(
                     }
                     if verbose:
                         logger.info("[DRIVE PUSH] uploaded %s (%d bytes)", rel_path, len(raw))
-                except HttpError as e:
+                except Exception as e:   # HttpError ΚΑΙ σφάλματα δικτύου/timeout: συνεχίζουμε με τα υπόλοιπα αρχεία
                     files_failed += 1
                     logger.error("[DRIVE PUSH] upload failed for %s: %s", rel_path, e)
                     _report_transfer(phase="upload", group=group_name, files_done=files_uploaded + files_failed,
@@ -1179,10 +1218,17 @@ def drive_log_activity(user_id: str, group_name: str, action: str, details: Opti
                 meta = index.get("activity.log")
                 existing_blob = b""
                 if meta:
-                    try:
+                    # Αν η ανάγνωση του υπάρχοντος log αποτύχει, ΔΕΝ ξαναγράφουμε το απομακρυσμένο log
+                    # (πριν, ένα timeout το αντικαθιστούσε με μία μόνο γραμμή) — το σφάλμα πάει στο εξωτερικό except.
+                    remote_size = int(meta.get("size") or 0)
+                    if remote_size > _REMOTE_LOG_LIMIT:
+                        # Κυλιόμενο log: μόνο το τελευταίο κομμάτι (ξεκινά από πλήρη γραμμή).
+                        tail = _download_tail(meta["id"], remote_size, _REMOTE_LOG_KEEP)
+                        nl = tail.find(b"\n")
+                        existing_blob = tail[nl + 1:] if nl >= 0 else b""
+                    else:
                         existing_blob = _download_bytes(meta["id"])
-                    except Exception:
-                        existing_blob = b""
+
                 new_blob = existing_blob + (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
                 parent_id = _ensure_group_folder(folder_name)
                 res = _upload_bytes(

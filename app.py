@@ -5159,6 +5159,127 @@ def json_read(path, default=None):
         # return default to avoid crashing the app (caller should handle None/default)
         return default
 
+# ---------------------------------------------------------------------------
+# Χρονοσφραγίδες εγγραφών epsilon (λίστα παραστατικών): `_saved_at` = πότε μπήκε η εγγραφή στο πρόγραμμα,
+# `_updated_at` = πότε άλλαξε ο χαρακτηρισμός της (επαναχαρακτηρισμός). Μπαίνουν κεντρικά, σε κάθε εγγραφή
+# αρχείου *_epsilon_invoices.json (json_write / _write_json_atomic / _save_json), ώστε να καλύπτονται όλοι
+# οι δρόμοι αποθήκευσης (λήψη, χειροκίνητη καταχώρηση, αλλαγή χαρακτηρισμού, σάρωση κ.λπ.).
+# Εγγραφές που υπήρχαν πριν την αλλαγή δεν έχουν `_saved_at` (άγνωστη ώρα εισαγωγής) — εμφανίζονται κενές.
+# ---------------------------------------------------------------------------
+_EPS_STAMP_CACHE: Dict[str, Any] = {}
+_EPS_STAMP_LOCK = threading.Lock()
+_EPS_CLASS_KEYS = ("χαρακτηρισμός", "χαρακτηρισμος", "characteristic", "category", "classification")
+
+
+def _eps_classification_sig(r: Dict[str, Any]) -> str:
+    try:
+        top = [str(r.get(k) or "") for k in _EPS_CLASS_KEYS]
+        lines = []
+        for ln in (r.get("lines") or []):
+            if isinstance(ln, dict):
+                lines.append([str(ln.get(k) or "") for k in _EPS_CLASS_KEYS])
+        return json.dumps([top, lines], ensure_ascii=False)
+    except Exception:
+        return ""
+
+
+def _eps_keyed(lst) -> List[Any]:
+    """[(key, record)] με key = MARK (ή MARK#n για επαναλήψεις του ίδιου MARK, π.χ. καθρέφτης ταμείου)."""
+    seen: Dict[str, int] = {}
+    out = []
+    for r in lst or []:
+        if not isinstance(r, dict):
+            continue
+        mk = str(r.get("mark") or r.get("MARK") or "").strip()
+        if not mk:
+            continue
+        n = seen.get(mk, 0)
+        seen[mk] = n + 1
+        out.append((mk if n == 0 else f"{mk}#{n}", r))
+    return out
+
+
+def _eps_state(lst) -> Dict[str, Any]:
+    return {k: (_eps_classification_sig(r), r.get("_saved_at") or "", r.get("_updated_at") or "") for k, r in _eps_keyed(lst)}
+
+
+def _eps_is_target(path, obj) -> bool:
+    try:
+        return isinstance(obj, list) and os.path.basename(str(path)).endswith("_epsilon_invoices.json")
+    except Exception:
+        return False
+
+
+def _epsilon_stamp_times(path, obj) -> None:
+    """Πριν την εγγραφή: βάζει `_saved_at` στις νέες εγγραφές και `_updated_at` όταν άλλαξε ο χαρακτηρισμός."""
+    if not _eps_is_target(path, obj):
+        return
+    try:
+        old: Dict[str, Any] = {}
+        if os.path.exists(path):
+            st = os.stat(path)
+            with _EPS_STAMP_LOCK:
+                c = _EPS_STAMP_CACHE.get(path)
+            if c and c[0] == (st.st_mtime_ns, st.st_size):
+                old = c[1]
+            else:
+                with open(path, "r", encoding="utf-8") as fh:
+                    prev = json.load(fh)
+                old = _eps_state(prev) if isinstance(prev, list) else {}
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for key, r in _eps_keyed(obj):
+            prev = old.get(key)
+            if prev is None:
+                if not r.get("_saved_at"):
+                    r["_saved_at"] = now
+                continue
+            psig, psaved, pupd = prev
+            if not r.get("_saved_at") and psaved:
+                r["_saved_at"] = psaved
+            if not r.get("_updated_at") and pupd:
+                r["_updated_at"] = pupd
+            if psig and _eps_classification_sig(r) != psig and (r.get("_updated_at") or "") == pupd:
+                r["_updated_at"] = now
+    except Exception:
+        log.exception("_epsilon_stamp_times failed for %s", path)
+
+
+def _epsilon_stamp_commit(path, obj) -> None:
+    """Μετά την εγγραφή: κρατά στη μνήμη την κατάσταση του αρχείου (χωρίς νέο parse στην επόμενη αποθήκευση)."""
+    if not _eps_is_target(path, obj):
+        return
+    try:
+        st = os.stat(path)
+        state = _eps_state(obj)
+        with _EPS_STAMP_LOCK:
+            _EPS_STAMP_CACHE[path] = ((st.st_mtime_ns, st.st_size), state)
+    except Exception:
+        pass
+
+
+def _athens_local(iso: str) -> str:
+    """ISO χρονοσφραγίδα (UTC) -> «ηη/μμ/εεεε ΩΩ:ΛΛ» ώρα Ελλάδας (EET/EEST, χωρίς εξάρτηση από tzdata)."""
+    s = str(iso or "").strip()
+    if not s:
+        return ""
+    try:
+        d = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=datetime.timezone.utc)
+        d = d.astimezone(datetime.timezone.utc)
+
+        def _last_sunday(year: int, month: int) -> datetime.datetime:
+            # Μάρτιος και Οκτώβριος έχουν 31 ημέρες· η αλλαγή ώρας γίνεται την τελευταία Κυριακή στις 01:00 UTC.
+            last = datetime.datetime(year, month, 31, 1, tzinfo=datetime.timezone.utc)
+            return last - datetime.timedelta(days=(last.weekday() + 1) % 7)
+
+        dst = _last_sunday(d.year, 3) <= d < _last_sunday(d.year, 10)
+        local = d + datetime.timedelta(hours=3 if dst else 2)
+        return local.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return ""
+
+
 def json_write(path, obj):
     """
     Atomic JSON write:
@@ -5169,6 +5290,7 @@ def json_write(path, obj):
     try:
         dirp = os.path.dirname(path) or "."
         os.makedirs(dirp, exist_ok=True)
+        _epsilon_stamp_times(path, obj)
         text = json.dumps(obj, ensure_ascii=False, indent=2)
         # write to tmp file in same dir (for atomic replace)
         fd, tmp = tempfile.mkstemp(prefix=".tmp_json_", dir=dirp)
@@ -5199,6 +5321,7 @@ def json_write(path, obj):
                         raise
 
         _replace_with_retry(tmp, path)
+        _epsilon_stamp_commit(path, obj)
         return True
     except Exception as e:
         try:
@@ -5641,8 +5764,10 @@ def _load_json(path):
         return json.load(f)
 
 def _save_json(path, obj):
+    _epsilon_stamp_times(path, obj)
     txt = json.dumps(obj, ensure_ascii=False, indent=2)
     _atomic_write(path, txt)
+    _epsilon_stamp_commit(path, obj)
 
 def _match_row_by_mark(df, mark):
     """
@@ -5923,6 +6048,9 @@ def _build_table_rows_from_epsilon(vat: str, fiscal_year: Optional[int] = None) 
             'Καθαρή Αξία': f"{net:.2f}".replace('.', ','),
             'ΦΠΑ': f"{vat_val:.2f}".replace('.', ','),
             'Σύνολο': f"{total:.2f}".replace('.', ','),
+            # Τέρμα δεξιά: πότε μπήκε η εγγραφή στο πρόγραμμα και (αν έγινε επαναχαρακτηρισμός) πότε τροποποιήθηκε.
+            'Ημερομηνία/Ώρα Εισαγωγής': _athens_local(rec.get('_saved_at') or rec.get('_created_at') or ''),
+            'Ημερομηνία/Ώρα Τροποποίησης': _athens_local(rec.get('_updated_at') or ''),
         }
         rows.append(row)
 
@@ -6155,12 +6283,14 @@ def _write_json_atomic(path, obj):
     import tempfile
     dirn = os.path.dirname(path)
     os.makedirs(dirn, exist_ok=True)
+    _epsilon_stamp_times(path, obj)
     text = json.dumps(obj, ensure_ascii=False, indent=2)
     fd, tmp = tempfile.mkstemp(prefix=".tmp_json_", dir=dirn)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         os.replace(tmp, path)
+        _epsilon_stamp_commit(path, obj)
     except Exception:
         try:
             if os.path.exists(tmp):

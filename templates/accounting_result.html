@@ -231,11 +231,6 @@
     αποσβέσεις από το προηγούμενο έτος, απόθεμα λήξης με χειροκίνητη ή αυτόματη συμπλήρωση).
   </p>
 
-  <label class="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer mb-3" title="Τα δεδομένα myDATA που έχουν ήδη ληφθεί (ανά δίμηνο) επαναχρησιμοποιούνται για λίγα λεπτά/ώρες ώστε ο νέος έλεγχος να είναι γρήγορος. Τσέκαρέ το αν χαρακτήρισες παραστατικά στο myDATA ΜΟΛΙΣ τώρα και θέλεις νέα λήψη από την αρχή.">
-    <input id="arForceFresh" type="checkbox" class="rounded">
-    Φρέσκια λήψη από myDATA (αγνόηση των ήδη ληφθέντων δεδομένων)
-  </label>
-
   <div class="brain-tabs flex gap-2 mb-4">
     <button id="arTabSingleBtn" type="button" class="brain-tab-button active">Ατομικός</button>
     <button id="arTabBulkBtn" type="button" class="brain-tab-button">Μαζικός</button>
@@ -273,6 +268,10 @@
       </div>
 
       <div class="flex flex-col gap-1">
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Τα δεδομένα myDATA που έχουν ήδη ληφθεί (ανά δίμηνο) επαναχρησιμοποιούνται για λίγα λεπτά/ώρες ώστε ο νέος έλεγχος να είναι γρήγορος. Τσέκαρέ το αν χαρακτήρισες παραστατικά στο myDATA ΜΟΛΙΣ τώρα και θέλεις νέα λήψη από την αρχή.">
+          <input id="arSingleForceFresh" type="checkbox" class="ar-force-fresh rounded">
+          Επανάληψη λήψης (νέα λήψη από myDATA)
+        </label>
         <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Έλεγχος στο TAXISnet (ένα login ανά εταιρία): πρόβλεψη ΦΠΑ για την πιο πρόσφατη περίοδο χωρίς υποβληθείσα Φ2, προηγούμενη περίοδος/πιστωτικό υπόλοιπο και σύγκριση με υποβληθείσα δήλωση (πιθανή τροποποιητική). Ανενεργό = πολύ πιο γρήγορα: ΦΠΑ της τελευταίας ολοκληρωμένης περιόδου από το myDATA, χωρίς έλεγχο δηλώσεων.">
           <input id="arSingleVatForecast" type="checkbox" class="ar-income-tax-toggle rounded">
           Εκτίμηση ΦΠΑ &amp; τροποποιητικών (TAXISnet)
@@ -313,6 +312,10 @@
           <label class="block text-xs text-gray-600 mb-1">Έως</label>
           <input id="arBulkTo" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
         </div>
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Τα δεδομένα myDATA που έχουν ήδη ληφθεί (ανά δίμηνο) επαναχρησιμοποιούνται για λίγα λεπτά/ώρες ώστε ο νέος έλεγχος να είναι γρήγορος. Τσέκαρέ το αν χαρακτήρισες παραστατικά στο myDATA ΜΟΛΙΣ τώρα και θέλεις νέα λήψη από την αρχή.">
+          <input id="arBulkForceFresh" type="checkbox" class="ar-force-fresh rounded">
+          Επανάληψη λήψης (νέα λήψη από myDATA)
+        </label>
         <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Έλεγχος στο TAXISnet (ένα login ανά εταιρία): πρόβλεψη ΦΠΑ για την πιο πρόσφατη περίοδο χωρίς υποβληθείσα Φ2, προηγούμενη περίοδος/πιστωτικό υπόλοιπο και σύγκριση με υποβληθείσα δήλωση (πιθανή τροποποιητική). Ανενεργό = πολύ πιο γρήγορα: ΦΠΑ της τελευταίας ολοκληρωμένης περιόδου από το myDATA, χωρίς έλεγχο δηλώσεων.">
           <input id="arBulkVatForecast" type="checkbox" class="ar-income-tax-toggle rounded">
           Εκτίμηση ΦΠΑ &amp; τροποποιητικών (TAXISnet)

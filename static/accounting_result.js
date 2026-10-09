@@ -123,7 +123,7 @@ async function postJson(url, body, timeoutMs) {
   try {
     const headers = { 'Content-Type': 'application/json' };
     // Checkbox «Φρέσκια λήψη από myDATA»: ο server αγνοεί το cache λήψης (e3/checks/fetch_e3.py) και το ανανεώνει.
-    try { const fr = document.getElementById('arForceFresh'); if (fr && fr.checked) headers['X-AR-Fresh'] = '1'; } catch (_) {}
+    try { if (document.querySelector('.ar-force-fresh:checked')) headers['X-AR-Fresh'] = '1'; } catch (_) {}
     const res = await fetch(url, {
       method: 'POST',
       headers,
@@ -222,7 +222,15 @@ function arSyncPrevAdvanceInput() {
   if (input) input.classList.toggle('hidden', !arIncomeTaxEnabled('arSingleIncomeTax'));
 }
 
+// «Επανάληψη λήψης»: ένα κοινό checkbox σε Ατομικό και Μαζικό (αν αλλάξει το ένα, αλλάζει και το άλλο).
+function arInitForceFreshToggles() {
+  document.querySelectorAll('.ar-force-fresh').forEach((cb) => {
+    cb.onchange = () => { document.querySelectorAll('.ar-force-fresh').forEach((o) => { o.checked = cb.checked; }); };
+  });
+}
+
 function arInitIncomeTaxToggles() {
+  arInitForceFreshToggles();
   document.querySelectorAll('.ar-income-tax-toggle').forEach((cb) => {
     try {
       const saved = localStorage.getItem(AR_INCOME_TAX_PREF_PREFIX + cb.id);
