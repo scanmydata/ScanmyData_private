@@ -10281,9 +10281,8 @@ def api_fetch_bulk_start():
     from accounting_result import activity_registry as _act_reg
     _fa_uk, _fa_un = _ar_user_ident()
     _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
-        "fetch", ["fetch", "ar_single"], _ar_group_key(), _fa_uk, _fa_un,
+        "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
         label=f"Μαζική λήψη ({len(targets)} πελάτες)", ttl=_act_reg.TTL_FETCH, ref="fetchbulk:" + job_id,
-        extra_conflict=_ar_bulk_conflict(""),
     ) if _ar_group_key() else (None, None)
     if _fa_conflict:
         return jsonify({
@@ -10922,9 +10921,8 @@ def fetch():
         from accounting_result import activity_registry as _act_reg
         _fa_uk, _fa_un = _ar_user_ident()
         _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
-            "fetch", ["fetch", "ar_single"], _ar_group_key(), _fa_uk, _fa_un,
+            "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
             label=f"Λήψη παραστατικών — {selected or vat}", ttl=_act_reg.TTL_FETCH, ref="fetch:" + fetch_key,
-            extra_conflict=_ar_bulk_conflict(""),
         ) if _ar_group_key() else (None, None)
         if _fa_conflict:
             error = _group_busy_message(_fa_conflict)
@@ -19093,7 +19091,7 @@ def api_accounting_result_compute():
     if group:
         uk, un = _ar_user_ident()
         act_id, conflict = ar_act.begin_exclusive(
-            "ar_single", ["ar_single", "fetch"], group, uk, un,
+            "ar_single", ["ar_single"], group, uk, un,
             label=str(_p0.get("credential_name") or "Ατομικός υπολογισμός"),
             extra_conflict=_ar_bulk_conflict(""),
         )
@@ -19936,7 +19934,8 @@ def _ar_bulk_conflict(exclude_job_id: str = ""):
 
 def _ar_lock_conflict(exclude_job_id: str = ""):
     """Οποιοσδήποτε ΑΛΛΟΣ έλεγχος Λογιστικού Αποτελέσματος (Μαζικός ή Ατομικός) που τρέχει στην ενεργή
-    ομάδα — όσο τρέχει, τα λογιστικά αποτελέσματα είναι κλειδωμένα για όλους."""
+    ομάδα — όσο τρέχει, τα λογιστικά αποτελέσματα είναι κλειδωμένα για όλους. (Η Λήψη παραστατικών ΔΕΝ μετράει:
+    κλειδώνει μόνο τον εαυτό της.)"""
     from accounting_result import activity_registry as ar_act
     group = _ar_group_key()
     if not group:
@@ -19944,7 +19943,7 @@ def _ar_lock_conflict(exclude_job_id: str = ""):
     c = _ar_bulk_conflict(exclude_job_id)
     if c:
         return c
-    single = ar_act.find_conflict(["ar_single", "fetch"], group)
+    single = ar_act.find_conflict(["ar_single"], group)
     if single:
         return {"kind": single.get("kind"), "username": single.get("username") or "", "label": single.get("label") or ""}
     return None
@@ -19962,11 +19961,7 @@ def _group_busy_message(conflict) -> str:
     """«Τρέχει ήδη … — εντολή από <χρήστης>» για οποιοδήποτε είδος εργασίας της ομάδας."""
     who = (conflict or {}).get("username") or "άλλος χρήστης"
     what = _GROUP_BUSY_WHAT.get((conflict or {}).get("kind"), "εργασία")
-    if (conflict or {}).get("kind") == "e3_bulk":
-        return f"Τρέχει ήδη {what} — εντολή από {who}. Περίμενε να ολοκληρωθεί και ξαναδοκίμασε."
-    return (f"Τρέχει ήδη {what} — εντολή από {who}. "
-            "Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ο ένας τον άλλον· "
-            "περίμενε να ολοκληρωθεί και ξαναδοκίμασε.")
+    return f"Τρέχει ήδη {what} — εντολή από {who}. Περίμενε να ολοκληρωθεί και ξαναδοκίμασε."
 
 
 def _ar_locked_response(conflict):
