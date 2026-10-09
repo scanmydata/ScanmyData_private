@@ -228,3 +228,33 @@ def clear_efka_check(path: str, year: int) -> None:
     if isinstance(checks, dict) and str(year) in checks:
         del checks[str(year)]
         _write(path, data)
+
+
+# ---------------------------------------------------------------------------
+# Προσαρμογές ανά εταιρία/έτος (tabs «Πάγια» και «Μεταφορά εσόδων» στο popup ελέγχων του Μαζικού).
+# STANDING (όπως η εξαίρεση ΕΦΚΑ): μένουν αποθηκευμένες μέχρι να αλλάξουν — είναι επιλογές του χρήστη για την
+# εταιρία (ποσοστό πρόβλεψης αποσβέσεων, εξαίρεση/συμπερίληψη εσόδων 1_9, επιπλέον μεταφορά εσόδων).
+# ---------------------------------------------------------------------------
+def get_adjustments(path: str, year: int) -> Dict[str, Any]:
+    return dict((_read_or_empty(path).get("adjustments") or {}).get(str(year)) or {})
+
+
+def set_adjustments(path: str, year: int, dep_rate: Optional[float] = None,
+                    transfer_mode: Optional[str] = None, transfer_extra: Optional[float] = None) -> Dict[str, Any]:
+    """Ενημερώνει ΜΟΝΟ τα πεδία που δόθηκαν. dep_rate: % πρόβλεψης αποσβέσεων επί αγορών παγίων· transfer_mode:
+    "include" (προεπιλογή) | "exclude" για τα έσοδα 1_9 του προηγούμενου έτους· transfer_extra: επιπλέον έσοδα (€)
+    που μεταφέρονται στην τρέχουσα χρήση από άλλες χρονιές."""
+    data = _read(path)
+    adj = data.setdefault("adjustments", {})
+    rec = dict(adj.get(str(year)) or {})
+    if dep_rate is not None:
+        rec["dep_rate"] = round(max(0.0, min(float(dep_rate), 100.0)), 2)
+    if transfer_mode is not None:
+        rec["transfer_mode"] = "exclude" if str(transfer_mode) == "exclude" else "include"
+    if transfer_extra is not None:
+        rec["transfer_extra"] = round(float(transfer_extra), 2)
+    rec["updated_at"] = datetime.now().isoformat()
+    adj[str(year)] = rec
+    data["adjustments"] = adj
+    _write(path, data)
+    return rec

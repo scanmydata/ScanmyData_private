@@ -19167,7 +19167,9 @@ def _api_accounting_result_compute_impl():
                 "books_category_mismatch": books_category_mismatch,
                 "inventory_obligation": inventory_obligation,
             }), 200
-        depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to, depreciation_selection)
+        depreciation_amount, dep_info, adjinfo, transfer_rows = _ar_plan_adjustments(
+            path, year, ar_engine, dep_entries, prior_entries, current_period_entries[0], date_from, date_to,
+            depreciation_selection)
 
         # Payroll monthly-completeness — blocks exactly like the inventory
         # check below (same user-facing pattern, deliberately): the
@@ -19271,8 +19273,11 @@ def _api_accounting_result_compute_impl():
             payroll_manual_total=payroll_res["payroll_manual_total"],
             rent_manual_total=rent_res["rent_manual_total"],
             efka_manual_total=_ar_efka_manual_total(path, year),
+            transfer_entries=transfer_rows, transfer_extra=adjinfo["transfer_extra"],
         )
         report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+        report["depreciation_info"] = dep_info
+        report["income_transfer"].update({"mode": adjinfo["transfer_mode"], "found": adjinfo["transfer_found"]})
 
         # Non-blocking compliance notes — computed once every blocking gate
         # above has cleared, so a mid-resolution retry (depreciation/payroll/
@@ -19317,6 +19322,7 @@ def _api_accounting_result_compute_impl():
         uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
         if uncharacterized_note:
             report_notes.append(uncharacterized_note)
+        report_notes.extend(_ar_adjustment_notes(dep_info, adjinfo))
         report["notes"] = report_notes
         # "sole_proprietor" | "legal_entity" | None — from the ΑΑΔΕ Μητρώο
         # auto-detect that already ran for this company (see
@@ -19745,7 +19751,8 @@ def api_accounting_result_bulk_compute():
             # Bulk runs default depreciation to "sum every prior-year entry" rather
             # than blocking the whole batch on a per-company pick — the per-mark
             # disambiguation popup is available in Ατομικός mode.
-            depreciation_amount = ar_engine.compute_depreciation_amount(dep_entries, date_from, date_to)
+            depreciation_amount, dep_info, adjinfo, transfer_rows = _ar_plan_adjustments(
+                path, year, ar_engine, dep_entries, prior_entries, current_period_entries[0], date_from, date_to)
 
             if has_inventory:
                 opening = ar_engine.extract_prior_year_closing_inventory(prior_entries)
@@ -19756,7 +19763,8 @@ def api_accounting_result_bulk_compute():
                         "precheck": _ar_bulk_precheck_row(
                             name, vat, path, year, current_period_entries[0], date_from, date_to,
                             inventory_obligation, True, opening, False,
-                            _payroll_flag, _payroll_chk, _rent_flag, _rent_chk, dep_entries),
+                            _payroll_flag, _payroll_chk, _rent_flag, _rent_chk, dep_entries,
+                            dep_info=dep_info, adjinfo=adjinfo),
                         "vat": vat, "year": year, "opening_inventory": opening,
                         "vat_auto_check": vat_auto_check,
                         "books_category_mismatch": books_category_mismatch,
@@ -19784,8 +19792,11 @@ def api_accounting_result_bulk_compute():
                     payroll_manual_total=payroll_res["payroll_manual_total"],
                     rent_manual_total=rent_res["rent_manual_total"],
                     efka_manual_total=_ar_efka_manual_total(path, year),
+                    transfer_entries=transfer_rows, transfer_extra=adjinfo["transfer_extra"],
                 )
                 report["inventory_method_label"] = _ar_inventory_method_label(path, year, has_inventory)
+                report["depreciation_info"] = dep_info
+                report["income_transfer"].update({"mode": adjinfo["transfer_mode"], "found": adjinfo["transfer_found"]})
 
                 report_notes = []
                 payroll_note = _ar_payroll_note(payroll_res)
@@ -19819,6 +19830,7 @@ def api_accounting_result_bulk_compute():
                 uncharacterized_note = _ar_last_quarter_uncharacterized_note(vat, date_from, date_to, aade_user, aade_key)
                 if uncharacterized_note:
                     report_notes.append(uncharacterized_note)
+                report_notes.extend(_ar_adjustment_notes(dep_info, adjinfo))
                 report["notes"] = report_notes
                 report["efka_self_employed_check"] = _ar_efka_completeness(path, year, current_period_entries[0], date_from, date_to)
 
@@ -19859,7 +19871,8 @@ def api_accounting_result_bulk_compute():
                         name, vat, path, year, current_period_entries[0], date_from, date_to,
                         inventory_obligation, has_inventory, opening, True,
                         _payroll_flag, _payroll_chk, _rent_flag, _rent_chk, dep_entries,
-                        efka_note=efka_note, efka_check=report.get("efka_self_employed_check")),
+                        efka_note=efka_note, efka_check=report.get("efka_self_employed_check"),
+                        dep_info=dep_info, adjinfo=adjinfo),
                     "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
                     "vat_auto_check": vat_auto_check,
                     "books_category_mismatch": books_category_mismatch,
@@ -19958,9 +19971,60 @@ def _ar_locked_response(conflict):
     return jsonify({"ok": False, "locked": True, "locked_by": who, "error": _group_busy_message(conflict)}), 409
 
 
+def _ar_plan_adjustments(path, year, ar_engine, dep_entries, prior_entries, current_entries, date_from, date_to,
+                         selection=None):
+    """Αποσβέσεις (με πρόβλεψη από αγορές παγίων όταν δεν βρέθηκαν) + μεταφορά εσόδων 1_9 από το προηγούμενο
+    έτος. Επιστρέφει (ποσό αποσβέσεων, dep_info, adjinfo, γραμμές εσόδων προς συμπερίληψη)."""
+    from accounting_result import compliance_notes_store as cn
+    adj = cn.get_adjustments(path, year)
+    rate = adj.get("dep_rate")
+    rate = float(rate) if rate is not None else ar_engine.DEFAULT_DEPRECIATION_FORECAST_RATE
+    capex = ar_engine.build_expense_groups(current_entries)["capex"]
+    amount, dep_info = ar_engine.depreciation_plan(dep_entries, current_entries, capex, date_from, date_to, selection, rate)
+    found_rows = ar_engine.income_transfer_entries(prior_entries)
+    mode = "exclude" if adj.get("transfer_mode") == "exclude" else "include"
+    adjinfo = {
+        "dep_rate": rate,
+        "transfer_found": round(sum(float(r.get("amount") or 0) for r in found_rows), 2),
+        "transfer_mode": mode,
+        "transfer_extra": round(float(adj.get("transfer_extra") or 0), 2),
+    }
+    return amount, dep_info, adjinfo, ([] if mode == "exclude" else found_rows)
+
+
+def _ar_adjustment_notes(dep_info, adjinfo):
+    """Σημειώσεις αναφοράς για πρόβλεψη αποσβέσεων και μεταφορά εσόδων."""
+    notes = []
+    basis = (dep_info or {}).get("basis")
+    if basis == "forecast":
+        notes.append({
+            "type": "depreciation_forecast",
+            "message": (f"Αποσβέσεις: δεν βρέθηκαν αποσβέσεις στο προηγούμενο έτος ούτε στην περίοδο — πρόβλεψη "
+                        f"{_ar_gr_money(dep_info.get('rate'))}% επί των αγορών παγίων {_ar_gr_money(dep_info.get('capex'))}€."),
+            "highlight": f"{_ar_gr_money(round(dep_info['capex'] * dep_info['rate'] / 100.0, 2))}€",
+        })
+    elif basis == "current_year":
+        notes.append({
+            "type": "depreciation_forecast",
+            "message": (f"Αποσβέσεις: δεν υπήρχαν στο προηγούμενο έτος — χρησιμοποιήθηκαν οι αποσβέσεις που βρέθηκαν "
+                        f"στην ίδια την περίοδο ({_ar_gr_money(dep_info.get('amount'))}€)."),
+        })
+    found = float((adjinfo or {}).get("transfer_found") or 0)
+    extra = float((adjinfo or {}).get("transfer_extra") or 0)
+    if abs(found) > 0.005 or abs(extra) > 0.005:
+        parts = []
+        if abs(found) > 0.005:
+            parts.append(f"από το προηγούμενο έτος βρέθηκαν έσοδα κατηγορίας 1_9 (επομένων χρήσεων) {_ar_gr_money(found)}€ — "
+                         + ("συμπεριλήφθηκαν στα έσοδα της περιόδου" if adjinfo.get("transfer_mode") != "exclude" else "ΕΞΑΙΡΕΘΗΚΑΝ από τον χρήστη"))
+        if abs(extra) > 0.005:
+            parts.append(f"επιπλέον μεταφορά εσόδων από άλλες χρήσεις {_ar_gr_money(extra)}€ (στα ΕΣΟΔΑ ΠΡΟΗΓ. ΧΡΗΣΕΩΝ)")
+        notes.append({"type": "income_transfer", "message": "Μεταφορά εσόδων: " + "; ".join(parts) + "."})
+    return notes
+
+
 def _ar_bulk_precheck_row(name, vat, path, year, entries, date_from, date_to, obligation, has_inventory,
                           opening, closing_known, payroll_flag, payroll_chk, rent_flag, rent_chk,
-                          dep_entries, efka_note=_AR_UNSET, efka_check=None):
+                          dep_entries, efka_note=_AR_UNSET, efka_check=None, dep_info=None, adjinfo=None):
     """Ίδια μορφή με τις γραμμές του /inventory/bulk_status, αλλά από τα δεδομένα που ο υπολογισμός έχει
     ΗΔΗ στη μνήμη (χωρίς νέα λήψη): τροφοδοτεί το popup ελέγχων ΜΕΤΑ τον υπολογισμό του Μαζικού."""
     try:
@@ -19982,6 +20046,15 @@ def _ar_bulk_precheck_row(name, vat, path, year, entries, date_from, date_to, ob
             "legal_kind": _ar_legal_kind(path, vat),
             "efka_check": efka_check if efka_short else None,
         }
+        # tabs «Πάγια» / «Μεταφορά εσόδων» του popup ελέγχων
+        di, ai = dep_info or {}, adjinfo or {}
+        row["fixed_basis"] = di.get("basis")
+        row["fixed_capex"] = float(di.get("capex") or 0)
+        row["fixed_rate"] = float(ai.get("dep_rate") if ai.get("dep_rate") is not None else 15.0)
+        row["fixed_candidate"] = di.get("basis") in ("forecast", "none") and row["fixed_capex"] > 0.005
+        row["transfer_found"] = float(ai.get("transfer_found") or 0)
+        row["transfer_mode"] = ai.get("transfer_mode") or "include"
+        row["transfer_extra"] = float(ai.get("transfer_extra") or 0)
         if has_inventory and obligation:
             row["inventory_obligation_reason"] = obligation.get("reason")
             row["inventory_obligation_message"] = obligation.get("message")
@@ -20013,6 +20086,32 @@ def _ar_e3_cache_bypass_hook():
         pass
 
 
+@app.route("/api/accounting_result/adjustments/set", methods=["POST"])
+@login_required
+def api_accounting_result_adjustments_set():
+    """Επιλογές του χρήστη από τα tabs «Πάγια» (ποσοστό πρόβλεψης αποσβέσεων) και «Μεταφορά εσόδων»."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_name, cred = _ar_resolve_credential(payload)
+        year = payload.get("year")
+        if not cred or not year:
+            return jsonify({"ok": False, "error": "Λείπει credential ή έτος"}), 400
+        from accounting_result import compliance_notes_store as cn
+        def _num(k):
+            v = payload.get(k)
+            if v is None or v == "":
+                return None
+            return float(str(v).replace(",", "."))
+        rec = cn.set_adjustments(
+            _ar_store_path(str(cred.get("vat") or "").strip()), int(year),
+            dep_rate=_num("dep_rate"), transfer_mode=payload.get("transfer_mode"), transfer_extra=_num("transfer_extra"),
+        )
+        return jsonify({"ok": True, "adjustments": rec}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_adjustments_set failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/accounting_result/lock/acquire", methods=["POST"])
 def api_accounting_result_lock_acquire():
     """Ξεκίνημα Μαζικού: ελέγχει ότι δεν τρέχει άλλος έλεγχος λογιστικού αποτελέσματος στην ομάδα και
@@ -20035,6 +20134,146 @@ def api_accounting_result_lock_acquire():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# ΕΛΕΓΧΟΣ Ε3 (Μαζικός) ως job του server — όπως ο Μαζικός Λογιστικού: ο browser δίνει την εντολή, το thread του
+# server καλεί το /api/e3/brain με το session snapshot του χρήστη και συνεχίζει ανεξάρτητα από σελίδα/logout.
+# Η πρόοδος (ανά πελάτη/βήμα) φαίνεται σε ΟΛΟΥΣ τους χρήστες της ομάδας (group_activity), με το όνομα αυτού που
+# έδωσε την εντολή· το αποτέλεσμα το παραλαμβάνει μόνο ο χρήστης που ξεκίνησε (και μετά από νέα σύνδεση).
+# ---------------------------------------------------------------------------
+_E3_SERVER_JOBS: Dict[str, Dict[str, Any]] = {}
+_E3_SERVER_JOBS_LOCK = threading.Lock()
+
+
+def _e3_bulk_worker(app_obj, job, snapshot, env, group_dir, payload):
+    from accounting_result import activity_registry as ar_act
+    try:
+        _set_thread_group_base_dir(group_dir)
+    except Exception:
+        pass
+    try:
+        data, code = _ar_call_view(app_obj, snapshot, env, api_e3_brain, "/api/e3/brain", "POST", body=payload)
+        job["result"] = data
+        if data.get("ok"):
+            job["status"] = "done"
+        else:
+            job["status"] = "error"
+            job["error"] = str(data.get("error") or f"HTTP {code}")
+    except Exception as e:
+        log.exception("server E3 bulk job %s failed", job.get("id"))
+        job["status"] = "error"
+        job["error"] = _friendly_net_error(e) or str(e)
+    finally:
+        job["finished"] = time.time()
+        ar_act.end(job.get("activity_id"))
+
+
+def _e3_progress(job_id) -> Dict[str, Any]:
+    try:
+        from e3.checks.e3_brain import get_brain_progress
+        return get_brain_progress(str(job_id or "").strip()) or {}
+    except Exception:
+        return {}
+
+
+def _e3_server_job_for_request(job_id, owner_only=False):
+    job = _E3_SERVER_JOBS.get(str(job_id or "").strip())
+    if job and job.get("group") == _ar_group_key():
+        if owner_only and job.get("user_key") != _ar_user_ident()[0]:
+            return None
+        return job
+    return None
+
+
+@app.route("/api/e3/brain/bulk_start", methods=["POST"])
+@login_required
+def api_e3_brain_bulk_start():
+    try:
+        from accounting_result import activity_registry as ar_act
+        payload = request.get_json(silent=True) or {}
+        group = _ar_group_key()
+        if not group:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 400
+        jid = str(payload.get("job_id") or "").strip() or ("bulk-" + secrets.token_hex(5))
+        payload["job_id"] = jid
+        n = len(payload.get("clients") or []) or len(payload.get("active_group_clients") or [])
+        uk, un = _ar_user_ident()
+        act_id = ar_act.begin("e3_bulk", group, uk, un, label=f"Έλεγχος Ε3 (Μαζικός, {n} πελάτες)",
+                              ttl=6 * 3600, ref="e3bulk:" + jid)
+        job = {"id": jid, "group": group, "user_key": uk, "username": un, "status": "running", "activity_id": act_id,
+               "started": time.time(), "finished": None, "result": None, "error": "", "claimed": "", "consumed": False,
+               "total": n}
+        with _E3_SERVER_JOBS_LOCK:
+            _E3_SERVER_JOBS[jid] = job
+        env = {
+            "headers": {k: v for k, v in (("User-Agent", request.headers.get("User-Agent")),
+                                          ("X-Forwarded-For", request.headers.get("X-Forwarded-For"))) if v},
+            "environ_base": {"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        }
+        threading.Thread(
+            target=_e3_bulk_worker,
+            args=(current_app._get_current_object(), job, dict(session), env, get_group_base_dir(), payload),
+            daemon=True,
+        ).start()
+        return jsonify({"ok": True, "job_id": jid}), 200
+    except Exception as e:
+        log.exception("api_e3_brain_bulk_start failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _e3_job_public(job) -> Dict[str, Any]:
+    prog = _e3_progress(job.get("id")) if job.get("status") == "running" else {}
+    return {"id": job.get("id"), "status": job.get("status"), "username": job.get("username"),
+            "label": prog.get("label") or "", "percent": prog.get("percent"), "error": job.get("error") or "",
+            "started": job.get("started"), "finished": job.get("finished"), "total": job.get("total"),
+            "consumed": job.get("consumed")}
+
+
+@app.route("/api/e3/brain/bulk_job_state", methods=["GET"])
+@login_required
+def api_e3_brain_bulk_job_state():
+    job = _e3_server_job_for_request(request.args.get("job_id"))
+    if not job:
+        return jsonify({"ok": True, "status": "unknown"}), 200
+    return jsonify({"ok": True, **_e3_job_public(job)}), 200
+
+
+@app.route("/api/e3/brain/bulk_job_result", methods=["GET"])
+@login_required
+def api_e3_brain_bulk_job_result():
+    job = _e3_server_job_for_request(request.args.get("job_id"), owner_only=True)
+    if not job:
+        return jsonify({"ok": False, "error": "Το job δεν βρέθηκε (πιθανή επανεκκίνηση του server) ή ανήκει σε άλλον χρήστη."}), 404
+    if job.get("status") not in ("done", "error"):
+        return jsonify({"ok": True, "status": job.get("status")}), 200
+    tab = str(request.args.get("tab") or "")
+    if job.get("claimed") and tab and job["claimed"] != tab:
+        return jsonify({"ok": True, "status": "claimed"}), 200
+    if tab:
+        job["claimed"] = tab
+    return jsonify({"ok": True, **_e3_job_public(job), "result": job.get("result") or {}}), 200
+
+
+@app.route("/api/e3/brain/bulk_job_consume", methods=["POST"])
+@login_required
+def api_e3_brain_bulk_job_consume():
+    job = _e3_server_job_for_request((request.get_json(silent=True) or {}).get("job_id"), owner_only=True)
+    if job:
+        job["consumed"] = True
+        job["result"] = None
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/api/e3/brain/bulk_jobs_mine", methods=["GET"])
+@login_required
+def api_e3_brain_bulk_jobs_mine():
+    me, _ = _ar_user_ident()
+    group = _ar_group_key()
+    out = [_e3_job_public(j) for j in list(_E3_SERVER_JOBS.values())
+           if j.get("group") == group and j.get("user_key") == me and not j.get("consumed")]
+    out.sort(key=lambda j: j.get("started") or 0)
+    return jsonify({"ok": True, "jobs": out}), 200
+
+
 @app.route("/api/group_activity", methods=["GET"])
 def api_group_activity():
     """Ό,τι τρέχει ΤΩΡΑ στην ενεργή ομάδα (Μαζικός/Ατομικός Λογιστικού Αποτελέσματος, Λήψη παραστατικών),
@@ -20049,12 +20288,31 @@ def api_group_activity():
             for j in ar_jobs.active_jobs(group):
                 acts.append({"id": j["job_id"], "kind": "ar_bulk", "label": j.get("label") or "",
                              "percent": j.get("percent"), "username": j.get("username") or "",
-                             "mine": bool(me) and j.get("user_key") == me, "started": j.get("started")})
+                             "mine": bool(me) and j.get("user_key") == me, "started": j.get("started"),
+                             "ref": j["job_id"]})
             for e in ar_act.active(group):
-                acts.append({"id": e["id"], "kind": e["kind"], "label": e.get("label") or "",
-                             "percent": e.get("percent"), "username": e.get("username") or "",
-                             "mine": bool(me) and e.get("user_key") == me, "started": e.get("started")})
-        return jsonify({"ok": True, "activities": acts}), 200
+                label, percent = e.get("label") or "", e.get("percent")
+                ref = str(e.get("ref") or "")
+                if e.get("kind") == "e3_bulk":
+                    prog = _e3_progress(ref.split(":", 1)[-1])
+                    if prog.get("label"):
+                        label = f"{e.get('title') or 'Έλεγχος Ε3'} — {prog['label']}"
+                        percent = prog.get("percent", percent)
+                acts.append({"id": e["id"], "kind": e["kind"], "label": label,
+                             "percent": percent, "username": e.get("username") or "",
+                             "mine": bool(me) and e.get("user_key") == me, "started": e.get("started"),
+                             "ref": ref})
+        # Εργασίες του ΤΡΕΧΟΝΤΟΣ χρήστη που τελείωσαν και περιμένουν να χειριστεί τα αποτελέσματα/ελέγχους
+        # (π.χ. μετά από logout/login): ο browser δείχνει flash «Συνέχεια» σε οποιαδήποτε σελίδα.
+        pending = {"ar_bulk": [], "e3_bulk": []}
+        if group and me:
+            for j in list(_AR_SERVER_JOBS.values()):
+                if j.get("group") == group and j.get("user_key") == me and not j.get("consumed") and j.get("status") in ("done", "error"):
+                    pending["ar_bulk"].append(j["id"])
+            for j in list(_E3_SERVER_JOBS.values()):
+                if j.get("group") == group and j.get("user_key") == me and not j.get("consumed") and j.get("status") in ("done", "error"):
+                    pending["e3_bulk"].append(j["id"])
+        return jsonify({"ok": True, "activities": acts, "pending": pending}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -20261,9 +20519,13 @@ def _ar_server_job_public(job) -> Dict[str, Any]:
                                     "date_to", "batch_id", "started", "finished", "consumed")} | {"total": len(job.get("names") or [])}
 
 
-def _ar_server_job_for_request(job_id):
+def _ar_server_job_for_request(job_id, owner_only=False):
+    """Το job της ενεργής ομάδας. owner_only=True: μόνο ο χρήστης που ξεκίνησε τον έλεγχο (αυτός χειρίζεται τα
+    popup/αποτελέσματα· οι υπόλοιποι χρήστες της ομάδας ενημερώνονται μόνο από τα flash)."""
     job = _AR_SERVER_JOBS.get(str(job_id or "").strip())
     if job and job.get("group") == _ar_group_key():
+        if owner_only and job.get("user_key") != _ar_user_ident()[0]:
+            return None
         return job
     return None
 
@@ -20282,9 +20544,9 @@ def api_accounting_result_bulk_job_state():
 def api_accounting_result_bulk_job_result():
     """Το αποτέλεσμα ενός τελειωμένου job. Την πρώτη φορά το «διεκδικεί» ένα tab (?tab=) — τα υπόλοιπα tabs
     του ίδιου χρήστη δεν ανοίγουν δεύτερη φορά τα ίδια popup."""
-    job = _ar_server_job_for_request(request.args.get("job_id"))
+    job = _ar_server_job_for_request(request.args.get("job_id"), owner_only=True)
     if not job:
-        return jsonify({"ok": False, "error": "Το job δεν βρέθηκε (πιθανή επανεκκίνηση του server)."}), 404
+        return jsonify({"ok": False, "error": "Το job δεν βρέθηκε (πιθανή επανεκκίνηση του server) ή ανήκει σε άλλον χρήστη."}), 404
     if job.get("status") not in ("done", "error"):
         return jsonify({"ok": True, "status": job.get("status")}), 200
     tab = str(request.args.get("tab") or "")
@@ -20299,7 +20561,7 @@ def api_accounting_result_bulk_job_result():
 @app.route("/api/accounting_result/bulk_job_consume", methods=["POST"])
 @login_required
 def api_accounting_result_bulk_job_consume():
-    job = _ar_server_job_for_request((request.get_json(silent=True) or {}).get("job_id"))
+    job = _ar_server_job_for_request((request.get_json(silent=True) or {}).get("job_id"), owner_only=True)
     if job:
         job["consumed"] = True
         job["results"] = []   # μνήμη: τα αποτελέσματα μένουν στον φάκελο αποθηκευμένων μαζικών

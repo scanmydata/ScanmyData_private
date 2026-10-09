@@ -381,11 +381,13 @@
       // Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ΟΛΑ μεταξύ τους (ο υπολογισμός δεν πρέπει
       // να τρέχει πάνω σε δεδομένα που αλλάζουν και η λήψη δεν ξεκινά όσο υπολογίζεται αποτέλεσμα).
       var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single', 'fetch'], fetch: ['fetch', 'ar_bulk', 'ar_single'] };
-      var WHAT = { ar_bulk: 'Μαζικός υπολογισμός Λογιστικού Αποτελέσματος', ar_single: 'Ατομικός υπολογισμός Λογιστικού Αποτελέσματος', fetch: 'Λήψη παραστατικών' };
+      var WHAT = { ar_bulk: 'Μαζικός υπολογισμός Λογιστικού Αποτελέσματος', ar_single: 'Ατομικός υπολογισμός Λογιστικού Αποτελέσματος', fetch: 'Λήψη παραστατικών', e3_bulk: 'Έλεγχος Ε3 (Μαζικός)' };
       var state = [];
       var timer = null;
       var rendered = {};
       var prevMineBulk = {};
+      var prevOthers = {};
+      var prevMineOther = {};
       function getContainer() {
         var c = document.getElementById('flashContainer');
         if (!c) c = document.getElementById('arFlashContainer');
@@ -398,8 +400,9 @@
       function bannerText(a) {
         var label = a.label || WHAT[a.kind] || 'εργασία';
         var pct = (typeof a.percent === 'number') ? ' (' + a.percent + '%)' : '';
-        var head = a.kind === 'fetch' ? label : (WHAT[a.kind] + ' — ' + label);
-        return head + pct + ' — εντολή: ' + (a.username || '—') + (a.mine ? ' (εσύ)' : '') + ' · κλειδωμένο μέχρι να ολοκληρωθεί';
+        var head = (a.kind === 'fetch' || a.kind === 'e3_bulk') ? label : (WHAT[a.kind] + ' — ' + label);
+        var lockTxt = (a.kind === 'e3_bulk') ? '' : ' · κλειδωμένο μέχρι να ολοκληρωθεί';
+        return head + pct + ' — εντολή: ' + (a.username || '—') + (a.mine ? ' (εσύ)' : '') + lockTxt;
       }
       function render(acts) {
         var wanted = {};
@@ -410,6 +413,7 @@
           if (a.kind === 'ar_single' && a.mine) return;
           // Λήψη που ξεκίνησε εδώ: υπάρχει ήδη το δικό της flash προόδου (με Διακοπή).
           if (a.kind === 'fetch' && a.mine && document.querySelector('[data-progress-flash="1"]')) return;
+          if (a.kind === 'e3_bulk' && a.mine && document.getElementById('e3BulkProgressFlash')) return;
           var id = 'groupActivity-' + a.id;
           wanted[id] = true;
           var el = document.getElementById(id);
@@ -433,6 +437,21 @@
             span.style.lineHeight = '1.3';
             span.style.fontSize = '13px';
             el.appendChild(span);
+            // Διακοπή: μόνο για τον χρήστη που έδωσε την εντολή (μαζική λήψη / μαζικός έλεγχος Ε3)
+            var stopUrl = null, stopBody = null, ref = String(a.ref || '');
+            if (a.mine && a.kind === 'e3_bulk' && ref.indexOf('e3bulk:') === 0) { stopUrl = '/api/e3/brain/abort/' + encodeURIComponent(ref.slice(7)); }
+            if (a.mine && a.kind === 'fetch' && ref.indexOf('fetchbulk:') === 0) { stopUrl = '/api/fetch_bulk/stop'; stopBody = JSON.stringify({ job_id: ref.slice(10) }); }
+            if (stopUrl) {
+              var stopBtn = document.createElement('button');
+              stopBtn.type = 'button';
+              stopBtn.textContent = 'Διακοπή';
+              stopBtn.style.cssText = 'background:#dc2626;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;';
+              stopBtn.addEventListener('click', function () {
+                stopBtn.disabled = true; stopBtn.style.opacity = '0.6';
+                fetch(stopUrl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, body: stopBody || '{}' }).catch(function () {});
+              });
+              el.appendChild(stopBtn);
+            }
             container.appendChild(el);
           }
           var t = el.querySelector('span');
@@ -472,6 +491,51 @@
           }
         });
       }
+      // Εκκρεμή αποτελέσματα/έλεγχοι του ΙΔΙΟΥ χρήστη (π.χ. έκανε logout όσο έτρεχε και ξανασυνδέθηκε): αν είναι
+      // ανοιχτή η σελίδα της εργασίας συνεχίζει αυτόματα, αλλιώς flash με κουμπί «Συνέχεια».
+      var PENDING_DEF = {
+        ar_bulk: { path: '/accounting_result', fn: 'arBulkResumePending', text: 'Ο Μαζικός υπολογισμός Λογιστικού Αποτελέσματος ολοκληρώθηκε — περιμένουν αποτελέσματα και έλεγχοι.' },
+        e3_bulk: { path: '/e3_check', fn: '_e3BulkResumePending', text: 'Ο Μαζικός έλεγχος Ε3 ολοκληρώθηκε — περιμένουν τα αποτελέσματα.' },
+      };
+      function handlePending(pending) {
+        Object.keys(PENDING_DEF).forEach(function (k) {
+          var def = PENDING_DEF[k];
+          var id = 'groupPending-' + k;
+          var el = document.getElementById(id);
+          var has = pending[k] && pending[k].length;
+          if (!has) { if (el) el.remove(); return; }
+          if ((location.pathname || '').indexOf(def.path) === 0 && typeof window[def.fn] === 'function') {
+            if (el) el.remove();
+            try { window[def.fn](); } catch (_) {}
+            return;
+          }
+          if (el) return;
+          var container = getContainer();
+          el = document.createElement('div');
+          el.id = id;
+          el.className = 'flash-banner flash-warning';
+          el.setAttribute('data-flash', '');
+          el.setAttribute('data-ttl', '0');
+          el.style.cssText = 'display:flex;align-items:center;gap:0.5rem;pointer-events:auto;order:98;';
+          var span = document.createElement('span');
+          span.style.cssText = 'flex:1 1 auto;line-height:1.3;font-size:13px;';
+          span.textContent = def.text;
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = 'Συνέχεια';
+          btn.style.cssText = 'background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;';
+          btn.addEventListener('click', function () {
+            var a = document.createElement('a');
+            a.href = def.path;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { try { a.remove(); } catch (_) {} }, 0);
+          });
+          el.appendChild(span);
+          el.appendChild(btn);
+          container.appendChild(el);
+        });
+      }
       function poll() {
         if (window.IS_LOGGED_IN !== true) { state = []; removeAll(); applyLocks(); return; }
         fetch('/api/group_activity', { cache: 'no-store', credentials: 'same-origin', headers: { 'X-Wait-Overlay': 'skip' } })
@@ -494,6 +558,33 @@
                 }
               });
               prevMineBulk = nowMine;
+              // Εργασίες ΑΛΛΩΝ χρηστών της ομάδας που τελείωσαν: απλή ενημέρωση (τις χειρίζεται όποιος τις ξεκίνησε).
+              var nowOthers = {};
+              state.forEach(function (a) { if (!a.mine) nowOthers[a.id] = { kind: a.kind, username: a.username }; });
+              Object.keys(prevOthers).forEach(function (id) {
+                if (!nowOthers[id] && typeof window.showFlash === 'function') {
+                  var o = prevOthers[id];
+                  window.showFlash((WHAT[o.kind] || 'Εργασία') + ' ολοκληρώθηκε — εντολή: ' + (o.username || '—'), 'info', 9000);
+                }
+              });
+              prevOthers = nowOthers;
+              // Δική μου λήψη/έλεγχος Ε3 που τελείωσε χωρίς να υπάρχει το τοπικό τελικό flash (π.χ. μετά από
+              // logout/login ή ανανέωση): ενημέρωση ότι ολοκληρώθηκε.
+              var nowMineOther = {};
+              state.forEach(function (a) { if (a.mine && (a.kind === 'fetch' || a.kind === 'e3_bulk')) nowMineOther[a.id] = { kind: a.kind }; });
+              Object.keys(prevMineOther).forEach(function (id) {
+                if (nowMineOther[id]) return;
+                var kind = prevMineOther[id].kind;
+                setTimeout(function () {
+                  var haveLocal = document.getElementById('bulkFetchFinalFlash') || document.getElementById('singleFetchFinalFlash')
+                    || document.getElementById('fetchFinalFlashMessage') || (kind === 'e3_bulk' && window.__e3BulkAttached);
+                  if (!haveLocal && typeof window.showFlash === 'function') {
+                    window.showFlash((WHAT[kind] || 'Εργασία') + ' ολοκληρώθηκε.', 'success', 8000);
+                  }
+                }, 2500);
+              });
+              prevMineOther = nowMineOther;
+              handlePending((data && data.pending) || {});
             } catch (_) {}
             render(state);
             applyLocks();

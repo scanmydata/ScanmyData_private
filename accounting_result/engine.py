@@ -831,6 +831,62 @@ def compute_depreciation_amount(
     return round(total * (months / 12.0), 2)
 
 
+# Προεπιλεγμένο ποσοστό πρόβλεψης αποσβέσεων επί της αξίας αγοράς παγίου (ρυθμίζεται από τον χρήστη στο
+# tab «Πάγια» του popup ελέγχων του Μαζικού).
+DEFAULT_DEPRECIATION_FORECAST_RATE = 15.0
+
+
+def depreciation_plan(
+    dep_entries: List[Dict[str, Any]],
+    current_classified: List[dict],
+    capex: float,
+    date_from: str,
+    date_to: str,
+    selection: Optional[Dict[str, Any]] = None,
+    forecast_rate: float = DEFAULT_DEPRECIATION_FORECAST_RATE,
+) -> Tuple[float, Dict[str, Any]]:
+    """Ποσό αποσβέσεων της περιόδου + από πού προέκυψε:
+      1. «prior_year»: υπάρχουν αποσβέσεις (587) στο προηγούμενο έτος -> pro-rata κατά μήνες (παλιά λογική).
+      2. «current_year»: δεν υπάρχουν στο προηγούμενο, αλλά βρέθηκαν στην εξεταζόμενη περίοδο -> το ποσό τους.
+      3. «forecast»: δεν βρέθηκαν πουθενά, αλλά υπάρχει ΑΓΟΡΑ ΠΑΓΙΟΥ στην περίοδο -> πρόβλεψη
+         forecast_rate% επί της αξίας αγοράς.
+      4. «none»: τίποτα από τα παραπάνω -> 0."""
+    if dep_entries:
+        return compute_depreciation_amount(dep_entries, date_from, date_to, selection), {"basis": "prior_year"}
+    current_dep = round(sum(
+        _fnum(r.get("amount")) for r in (current_classified or [])
+        if str(r.get("code") or "").strip() == DEPRECIATION_E3_CODE
+    ), 2)
+    if abs(current_dep) > 0.005:
+        return current_dep, {"basis": "current_year", "amount": current_dep}
+    capex = round(_fnum(capex), 2)
+    rate = _fnum(forecast_rate)
+    if capex > 0.005 and rate > 0:
+        return round(capex * rate / 100.0, 2), {"basis": "forecast", "capex": capex, "rate": rate}
+    return 0.0, {"basis": "none", "capex": capex if capex > 0.005 else 0.0, "rate": rate}
+
+
+# myDATA κατηγορία εσόδων «Έσοδα επομένων χρήσεων» (category1_9): έσοδο που τιμολογήθηκε/εισπράχθηκε σε ένα έτος
+# αλλά ανήκει στο ΕΠΟΜΕΝΟ — στον έλεγχο του επόμενου έτους μεταφέρεται στα έσοδά του.
+INCOME_NEXT_YEARS_CATEGORY = "CATEGORY1_9"
+_INCOME_CODES = {str(c) for c in range(561, 571)}
+
+
+def income_transfer_entries(prior_classified: List[dict]) -> List[dict]:
+    """Εγγραφές εσόδων (561-570) του ΠΡΟΗΓΟΥΜΕΝΟΥ έτους με κατηγορία 1_9 — αντίγραφα, έτοιμα να προστεθούν στα
+    έσοδα της εξεταζόμενης περιόδου (ακολουθούν την ίδια ταξινόμηση 70/73 κ.λπ.)."""
+    out = []
+    for r in prior_classified or []:
+        if str(r.get("code") or "").strip() not in _INCOME_CODES:
+            continue
+        if str(r.get("classification_category") or "").strip().upper() != INCOME_NEXT_YEARS_CATEGORY:
+            continue
+        if abs(_fnum(r.get("amount"))) <= 0.005:
+            continue
+        out.append(dict(r, _transferred=True))
+    return out
+
+
 def merge_excel_overrides(account_totals: Dict[str, float], group_totals: Dict[str, float]) -> Dict[str, float]:
     """Per-account-group Excel values REPLACE the myDATA-computed total for that group."""
     merged = dict(account_totals or {})
@@ -860,6 +916,8 @@ def build_report(
     payroll_manual_total: Optional[float] = None,
     rent_manual_total: Optional[float] = None,
     efka_manual_total: Optional[float] = None,
+    transfer_entries: Optional[List[dict]] = None,
+    transfer_extra: float = 0.0,
 ) -> Dict[str, Any]:
     opening_inventory = {k: _fnum(v) for k, v in (opening_inventory or {}).items()}
     closing_inventory = {k: _fnum(v) for k, v in (closing_inventory or {}).items()}
@@ -906,7 +964,12 @@ def build_report(
         classified_entries, unclassified_net, unclassified_marks = fetch_and_split_e3_entries(
             date_from, date_to, aade_user, aade_key,
         )
-    sales_groups = build_sales_groups(classified_entries)
+    # Μεταφορά εσόδων από προηγούμενη χρήση (κατηγορία 1_9 «Έσοδα επομένων χρήσεων»): προστίθενται στις
+    # εγγραφές της περιόδου ΜΟΝΟ για τον υπολογισμό των πωλήσεων (τα αντικείμενα του caller δεν αλλάζουν).
+    transfer_total = round(sum(_fnum(r.get("amount")) for r in (transfer_entries or [])), 2)
+    transfer_extra = round(_fnum(transfer_extra), 2)
+    sales_input = list(classified_entries) + list(transfer_entries or [])
+    sales_groups = build_sales_groups(sales_input)
     expense_result = build_expense_groups(classified_entries)
 
     account_totals: Dict[str, float] = {}
@@ -918,6 +981,9 @@ def build_report(
     # (possibly disambiguated by the accountant) — it always overrides whatever
     # the CURRENT period's own 587 entries would have summed to.
     account_totals["66"] = round(_fnum(depreciation_amount), 2)
+    # Επιπλέον μεταφορά εσόδων που δήλωσε ο χρήστης (από άλλες χρήσεις) -> «ΕΣΟΔΑ ΠΡΟΗΓ. ΧΡΗΣΕΩΝ» (82).
+    if abs(transfer_extra) > 0.005:
+        account_totals["82"] = round(account_totals.get("82", 0.0) + transfer_extra, 2)
 
     # Accountant-reviewed full-period total for payroll (code 581), from the
     # monthly-totals entry form — the form is pre-filled with what myDATA
@@ -984,7 +1050,9 @@ def build_report(
 
     expense_rows = [{"code": c, "label": EXPENSE_LABELS[c], "amount": g(c)} for c in EXPENSE_CODES]
     expenses_ekm = round(sum(r["amount"] for r in expense_rows), 2)
-    extra_expense_rows = [{"code": c, "label": EXTRA_EXPENSE_LABELS[c], "amount": g(c)} for c in EXTRA_EXPENSE_CODES]
+    # Τα «έκτακτα/προηγ. χρήσεων» ΕΞΟΔΑ (81/82) έχουν δικό τους κλειδί «X81/X82»: πριν μοιράζονταν το κλειδί 81/82 με τα
+    # αντίστοιχα ΕΣΟΔΑ, οπότε κάθε έσοδο 566/567/569/570 μετριόταν και ως έξοδο και ακυρωνόταν στο αποτέλεσμα.
+    extra_expense_rows = [{"code": c, "label": EXTRA_EXPENSE_LABELS[c], "amount": g("X" + c)} for c in EXTRA_EXPENSE_CODES]
     expenses_total = round(expenses_ekm + sum(r["amount"] for r in extra_expense_rows), 2)
     production_expenses = expense_result["production_expenses"]
     fixed_asset_purchases = expense_result["capex"]
@@ -1036,6 +1104,8 @@ def build_report(
         "unclassified_marks": unclassified_marks,
         "taxable_result": taxable_result,
         "depreciation": depreciation_amount,
+        "income_transfer": {"prior_year_found": transfer_total, "extra": transfer_extra,
+                            "entries": len(transfer_entries or [])},
         "payroll_manual_total": payroll_manual_total if payroll_manual_total is None else round(_fnum(payroll_manual_total), 2),
         "rent_manual_total": rent_manual_total if rent_manual_total is None else round(_fnum(rent_manual_total), 2),
         "efka_manual_total": efka_manual_total if efka_manual_total is None else round(_fnum(efka_manual_total), 2),

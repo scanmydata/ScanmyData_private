@@ -6336,6 +6336,122 @@
       .filter(Boolean);
   }
 
+  // ---- Μαζικός έλεγχος Ε3 ως job του SERVER ----
+  // Το /api/e3/brain bulk τρέχει σε thread του server (με το session του χρήστη) ΑΝΕΞΑΡΤΗΤΑ από σελίδα/logout.
+  // Η πρόοδος φαίνεται σε όλους τους χρήστες της ομάδας (flash με το όνομα αυτού που έδωσε την εντολή)· το
+  // αποτέλεσμα το χειρίζεται μόνο ο χρήστης που ξεκίνησε — και μετά από νέα σύνδεση συνεχίζει από εκεί που έμεινε.
+  window.__e3TabId = window.__e3TabId || ('t' + Math.random().toString(36).slice(2, 10));
+  function _e3Sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
+
+  async function _e3BulkWaitJob(jobId) {
+    const enc = encodeURIComponent(jobId);
+    let unknown = 0, failures = 0;
+    for (;;) {
+      await _e3Sleep(2500);
+      let st = null;
+      try {
+        st = await (await fetch('/api/e3/brain/bulk_job_state?job_id=' + enc, { cache: 'no-store', credentials: 'same-origin' })).json();
+        failures = 0;
+      } catch (_) {
+        if (++failures >= 60) return { ok: false, detached: true, jobId, error: 'Η επικοινωνία διακόπηκε — ο έλεγχος συνεχίζει στον server· άνοιξε ξανά τη σελίδα για να δεις το αποτέλεσμα.' };
+        continue;
+      }
+      if (!st || !st.ok) continue;
+      if (st.status === 'unknown') {
+        if (++unknown >= 3) return { ok: false, jobId, error: 'Ο server δεν έχει πια το job (πιθανή επανεκκίνηση).' };
+        continue;
+      }
+      unknown = 0;
+      if (st.status !== 'done' && st.status !== 'error') continue;
+      let res = null;
+      try {
+        res = await (await fetch('/api/e3/brain/bulk_job_result?job_id=' + enc + '&tab=' + encodeURIComponent(window.__e3TabId), { cache: 'no-store', credentials: 'same-origin' })).json();
+      } catch (_) { continue; }
+      if (res && res.status === 'claimed') return { ok: false, claimed: true, jobId };
+      if (!res || !res.ok) return { ok: false, jobId, error: (res && res.error) || 'Δεν βρέθηκε το αποτέλεσμα.' };
+      return { ok: true, jobId, data: res.result || {}, error: res.error || '' };
+    }
+  }
+
+  async function _e3BulkRunOnServer(payload) {
+    let started = null;
+    try {
+      const resp = await fetch('/api/e3/brain/bulk_start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(payload),
+      });
+      started = await resp.json();
+    } catch (_) { return { unsupported: true }; }
+    if (!started || !started.ok) return { unsupported: true, error: started && started.error };
+    return await _e3BulkWaitJob(started.job_id);
+  }
+
+  function _e3BulkConsume(jobId) {
+    try {
+      fetch('/api/e3/brain/bulk_job_consume', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ job_id: jobId }),
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  // Αποτέλεσμα ενός Μαζικού (απευθείας ή μετά από ξαναπιάσιμο): εμφάνιση, accordion, ανανέωση πινάκων.
+  async function _e3BulkFinish(data) {
+      E3_BRAIN_LAST_RESULT = data;
+      brainSetResult(data);
+      const summary = data.message ||
+        (data.aborted
+          ? `Bulk διεκόπη μετά από ${data.total_clients || 0} πελάτες.`
+          : `E3 Brain bulk εκτέλεση ολοκληρώθηκε για ${data.total_clients || 0} πελάτες.`);
+      showBrainFlash(summary, data.aborted ? 'warning' : 'success');
+      try { _renderBulkResultsAccordion(data); } catch (e) { console.error('bulk render failed', e); }
+      // Partial reload after bulk completion — refresh the saved
+      // credentials cache (so brand-new entries written by the brain
+      // appear in the «Αποθηκευμένα» tab), the PDF browser (so the just-
+      // saved ΕΦΚΑ/ΤΕΚΑ/Μισθωτηρίων/Ε9 files surface immediately) and the
+      // active-client dropdown. No full page reload so the user keeps any
+      // scroll/expand state in the accordion.
+      try {
+        await Promise.all([
+          (typeof fetchE3BrainCredentials === 'function')
+            ? fetchE3BrainCredentials({ verbose: false }).catch(() => {})
+            : Promise.resolve(),
+          (typeof fetchE3BrainActiveClients === 'function')
+            ? fetchE3BrainActiveClients({ verbose: false }).catch(() => {})
+            : Promise.resolve(),
+        ]);
+      } catch (_) {}
+      try {
+        if (typeof refreshBrainAllPdfs === 'function') {
+          await refreshBrainAllPdfs().catch(() => {});
+        }
+      } catch (_) {}
+      try { if (typeof renderBrainCredsList === 'function') renderBrainCredsList(); } catch (_) {}
+  }
+
+  // Μετά από ανανέωση/νέα σύνδεση: Μαζικός που έτρεχε/τελείωσε στον server και δεν παραλήφθηκε ξαναπιάνεται.
+  async function _e3BulkResumePending() {
+    if (window.__e3BulkAttached) return;
+    try {
+      const d = await (await fetch('/api/e3/brain/bulk_jobs_mine', { cache: 'no-store', credentials: 'same-origin' })).json();
+      const j = d && d.ok && (d.jobs || [])[0];
+      if (!j || window.__e3BulkAttached) return;
+      window.__e3BulkAttached = j.id;
+      window.E3_BRAIN_BULK_RUNNING = true;
+      try { brainSetResult('Ο μαζικός έλεγχος τρέχει στον server…'); } catch (_) {}
+      try {
+        const res = await _e3BulkWaitJob(j.id);
+        if (res.claimed) return;
+        if (res.detached || !res.ok) { showBrainFlash(`Σφάλμα: ${res.error || ''}`, res.detached ? 'warning' : 'error'); if (!res.detached) _e3BulkConsume(j.id); return; }
+        await _e3BulkFinish(res.data);
+        _e3BulkConsume(j.id);
+      } finally {
+        window.E3_BRAIN_BULK_RUNNING = false;
+        window.__e3BulkAttached = null;
+      }
+    } catch (_) { /* χωρίς endpoint/σύνδεση: τίποτα να ξαναπιαστεί */ }
+  }
+  window._e3BulkResumePending = _e3BulkResumePending;
+  setTimeout(function () { try { _e3BulkResumePending(); } catch (_) {} }, 1500);
+
   async function executeBulkSelectedClients() {
     const selected = getSelectedBulkClients();
     if (!selected.length) {
@@ -6441,47 +6557,35 @@
       null,
       { noOverlay: true },  // bulk = flash banner only, NO wait overlay
     );
+    let _srvJobId = null;
     try {
-      const response = await fetch('/api/e3/brain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
-        throw new Error((data && data.error) || 'Αποτυχία bulk εκτέλεσης E3 brain.');
-      }
-      E3_BRAIN_LAST_RESULT = data;
-      brainSetResult(data);
-      const summary = data.message ||
-        (data.aborted
-          ? `Bulk διεκόπη μετά από ${data.total_clients || 0} πελάτες.`
-          : `E3 Brain bulk εκτέλεση ολοκληρώθηκε για ${data.total_clients || 0} πελάτες.`);
-      showBrainFlash(summary, data.aborted ? 'warning' : 'success');
-      try { _renderBulkResultsAccordion(data); } catch (e) { console.error('bulk render failed', e); }
-      // Partial reload after bulk completion — refresh the saved
-      // credentials cache (so brand-new entries written by the brain
-      // appear in the «Αποθηκευμένα» tab), the PDF browser (so the just-
-      // saved ΕΦΚΑ/ΤΕΚΑ/Μισθωτηρίων/Ε9 files surface immediately) and the
-      // active-client dropdown. No full page reload so the user keeps any
-      // scroll/expand state in the accordion.
-      try {
-        await Promise.all([
-          (typeof fetchE3BrainCredentials === 'function')
-            ? fetchE3BrainCredentials({ verbose: false }).catch(() => {})
-            : Promise.resolve(),
-          (typeof fetchE3BrainActiveClients === 'function')
-            ? fetchE3BrainActiveClients({ verbose: false }).catch(() => {})
-            : Promise.resolve(),
-        ]);
-      } catch (_) {}
-      try {
-        if (typeof refreshBrainAllPdfs === 'function') {
-          await refreshBrainAllPdfs().catch(() => {});
+      // ΝΕΟ: ο έλεγχος τρέχει ως job του server (συνεχίζει μετά από αλλαγή σελίδας/logout, ορατός σε όλη την ομάδα).
+      // Παλιός server χωρίς το endpoint: ίδια ροή με πριν (το αίτημα το οδηγεί ο browser).
+      let data = null;
+      const srv = await _e3BulkRunOnServer(payload);
+      if (srv.unsupported) {
+        const response = await fetch('/api/e3/brain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error((data && data.error) || 'Αποτυχία bulk εκτέλεσης E3 brain.');
         }
-      } catch (_) {}
-      try { if (typeof renderBrainCredsList === 'function') renderBrainCredsList(); } catch (_) {}
+      } else {
+        if (srv.claimed) return;   // άλλο tab του χρήστη το διαχειρίζεται
+        _srvJobId = srv.jobId || null;
+        if (srv.detached) throw new Error(srv.error || 'Η επικοινωνία διακόπηκε — ο έλεγχος συνεχίζει στον server.');
+        data = srv.data;
+        if (!data || !data.ok) {
+          throw new Error((data && data.error) || srv.error || 'Αποτυχία bulk εκτέλεσης E3 brain.');
+        }
+      }
+      await _e3BulkFinish(data);
+      if (_srvJobId) _e3BulkConsume(_srvJobId);
     } catch (e) {
+      if (_srvJobId) _e3BulkConsume(_srvJobId);
       brainSetResult(`Σφάλμα: ${e.message}`);
       showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
     } finally {

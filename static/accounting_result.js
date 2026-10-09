@@ -64,6 +64,21 @@ function yearFromDMY(dateStr) {
 var AR_OVERLAY_TIMEOUT = null;
 var AR_BULK_RUNNING = false;
 
+// Το #waitOverlay υπάρχει μόνο στη σελίδα Λογιστικό Αποτέλεσμα· αν ο χρήστης βρίσκεται αλλού (π.χ. ο Μαζικός
+// τελείωσε στον server και ζητά καταχωρήσεις), το δημιουργούμε στο <body> ώστε το wait overlay να φαίνεται παντού.
+function arEnsureWaitOverlay() {
+  let ov = document.getElementById('waitOverlay');
+  if (ov) return ov;
+  ov = document.createElement('div');
+  ov.id = 'waitOverlay';
+  ov.setAttribute('aria-hidden', 'true');
+  ov.innerHTML = '<div><div class="spinner" aria-hidden="true"></div>'
+    + '<div id="waitOverlayTitle" class="text-lg font-semibold text-gray-800">Λήψη δεδομένων από myDATA...</div>'
+    + '<div id="waitOverlayMsg" class="text-sm text-gray-600">Παρακαλώ περιμένετε - η διαδικασία μπορεί να διαρκέσει.</div></div>';
+  document.body.appendChild(ov);
+  return ov;
+}
+
 function showArOverlay(title, message) {
   if (AR_BULK_RUNNING) {
     // One progress flash only: the step detail goes into the cross-page
@@ -79,6 +94,7 @@ function showArOverlay(title, message) {
   // right when it's about to be shown. Calling this again here is a no-op
   // once already moved, so it's cheap insurance on every open.
   moveModalsToBody();
+  arEnsureWaitOverlay();
   const overlay = document.getElementById('waitOverlay');
   const titleEl = document.getElementById('waitOverlayTitle');
   const msgEl = document.getElementById('waitOverlayMsg');
@@ -846,6 +862,167 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+// ---------------- PDF συγκεντρωτικού: αλλαγή σελίδας ΜΟΝΟ ανάμεσα σε γραμμές ----------------
+// Η απόδοση του html2pdf («legacy») κόβει τη σελίδα σε σταθερό ύψος, ΜΕΣΑ σε γραμμές πίνακα (κομμένες γραμμές
+// Παρατηρήσεων/Υπομνήματος στο κάτω-πάνω μέρος κάθε σελίδας). Εδώ αποδίδεται ΜΙΑ φορά ολόκληρο το περιεχόμενο σε
+// canvas και κόβεται σε σελίδες A4 οριζόντιες στα όρια των γραμμών (<tr>) και των ενοτήτων· κρατιούνται και οι
+// εσωτερικοί σύνδεσμοι (data-ar-goto) του συγκεντρωτικού.
+var AR_CONSOLIDATED_PDF = { widthPx: 1500, marginXmm: 6, marginYmm: 8 };
+
+async function buildConsolidatedPdfBlob(innerHtml) {
+  await ensureHtml2Pdf();
+  const cfg = AR_CONSOLIDATED_PDF;
+  const container = document.createElement('div');
+  container.style.width = cfg.widthPx + 'px';
+  container.style.background = '#fff';
+  container.style.color = '#111';
+  container.style.padding = '10px';
+  container.innerHTML = innerHtml;
+  document.body.appendChild(container);
+  try {
+    try { await document.fonts.ready; } catch (_) {}
+    await new Promise((r) => setTimeout(r, 250));
+    if (container.scrollWidth > container.clientWidth) {
+      container.style.width = container.scrollWidth + 'px';
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const capturedWidth = container.scrollWidth;
+    const capturedHeight = container.scrollHeight;
+
+    // Επιτρεπτά σημεία αλλαγής σελίδας (px από την κορυφή του container).
+    const cr = container.getBoundingClientRect();
+    const top0 = cr.top;
+    const breaks = [];
+    container.querySelectorAll('tr').forEach((el) => {
+      const b = Math.round(el.getBoundingClientRect().bottom - top0);
+      if (b > 0 && b < capturedHeight) breaks.push(b);
+    });
+    // Όρια ενοτήτων (τίτλοι/πίνακες/υπόμνημα): κόψιμο ΠΡΙΝ από την ενότητα.
+    const sectionBreaks = [];
+    const root = container.firstElementChild;
+    Array.from((root && root.children) || []).forEach((el) => {
+      const t = Math.round(el.getBoundingClientRect().top - top0);
+      if (t > 0 && t < capturedHeight) sectionBreaks.push(t);
+    });
+    breaks.sort((a, b) => a - b);
+    sectionBreaks.sort((a, b) => a - b);
+
+    // Σύλληψη σε φαρδύτερη περιοχή (+EXTRA) ώστε να μη χάνεται η δεξιά στήλη (βλ. buildIndividualPdfBlob),
+    // κλίμακα που δεν ξεπερνά το όριο του canvas (~32k px ύψος).
+    const EXTRA = 48;
+    const scale = Math.max(1, Math.min(2, 30000 / Math.max(capturedHeight, 1)));
+    const pxToMm = 25.4 / 96;
+    const captureWmm = Math.max(210, Math.ceil((capturedWidth + EXTRA) * pxToMm) + 6);
+    const worker = window.html2pdf().from(container).set({
+      margin: 0,
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth + EXTRA, height: capturedHeight, scrollX: 0, scrollY: 0 },
+      jsPDF: { unit: 'mm', format: [captureWmm, Math.max(297, captureWmm + 1)], orientation: 'portrait' },
+      pagebreak: { mode: ['legacy'] },
+    });
+    const canvas = await worker.toCanvas().get('canvas');
+    // Έγγραφο jsPDF: ΔΕΝ προσθέτουμε στο έγγραφο την ολόκληρη σύλληψη (θα έμενε μέσα στο αρχείο και θα το φούσκωνε) —
+    // παίρνουμε ένα μικροσκοπικό «probe» έγγραφο από το html2pdf (το jsPDF δεν εκτίθεται αλλιώς), προσθέτουμε
+    // μόνο τις δικές μας σελίδες και σβήνουμε την αρχική. Fallback: η παλιά διαδρομή (σύλληψη ως σελίδες).
+    let pdf = null;
+    let capturePages = 0;
+    try {
+      const probeEl = document.createElement('div');
+      probeEl.style.cssText = 'width:20px;height:10px;background:#fff';
+      probeEl.textContent = '.';
+      document.body.appendChild(probeEl);
+      try {
+        pdf = await window.html2pdf().from(probeEl).set({ margin: 0, jsPDF: { unit: 'mm', format: [20, 20] }, html2canvas: { scale: 0.2 } }).toPdf().get('pdf');
+      } finally { probeEl.remove(); }
+      capturePages = pdf.internal.getNumberOfPages();
+    } catch (_) {
+      pdf = await worker.toPdf().get('pdf');
+      capturePages = pdf.internal.getNumberOfPages();
+    }
+
+    const canvasPerPx = canvas.width / (capturedWidth + EXTRA);
+    // Οριζόντια όρια περιεχομένου στο canvas.
+    let minX = canvas.width, maxX = -1;
+    try {
+      const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let y = 0; y < canvas.height; y += 5) {
+        const row = y * canvas.width * 4;
+        for (let x = 0; x < minX; x++) {
+          const i = row + x * 4;
+          if (img[i] < 245 || img[i + 1] < 245 || img[i + 2] < 245) { minX = x; break; }
+        }
+        for (let x = canvas.width - 1; x > maxX; x--) {
+          const i = row + x * 4;
+          if (img[i] < 245 || img[i + 1] < 245 || img[i + 2] < 245) { maxX = x; break; }
+        }
+      }
+    } catch (_) { /* αν δεν διαβάζεται το canvas, κρατάμε όλο το πλάτος */ }
+    if (maxX < minX) { minX = 0; maxX = canvas.width - 1; }
+    const padC = Math.round(2 * canvasPerPx);
+    const srcX = Math.max(0, minX - padC);
+    const srcW = Math.min(canvas.width, maxX + padC + 1) - srcX;
+
+    const pageW = 297, pageH = 210;
+    const usableW = pageW - 2 * cfg.marginXmm;
+    const usableH = pageH - 2 * cfg.marginYmm;
+    const mmPerPx = usableW / (srcW / canvasPerPx);
+    const pagePx = usableH / mmPerPx;
+
+    const slices = [];
+    let start = 0;
+    while (start < capturedHeight - 1) {
+      const limit = start + pagePx;
+      let end = capturedHeight;
+      if (limit < capturedHeight) {
+        const sectionCands = sectionBreaks.filter((b) => b > start + pagePx * 0.8 && b <= limit);
+        const candidates = breaks.filter((b) => b > start + pagePx * 0.5 && b <= limit);
+        end = sectionCands.length ? sectionCands[sectionCands.length - 1]
+          : (candidates.length ? candidates[candidates.length - 1] : Math.floor(limit));
+      }
+      slices.push([start, end]);
+      start = end;
+    }
+
+    slices.forEach(([st, en]) => {
+      pdf.addPage('a4', 'landscape');
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      const part = document.createElement('canvas');
+      part.width = srcW;
+      part.height = Math.max(1, Math.round((en - st) * canvasPerPx));
+      const ctx2 = part.getContext('2d');
+      ctx2.fillStyle = '#ffffff';
+      ctx2.fillRect(0, 0, part.width, part.height);
+      ctx2.drawImage(canvas, srcX, Math.round(st * canvasPerPx), srcW, part.height, 0, 0, part.width, part.height);
+      pdf.addImage(part.toDataURL('image/jpeg', 0.95), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (en - st) * mmPerPx);
+    });
+    for (let k = 0; k < capturePages; k++) pdf.deletePage(1);
+
+    // Εσωτερικοί σύνδεσμοι (όνομα εταιρίας -> στοιχεία επικοινωνίας, σημάδια -> Παρατηρήσεις).
+    try {
+      const pageOf = (yPx) => { for (let k = 0; k < slices.length; k++) if (yPx < slices[k][1]) return k; return slices.length - 1; };
+      container.querySelectorAll('[data-ar-goto]').forEach((el) => {
+        const target = container.querySelector('#' + el.getAttribute('data-ar-goto'));
+        if (!target) return;
+        const r = el.getBoundingClientRect();
+        const topPx = r.top - top0;
+        const fromIdx = pageOf(topPx);
+        const toIdx = pageOf(target.getBoundingClientRect().top - top0);
+        const x = cfg.marginXmm + ((r.left - cr.left) * canvasPerPx - srcX) / canvasPerPx * mmPerPx;
+        const y = cfg.marginYmm + (topPx - slices[fromIdx][0]) * mmPerPx;
+        pdf.setPage(fromIdx + 1);
+        pdf.link(x, y, r.width * mmPerPx, r.height * mmPerPx, { pageNumber: toIdx + 1 });
+      });
+      pdf.setPage(slices.length);
+    } catch (e) {
+      console.warn('PDF internal links skipped:', e);
+    }
+    return pdf.output('blob');
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
 // `innerHtml` may be a function: it's then built only AFTER the contact
 // cache below is loaded — building it up front (as an argument) ran before
 // the cache existed, which is why the contact legend/links went missing.
@@ -854,7 +1031,18 @@ async function exportHtmlAsPdf(innerHtml, filename, orientation, fitToOnePage) {
   if (typeof innerHtml === 'function') innerHtml = innerHtml();
   showArOverlay('Δημιουργία PDF...', 'Παρακαλώ περιμένετε όσο δημιουργείται το αρχείο.');
   try {
-    const blob = await buildPdfBlob(innerHtml, orientation, fitToOnePage);
+    let blob;
+    if (orientation === 'landscape' && !fitToOnePage) {
+      // Νέα απόδοση: σελίδες που κόβονται μόνο ανάμεσα σε γραμμές· η παλιά (legacy) μένει ως fallback.
+      try {
+        blob = await buildConsolidatedPdfBlob(innerHtml);
+      } catch (e) {
+        console.warn('Consolidated PDF (paged) failed — falling back to legacy render', e);
+        blob = await buildPdfBlob(innerHtml, orientation, fitToOnePage);
+      }
+    } else {
+      blob = await buildPdfBlob(innerHtml, orientation, fitToOnePage);
+    }
     downloadBlob(blob, safeFilename(filename) + '.pdf');
   } finally {
     hideArOverlay();
@@ -919,6 +1107,7 @@ function buildConsolidatedTableHtml(companies) {
     const unclassifiedMarks = marksFor(c, i, 'unclassified');
     const vatMarks = marksFor(c, i, 'vat');
     const stockMarks = marksFor(c, i, 'stock');
+    const incomeMarks = marksFor(c, i, 'income');
     // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
     const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
     return `<tr>
@@ -933,7 +1122,7 @@ function buildConsolidatedTableHtml(companies) {
       <td class="ar-num">${fmtAmountOrBlank(closingSum)}${stockMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.cogs_total)}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.expenses_total)}${expenseMarks}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.sales_total)}</td>
+      <td class="ar-num">${fmtAmountOrBlank(r.sales_total)}${incomeMarks}</td>
       <td class="ar-num"></td>
       <td class="ar-num">${fmtAmountOrBlank(-Math.abs(r.unclassified_net || 0))}${unclassifiedMarks}</td>
       <td class="ar-num">${fmtAmountOrBlank(r.taxable_result)}</td>
@@ -1032,11 +1221,21 @@ function showManualInventoryModal(title, opening) {
 
     const saveBtn = document.getElementById('arManualInvSave');
     const cancelBtn = document.getElementById('arManualInvCancel');
+    const continueBtn = document.getElementById('arManualInvContinue');
 
     function cleanup() {
       modal.classList.add('hidden');
       saveBtn.removeEventListener('click', onSave);
       cancelBtn.removeEventListener('click', onCancel);
+      if (continueBtn) continueBtn.removeEventListener('click', onContinue);
+    }
+    // «Συνέχεια χωρίς απόθεμα»: ρητή επιλογή να προχωρήσει ο υπολογισμός με απόθεμα λήξης 0 (χωρίς να
+    // χρειάζεται να πατηθεί «Αποθήκευση» πάνω σε κενά πεδία).
+    function onContinue() {
+      const zeros = {};
+      fields.querySelectorAll('input').forEach((inp) => { zeros[inp.dataset.code] = 0; });
+      cleanup();
+      resolve(zeros);
     }
     function onSave() {
       const values = {};
@@ -1052,6 +1251,7 @@ function showManualInventoryModal(title, opening) {
     }
     saveBtn.addEventListener('click', onSave);
     cancelBtn.addEventListener('click', onCancel);
+    if (continueBtn) continueBtn.addEventListener('click', onContinue);
   });
 }
 
@@ -1072,18 +1272,23 @@ async function resolveInventoryForCompany(name, vat, year, opening, dateFrom, da
       { key: 'pct10_up', label: '+10% επί έναρξης' },
       { key: 'pct10_down', label: '-10% επί έναρξης' },
       { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
+      { key: 'zero', label: 'Συνέχεια χωρίς απόθεμα λήξης (0 €)' },
     ]
   );
   if (!choice) return false;
 
   let value = null;
+  let apiMethod = choice;
   if (choice === 'manual') {
     value = await showManualInventoryModal(`Απόθεμα λήξης — ${name} (${year})`, opening);
     if (!value) return false;
+  } else if (choice === 'zero') {
+    apiMethod = 'manual';   // ο server αποθηκεύει μηδενικά σε όλους τους λογαριασμούς
+    value = {};
   }
 
   const resp = await arPostWithOverlay('/api/accounting_result/inventory/resolve', {
-    credential_name: name, year, method: choice, value, date_from: dateFrom, date_to: dateTo,
+    credential_name: name, year, method: apiMethod, value, date_from: dateFrom, date_to: dateTo,
   }, `Καταχώρηση αποθέματος λήξης — ${name}...`);
   return resp.ok ? true : arResolveSaveFailed('Απόθεμα λήξης', name, resp);
 }
@@ -1294,6 +1499,8 @@ var AR_NOTE_TYPES = {
   unclassified_vat_inflow: { label: 'ΦΠΑ εισροών χωρίς τα αχαρακτήριστα αγορών/εξόδων', mark: '◊', cell: 'vat' },
   vat_prev_period: { label: 'ΦΠΑ προηγούμενης περιόδου (χρεωστική / χωρίς δήλωση)', mark: '▲', cell: 'vat' },
   vat_declared_mismatch: { label: 'Διαφορά myDATA με την υποβληθείσα Φ2 (πιθανή τροποποιητική)', mark: '≠', cell: 'vat', bold: true },
+  depreciation_forecast: { label: 'Αποσβέσεις: πρόβλεψη από αγορές παγίων / από την περίοδο', mark: 'Δ', cell: 'expenses' },
+  income_transfer: { label: 'Μεταφορά εσόδων (κατηγορία 1_9 προηγ. έτους / επιπλέον)', mark: '⇄', cell: 'income' },
 };
 
 // A note's message as HTML, with its `highlight` part (e.g. the new ΦΠΑ
@@ -1398,13 +1605,23 @@ function arBuildCheckGroups(rows, post) {
         ? 'ΝΕΑ υποχρέωση (έναρξη 0): ' + (r.inventory_obligation_message || '')
         : (r.inventory_obligation_message && r.inventory_obligation_reason !== 'declared_prior_year'
           ? r.inventory_obligation_message : 'Δεν έχει καταχωρηθεί απόθεμα λήξης')),
-      options: () => [
-        ...(post ? [{ key: '', label: 'Παράλειψη (δεν υπολογίζεται)' }] : []),
-        { key: 'manual', label: 'Χειροκίνητα' },
-        { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
-        { key: 'pct10_up', label: '+10% επί έναρξης' },
-        { key: 'pct10_down', label: '-10% επί έναρξης' },
-      ],
+      options: (r) => {
+        // Νέα υποχρέωση απογραφής (ή καθόλου απόθεμα έναρξης): δεν υπάρχει έναρξη να βασιστούν «ίσο με έναρξη»
+        // και ±10% — μόνο παράλειψη ή χειροκίνητη καταχώρηση.
+        const row = r || {};
+        const noOpening = !!row.inventory_new_obligation
+          || !Object.values(row.opening_inventory || {}).some((v) => Number(v) > 0);
+        return [
+          ...(post ? [{ key: '', label: 'Παράλειψη (δεν υπολογίζεται)' }] : []),
+          { key: 'manual', label: 'Χειροκίνητα' },
+          { key: 'zero', label: 'Συνέχεια χωρίς απόθεμα λήξης (0 €)' },
+          ...(noOpening ? [] : [
+            { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
+            { key: 'pct10_up', label: '+10% επί έναρξης' },
+            { key: 'pct10_down', label: '-10% επί έναρξης' },
+          ]),
+        ];
+      },
     },
     {
       key: 'payroll', title: '💼 Μισθοδοσία (κωδ. 581)',
@@ -1428,43 +1645,80 @@ function arBuildCheckGroups(rows, post) {
         return [{ key: '', label: 'Συνέχεια με τα τρέχοντα στοιχεία' }, ...applicable, AR_EFKA_MANUAL_OPTION];
       },
     },
+    {
+      key: 'fixed', title: '🏗 Πάγια — πρόβλεψη αποσβέσεων',
+      rows: ok.filter((r) => r.fixed_candidate),
+      finding: (r) => `Δεν βρέθηκαν αποσβέσεις (προηγούμενο έτος / περίοδος). Αγορές παγίων ${arFmtMoney(r.fixed_capex)}€ → πρόβλεψη ${arFmtMoney(r.fixed_rate)}% = ${arFmtMoney((Number(r.fixed_capex) || 0) * (Number(r.fixed_rate) || 0) / 100)}€.`,
+      controls: [{ key: 'rate', kind: 'number', label: '% πρόβλεψης επί αγορών', value: (r) => r.fixed_rate, step: '0.5', min: '0', max: '100' }],
+      changed: (r, v) => Math.abs((Number(v.rate) || 0) - (Number(r.fixed_rate) || 0)) > 1e-9,
+    },
+    {
+      key: 'transfer', title: '💱 Μεταφορά εσόδων',
+      rows: ok.filter((r) => Number(r.transfer_found) || Number(r.transfer_extra)),
+      finding: (r) => `Στο προηγούμενο έτος βρέθηκαν έσοδα κατηγορίας 1_9 (επομένων χρήσεων) ${arFmtMoney(r.transfer_found)}€ — `
+        + (r.transfer_mode === 'exclude' ? 'ΕΞΑΙΡΟΥΝΤΑΙ από την τρέχουσα χρήση' : 'συμπεριλαμβάνονται στα έσοδα της τρέχουσας χρήσης')
+        + (Number(r.transfer_extra) ? ` · επιπλέον μεταφορά από άλλες χρήσεις ${arFmtMoney(r.transfer_extra)}€` : '') + '. Υπάρχει άλλη μεταφορά εσόδων από άλλη χρονιά;',
+      controls: [
+        { key: 'mode', kind: 'select', label: 'Έσοδα 1_9 προηγ. έτους', options: [{ key: 'include', label: 'Συμπερίληψη' }, { key: 'exclude', label: 'Εξαίρεση' }], value: (r) => r.transfer_mode || 'include' },
+        { key: 'extra', kind: 'number', label: 'Επιπλέον μεταφορά εσόδων (€)', value: (r) => r.transfer_extra || 0, step: '0.01', min: '' },
+      ],
+      changed: (r, v) => (v.mode || 'include') !== (r.transfer_mode || 'include') || Math.abs((Number(v.extra) || 0) - (Number(r.transfer_extra) || 0)) > 0.004,
+    },
   ].filter((g) => g.rows.length);
 }
 
 // Resolves to {groupKey: {companyName: choiceKey}} or null (cancelled).
+// Φαρδύ popup με TABS (ένα ανά κατηγορία ελέγχου) — η λίστα με δεκάδες εταιρίες δεν χωρούσε σε μία σελίδα.
 function showGroupedChecksModal(groups, opts) {
   opts = opts || {};
   return new Promise((resolve) => {
-    const optionsHtml = (opts) => opts.map((o) => `<option value="${arEscapeHtml(o.key)}">${arEscapeHtml(o.label)}</option>`).join('');
-    const sectionsHtml = groups.map((g) => {
-      // «Όλες» offers only the options every row of the group has (the ΕΦΚΑ
-      // exception reason differs per company type).
-      const common = g.options(g.rows[0]).filter((o) => g.rows.every((r) => g.options(r).some((x) => x.key === o.key)));
+    const optionsHtml = (o) => o.map((x) => `<option value="${arEscapeHtml(x.key)}">${arEscapeHtml(x.label)}</option>`).join('');
+    const tabsHtml = groups.map((g, i) => `<button type="button" class="ar-gc-tab" data-tab="${g.key}" style="padding:8px 14px;border:1px solid #cbd5e1;border-bottom:none;border-radius:8px 8px 0 0;background:${i === 0 ? '#fff' : '#f1f5f9'};font-weight:${i === 0 ? '700' : '500'};font-size:0.85rem;cursor:pointer;margin-right:4px;">${g.title} <span style="color:#64748b;font-weight:600;">(${g.rows.length})</span></button>`).join('');
+    const panelsHtml = groups.map((g, i) => {
+      // «Όλες» προσφέρει μόνο τις επιλογές που έχουν ΟΛΕΣ οι γραμμές της ομάδας (π.χ. νέες υποχρεώσεις δεν έχουν «ίσο με έναρξη»).
+      const common = g.controls ? [] : g.options(g.rows[0]).filter((o) => g.rows.every((r) => g.options(r).some((x) => x.key === o.key)));
+      // Ομάδες με «controls» (Πάγια / Μεταφορά εσόδων): αριθμητικά πεδία/επιλογές αντί για ένα select ενέργειας.
+      const ctlHtml = (r, c) => {
+        const val = c.value(r);
+        const inner = c.kind === 'select'
+          ? `<select class="ar-gc-ctl border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}" data-key="${c.key}">${c.options.map((o) => `<option value="${arEscapeHtml(o.key)}"${o.key === val ? ' selected' : ''}>${arEscapeHtml(o.label)}</option>`).join('')}</select>`
+          : `<input type="number" class="ar-gc-ctl border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}" data-key="${c.key}" value="${arEscapeHtml(val)}" step="${c.step || 'any'}"${c.min !== '' && c.min !== undefined ? ` min="${c.min}"` : ''}${c.max ? ` max="${c.max}"` : ''}>`;
+        return `<label style="display:block;font-size:0.7rem;color:#64748b;margin-bottom:2px;">${arEscapeHtml(c.label)}${inner}</label>`;
+      };
       const trs = g.rows.map((r) => `<tr>
-          <td style="white-space:nowrap;">${arEscapeHtml(r.name)}</td>
+          <td style="white-space:normal;word-break:break-word;font-weight:600;">${arEscapeHtml(r.name)}</td>
           <td>${arLegalKindBadge(r.legal_kind)}</td>
-          <td style="font-size:0.78rem;">${arEscapeHtml(g.finding(r))}</td>
-          <td><select class="ar-gc-select border rounded px-1 py-0.5 text-xs" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}">${optionsHtml(g.options(r))}</select></td>
+          <td style="font-size:0.8rem;white-space:normal;">${arEscapeHtml(g.finding(r))}</td>
+          <td>${g.controls
+    ? g.controls.map((c) => ctlHtml(r, c)).join('')
+    : `<select class="ar-gc-select border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}">${optionsHtml(g.options(r))}</select>`}</td>
         </tr>`).join('');
-      return `<div class="mb-4">
-        <div class="flex items-center justify-between gap-2 mb-1">
+      const allHtml = g.controls
+        ? g.controls.map((c) => (c.kind === 'select'
+          ? `<label class="text-xs text-gray-600" style="margin-left:10px;">${arEscapeHtml(c.label)} (όλες): <select class="ar-gc-allctl border rounded px-1 py-1 text-xs" data-group="${g.key}" data-key="${c.key}"><option value="__">—</option>${c.options.map((o) => `<option value="${arEscapeHtml(o.key)}">${arEscapeHtml(o.label)}</option>`).join('')}</select></label>`
+          : `<label class="text-xs text-gray-600" style="margin-left:10px;">${arEscapeHtml(c.label)} (όλες): <input type="number" class="ar-gc-allctl border rounded px-1 py-1 text-xs" style="width:90px;" data-group="${g.key}" data-key="${c.key}" step="${c.step || 'any'}" placeholder="—"></label>`)).join('')
+        : `<label class="text-xs text-gray-600">Όλες:
+            <select class="ar-gc-all border rounded px-1 py-1 text-xs" data-group="${g.key}"><option value="__">—</option>${optionsHtml(common)}</select>
+          </label>`;
+      return `<div class="ar-gc-panel" data-panel="${g.key}" style="display:${i === 0 ? 'block' : 'none'};">
+        <div class="flex items-center justify-between gap-2 mb-2">
           <div class="font-semibold text-sm">${g.title} — ${g.rows.length} εταιρίες</div>
-          <label class="text-xs text-gray-600">Όλες:
-            <select class="ar-gc-all border rounded px-1 py-0.5 text-xs" data-group="${g.key}"><option value="__">—</option>${optionsHtml(common)}</select>
-          </label>
+          <div>${allHtml}</div>
         </div>
-        <table class="ar-bulk-summary-table"><thead><tr><th>Εταιρία</th><th>Τύπος</th><th>Εύρημα</th><th>Ενέργεια</th></tr></thead><tbody>${trs}</tbody></table>
+        <table class="ar-bulk-summary-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:24%"><col style="width:8%"><col style="width:42%"><col style="width:26%"></colgroup>
+          <thead><tr><th>Εταιρία</th><th>Τύπος</th><th>Εύρημα</th><th>Ενέργεια</th></tr></thead><tbody>${trs}</tbody></table>
       </div>`;
     }).join('');
     const modal = document.createElement('div');
     modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
     modal.setAttribute('data-managed', '1');
     modal.innerHTML = `
-      <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
+      <div class="modal-warning-panel" style="width:min(96vw,1500px);max-width:96vw;max-height:92vh;display:flex;flex-direction:column;">
         <div class="modal-warning-title">${arEscapeHtml(opts.title || 'Διαφορές προελέγχου — ανά είδος')}</div>
-        <div class="modal-warning-body">
+        <div class="modal-warning-body" style="overflow-y:auto;flex:1 1 auto;">
           <p class="text-xs text-gray-500 mb-3">${arEscapeHtml(opts.note || 'Διάλεξε ενέργεια ανά εταιρία (ή για όλες μιας ομάδας). Τα «χειροκίνητα» ζητούνται αμέσως μετά, ένα-ένα.')}</p>
-          ${sectionsHtml}
+          <div style="display:flex;flex-wrap:wrap;border-bottom:1px solid #cbd5e1;margin-bottom:10px;">${tabsHtml}</div>
+          ${panelsHtml}
         </div>
         <div class="modal-warning-actions">
           <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arGcCancel">${arEscapeHtml(opts.cancelLabel || 'Άκυρο')}</button>
@@ -1472,11 +1726,29 @@ function showGroupedChecksModal(groups, opts) {
         </div>
       </div>`;
     document.body.appendChild(modal);
+    modal.querySelectorAll('.ar-gc-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        modal.querySelectorAll('.ar-gc-tab').forEach((b) => {
+          const on = b === btn;
+          b.style.background = on ? '#fff' : '#f1f5f9';
+          b.style.fontWeight = on ? '700' : '500';
+        });
+        modal.querySelectorAll('.ar-gc-panel').forEach((p) => { p.style.display = p.dataset.panel === btn.dataset.tab ? 'block' : 'none'; });
+      });
+    });
     modal.querySelectorAll('.ar-gc-all').forEach((sel) => {
       sel.addEventListener('change', () => {
         if (sel.value === '__') return;
-        modal.querySelectorAll(`.ar-gc-select[data-group="${sel.dataset.group}"]`).forEach((s) => { s.value = sel.value; });
+        modal.querySelectorAll(`.ar-gc-select[data-group="${sel.dataset.group}"]`).forEach((x) => { x.value = sel.value; });
       });
+    });
+    modal.querySelectorAll('.ar-gc-allctl').forEach((ctl) => {
+      const apply = () => {
+        if (ctl.value === '__' || ctl.value === '') return;
+        modal.querySelectorAll(`.ar-gc-ctl[data-group="${ctl.dataset.group}"][data-key="${ctl.dataset.key}"]`).forEach((x) => { x.value = ctl.value; });
+      };
+      ctl.addEventListener('change', apply);
+      ctl.addEventListener('input', apply);
     });
     const finish = (val) => { document.removeEventListener('keydown', onKey); modal.remove(); resolve(val); };
     const onKey = (e) => { if (e.key === 'Escape') finish(null); };
@@ -1484,8 +1756,13 @@ function showGroupedChecksModal(groups, opts) {
     modal.querySelector('#arGcCancel').addEventListener('click', () => finish(null));
     modal.querySelector('#arGcRun').addEventListener('click', () => {
       const out = {};
-      modal.querySelectorAll('.ar-gc-select').forEach((s) => {
-        (out[s.dataset.group] = out[s.dataset.group] || {})[s.dataset.name] = s.value;
+      modal.querySelectorAll('.ar-gc-select').forEach((x) => {
+        (out[x.dataset.group] = out[x.dataset.group] || {})[x.dataset.name] = x.value;
+      });
+      // controls: {group: {company: {controlKey: value}}}
+      modal.querySelectorAll('.ar-gc-ctl').forEach((x) => {
+        const grp = (out[x.dataset.group] = out[x.dataset.group] || {});
+        (grp[x.dataset.name] = grp[x.dataset.name] || {})[x.dataset.key] = x.value;
       });
       finish(out);
     });
@@ -1510,20 +1787,27 @@ async function arAskMonthlyTotals(kind, name, dateFrom, dateTo) {
 
 // Applies the grouped popup's choices; manual ones open their entry form
 // one company at a time. false = the user cancelled a form (stop the run).
-async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusEl) {
+// `skipped` (προαιρετικό array): όταν δίνεται, η ακύρωση μιας φόρμας χειροκίνητης καταχώρησης ΔΕΝ σταματά όλο το
+// batch — η εταιρία μπαίνει στο array και συνεχίζουν οι υπόλοιπες (όσες είχαν ήδη αποθηκευτεί ξαναϋπολογίζονται).
+async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusEl, skipped) {
   const rowByName = new Map((rows || []).map((r) => [r.name, r]));
   // Αμέσως, πριν το πρώτο αίτημα αποθήκευσης (Μαζικός: στο cross-page banner).
   showArOverlay('Εφαρμογή επιλογών...', 'Εφαρμογή των επιλογών σου στον προέλεγχο...');
   for (const [name, method] of Object.entries(choices.inventory || {})) {
     if (!method) continue; // «Παράλειψη» (popup μετά τον υπολογισμό)
     let value = null;
-    if (method === 'manual') {
+    let apiMethod = method;
+    if (method === 'zero') {
+      apiMethod = 'manual';   // απόθεμα λήξης 0 € σε όλους τους λογαριασμούς (ο υπολογισμός συνεχίζει)
+      value = {};
+    } else if (method === 'manual') {
+      hideArOverlay();   // το overlay (z-index 999999) θα κάλυπτε τη φόρμα χειροκίνητης καταχώρησης
       value = await showManualInventoryModal(`Απόθεμα λήξης — ${name} (${year})`, (rowByName.get(name) || {}).opening_inventory);
-      if (!value) return false;
+      if (!value) { if (skipped) { skipped.push(name); continue; } return false; }
     }
     if (statusEl) statusEl.textContent = `Απόθεμα λήξης — ${name}...`;
     const invResp = await arPostWithOverlay('/api/accounting_result/inventory/resolve', {
-      credential_name: name, year, method, value, date_from: dateFrom, date_to: dateTo,
+      credential_name: name, year, method: apiMethod, value, date_from: dateFrom, date_to: dateTo,
     }, `Καταχώρηση αποθέματος λήξης — ${name}...`);
     if (!invResp.ok) arResolveSaveFailed('Απόθεμα λήξης', name, invResp);
   }
@@ -1533,7 +1817,7 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
       let monthlyTotals = {};
       if (choice === 'manual') {
         const values = await arAskMonthlyTotals(kind, name, dateFrom, dateTo);
-        if (!values) return false;
+        if (!values) { if (skipped) { skipped.push(name); continue; } return false; }
         if (!values.__continue && Object.keys(values).length) { resolution = 'manual'; monthlyTotals = values; }
       }
       const kindResp = await arPostWithOverlay(`/api/accounting_result/${kind}/resolve`, { credential_name: name, year, resolution, monthly_totals: monthlyTotals },
@@ -1541,11 +1825,21 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
       if (!kindResp.ok) arResolveSaveFailed(kind === 'payroll' ? 'Μισθοδοσία' : 'Ενοίκιο', name, kindResp);
     }
   }
+  for (const [name, v] of Object.entries(choices.fixed || {})) {
+    const r = await arPostWithOverlay('/api/accounting_result/adjustments/set', { credential_name: name, year, dep_rate: v.rate },
+      `Καταχώρηση ποσοστού πρόβλεψης αποσβέσεων — ${name}...`);
+    if (!r.ok) arResolveSaveFailed('Πάγια', name, r);
+  }
+  for (const [name, v] of Object.entries(choices.transfer || {})) {
+    const r = await arPostWithOverlay('/api/accounting_result/adjustments/set', { credential_name: name, year, transfer_mode: v.mode, transfer_extra: v.extra },
+      `Καταχώρηση μεταφοράς εσόδων — ${name}...`);
+    if (!r.ok) arResolveSaveFailed('Μεταφορά εσόδων', name, r);
+  }
   for (const [name, choice] of Object.entries(choices.efka || {})) {
     if (!choice) continue;
     if (choice === 'manual_totals') {
       const values = await arAskMonthlyTotals('efka', name, dateFrom, dateTo);
-      if (!values) return false;
+      if (!values) { if (skipped) { skipped.push(name); continue; } return false; }
       if (values.__continue || !Object.keys(values).length) continue;
       await arPostWithOverlay('/api/accounting_result/efka_self_employed/resolve_totals', { credential_name: name, year, monthly_totals: values },
         `Καταχώρηση συνόλων ΕΦΚΑ — ${name}...`);
@@ -2498,7 +2792,7 @@ function setBulkTableLocked(locked) {
 // always carries the same asterisk across different Μαζικός runs — simpler
 // to keep straight than a batch-local renumbering, and a legend line is
 // only ever printed for numbers that actually occur in THIS batch.
-var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation', 'unclassified_vat_inflow', 'vat_prev_period', 'vat_declared_mismatch'];
+var AR_BULK_NOTE_TYPE_ORDER = ['payroll_shortfall', 'rent_shortfall', 'efka_self_employed_shortfall', 'uncharacterized_last_quarter', 'small_business_vat_limit', 'inventory_obligation', 'unclassified_vat_inflow', 'vat_prev_period', 'vat_declared_mismatch', 'depreciation_forecast', 'income_transfer'];
 var AR_BULK_NOTE_TYPE_LEGEND = {
   payroll_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές μισθοδοσίας από τους μήνες της περιόδου.',
   rent_shortfall: 'Βρέθηκαν λιγότερες μηνιαίες εγγραφές ενοικίου από τους μήνες της περιόδου.',
@@ -2509,6 +2803,8 @@ var AR_BULK_NOTE_TYPE_LEGEND = {
   unclassified_vat_inflow: 'ΦΠΑ εισροών: μετράει μόνο τα χαρακτηρισμένα παραστατικά αγορών/εξόδων — υπάρχουν αχαρακτήριστα με ΦΠΑ στην περίοδο (δες το νέο σύνολο στις παρατηρήσεις).',
   vat_prev_period: 'ΦΠΑ προηγούμενης περιόδου: χρεωστική δήλωση (έλεγξε την εξόφληση) ή δεν έχει υποβληθεί/οριστικοποιηθεί δήλωση Φ2.',
   vat_declared_mismatch: 'Η ήδη υποβληθείσα Φ2 της περιόδου διαφέρει από τα στοιχεία του myDATA — πιθανή ανάγκη τροποποιητικής.',
+  depreciation_forecast: 'Αποσβέσεις: δεν βρέθηκαν στο προηγούμενο έτος — πρόβλεψη (% επί αγορών παγίων, ρυθμίζεται στο tab «Πάγια» των ελέγχων) ή αποσβέσεις της ίδιας της περιόδου.',
+  income_transfer: 'Μεταφορά εσόδων: έσοδα κατηγορίας 1_9 (επομένων χρήσεων) του προηγούμενου έτους που συμπεριλήφθηκαν στα έσοδα της περιόδου και/ή επιπλέον μεταφορά που δήλωσε ο χρήστης.',
 };
 var AR_BULK_NOTE_SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
@@ -2820,16 +3116,26 @@ async function arBulkPostChecks(bulkResp, from, to, year, batchId, statusEl) {
   if (!choices) return { recomputed: 0, skipped: true };
 
   // Μόνο όσες επιλογές αλλάζουν κάτι χρειάζονται επαναϋπολογισμό.
-  const eff = { inventory: {}, payroll: {}, rent: {}, efka: {} };
+  const eff = { inventory: {}, payroll: {}, rent: {}, efka: {}, fixed: {}, transfer: {} };
+  const rowBy = new Map(rows.map((r) => [r.name, r]));
+  groups.filter((g) => g.controls).forEach((g) => {
+    Object.entries(choices[g.key] || {}).forEach(([n, v]) => { const r = rowBy.get(n); if (r && g.changed(r, v)) eff[g.key][n] = v; });
+  });
   Object.entries(choices.inventory || {}).forEach(([n, m]) => { if (m) eff.inventory[n] = m; });
   ['payroll', 'rent'].forEach((k) => Object.entries(choices[k] || {}).forEach(([n, m]) => { if (m === 'manual') eff[k][n] = m; }));
   Object.entries(choices.efka || {}).forEach(([n, m]) => { if (m && m !== 'continue') eff.efka[n] = m; });
-  const names = Array.from(new Set(['inventory', 'payroll', 'rent', 'efka'].flatMap((k) => Object.keys(eff[k]))));
+  let names = Array.from(new Set(['inventory', 'payroll', 'rent', 'efka', 'fixed', 'transfer'].flatMap((k) => Object.keys(eff[k]))));
   if (!names.length) return { recomputed: 0 };
 
   // Οι επιλογές αποθηκεύονται από τον browser (χωρίς κλείδωμα/banner) και ο επαναϋπολογισμός τρέχει ως job του server.
-  const applied = await applyGroupedChecks(eff, rows, year, from, to, statusEl);
+  const skipped = [];
+  const applied = await applyGroupedChecks(eff, rows, year, from, to, statusEl, skipped);
   if (!applied) return { recomputed: 0, cancelled: true };
+  if (skipped.length) {
+    showArFlash(`Ακυρώθηκε η χειροκίνητη καταχώρηση για ${skipped.length} εταιρίες — δεν ξαναϋπολογίστηκαν (παραμένουν όπως ήταν).`, 'warning', 9000);
+    names = names.filter((n) => !skipped.includes(n));
+    if (!names.length) return { recomputed: 0, cancelled: true };
+  }
 
   let r2 = await arBulkRunServerJob({
     credential_names: names, date_from: from, date_to: to, batch_id: batchId, fresh_run: false, skip_precheck: true,
@@ -2937,17 +3243,20 @@ async function arBulkAttachAndFinish(jobId, meta) {
   window.__arBulkAttached = jobId;
   const statusEl = arBulkStatusProxy();
   setBulkTableLocked(true);
-  AR_BULK_RUNNING = true;
+  // ΟΧΙ AR_BULK_RUNNING: ο υπολογισμός τρέχει στον server· οι καταχωρήσεις/επιλογές ελέγχων που ακολουθούν
+  // δείχνουν κανονικά wait overlay (και σε όποια σελίδα κι αν βρίσκεται ο χρήστης).
+  AR_BULK_RUNNING = false;
   let delivered = false;
   try {
     statusEl.textContent = 'Ο υπολογισμός τρέχει στον server — μπορείς να αλλάξεις σελίδα· όταν ολοκληρωθεί θα εμφανιστούν τα αποτελέσματα και οι έλεγχοι.';
     const res = await arBulkWaitJob(jobId, (st) => {
       if (st.label) statusEl.textContent = `Στον server: ${st.label}`;
     });
-    if (res.claimed) return;   // άλλο tab του χρήστη το διαχειρίζεται
+    if (res.claimed) { window.__arClaimedUntil = Date.now() + 60000; return; }   // άλλο tab του χρήστη το διαχειρίζεται
     if (res.detached || (!res.ok && !(res.results || []).length)) {
       statusEl.textContent = 'Σφάλμα: ' + (res.error || '');
       showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ' + (res.error || 'αποτυχία'), res.detached ? 'warning' : 'error', 12000);
+      if (!res.detached) delivered = true;   // το σφάλμα εμφανίστηκε μία φορά· να μην ξαναεμφανίζεται σε κάθε έλεγχο
       return;
     }
     delivered = true;
@@ -2973,6 +3282,7 @@ async function arBulkAttachAndFinish(jobId, meta) {
 // Μετά από ανανέωση/νέα σύνδεση: αν ο χρήστης έχει Μαζικό που τρέχει ή τελείωσε και δεν παραλήφθηκε, ξαναπιάνεται.
 async function arBulkResumePending() {
   if (window.__arBulkAttached) return;
+  if (window.__arClaimedUntil && Date.now() < window.__arClaimedUntil) return;
   try {
     const d = await (await fetch('/api/accounting_result/bulk_jobs_mine', { cache: 'no-store', credentials: 'same-origin' })).json();
     const j = d && d.ok && (d.jobs || [])[0];
