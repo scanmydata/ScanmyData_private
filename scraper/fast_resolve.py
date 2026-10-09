@@ -81,7 +81,14 @@ def einvoicing_url_is_truncated(url: str) -> bool:
     path = p.path or ""
     if "/edocuments/" not in path.lower() and "viewinvoice" not in path.lower():
         return False
-    return not _UUID_TOKEN_RE.search(path + "/")
+    if _UUID_TOKEN_RE.search(path + "/"):
+        return False
+    # ΣΩΣΤΕΣ μορφές με παραμέτρους query (όχι uuid στο path): PEPPOL «?v=<ΑΦΜ>&ag=<..>&c=<token>»
+    # και παλιά «?ct=&id=&s=&h=» — δεν είναι κομμένα.
+    qs = parse_qs(p.query or "")
+    if all(qs.get(k) for k in ("v", "ag", "c")) or all(qs.get(k) for k in ("ct", "id", "s", "h")):
+        return False
+    return True
 
 
 def repair_scanned_url(url: str) -> str:
