@@ -378,11 +378,14 @@
     // Ο server επιβάλλει το κλείδωμα επίσης (HTTP 409), άρα και χωρίς αυτό το script δεν ξεκινά δεύτερη εργασία.
     // ============================================================================
     (function () {
-      var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single'], fetch: ['fetch'] };
+      // Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ΟΛΑ μεταξύ τους (ο υπολογισμός δεν πρέπει
+      // να τρέχει πάνω σε δεδομένα που αλλάζουν και η λήψη δεν ξεκινά όσο υπολογίζεται αποτέλεσμα).
+      var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single', 'fetch'], fetch: ['fetch', 'ar_bulk', 'ar_single'] };
       var WHAT = { ar_bulk: 'Μαζικός υπολογισμός Λογιστικού Αποτελέσματος', ar_single: 'Ατομικός υπολογισμός Λογιστικού Αποτελέσματος', fetch: 'Λήψη παραστατικών' };
       var state = [];
       var timer = null;
       var rendered = {};
+      var prevMineBulk = {};
       function getContainer() {
         var c = document.getElementById('flashContainer');
         if (!c) c = document.getElementById('arFlashContainer');
@@ -480,6 +483,18 @@
           .then(function (data) {
             state = (data && data.activities) || [];
             window.__groupActivity = state;
+            // Ο Μαζικός μου (που τρέχει στον server) τελείωσε ενώ δεν είμαι στη σελίδα Μαζικού/δεν τον παρακολουθεί
+            // κανένα script: ειδοποίηση ότι τα αποτελέσματα και οι έλεγχοι περιμένουν στη σελίδα.
+            try {
+              var nowMine = {};
+              state.forEach(function (a) { if (a.kind === 'ar_bulk' && a.mine) nowMine[a.id] = true; });
+              Object.keys(prevMineBulk).forEach(function (id) {
+                if (!nowMine[id] && !window.__arBulkAttached && typeof window.showFlash === 'function') {
+                  window.showFlash('Ο Μαζικός υπολογισμός Λογιστικού Αποτελέσματος ολοκληρώθηκε — άνοιξε τη σελίδα «Λογιστικό Αποτέλεσμα» για τα αποτελέσματα και τους ελέγχους.', 'success', 15000);
+                }
+              });
+              prevMineBulk = nowMine;
+            } catch (_) {}
             render(state);
             applyLocks();
             try { window.dispatchEvent(new CustomEvent('group-activity', { detail: state })); } catch (_) {}

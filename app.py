@@ -10281,14 +10281,14 @@ def api_fetch_bulk_start():
     from accounting_result import activity_registry as _act_reg
     _fa_uk, _fa_un = _ar_user_ident()
     _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
-        "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
+        "fetch", ["fetch", "ar_single"], _ar_group_key(), _fa_uk, _fa_un,
         label=f"Μαζική λήψη ({len(targets)} πελάτες)", ttl=_act_reg.TTL_FETCH, ref="fetchbulk:" + job_id,
+        extra_conflict=_ar_bulk_conflict(""),
     ) if _ar_group_key() else (None, None)
     if _fa_conflict:
         return jsonify({
             'ok': False, 'locked': True, 'locked_by': _fa_conflict.get('username') or '',
-            'error': f"Τρέχει ήδη λήψη παραστατικών ({_fa_conflict.get('label') or ''}) — εντολή από "
-                     f"{_fa_conflict.get('username') or 'άλλον χρήστη'}. Περίμενε να ολοκληρωθεί.",
+            'error': _group_busy_message(_fa_conflict),
         }), 409
 
     _set_bulk_fetch_progress(
@@ -10922,12 +10922,12 @@ def fetch():
         from accounting_result import activity_registry as _act_reg
         _fa_uk, _fa_un = _ar_user_ident()
         _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
-            "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
+            "fetch", ["fetch", "ar_single"], _ar_group_key(), _fa_uk, _fa_un,
             label=f"Λήψη παραστατικών — {selected or vat}", ttl=_act_reg.TTL_FETCH, ref="fetch:" + fetch_key,
+            extra_conflict=_ar_bulk_conflict(""),
         ) if _ar_group_key() else (None, None)
         if _fa_conflict:
-            error = (f"Τρέχει ήδη λήψη παραστατικών ({_fa_conflict.get('label') or ''}) — εντολή από "
-                     f"{_fa_conflict.get('username') or 'άλλον χρήστη'}. Περίμενε να ολοκληρωθεί.")
+            error = _group_busy_message(_fa_conflict)
             if wants_json:
                 return jsonify({"ok": False, "error": error, "status": "running", "locked": True,
                                 "locked_by": _fa_conflict.get("username") or ""}), 409
@@ -19093,7 +19093,7 @@ def api_accounting_result_compute():
     if group:
         uk, un = _ar_user_ident()
         act_id, conflict = ar_act.begin_exclusive(
-            "ar_single", ["ar_single"], group, uk, un,
+            "ar_single", ["ar_single", "fetch"], group, uk, un,
             label=str(_p0.get("credential_name") or "Ατομικός υπολογισμός"),
             extra_conflict=_ar_bulk_conflict(""),
         )
@@ -19931,20 +19931,31 @@ def _ar_lock_conflict(exclude_job_id: str = ""):
     c = _ar_bulk_conflict(exclude_job_id)
     if c:
         return c
-    single = ar_act.find_conflict(["ar_single"], group)
+    single = ar_act.find_conflict(["ar_single", "fetch"], group)
     if single:
-        return {"kind": "ar_single", "username": single.get("username") or "", "label": single.get("label") or ""}
+        return {"kind": single.get("kind"), "username": single.get("username") or "", "label": single.get("label") or ""}
     return None
+
+
+_GROUP_BUSY_WHAT = {
+    "ar_bulk": "Μαζικός υπολογισμός Λογιστικού Αποτελέσματος",
+    "ar_single": "Ατομικός υπολογισμός Λογιστικού Αποτελέσματος",
+    "fetch": "Λήψη παραστατικών",
+}
+
+
+def _group_busy_message(conflict) -> str:
+    """«Τρέχει ήδη … — εντολή από <χρήστης>» για οποιοδήποτε είδος εργασίας της ομάδας."""
+    who = (conflict or {}).get("username") or "άλλος χρήστης"
+    what = _GROUP_BUSY_WHAT.get((conflict or {}).get("kind"), "εργασία")
+    return (f"Τρέχει ήδη {what} — εντολή από {who}. "
+            "Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ο ένας τον άλλον· "
+            "περίμενε να ολοκληρωθεί και ξαναδοκίμασε.")
 
 
 def _ar_locked_response(conflict):
     who = conflict.get("username") or "άλλος χρήστης"
-    what = "Μαζικός υπολογισμός" if conflict.get("kind") == "ar_bulk" else "Ατομικός υπολογισμός"
-    return jsonify({
-        "ok": False, "locked": True, "locked_by": who,
-        "error": f"Τρέχει ήδη έλεγχος Λογιστικού Αποτελέσματος ({what} — εντολή από {who}). "
-                 "Περίμενε να ολοκληρωθεί και ξαναδοκίμασε.",
-    }), 409
+    return jsonify({"ok": False, "locked": True, "locked_by": who, "error": _group_busy_message(conflict)}), 409
 
 
 def _ar_bulk_precheck_row(name, vat, path, year, entries, date_from, date_to, obligation, has_inventory,
@@ -19979,6 +19990,17 @@ def _ar_bulk_precheck_row(name, vat, path, year, entries, date_from, date_to, ob
     except Exception:
         log.exception("could not build bulk precheck row for %s", name)
         return None
+
+
+@app.url_defaults
+def _static_cache_bust(endpoint, values):
+    """Κάθε url_for('static', ...) παίρνει ?v=<mtime αρχείου>: μετά από deploy ο browser/proxy δεν κρατά παλιά
+    JS/CSS (π.χ. παλιό app.css χωρίς τους κανόνες του #waitOverlay άφηνε το overlay ορατό αστυλιάριστο)."""
+    if endpoint == "static" and "filename" in values and "v" not in values:
+        try:
+            values["v"] = int(os.path.getmtime(os.path.join(app.static_folder, str(values["filename"]))))
+        except Exception:
+            pass
 
 
 @app.before_request
@@ -20035,6 +20057,269 @@ def api_group_activity():
         return jsonify({"ok": True, "activities": acts}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# ΜΑΖΙΚΟΣ ως job του SERVER: η εντολή δίνεται από τον browser, αλλά ο υπολογισμός (ΑΑΔΕ προέλεγχος + όλες οι
+# εταιρίες) τρέχει σε thread του server και ΣΥΝΕΧΙΖΕΙ ακόμη κι αν ο χρήστης αλλάξει σελίδα, κάνει ανανέωση,
+# αποσυνδεθεί ή λήξει το session του (πριν, το run οδηγούσε το tab και «τερματιζόταν μόνο του»).
+# Όταν τελειώσει, ο browser (σε οποιαδήποτε σελίδα/μετά από ανανέωση) παραλαμβάνει το αποτέλεσμα και ανοίγει τα
+# popup ελέγχων. Κατάσταση στη μνήμη της διεργασίας (όπως τα υπόλοιπα job registries)· οι εταιρίες που
+# ολοκληρώθηκαν αποθηκεύονται ήδη στον φάκελο «αποθηκευμένων μαζικών».
+# ---------------------------------------------------------------------------
+_AR_SERVER_JOBS: Dict[str, Dict[str, Any]] = {}
+_AR_SERVER_JOBS_LOCK = threading.Lock()
+_AR_SERVER_JOB_KEEP_SECONDS = 12 * 3600
+_AR_SERVER_CHUNK = 2
+
+
+def _ar_purge_server_jobs() -> None:
+    now = time.time()
+    with _AR_SERVER_JOBS_LOCK:
+        for jid in [j for j, v in _AR_SERVER_JOBS.items()
+                    if v.get("finished") and now - float(v["finished"]) > _AR_SERVER_JOB_KEEP_SECONDS]:
+            _AR_SERVER_JOBS.pop(jid, None)
+
+
+def _ar_call_view(app_obj, snapshot, env, fn, path, method="POST", body=None, query=None):
+    """Καλεί view function με συνθετικό request context του ΙΔΙΟΥ χρήστη/ομάδας (session snapshot) — χωρίς τα
+    before_request hooks (timeout αδράνειας, single-session claim), ώστε το job να μη σταματά με το session."""
+    kw: Dict[str, Any] = {"path": path, "method": method, "headers": env.get("headers") or {},
+                          "environ_base": env.get("environ_base") or {}}
+    if body is not None:
+        kw["json"] = body
+    if query:
+        kw["query_string"] = query
+    with app_obj.test_request_context(**kw):
+        for k, v in (snapshot or {}).items():
+            session[k] = v
+        out = fn()
+        resp, code = (out if isinstance(out, tuple) else (out, getattr(out, "status_code", 200)))[:2]
+        data = resp.get_json(silent=True) if hasattr(resp, "get_json") else None
+        return (data if isinstance(data, dict) else {}), int(code or 200)
+
+
+def _ar_bulk_server_worker(app_obj, job, snapshot, env, group_dir):
+    from accounting_result import job_registry as ar_jobs
+    jid = job["id"]
+    names = job["names"]
+    total = len(names)
+    try:
+        _set_thread_group_base_dir(group_dir)
+    except Exception:
+        pass
+    try:
+        from e3.checks import fetch_e3 as _fe3
+        _fe3.set_cache_bypass(bool(job.get("force_fresh")))
+    except Exception:
+        pass
+
+    def beat(label, pct=None, cur=None):
+        ar_jobs.publish_progress(jid, label, percent=pct, current=cur, total=total)
+        job["label"] = label
+
+    def aborted():
+        return ar_jobs.is_abort_requested(jid)
+
+    results: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    try:
+        if not job.get("skip_precheck"):
+            # Βήμα 1: ΑΑΔΕ (τύπος/επικοινωνία/ΦΠΑ) ΠΡΙΝ από τους ελέγχους — όπως πριν στον browser.
+            need_members: List[str] = []
+            for i, name in enumerate(names):
+                if aborted():
+                    break
+                cred = get_cred_by_name(str(name)) or _ar_credential_from_store_by_name(str(name))
+                vat = str((cred or {}).get("vat") or "").strip()
+                if not vat:
+                    continue
+                beat(f"Βήμα 1/3 — ΑΑΔΕ (τύπος, επικοινωνία, ΦΠΑ): {name} ({i + 1}/{total})",
+                     pct=round(i / max(total, 1) * 33), cur=i + 1)
+                body = {"afm": vat, "apply_vat": True, "only_if_missing": True, "defer_members": True}
+                data, _c = _ar_call_view(app_obj, snapshot, env, api_accounting_result_company_info,
+                                         "/api/accounting_result/company_info", "POST", body)
+                if not data.get("ok") and not re.search(r"TAXISnet|χρόνος", str(data.get("error") or "")):
+                    time.sleep(3)
+                    data, _c = _ar_call_view(app_obj, snapshot, env, api_accounting_result_company_info,
+                                             "/api/accounting_result/company_info", "POST", body)
+                if not data.get("ok"):
+                    warnings.append(f"{name}: {data.get('error') or 'σφάλμα'}")
+                elif data.get("needs_members") or data.get("members_pending"):
+                    need_members.append(vat)
+            if need_members and not aborted():
+                _ar_call_view(app_obj, snapshot, env, api_accounting_result_company_info_fetch_members,
+                              "/api/accounting_result/company_info/fetch_members", "POST", {"afms": need_members})
+                deadline = time.time() + 90 * len(need_members)
+                left = list(need_members)
+                while left and time.time() < deadline and not aborted():
+                    beat(f"Βήμα 1/3 — ανάκτηση εταίρων (για ΕΦΚΑ: μήνες × εταίροι): απομένουν {len(left)}")
+                    time.sleep(5)
+                    st, _c = _ar_call_view(app_obj, snapshot, env, api_accounting_result_company_info_members_pending,
+                                           "/api/accounting_result/company_info/members_pending", "GET",
+                                           query={"afms": ",".join(left)})
+                    if st.get("ok"):
+                        left = list(st.get("pending") or [])
+                if left:
+                    warnings.append(f"Οι εταίροι δεν ανακτήθηκαν έγκαιρα για {len(left)} εταιρίες — ο έλεγχος ΕΦΚΑ τους γίνεται ανά μήνα.")
+
+        # Βήμα 3: υπολογισμός σε chunks (ίδιο endpoint/λογική με πριν — μοιράζονται φάκελο αποθηκευμένων μαζικών).
+        was_aborted = aborted()
+        for i in range(0, total, _AR_SERVER_CHUNK):
+            if aborted():
+                was_aborted = True
+                break
+            chunk = names[i:i + _AR_SERVER_CHUNK]
+            beat(f"Βήμα 3/3 — υπολογισμός {i + 1}–{i + len(chunk)}/{total}: {', '.join(chunk)}",
+                 pct=33 + round(i / max(total, 1) * 67), cur=i + 1)
+            body = {
+                "credential_names": chunk, "date_from": job["date_from"], "date_to": job["date_to"], "job_id": jid,
+                "income_tax": bool(job.get("income_tax")), "vat_forecast": bool(job.get("vat_forecast", True)),
+                "batch_id": job["batch_id"], "offset": i, "grand_total": total, "chunked": True,
+                "auto_continue": True, "fresh_run": bool(job.get("fresh_run", True)),
+            }
+            data, code = _ar_call_view(app_obj, snapshot, env, api_accounting_result_bulk_compute,
+                                       "/api/accounting_result/bulk_compute", "POST", body)
+            if not data.get("ok"):   # στιγμιαίο πρόβλημα: μία επανάληψη
+                time.sleep(2.5)
+                data, code = _ar_call_view(app_obj, snapshot, env, api_accounting_result_bulk_compute,
+                                           "/api/accounting_result/bulk_compute", "POST", body)
+            if not data.get("ok"):
+                for n in chunk:
+                    results.append({"credential_name": n, "ok": False, "error": data.get("error") or f"σφάλμα υπολογισμού (HTTP {code})"})
+                continue   # δεν σταματά όλο το run για ένα chunk
+            results.extend(data.get("results") or [])
+            job["done"] = len(results)
+            if data.get("aborted"):
+                was_aborted = True
+                break
+        job.update(results=results, warnings=warnings, aborted=was_aborted, status="done")
+    except Exception as e:
+        log.exception("server bulk job %s failed", jid)
+        job.update(results=results, warnings=warnings, status="error", error=_friendly_net_error(e) or str(e))
+    finally:
+        job["finished"] = time.time()
+        ar_jobs.finish_job(jid)
+        ar_jobs.clear_abort(jid)
+        ar_jobs.clear_progress(jid)
+
+
+@app.route("/api/accounting_result/bulk_start", methods=["POST"])
+@login_required
+def api_accounting_result_bulk_start():
+    """Ξεκινά Μαζικό υπολογισμό ως job του server (βλ. σχόλιο παραπάνω)."""
+    try:
+        from accounting_result import job_registry as ar_jobs
+        payload = request.get_json(silent=True) or {}
+        names = [str(n) for n in (payload.get("credential_names") or []) if str(n).strip()]
+        date_from = str(payload.get("date_from") or "").strip()
+        date_to = str(payload.get("date_to") or "").strip()
+        group = _ar_group_key()
+        if not names or not date_from or not date_to:
+            return jsonify({"ok": False, "error": "Λείπουν credential_names ή περίοδος"}), 400
+        if not group:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 400
+        jid = "ar-bulk-" + secrets.token_hex(5) + str(int(time.time()))
+        uk, un = _ar_user_ident()
+        with _AR_LOCK_GUARD:
+            conflict = _ar_lock_conflict(jid)
+            if conflict:
+                return _ar_locked_response(conflict)
+            ar_jobs.touch_job(jid, group, uk, un, f"ξεκίνησε για {len(names)} εταιρίες…", len(names), detached=True)
+        batch_id = str(payload.get("batch_id") or "").strip() or ("b" + secrets.token_hex(6))
+        job = {
+            "id": jid, "group": group, "user_key": uk, "username": un, "status": "running",
+            "names": names, "date_from": date_from, "date_to": date_to, "batch_id": batch_id,
+            "income_tax": bool(payload.get("income_tax")), "vat_forecast": bool(payload.get("vat_forecast", True)),
+            "force_fresh": request.headers.get("X-AR-Fresh") == "1",
+            "fresh_run": bool(payload.get("fresh_run", True)), "skip_precheck": bool(payload.get("skip_precheck")),
+            "started": time.time(), "finished": None, "label": "", "done": 0,
+            "results": [], "warnings": [], "aborted": False, "error": "", "claimed": "", "consumed": False,
+        }
+        _ar_purge_server_jobs()
+        with _AR_SERVER_JOBS_LOCK:
+            _AR_SERVER_JOBS[jid] = job
+        env = {
+            "headers": {k: v for k, v in (("User-Agent", request.headers.get("User-Agent")),
+                                          ("X-Forwarded-For", request.headers.get("X-Forwarded-For"))) if v},
+            "environ_base": {"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        }
+        snapshot = dict(session)
+        threading.Thread(
+            target=_ar_bulk_server_worker,
+            args=(current_app._get_current_object(), job, snapshot, env, get_group_base_dir()),
+            daemon=True,
+        ).start()
+        return jsonify({"ok": True, "job_id": jid, "batch_id": batch_id}), 200
+    except Exception as e:
+        log.exception("api_accounting_result_bulk_start failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _ar_server_job_public(job) -> Dict[str, Any]:
+    return {k: job.get(k) for k in ("id", "status", "username", "label", "done", "aborted", "error", "date_from",
+                                    "date_to", "batch_id", "started", "finished", "consumed")} | {"total": len(job.get("names") or [])}
+
+
+def _ar_server_job_for_request(job_id):
+    job = _AR_SERVER_JOBS.get(str(job_id or "").strip())
+    if job and job.get("group") == _ar_group_key():
+        return job
+    return None
+
+
+@app.route("/api/accounting_result/bulk_job_state", methods=["GET"])
+@login_required
+def api_accounting_result_bulk_job_state():
+    job = _ar_server_job_for_request(request.args.get("job_id"))
+    if not job:
+        return jsonify({"ok": True, "status": "unknown"}), 200
+    return jsonify({"ok": True, **_ar_server_job_public(job)}), 200
+
+
+@app.route("/api/accounting_result/bulk_job_result", methods=["GET"])
+@login_required
+def api_accounting_result_bulk_job_result():
+    """Το αποτέλεσμα ενός τελειωμένου job. Την πρώτη φορά το «διεκδικεί» ένα tab (?tab=) — τα υπόλοιπα tabs
+    του ίδιου χρήστη δεν ανοίγουν δεύτερη φορά τα ίδια popup."""
+    job = _ar_server_job_for_request(request.args.get("job_id"))
+    if not job:
+        return jsonify({"ok": False, "error": "Το job δεν βρέθηκε (πιθανή επανεκκίνηση του server)."}), 404
+    if job.get("status") not in ("done", "error"):
+        return jsonify({"ok": True, "status": job.get("status")}), 200
+    tab = str(request.args.get("tab") or "")
+    if job.get("claimed") and tab and job["claimed"] != tab:
+        return jsonify({"ok": True, "status": "claimed"}), 200
+    if tab:
+        job["claimed"] = tab
+    return jsonify({"ok": True, **_ar_server_job_public(job), "results": job.get("results") or [],
+                    "warnings": job.get("warnings") or []}), 200
+
+
+@app.route("/api/accounting_result/bulk_job_consume", methods=["POST"])
+@login_required
+def api_accounting_result_bulk_job_consume():
+    job = _ar_server_job_for_request((request.get_json(silent=True) or {}).get("job_id"))
+    if job:
+        job["consumed"] = True
+        job["results"] = []   # μνήμη: τα αποτελέσματα μένουν στον φάκελο αποθηκευμένων μαζικών
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/api/accounting_result/bulk_jobs_mine", methods=["GET"])
+@login_required
+def api_accounting_result_bulk_jobs_mine():
+    """Μαζικοί υπολογισμοί του ΤΡΕΧΟΝΤΟΣ χρήστη που τρέχουν ή τελείωσαν και δεν έχουν παραληφθεί ακόμη
+    (π.χ. μετά από ανανέωση/νέα σύνδεση) — η σελίδα τους ξαναπιάνει και δείχνει τα popup ελέγχων."""
+    _ar_purge_server_jobs()
+    me, _ = _ar_user_ident()
+    group = _ar_group_key()
+    out = []
+    for job in list(_AR_SERVER_JOBS.values()):
+        if job.get("group") == group and job.get("user_key") == me and not job.get("consumed"):
+            out.append(_ar_server_job_public(job))
+    out.sort(key=lambda j: j.get("started") or 0)
+    return jsonify({"ok": True, "jobs": out}), 200
 
 
 @app.route("/api/accounting_result/bulk_job", methods=["POST"])

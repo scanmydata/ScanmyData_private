@@ -1542,9 +1542,8 @@
         // ελέγχει πια τη σελίδα) κλείνει πριν την αλλαγή — αλλιώς μένει ορφανό ή μπλοκάρει το UI της επόμενης.
         try {
           document.querySelectorAll('body > #waitOverlay').forEach(function (ov) {
-            ov.setAttribute('aria-hidden', 'true');
-            ov.style.display = 'none';
-            ov.style.pointerEvents = 'none';
+            // Αφαιρείται ολόκληρο (όχι μόνο κρύβεται): η επόμενη σελίδα φέρνει το δικό της αντίγραφο μέσα στο #appShell.
+            try { ov.remove(); } catch (_) { ov.setAttribute('aria-hidden', 'true'); ov.style.display = 'none'; }
           });
         } catch (_) {}
 

@@ -27,6 +27,7 @@ _PROGRESS_REGISTRY: Dict[str, Dict[str, Any]] = {}
 _JOBS: Dict[str, Dict[str, Any]] = {}
 CLIENT_STALE_SECONDS = 25      # χωρίς heartbeat από τον browser = το run σταμάτησε (logout/κλείσιμο)
 SERVER_STALE_SECONDS = 300     # το bulk_compute δημοσιεύει πρόοδο ανά εταιρία
+DETACHED_STALE_SECONDS = 900   # run που οδηγεί ο ΙΔΙΟΣ ο server (thread): ζει ανεξάρτητα από browser/session
 
 
 def request_abort(job_id: str) -> bool:
@@ -71,6 +72,8 @@ def publish_progress(job_id: Optional[str], label: str, percent: Optional[int] =
     job = _JOBS.get(str(job_id))
     if job is not None:
         job["server_ts"] = time.time()
+        if job.get("detached"):
+            job["client_ts"] = job["server_ts"]   # το thread του server είναι ζωντανό όσο δημοσιεύει πρόοδο
 
 
 def get_progress(job_id: str) -> Dict[str, Any]:
@@ -90,8 +93,9 @@ def clear_progress(job_id: str) -> None:
 # Ενεργά jobs ανά ομάδα
 # ---------------------------------------------------------------------------
 def touch_job(job_id: str, group: str, user_key: str, username: str,
-              label: Optional[str] = None, total: Optional[int] = None) -> None:
-    """Heartbeat/ενημέρωση από τον browser που οδηγεί το run (φάση «client»)."""
+              label: Optional[str] = None, total: Optional[int] = None, detached: bool = False) -> None:
+    """Heartbeat/ενημέρωση από τον browser που οδηγεί το run (φάση «client»).
+    detached=True: το run οδηγείται από thread του server (δεν εξαρτάται από browser/logout/timeout session)."""
     job_id = str(job_id or "").strip()
     if not job_id or not group:
         return
@@ -104,6 +108,8 @@ def touch_job(job_id: str, group: str, user_key: str, username: str,
             "client_ts": now, "server_ts": 0.0,
         }
     job["client_ts"] = now
+    if detached:
+        job["detached"] = True
     if label is not None:
         job["label"] = str(label)
     if total is not None:
@@ -129,7 +135,8 @@ def finish_job(job_id: str) -> None:
 
 def drop_client_jobs(user_key: str) -> int:
     """Στο logout: οι φάσεις που οδηγούσε ο browser αυτού του χρήστη δεν τρέχουν πια."""
-    drop = [jid for jid, j in _JOBS.items() if j.get("user_key") == user_key and not j.get("server_running")]
+    drop = [jid for jid, j in _JOBS.items()
+            if j.get("user_key") == user_key and not j.get("server_running") and not j.get("detached")]
     for jid in drop:
         _JOBS.pop(jid, None)
     return len(drop)
@@ -143,7 +150,7 @@ def active_jobs(group: str, now: Optional[float] = None) -> List[Dict[str, Any]]
         if j.get("group") != group:
             continue
         server_live = bool(j.get("server_running")) and (now - float(j.get("server_ts") or 0)) < SERVER_STALE_SECONDS
-        client_live = (now - float(j.get("client_ts") or 0)) < CLIENT_STALE_SECONDS
+        client_live = (now - float(j.get("client_ts") or 0)) < (DETACHED_STALE_SECONDS if j.get("detached") else CLIENT_STALE_SECONDS)
         if not (server_live or client_live):
             _JOBS.pop(jid, None)  # νεκρό: καθάρισε
             continue
