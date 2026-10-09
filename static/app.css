@@ -2080,4 +2080,48 @@
     [data-theme="dark"] .numInputWrapper span.arrowDown:after {
       border-top-color: #9ca3af;
     }
-  
+
+/* GLOBAL #waitOverlay: το στοιχείο μεταφέρεται στο <body> (accounting_result.js / e3_check) και ΜΕΝΕΙ εκεί
+   μετά από partial navigation, ενώ το CSS του ζούσε σε <style> της κάθε σελίδας και χανόταν — με αποτέλεσμα
+   το «Φόρτωση δεδομένων Ε3...» να εμφανίζεται αστυλιάριστο στο κάτω μέρος άλλων σελίδων (π.χ. /search). */
+#waitOverlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999999;
+  display: none;
+  pointer-events: none;
+  align-items: center;
+  justify-content: center;
+}
+#waitOverlay[aria-hidden="false"] {
+  display: flex !important;
+  pointer-events: all;
+}
+#waitOverlay[aria-hidden="true"] {
+  display: none !important;
+}
+#waitOverlay > div {
+  background: #fff;
+  padding: 1.5rem;
+  border-radius: 0.75rem;
+  text-align: center;
+  min-width: 300px;
+  max-width: 90vw;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+#waitOverlay .spinner {
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #3b82f6;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  animation: waitOverlaySpin 1s linear infinite;
+  margin: 0 auto 0.8rem auto;
+}
+@keyframes waitOverlaySpin { to { transform: rotate(360deg); } }
+[data-theme="dark"] #waitOverlay > div { background: #111827; border: 1px solid #374151; }
+[data-theme="dark"] #waitOverlayTitle { color: #f3f4f6 !important; }
+[data-theme="dark"] #waitOverlayMsg { color: #cbd5e1 !important; }

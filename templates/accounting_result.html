@@ -231,6 +231,11 @@
     αποσβέσεις από το προηγούμενο έτος, απόθεμα λήξης με χειροκίνητη ή αυτόματη συμπλήρωση).
   </p>
 
+  <label class="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer mb-3" title="Τα δεδομένα myDATA που έχουν ήδη ληφθεί (ανά δίμηνο) επαναχρησιμοποιούνται για λίγα λεπτά/ώρες ώστε ο νέος έλεγχος να είναι γρήγορος. Τσέκαρέ το αν χαρακτήρισες παραστατικά στο myDATA ΜΟΛΙΣ τώρα και θέλεις νέα λήψη από την αρχή.">
+    <input id="arForceFresh" type="checkbox" class="rounded">
+    Φρέσκια λήψη από myDATA (αγνόηση των ήδη ληφθέντων δεδομένων)
+  </label>
+
   <div class="brain-tabs flex gap-2 mb-4">
     <button id="arTabSingleBtn" type="button" class="brain-tab-button active">Ατομικός</button>
     <button id="arTabBulkBtn" type="button" class="brain-tab-button">Μαζικός</button>
@@ -268,6 +273,10 @@
       </div>
 
       <div class="flex flex-col gap-1">
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Έλεγχος στο TAXISnet (ένα login ανά εταιρία): πρόβλεψη ΦΠΑ για την πιο πρόσφατη περίοδο χωρίς υποβληθείσα Φ2, προηγούμενη περίοδος/πιστωτικό υπόλοιπο και σύγκριση με υποβληθείσα δήλωση (πιθανή τροποποιητική). Ανενεργό = πολύ πιο γρήγορα: ΦΠΑ της τελευταίας ολοκληρωμένης περιόδου από το myDATA, χωρίς έλεγχο δηλώσεων.">
+          <input id="arSingleVatForecast" type="checkbox" class="ar-income-tax-toggle rounded">
+          Εκτίμηση ΦΠΑ &amp; τροποποιητικών (TAXISnet)
+        </label>
         <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer" title="Υπολογισμός φόρου εισοδήματος πάνω στο Φορολογητέο Αποτέλεσμα (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (από την ΑΑΔΕ — εκκαθαριστικό ή δήλωση Ν — αλλιώς από το ιστορικό υπολογισμών)">
           <input id="arSingleIncomeTax" type="checkbox" class="ar-income-tax-toggle rounded">
           Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση)
@@ -278,7 +287,7 @@
                class="hidden border rounded px-2 py-1 text-xs w-56">
       </div>
 
-      <button id="arSingleComputeBtn" type="button" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Υπολογισμός</button>
+      <button id="arSingleComputeBtn" type="button" data-lock-group="ar" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Υπολογισμός</button>
       <button id="arSinglePdfBtn" type="button" class="hidden px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">⬇ Λήψη PDF</button>
     </div>
 
@@ -304,11 +313,15 @@
           <label class="block text-xs text-gray-600 mb-1">Έως</label>
           <input id="arBulkTo" type="text" placeholder="dd/mm/yyyy" autocomplete="off" class="border rounded px-2 py-1 text-sm">
         </div>
+        <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Έλεγχος στο TAXISnet (ένα login ανά εταιρία): πρόβλεψη ΦΠΑ για την πιο πρόσφατη περίοδο χωρίς υποβληθείσα Φ2, προηγούμενη περίοδος/πιστωτικό υπόλοιπο και σύγκριση με υποβληθείσα δήλωση (πιθανή τροποποιητική). Ανενεργό = πολύ πιο γρήγορα: ΦΠΑ της τελευταίας ολοκληρωμένης περιόδου από το myDATA, χωρίς έλεγχο δηλώσεων.">
+          <input id="arBulkVatForecast" type="checkbox" class="ar-income-tax-toggle rounded">
+          Εκτίμηση ΦΠΑ &amp; τροποποιητικών (TAXISnet)
+        </label>
         <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer self-center" title="Υπολογισμός φόρου εισοδήματος ανά εταιρία (κλίμακα φυσικών / 22% νομικών), προκαταβολή τρέχοντος έτους και έκπτωση της προκαταβολής του προηγούμενου έτους (από την ΑΑΔΕ — εκκαθαριστικό ή δήλωση Ν — αλλιώς από το ιστορικό κάθε εταιρίας)">
           <input id="arBulkIncomeTax" type="checkbox" class="ar-income-tax-toggle rounded">
           Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση)
         </label>
-        <button id="arBulkRunBtn" type="button" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Έλεγχος &amp; Εξαγωγή</button>
+        <button id="arBulkRunBtn" type="button" data-lock-group="ar" class="px-4 py-2 rounded-md text-sm font-medium bg-sky-600 text-white hover:bg-sky-700">Έλεγχος &amp; Εξαγωγή</button>
         <button id="arBulkPdfBtn" type="button" disabled class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">⬇ Λήψη ZIP (PDF ανά εταιρία)</button>
         <button id="arBulkConsolidatedPdfBtn" type="button" disabled class="px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">⬇ Συγκεντρωτικό PDF</button>
         <button id="arBulkRunsBtn" type="button" title="Αποθηκευμένες μαζικές καταστάσεις" class="px-4 py-2 rounded-md text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200">📁 Αποθηκευμένα μαζικά</button>

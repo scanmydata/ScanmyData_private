@@ -963,8 +963,11 @@ async function initEpsilonPreviewPage(){
     const baseUrl = "/export/fastimport/kinitseis?vat=" + encodeURIComponent(ACTIVE_VAT);
     const mode = exportBtn.dataset.exportMode || 'strict';
     let targetUrl = baseUrl;
+    // Οι εξαιρεθείσες MARK (μπορεί να είναι εκατοντάδες) πάνε στο σώμα POST, όχι στο URL — αλλιώς
+    // ο server απαντά «Bad Request» (υπερβολικά μακρύ URL).
+    let dlOptions = {};
     if (EXCLUDED_MARKS.size > 0){
-      targetUrl += '&excluded_marks=' + encodeURIComponent(Array.from(EXCLUDED_MARKS).join(','));
+      dlOptions = { method: 'POST', body: new URLSearchParams({ excluded_marks: Array.from(EXCLUDED_MARKS).join(',') }) };
     }
     if (format === 'ld'){
       targetUrl += '&format=ld';
@@ -979,7 +982,7 @@ async function initEpsilonPreviewPage(){
       if (!proceed) return;
       targetUrl += '&confirm_new_partners=1';
     }
-    await performBridgeDownload(targetUrl, { mode, format });
+    await performBridgeDownload(targetUrl, Object.assign({ mode, format }, dlOptions));
   }
 
   // Ενημέρωση backup Epsilon: ζήτα .zip, POST στη γέφυρα, λήψη ενημερωμένου zip (ίδιο όνομα)

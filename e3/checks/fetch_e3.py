@@ -1,9 +1,18 @@
+import contextvars
+import hashlib
+import json
+import logging
+import os
 import re
+import threading
+import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
 
 try:
     from lxml import etree as ET
@@ -15,6 +24,117 @@ from ..e3_field_map import E3_FIELD_MAP
 
 _URL_REQUEST_E3 = "https://mydatapi.aade.gr/myDATA/RequestE3Info"
 _CLASS_TYPE_RE = re.compile(r"E3_(\d{3})(?:_(\d{3}))?", re.IGNORECASE)
+
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Διαχείριση πόρων / cache λήψης RequestE3Info
+#
+#  * ΕΝΑ κοινό HTTP session (keep-alive: χωρίς νέο TLS handshake σε κάθε σελίδα/παράθυρο) και
+#    ΟΡΙΟ ταυτόχρονων κλήσεων προς ΑΑΔΕ σε όλη τη διεργασία, ώστε πολλοί χρήστες/εταιρίες
+#    μαζί να μην πνίγουν τον server ούτε να τρώνε rate-limit.
+#  * Τα δισμηνιαία παράθυρα μιας περιόδου ανακτώνται παράλληλα (μέχρι 3 ταυτόχρονα).
+#  * Cache ανά (credential, παράθυρο ημερομηνιών) σε μνήμη + δίσκο (data/_cache/e3info): ένας νέος
+#    έλεγχος λογιστικού αποτελέσματος ΔΕΝ ξαναρωτά το myDATA για παράθυρα που ήδη ανακτήθηκαν.
+#    Γιατί παράθυρα και όχι «από τον τελευταίο MARK»: ο χαρακτηρισμός ενός παραστατικού μπορεί να
+#    αλλάξει ΜΕΤΑ την έκδοσή του (αχαρακτήριστο -> χαρακτηρισμένο) χωρίς να αλλάξει το MARK, οπότε ένα
+#    «μόνο τα νέα MARK» θα έδειχνε ψευδώς αχαρακτήριστα. Γι' αυτό το cache έχει διάρκεια ζωής ανά
+#    παράθυρο (σύντομη για πρόσφατα παράθυρα και για παράθυρα με αχαρακτήριστα, μεγάλη για παλιά).
+#    Δεν αποθηκεύεται ποτέ αποτέλεσμα που προήλθε από σφάλμα ΑΑΔΕ.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "_cache", "e3info")
+_CACHE_VERSION = 1
+TTL_UNCLASSIFIED = 20 * 60        # υπάρχουν αχαρακτήριστα: ο χρήστης πιθανόν τα διορθώνει αυτή την ώρα
+TTL_RECENT = 30 * 60              # παράθυρο που τελείωσε πρόσφατα (<45 ημέρες) ή τρέχει ακόμη
+TTL_OLD = 12 * 3600               # παλιό παράθυρο χωρίς αχαρακτήριστα
+TTL_EMPTY_RECENT = 15 * 60
+
+_CACHE_BYPASS = contextvars.ContextVar("e3info_cache_bypass", default=False)
+_HTTP_SEM = threading.BoundedSemaphore(8)
+_SESSION = requests.Session()
+_SESSION.mount("https://", HTTPAdapter(pool_connections=8, pool_maxsize=16))
+_MEM_CACHE: Dict[str, Tuple[float, List[dict]]] = {}
+_MEM_LOCK = threading.Lock()
+_KEY_LOCKS: Dict[str, threading.Lock] = {}
+_STATS = {"hits": 0, "misses": 0, "stored": 0}
+
+
+def set_cache_bypass(flag: bool) -> None:
+    """Για το ΤΡΕΧΟΝ αίτημα/thread: αγνόησε το cache (φρέσκια λήψη) και ανανέωσέ το."""
+    _CACHE_BYPASS.set(bool(flag))
+
+
+def cache_stats() -> Dict[str, int]:
+    return dict(_STATS)
+
+
+def _cache_key(aade_user: str, aade_key: str, date_from: str, date_to: str) -> str:
+    raw = f"{aade_user}|{aade_key}|{date_from}|{date_to}|v{_CACHE_VERSION}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _row_is_unclassified(row: dict) -> bool:
+    category = str(row.get("classification_category") or "").strip().upper()
+    return category.startswith("ΜΗ") and ("ΧΑΡΑΚΤΗΡΙΣΜ" in category)
+
+
+def _cache_ttl_seconds(window_to: str, rows: List[dict]) -> int:
+    if any(_row_is_unclassified(r) for r in rows):
+        return TTL_UNCLASSIFIED
+    try:
+        age_days = (date.today() - _parse_ddmmyyyy(window_to)).days
+    except Exception:
+        return TTL_RECENT
+    if age_days < 45:
+        return TTL_EMPTY_RECENT if not rows else TTL_RECENT
+    return TTL_OLD
+
+
+def _cache_path(key: str) -> str:
+    return os.path.join(_CACHE_DIR, key + ".json")
+
+
+def _cache_get(key: str, window_to: str) -> Optional[List[dict]]:
+    now = time.time()
+    with _MEM_LOCK:
+        hit = _MEM_CACHE.get(key)
+    if hit is None:
+        try:
+            with open(_cache_path(key), "r", encoding="utf-8") as fh:
+                blob = json.load(fh)
+            hit = (float(blob["saved"]), list(blob["rows"]))
+            with _MEM_LOCK:
+                _MEM_CACHE[key] = hit
+        except Exception:
+            return None
+    saved, rows = hit
+    if now - saved > _cache_ttl_seconds(window_to, rows):
+        return None
+    return [dict(r) for r in rows]
+
+
+def _cache_put(key: str, rows: List[dict]) -> None:
+    saved = time.time()
+    with _MEM_LOCK:
+        _MEM_CACHE[key] = (saved, [dict(r) for r in rows])
+    _STATS["stored"] += 1
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        tmp = _cache_path(key) + ".%d.tmp" % threading.get_ident()
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"saved": saved, "rows": rows}, fh, ensure_ascii=False)
+        os.replace(tmp, _cache_path(key))
+    except Exception:
+        _log.exception("could not persist E3Info cache %s", key)
+
+
+def _key_lock(key: str) -> threading.Lock:
+    with _MEM_LOCK:
+        lk = _KEY_LOCKS.get(key)
+        if lk is None:
+            lk = _KEY_LOCKS[key] = threading.Lock()
+        return lk
 
 
 def _safe_strip(value) -> str:
@@ -173,19 +293,56 @@ def fetch_e3_entries(mark: str, date_from: str, date_to: str, aade_user: str, aa
         return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
 
     chunks = _bimonthly_chunks(date_from, date_to)
+    bypass = _CACHE_BYPASS.get()   # το contextvar δεν περνά στα worker threads: διαβάζεται εδώ
     if len(chunks) <= 1:
-        return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
+        return _fetch_window_cached(mark, date_from, date_to, aade_user, aade_key, debug, bypass)
 
     if debug:
         print(f"[RequestE3Info] Splitting {date_from}–{date_to} into {len(chunks)} two-month windows")
     out: List[dict] = []
-    for cf, ct in chunks:
-        out.extend(_fetch_e3_entries_single_range(mark, cf, ct, aade_user, aade_key, debug=debug))
+    # Παράλληλη ανάκτηση των παραθύρων (η σειρά των αποτελεσμάτων διατηρείται — τα παράθυρα είναι ξένα).
+    with ThreadPoolExecutor(max_workers=min(3, len(chunks))) as pool:
+        futures = [
+            pool.submit(_fetch_window_cached, mark, cf, ct, aade_user, aade_key, debug, bypass)
+            for cf, ct in chunks
+        ]
+        for fut in futures:
+            out.extend(fut.result())
     return out
 
 
+def _fetch_window_cached(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str,
+                         debug: bool, bypass: bool) -> List[dict]:
+    """Ένα παράθυρο ημερομηνιών: από το cache αν είναι φρέσκο, αλλιώς live (και αποθήκευση αν πέτυχε)."""
+    if _safe_strip(mark) not in ("", "0"):
+        return _fetch_e3_entries_single_range(mark, date_from, date_to, aade_user, aade_key, debug=debug)
+    key = _cache_key(aade_user, aade_key, date_from, date_to)
+    if not bypass:
+        rows = _cache_get(key, date_to)
+        if rows is not None:
+            _STATS["hits"] += 1
+            return rows
+    with _key_lock(key):   # ίδιο παράθυρο ζητήθηκε ταυτόχρονα από δύο αιτήματα: ένα live fetch
+        if not bypass:
+            rows = _cache_get(key, date_to)
+            if rows is not None:
+                _STATS["hits"] += 1
+                return rows
+        _STATS["misses"] += 1
+        rows, ok = _fetch_e3_entries_single_range_ex(mark, date_from, date_to, aade_user, aade_key, debug=debug)
+        if ok:
+            _cache_put(key, rows)
+        return [dict(r) for r in rows]
+
+
 def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> List[dict]:
+    return _fetch_e3_entries_single_range_ex(mark, date_from, date_to, aade_user, aade_key, debug=debug)[0]
+
+
+def _fetch_e3_entries_single_range_ex(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> Tuple[List[dict], bool]:
     """Inner fetcher for a single date range with its own pagination + dedup.
+    Returns (entries, ok): ok=False όταν η ΑΑΔΕ απάντησε με σφάλμα/μη αναγνώσιμη απάντηση
+    (τότε το αποτέλεσμα ΔΕΝ μπαίνει στο cache).
 
     Dedup tuple is (mark, classification_type, amount, category). This
     catches legitimate cross-page duplicates (AADE returns the same
@@ -206,6 +363,7 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
 
     all_entries: List[dict] = []
     seen_entries = set()
+    ok = True
 
     while True:
         # Explicit timeout: without one, requests waits forever on a hung/slow
@@ -213,13 +371,15 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
         # error page (the hosting platform's own timeout) instead of a clean
         # error Flask can catch and turn into JSON — the browser then tries
         # to JSON-parse that HTML and fails with a confusing SyntaxError.
-        resp = requests.get(_URL_REQUEST_E3, params=params, headers=headers, timeout=60)
+        with _HTTP_SEM:
+            resp = _SESSION.get(_URL_REQUEST_E3, params=params, headers=headers, timeout=60)
         if debug:
             print(f"[RequestE3Info] Status: {resp.status_code}")
 
         if resp.status_code != 200:
             if debug:
                 print(f"[RequestE3Info] HTTP {resp.status_code}")
+            ok = False
             break
 
         if not resp.content:
@@ -228,6 +388,7 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
         try:
             root = ET.fromstring(resp.content)
         except Exception:
+            ok = False
             break
 
         invoice_node_names = {"expensesInvoiceClassification", "incomeInvoiceClassification", "E3Info"}
@@ -327,7 +488,7 @@ def _fetch_e3_entries_single_range(mark: str, date_from: str, date_to: str, aade
 
         break
 
-    return all_entries
+    return all_entries, ok
 
 
 def fetch_mark_classification_map(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> Dict[str, str]:

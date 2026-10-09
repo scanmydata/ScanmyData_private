@@ -1538,6 +1538,16 @@
         cleanupPageScopedListeners();
         window.__cleanupPageScripts = null;
 
+        // Ανοιχτό «wait overlay» που έμεινε στο <body> από την προηγούμενη σελίδα (το script που το άνοιξε δεν
+        // ελέγχει πια τη σελίδα) κλείνει πριν την αλλαγή — αλλιώς μένει ορφανό ή μπλοκάρει το UI της επόμενης.
+        try {
+          document.querySelectorAll('body > #waitOverlay').forEach(function (ov) {
+            ov.setAttribute('aria-hidden', 'true');
+            ov.style.display = 'none';
+            ov.style.pointerEvents = 'none';
+          });
+        } catch (_) {}
+
         // Swap content and trigger enter animation
         shell.classList.remove('page-loading');
         shell.innerHTML = nextShell.innerHTML;

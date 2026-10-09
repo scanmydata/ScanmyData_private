@@ -133,7 +133,7 @@
 
       <!-- Κουμπιά (ίδια σειρά) -->
       <div class="flex items-center gap-2 pt-2">
-        <button id="fetchSubmitBtn" type="submit" title="Εκκίνηση λήψης παραστατικών" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg shadow">Ανάκτηση</button>
+        <button id="fetchSubmitBtn" type="submit" data-lock-group="fetch" title="Εκκίνηση λήψης παραστατικών" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg shadow">Ανάκτηση</button>
       </div>
       </div>
 
@@ -175,7 +175,7 @@
             </div>
           </div>
           <div class="flex flex-col justify-end gap-2">
-            <button id="bulkFetchStartBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg shadow">Εκκίνηση Μαζικής Λήψης</button>
+            <button id="bulkFetchStartBtn" type="button" data-lock-group="fetch" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg shadow">Εκκίνηση Μαζικής Λήψης</button>
             <button id="bulkFetchStopBtn" type="button" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow" disabled>Διακοπή Μαζικής Λήψης</button>
             <div id="bulkFetchStatus" class="text-sm text-indigo-800"></div>
             <div class="text-xs text-gray-600">Η μαζική λήψη χρησιμοποιεί το παραπάνω δικό της διάστημα «Από / Έως».</div>

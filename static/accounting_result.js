@@ -121,9 +121,12 @@ async function postJson(url, body, timeoutMs) {
   const ctrl = timeoutMs ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    // Checkbox «Φρέσκια λήψη από myDATA»: ο server αγνοεί το cache λήψης (e3/checks/fetch_e3.py) και το ανανεώνει.
+    try { const fr = document.getElementById('arForceFresh'); if (fr && fr.checked) headers['X-AR-Fresh'] = '1'; } catch (_) {}
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body || {}),
       signal: ctrl ? ctrl.signal : undefined,
     });
@@ -534,13 +537,13 @@ function ensureJsZip() {
 // marked data-ar-goto="<id>" get a jsPDF internal link to the page holding
 // #<id>. Page mapping mirrors html2pdf's 'legacy' slicing (fixed-height
 // slices of the captured container, inner box = page minus margins).
-function arAddInternalPdfLinks(pdf, container, orientation, marginMm) {
+function arAddInternalPdfLinks(pdf, container, orientation, marginMm, captureWidth) {
   try {
     const pageW = orientation === 'landscape' ? 297 : 210;
     const pageH = orientation === 'landscape' ? 210 : 297;
     const innerW = pageW - 2 * marginMm;
     const innerH = pageH - 2 * marginMm;
-    const cw = container.scrollWidth;
+    const cw = captureWidth || container.scrollWidth;
     const slice = Math.floor(cw * innerH / innerW);
     const toMm = innerW / cw;
     const cr = container.getBoundingClientRect();
@@ -595,6 +598,12 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
     }
     const capturedWidth = container.scrollWidth;
     const capturedHeight = container.scrollHeight;
+    // Στην εφαρμογή το html2canvas μέσα στο html2pdf μετατοπίζει την απόδοση λίγα px προς τα δεξιά,
+    // οπότε η τελευταία στήλη του συγκεντρωτικού (ΦΠΑ + τα σύμβολα ▲ ≠) έβγαινε κομμένη (όπως και στο
+    // PDF ατομικού, βλ. buildIndividualPdfBlob). Σύλληψη σε λίγο φαρδύτερη περιοχή: το html2pdf
+    // απεικονίζει ΟΛΟ το canvas στο πλάτος της σελίδας, άρα δεν χάνεται τίποτα.
+    const PDF_EXTRA_PX = 48;
+    const captureWidth = capturedWidth + PDF_EXTRA_PX;
     const worker = window.html2pdf().from(container).set({
       margin: 8,
       image: { type: 'jpeg', quality: 0.98 },
@@ -604,7 +613,7 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
       // sized for the *unshifted* height, producing a blank leading page
       // and clipping the tail of the report (confirmed via a real exported
       // e3_check.html PDF using this same pipeline).
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth, height: capturedHeight, scrollX: 0, scrollY: 0 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: captureWidth, height: capturedHeight, scrollX: 0, scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: orientation || 'portrait' },
       // 'css' mode's page-break-inside:avoid detection is what produced a
       // blank leading page and mis-cropped columns on a real multi-client
@@ -616,7 +625,7 @@ async function buildPdfBlob(innerHtml, orientation, fitToOnePage) {
 
     if (!fitToOnePage) {
       const pdf = await worker.toPdf().get('pdf');
-      arAddInternalPdfLinks(pdf, container, orientation, 8);
+      arAddInternalPdfLinks(pdf, container, orientation, 8, captureWidth);
       return pdf.output('blob');
     }
     // Force everything onto a single A4 page (shrinking, never cropping):
@@ -1362,7 +1371,15 @@ async function arBulkAadePrecheck(names, jobId) {
 
 // Pre-check findings grouped by KIND (one table per απόθεμα/μισθοδοσία/
 // ενοίκιο/ΕΦΚΑ, a row per company) instead of one screen per company.
-function arBuildCheckGroups(rows) {
+// Επιλογές μισθοδοσίας/ενοικίου: πριν τον υπολογισμό πρώτη η χειροκίνητη καταχώρηση, ΜΕΤΑ τον υπολογισμό
+// (οι εταιρίες έχουν ήδη υπολογιστεί με τα τρέχοντα) πρώτη η συνέχεια με τα τρέχοντα.
+function arCheckOptsMonthly(post) {
+  const manual = { key: 'manual', label: 'Μηνιαία σύνολα (χειροκίνητα)' };
+  const skip = { key: 'skip', label: 'Συνέχεια με τα τρέχοντα' };
+  return post ? [skip, manual] : [manual, skip];
+}
+
+function arBuildCheckGroups(rows, post) {
   const ok = (rows || []).filter((r) => !r.error);
   const monthly = (c) => (c ? `Βρέθηκαν ${c.found_months} από ${c.expected_months} μηνιαίες εγγραφές` : '');
   return [
@@ -1374,6 +1391,7 @@ function arBuildCheckGroups(rows) {
         : (r.inventory_obligation_message && r.inventory_obligation_reason !== 'declared_prior_year'
           ? r.inventory_obligation_message : 'Δεν έχει καταχωρηθεί απόθεμα λήξης')),
       options: () => [
+        ...(post ? [{ key: '', label: 'Παράλειψη (δεν υπολογίζεται)' }] : []),
         { key: 'manual', label: 'Χειροκίνητα' },
         { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
         { key: 'pct10_up', label: '+10% επί έναρξης' },
@@ -1384,13 +1402,13 @@ function arBuildCheckGroups(rows) {
       key: 'payroll', title: '💼 Μισθοδοσία (κωδ. 581)',
       rows: ok.filter((r) => r.payroll_needs_input),
       finding: (r) => monthly(r.payroll_check),
-      options: () => [{ key: 'manual', label: 'Μηνιαία σύνολα (χειροκίνητα)' }, { key: 'skip', label: 'Συνέχεια με τα τρέχοντα' }],
+      options: () => arCheckOptsMonthly(post),
     },
     {
       key: 'rent', title: '🏠 Ενοίκιο (κωδ. 585/014)',
       rows: ok.filter((r) => r.rent_needs_input),
       finding: (r) => monthly(r.rent_check),
-      options: () => [{ key: 'manual', label: 'Μηνιαία σύνολα (χειροκίνητα)' }, { key: 'skip', label: 'Συνέχεια με τα τρέχοντα' }],
+      options: () => arCheckOptsMonthly(post),
     },
     {
       key: 'efka', title: '🧾 ΕΦΚΑ Μη-Μισθωτών (κωδ. 585/007)',
@@ -1406,7 +1424,8 @@ function arBuildCheckGroups(rows) {
 }
 
 // Resolves to {groupKey: {companyName: choiceKey}} or null (cancelled).
-function showGroupedChecksModal(groups) {
+function showGroupedChecksModal(groups, opts) {
+  opts = opts || {};
   return new Promise((resolve) => {
     const optionsHtml = (opts) => opts.map((o) => `<option value="${arEscapeHtml(o.key)}">${arEscapeHtml(o.label)}</option>`).join('');
     const sectionsHtml = groups.map((g) => {
@@ -1434,14 +1453,14 @@ function showGroupedChecksModal(groups) {
     modal.setAttribute('data-managed', '1');
     modal.innerHTML = `
       <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
-        <div class="modal-warning-title">Διαφορές προελέγχου — ανά είδος</div>
+        <div class="modal-warning-title">${arEscapeHtml(opts.title || 'Διαφορές προελέγχου — ανά είδος')}</div>
         <div class="modal-warning-body">
-          <p class="text-xs text-gray-500 mb-3">Διάλεξε ενέργεια ανά εταιρία (ή για όλες μιας ομάδας). Τα «χειροκίνητα» ζητούνται αμέσως μετά, ένα-ένα.</p>
+          <p class="text-xs text-gray-500 mb-3">${arEscapeHtml(opts.note || 'Διάλεξε ενέργεια ανά εταιρία (ή για όλες μιας ομάδας). Τα «χειροκίνητα» ζητούνται αμέσως μετά, ένα-ένα.')}</p>
           ${sectionsHtml}
         </div>
         <div class="modal-warning-actions">
-          <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arGcCancel">Άκυρο</button>
-          <button type="button" class="modal-warning-btn" id="arGcRun">Συνέχεια</button>
+          <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="arGcCancel">${arEscapeHtml(opts.cancelLabel || 'Άκυρο')}</button>
+          <button type="button" class="modal-warning-btn" id="arGcRun">${arEscapeHtml(opts.runLabel || 'Συνέχεια')}</button>
         </div>
       </div>`;
     document.body.appendChild(modal);
@@ -1488,6 +1507,7 @@ async function applyGroupedChecks(choices, rows, year, dateFrom, dateTo, statusE
   // Αμέσως, πριν το πρώτο αίτημα αποθήκευσης (Μαζικός: στο cross-page banner).
   showArOverlay('Εφαρμογή επιλογών...', 'Εφαρμογή των επιλογών σου στον προέλεγχο...');
   for (const [name, method] of Object.entries(choices.inventory || {})) {
+    if (!method) continue; // «Παράλειψη» (popup μετά τον υπολογισμό)
     let value = null;
     if (method === 'manual') {
       value = await showManualInventoryModal(`Απόθεμα λήξης — ${name} (${year})`, (rowByName.get(name) || {}).opening_inventory);
@@ -1749,6 +1769,7 @@ async function computeSingle() {
     credential_name: name, date_from: from, date_to: to,
     excel_group_totals: window.__arSingleExcelTotals || null,
     income_tax: arIncomeTaxEnabled('arSingleIncomeTax'),
+    vat_forecast: arIncomeTaxEnabled('arSingleVatForecast'),   // προαιρετική εκτίμηση ΦΠΑ & τροποποιητικών (TAXISnet)
     prev_advance_override: arPrevAdvanceOverride(),
     fresh: true, // νέος υπολογισμός: οι έλεγχοι μισθοδοσίας/ενοικίου/ΕΦΚΑ ξαναρωτούν (σβήνει παλιές επιλογές)
   };
@@ -2722,8 +2743,12 @@ async function deleteBulkRun(batchId, onDone) {
 var AR_BULK_PRECHECK_POPUPS = false;
 var AR_BULK_CHUNK_SIZE = 2;
 
-async function arBulkComputeChunked(names, from, to, jobId) {
-  const batchId = 'b' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+async function arBulkComputeChunked(names, from, to, jobId, opts) {
+  opts = opts || {};
+  const batchId = opts.batchId || ('b' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36));
+  // freshRun=true: νέο run (σβήνονται παλιές αχρησιμοποίητες επιλογές μισθοδοσίας/ενοικίου).
+  // false: επαναϋπολογισμός μετά το popup ελέγχων — οι επιλογές του χρήστη ΜΕΝΟΥΝ και εφαρμόζονται.
+  const freshRun = opts.freshRun !== false;
   const incomeTax = arIncomeTaxEnabled('arBulkIncomeTax');
   const results = [];
   let aborted = false;
@@ -2733,7 +2758,9 @@ async function arBulkComputeChunked(names, from, to, jobId) {
     setBulkCrossPageLabel(`Βήμα 3/3 — υπολογισμός ${i + 1}–${i + chunk.length}/${names.length}: ${chunk.join(', ')}`);
     const body = {
       credential_names: chunk, date_from: from, date_to: to, job_id: jobId, income_tax: incomeTax,
+      vat_forecast: arIncomeTaxEnabled('arBulkVatForecast'),
       batch_id: batchId, offset: i, grand_total: names.length, chunked: true, auto_continue: true,
+      fresh_run: freshRun,
     };
     let resp = await postJson('/api/accounting_result/bulk_compute', body);
     if (!resp.ok) { // στιγμιαίο πρόβλημα δικτύου/gateway: μία επανάληψη
@@ -2747,7 +2774,65 @@ async function arBulkComputeChunked(names, from, to, jobId) {
     (resp.results || []).forEach((r) => results.push(r));
     if (resp.aborted) { aborted = true; break; }
   }
-  return { ok: true, results, aborted };
+  return { ok: true, results, aborted, batchId };
+}
+
+// Κλείδωμα ομάδας: μόνο ΕΝΑΣ έλεγχος λογιστικού αποτελέσματος τη φορά (Μαζικός ή Ατομικός, από οποιονδήποτε
+// χρήστη της ομάδας). false = τρέχει ήδη άλλος (εμφανίζεται μήνυμα με το ποιος τον ξεκίνησε).
+async function arBulkAcquireLock(jobId, total, label) {
+  const r = await postJson('/api/accounting_result/lock/acquire', { job_id: jobId, total, label });
+  if (!r.ok && r.locked) {
+    showArFlash('🔒 ' + (r.error || 'Τρέχει ήδη έλεγχος λογιστικού αποτελέσματος.'), 'warning', 12000);
+    return false;
+  }
+  return true; // άλλο σφάλμα επικοινωνίας: μην μπλοκάρεις τον χρήστη
+}
+
+// ΜΕΤΑ τον τελικό υπολογισμό του Μαζικού: ένα popup ανά είδος ελέγχου (απόθεμα λήξης / μισθοδοσία / ενοίκιο /
+// ΕΦΚΑ Μη-Μισθωτών) με τις εταιρίες που έχουν εύρημα. Οι εταιρίες έχουν ήδη υπολογιστεί με τα τρέχοντα στοιχεία
+// (εκτός όσων χρειάζονται απόθεμα λήξης)· ό,τι διαλέξει ο χρήστης εφαρμόζεται και ΜΟΝΟ αυτές ξαναϋπολογίζονται
+// (τα δεδομένα myDATA είναι στο cache λήψης, άρα ο επαναϋπολογισμός είναι γρήγορος).
+async function arBulkPostChecks(bulkResp, from, to, year, batchId, statusEl) {
+  const rows = (bulkResp.results || []).map((r) => r.precheck).filter(Boolean);
+  const groups = arBuildCheckGroups(rows, true);
+  if (!groups.length) return { recomputed: 0 };
+  const choices = await showGroupedChecksModal(groups, {
+    title: 'Έλεγχοι μετά τον υπολογισμό — ανά είδος',
+    note: 'Οι εταιρίες έχουν ήδη υπολογιστεί με τα τρέχοντα στοιχεία (όσες χρειάζονται απόθεμα λήξης δεν υπολογίστηκαν). ' +
+      'Διάλεξε ενέργεια μόνο για όσες θέλεις να ξαναϋπολογιστούν — οι «χειροκίνητες» ζητούνται αμέσως μετά, ένα-ένα.',
+    runLabel: 'Εφαρμογή & επαναϋπολογισμός',
+    cancelLabel: 'Παράλειψη',
+  });
+  if (!choices) return { recomputed: 0, skipped: true };
+
+  // Μόνο όσες επιλογές αλλάζουν κάτι χρειάζονται επαναϋπολογισμό.
+  const eff = { inventory: {}, payroll: {}, rent: {}, efka: {} };
+  Object.entries(choices.inventory || {}).forEach(([n, m]) => { if (m) eff.inventory[n] = m; });
+  ['payroll', 'rent'].forEach((k) => Object.entries(choices[k] || {}).forEach(([n, m]) => { if (m === 'manual') eff[k][n] = m; }));
+  Object.entries(choices.efka || {}).forEach(([n, m]) => { if (m && m !== 'continue') eff.efka[n] = m; });
+  const names = Array.from(new Set(['inventory', 'payroll', 'rent', 'efka'].flatMap((k) => Object.keys(eff[k]))));
+  if (!names.length) return { recomputed: 0 };
+
+  const jobId2 = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  if (!(await arBulkAcquireLock(jobId2, names.length, 'εφαρμογή επιλογών ελέγχων…'))) return { recomputed: 0, locked: true };
+  startBulkCrossPageBanner(jobId2, names.length, `εφαρμογή επιλογών ελέγχων για ${names.length} εταιρίες…`);
+  let recomputed = 0;
+  try {
+    const applied = await applyGroupedChecks(eff, rows, year, from, to, statusEl);
+    if (!applied) return { recomputed: 0, cancelled: true };
+    setBulkCrossPageLabel(`επαναϋπολογισμός ${names.length} εταιριών μετά τους ελέγχους…`);
+    const r2 = await arBulkComputeChunked(names, from, to, jobId2, { batchId, freshRun: false });
+    const byName = new Map((r2.results || []).map((r) => [r.credential_name, r]));
+    bulkResp.results = (bulkResp.results || []).map((old) => {
+      const fresh = byName.get(old.credential_name);
+      if (!fresh) return old;
+      if (fresh.ok && !fresh.needs_inventory_input) recomputed += 1;
+      return (fresh.ok || !old.ok) ? fresh : old;   // αποτυχία επαναϋπολογισμού: κράτα το προηγούμενο αποτέλεσμα
+    });
+  } finally {
+    stopBulkCrossPageBanner();
+  }
+  return { recomputed };
 }
 
 async function runBulk() {
@@ -2763,11 +2848,18 @@ async function runBulk() {
     return;
   }
 
-  setBulkTableLocked(true);
-  AR_BULK_RUNNING = true;
   // One job id for the whole run: the cross-page progress flash (with
   // «Διακοπή») stays up on every page from the first ΑΑΔΕ check to the end.
   const jobId = 'ar-bulk-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  // Κλείδωμα ομάδας: δεν ξεκινά αν τρέχει ήδη άλλος έλεγχος λογιστικού αποτελέσματος (από οποιονδήποτε χρήστη).
+  if (!(await arBulkAcquireLock(jobId, names.length, `ξεκίνησε για ${names.length} εταιρίες…`))) {
+    const hasPrev = !!(window.__arBulkCompanies && window.__arBulkCompanies.length);
+    document.getElementById('arBulkPdfBtn').disabled = !hasPrev;
+    document.getElementById('arBulkConsolidatedPdfBtn').disabled = !hasPrev;
+    return;
+  }
+  setBulkTableLocked(true);
+  AR_BULK_RUNNING = true;
   startBulkCrossPageBanner(jobId, names.length, `ξεκίνησε για ${names.length} εταιρίες…`);
   // Manual-entry modals must outlive a partial navigation (which replaces
   // #appShell) so they can still pop up on whatever page the user is on.
@@ -2844,6 +2936,19 @@ async function runBulk() {
     return;
   }
 
+  // ΝΕΟ: popup ελέγχων (απόθεμα λήξης / μισθοδοσία / ενοίκιο / ΕΦΚΑ) ΜΕΤΑ τον υπολογισμό, με τις εταιρίες ανά
+  // είδος· ό,τι διαλέξει ο χρήστης εφαρμόζεται και ξαναϋπολογίζονται μόνο οι σχετικές εταιρίες.
+  let postRecomputed = 0;
+  if (!bulkResp.aborted) {
+    try {
+      const post = await arBulkPostChecks(bulkResp, from, to, year, bulkResp.batchId, statusEl);
+      postRecomputed = post.recomputed || 0;
+    } catch (postErr) {
+      console.warn('post-compute checks failed', postErr);
+      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): αποτυχία εφαρμογής ελέγχων — ' + (postErr && postErr.message ? postErr.message : String(postErr)), 'error');
+    }
+  }
+
   // Bulk mode deliberately does NOT render the full per-company report
   // tables inline (that stays exclusive to Ατομικός) — just a compact
   // one-line-per-company summary with a download button; the actual
@@ -2866,6 +2971,9 @@ async function runBulk() {
     : (errors.length
       ? ('Ολοκληρώθηκε με σφάλματα: ' + errors.join(' · '))
       : `Ολοκληρώθηκε (${companies.length} εταιρίες).`);
+  if (postRecomputed) {
+    statusMsg += ` Μετά τους ελέγχους ξαναϋπολογίστηκαν ${postRecomputed} εταιρίες.`;
+  }
   if (depreciationAmbiguousNames.length) {
     statusMsg += ` Σημείωση: βρέθηκαν πολλαπλές εγγραφές αποσβέσεων και αθροίστηκαν αυτόματα (χωρίς επιλογή) για: ${depreciationAmbiguousNames.join(', ')}.`;
   }
@@ -3006,7 +3114,7 @@ function renderSavedTable(companies) {
       : '';
     const credName = afmToCredentialName(afm);
     const actionCell = credName
-      ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-name="${arEscapeHtml(credName)}">Υπολογισμός</button>`
+      ? `<button type="button" class="text-xs px-2 py-1 rounded border hover:bg-gray-50 ar-saved-compute-btn" data-lock-group="ar" data-name="${arEscapeHtml(credName)}">Υπολογισμός</button>`
       : `<button type="button" class="ar-saved-nomydata-btn" style="background:#fef3c7;color:#b45309;border:1px solid #fcd34d;border-radius:9999px;width:1.35rem;height:1.35rem;font-size:0.75rem;font-weight:800;cursor:pointer;line-height:1;" title="Δεν υπάρχουν κωδικοί myDATA για αυτή την εταιρία — δεν μπορεί να υπολογιστεί λογιστικό αποτέλεσμα. Πάτησε για να φιλτράρεις τον πίνακα μόνο σε τέτοιες εταιρίες (ξανά για καθαρισμό).">i</button>`;
     // One ΑΑΔΕ lookup for everything the registry page gives us — type,
     // address, email/κινητό/σταθερό AND ΦΠΑ/κατηγορία βιβλίων (same login,

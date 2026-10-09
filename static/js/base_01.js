@@ -308,7 +308,7 @@
               // στο tab που οδηγεί το run, η τοπική ετικέτα είναι πιο φρέσκια από τον server
               if (local && local.jobId === j.job_id && local.label && j.phase !== 'server' && (Date.now() - (local.updatedAt || 0)) < 20000) label = local.label;
               var pct = (typeof j.percent === 'number') ? ' (' + j.percent + '%)' : '';
-              var by = (!j.mine && j.username) ? ' — από ' + j.username : '';
+              var by = j.username ? ' — εντολή: ' + j.username + (j.mine ? ' (εσύ)' : '') : '';
               renderBanner({ jobId: j.job_id, total: j.total }, withElapsed('Λογιστικό Αποτέλεσμα — ' + (label || 'εκτέλεση σε εξέλιξη') + pct + by));
               return;
             }
@@ -364,6 +364,134 @@
       function start() {
         if (pollTimer) return;
         pollTimer = setInterval(poll, 3000);
+        poll();
+      }
+      try { start(); } catch (_) {}
+    })();
+
+    // ============================================================================
+    // Δραστηριότητες ΟΜΑΔΑΣ (/api/group_activity): ό,τι τρέχει τώρα στην ενεργή ομάδα — Λήψη παραστατικών
+    // (ατομική/μαζική) και Λογιστικό Αποτέλεσμα (Ατομικός/Μαζικός) — με το ποιος έδωσε την εντολή.
+    //  * flash μήνυμα προς ΟΛΟΥΣ τους χρήστες της ομάδας (ο Μαζικός Λογιστικού έχει δικό του banner με Διακοπή
+    //    παραπάνω· ο χρήστης που ξεκίνησε μια λήψη βλέπει ήδη το δικό του flash προόδου με Διακοπή),
+    //  * κλείδωμα κουμπιών με data-lock-group="ar"|"fetch" όσο τρέχει το αντίστοιχο είδος εργασίας.
+    // Ο server επιβάλλει το κλείδωμα επίσης (HTTP 409), άρα και χωρίς αυτό το script δεν ξεκινά δεύτερη εργασία.
+    // ============================================================================
+    (function () {
+      var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single'], fetch: ['fetch'] };
+      var WHAT = { ar_bulk: 'Μαζικός υπολογισμός Λογιστικού Αποτελέσματος', ar_single: 'Ατομικός υπολογισμός Λογιστικού Αποτελέσματος', fetch: 'Λήψη παραστατικών' };
+      var state = [];
+      var timer = null;
+      var rendered = {};
+      function getContainer() {
+        var c = document.getElementById('flashContainer');
+        if (!c) c = document.getElementById('arFlashContainer');
+        if (!c && typeof ensureFlashContainer === 'function') c = ensureFlashContainer();
+        return c || document.body;
+      }
+      function removeAll() {
+        document.querySelectorAll('[data-group-activity]').forEach(function (el) { try { el.remove(); } catch (_) {} });
+      }
+      function bannerText(a) {
+        var label = a.label || WHAT[a.kind] || 'εργασία';
+        var pct = (typeof a.percent === 'number') ? ' (' + a.percent + '%)' : '';
+        var head = a.kind === 'fetch' ? label : (WHAT[a.kind] + ' — ' + label);
+        return head + pct + ' — εντολή: ' + (a.username || '—') + (a.mine ? ' (εσύ)' : '') + ' · κλειδωμένο μέχρι να ολοκληρωθεί';
+      }
+      function render(acts) {
+        var wanted = {};
+        var container = getContainer();
+        acts.forEach(function (a) {
+          // Ο Μαζικός Λογιστικού έχει το δικό του banner· ο Ατομικός φαίνεται ως overlay στον ίδιο τον χρήστη.
+          if (a.kind === 'ar_bulk') return;
+          if (a.kind === 'ar_single' && a.mine) return;
+          // Λήψη που ξεκίνησε εδώ: υπάρχει ήδη το δικό της flash προόδου (με Διακοπή).
+          if (a.kind === 'fetch' && a.mine && document.querySelector('[data-progress-flash="1"]')) return;
+          var id = 'groupActivity-' + a.id;
+          wanted[id] = true;
+          var el = document.getElementById(id);
+          // Το μήνυμα που έκλεισε ο χρήστης (×) δεν ξαναεμφανίζεται· το κλείδωμα των κουμπιών μένει.
+          if (!el && rendered[id]) return;
+          if (!el) {
+            rendered[id] = true;
+            el = document.createElement('div');
+            el.id = id;
+            el.className = 'flash-banner flash-info';
+            el.setAttribute('data-flash', '');
+            el.setAttribute('data-group-activity', '1');
+            el.setAttribute('data-ttl', '0');
+            el.style.display = 'flex';
+            el.style.alignItems = 'center';
+            el.style.gap = '0.5rem';
+            el.style.pointerEvents = 'auto';
+            el.style.order = '99'; // πριν από το banner προόδου Μαζικού (order 100), κάτω από τα dismissable
+            var span = document.createElement('span');
+            span.style.flex = '1 1 auto';
+            span.style.lineHeight = '1.3';
+            span.style.fontSize = '13px';
+            el.appendChild(span);
+            container.appendChild(el);
+          }
+          var t = el.querySelector('span');
+          var txt = '🔒 ' + bannerText(a);
+          if (t && t.textContent !== txt) t.textContent = txt;
+        });
+        document.querySelectorAll('[data-group-activity]').forEach(function (el) {
+          if (!wanted[el.id]) { try { el.remove(); } catch (_) {} }
+        });
+        Object.keys(rendered).forEach(function (k) { if (!wanted[k]) delete rendered[k]; });
+      }
+      function holderFor(group) {
+        var kinds = LOCK_KINDS[group] || [];
+        for (var i = 0; i < state.length; i++) if (kinds.indexOf(state[i].kind) >= 0) return state[i];
+        return null;
+      }
+      function applyLocks() {
+        document.querySelectorAll('[data-lock-group]').forEach(function (el) {
+          var holder = holderFor(el.getAttribute('data-lock-group'));
+          var marked = el.getAttribute('data-group-locked') === '1';
+          if (holder) {
+            if (!el.disabled) {
+              el.disabled = true;
+              if (!marked) {
+                el.setAttribute('data-group-locked', '1');
+                el.setAttribute('data-orig-title', el.getAttribute('title') || '');
+                marked = true;
+              }
+            }
+            if (marked) el.title = 'Κλειδωμένο: τρέχει ' + (WHAT[holder.kind] || 'εργασία') + ' (εντολή: ' + (holder.username || '—') + ')';
+          } else if (marked) {
+            el.disabled = false;
+            var ot = el.getAttribute('data-orig-title') || '';
+            if (ot) el.title = ot; else el.removeAttribute('title');
+            el.removeAttribute('data-group-locked');
+            el.removeAttribute('data-orig-title');
+          }
+        });
+      }
+      function poll() {
+        if (window.IS_LOGGED_IN !== true) { state = []; removeAll(); applyLocks(); return; }
+        fetch('/api/group_activity', { cache: 'no-store', credentials: 'same-origin', headers: { 'X-Wait-Overlay': 'skip' } })
+          .then(function (r) {
+            var ct = r.headers.get('content-type') || '';
+            if (!r.ok || ct.indexOf('json') < 0) { var e = new Error('group_activity HTTP ' + r.status); e.unauth = true; throw e; }
+            return r.json();
+          })
+          .then(function (data) {
+            state = (data && data.activities) || [];
+            window.__groupActivity = state;
+            render(state);
+            applyLocks();
+            try { window.dispatchEvent(new CustomEvent('group-activity', { detail: state })); } catch (_) {}
+          })
+          .catch(function (err) {
+            if (err && err.unauth) { state = []; removeAll(); applyLocks(); }
+          });
+      }
+      function start() {
+        if (timer) return;
+        timer = setInterval(poll, 3000);
+        setInterval(applyLocks, 1000); // κουμπιά που ξαναγράφονται/ενεργοποιούνται από τη σελίδα ή μετά από partial-nav
         poll();
       }
       try { start(); } catch (_) {}

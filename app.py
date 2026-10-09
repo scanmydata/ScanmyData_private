@@ -9977,6 +9977,12 @@ def _set_fetch_progress_state(fetch_key: str, status: str, percent: int, message
         if "started_at" in prev and "started_at" not in payload:
             payload["started_at"] = prev.get("started_at")
         fetch_progress_state[key] = payload
+    # Το banner «Λήψη σε εξέλιξη» που βλέπουν όλοι οι χρήστες της ομάδας (βλ. activity_registry).
+    try:
+        from accounting_result import activity_registry as _act_reg
+        _act_reg.update_by_ref("fetch:" + key, detail=str(message or ""), percent=pct)
+    except Exception:
+        pass
 
 
 def _with_progress_age(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -10025,6 +10031,17 @@ def _set_bulk_fetch_progress(job_id: str, status: str, percent: int, message: st
         if "started_at" in prev and "started_at" not in payload:
             payload["started_at"] = prev.get("started_at")
         bulk_fetch_progress_state[key] = payload
+    try:
+        from accounting_result import activity_registry as _act_reg
+        _cust = str((extra or {}).get("current_customer") or "").strip()
+        _idx = (extra or {}).get("current_index")
+        _tot = (extra or {}).get("total_customers")
+        _detail = (f"{_cust} ({_idx}/{_tot})" if _cust and _idx and _tot else (_cust or "")) or str(message or "")
+        _act_reg.update_by_ref("fetchbulk:" + key, detail=_detail, percent=pct,
+                               current=_idx if isinstance(_idx, int) else None,
+                               total=_tot if isinstance(_tot, int) else None)
+    except Exception:
+        pass
 
 
 def _get_bulk_fetch_progress(job_id: str) -> Dict[str, Any]:
@@ -10129,6 +10146,20 @@ def api_fetch_bulk_start():
     except Exception:
         pass
     job_id = f"bulk:{group_part}:{user_part}:{int(time.time())}:{secrets.token_hex(4)}"
+
+    # Κλείδωμα: μία λήψη παραστατικών τη φορά ανά ομάδα (όλοι οι χρήστες βλέπουν ποιος την ξεκίνησε).
+    from accounting_result import activity_registry as _act_reg
+    _fa_uk, _fa_un = _ar_user_ident()
+    _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
+        "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
+        label=f"Μαζική λήψη ({len(targets)} πελάτες)", ttl=_act_reg.TTL_FETCH, ref="fetchbulk:" + job_id,
+    ) if _ar_group_key() else (None, None)
+    if _fa_conflict:
+        return jsonify({
+            'ok': False, 'locked': True, 'locked_by': _fa_conflict.get('username') or '',
+            'error': f"Τρέχει ήδη λήψη παραστατικών ({_fa_conflict.get('label') or ''}) — εντολή από "
+                     f"{_fa_conflict.get('username') or 'άλλον χρήστη'}. Περίμενε να ολοκληρωθεί.",
+        }), 409
 
     _set_bulk_fetch_progress(
         job_id,
@@ -10419,15 +10450,22 @@ def api_fetch_bulk_start():
                 finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             )
 
+    def _bulk_worker_tracked(*_a):
+        try:
+            return _bulk_worker(*_a)
+        finally:
+            _act_reg.end(_fetch_act_id)   # ξεκλείδωμα όταν τελειώσει (ή αποτύχει) η λήψη
+
     try:
         t = threading.Thread(
-            target=_bulk_worker,
+            target=_bulk_worker_tracked,
             args=(job_id, targets, d1, d2, group_dir, log_group_name, log_group_obj, log_actor_id, log_actor_email, log_actor_username, app_obj),
             daemon=True
         )
         t.start()
     except Exception:
         log.exception('Failed to start bulk fetch worker')
+        _act_reg.end(_fetch_act_id)
         _set_bulk_fetch_progress(job_id, 'error', 100, 'Αποτυχία εκκίνησης worker μαζικής λήψης.')
         return jsonify({'ok': False, 'error': 'Αποτυχία εκκίνησης worker μαζικής λήψης.'}), 500
 
@@ -10750,12 +10788,36 @@ def fetch():
                                active_credential=active_name,
                                last_fetch_date_display=initial_last_fetch_date)
 
+        # Κλείδωμα: μία λήψη παραστατικών τη φορά ανά ομάδα (όλοι οι χρήστες βλέπουν ποιος την ξεκίνησε).
+        from accounting_result import activity_registry as _act_reg
+        _fa_uk, _fa_un = _ar_user_ident()
+        _fetch_act_id, _fa_conflict = _act_reg.begin_exclusive(
+            "fetch", ["fetch"], _ar_group_key(), _fa_uk, _fa_un,
+            label=f"Λήψη παραστατικών — {selected or vat}", ttl=_act_reg.TTL_FETCH, ref="fetch:" + fetch_key,
+        ) if _ar_group_key() else (None, None)
+        if _fa_conflict:
+            error = (f"Τρέχει ήδη λήψη παραστατικών ({_fa_conflict.get('label') or ''}) — εντολή από "
+                     f"{_fa_conflict.get('username') or 'άλλον χρήστη'}. Περίμενε να ολοκληρωθεί.")
+            if wants_json:
+                return jsonify({"ok": False, "error": error, "status": "running", "locked": True,
+                                "locked_by": _fa_conflict.get("username") or ""}), 409
+            return safe_render("fetch.html", credentials=creds, message=message,
+                               error=error, preview=preview, active_page="fetch",
+                               active_credential=active_name,
+                               last_fetch_date_display=initial_last_fetch_date)
+
         _set_fetch_progress_state(fetch_key, "running", 1, "Η λήψη ξεκίνησε.", started_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+
+        def _do_fetch_tracked(*_a):
+            try:
+                return _do_fetch(*_a)
+            finally:
+                _act_reg.end(_fetch_act_id)   # ξεκλείδωμα όταν τελειώσει (ή αποτύχει) η λήψη
 
         group_dir = get_group_base_dir()
         try:
             t = threading.Thread(
-                target=_do_fetch,
+                target=_do_fetch_tracked,
                 args=(
                     aade_user,
                     aade_key,
@@ -10776,6 +10838,7 @@ def fetch():
             t.start()
         except Exception:
             log.exception("Failed to start background fetch thread")
+            _act_reg.end(_fetch_act_id)
 
         message = "Fetch started – results will be saved shortly."
         preview = []
@@ -17294,7 +17357,7 @@ def epsilon_preview():
                            allow_backup_export=_perms["backup"])
 
 
-@app.route("/export/fastimport/kinitseis")
+@app.route("/export/fastimport/kinitseis", methods=["GET", "POST"])
 def export_fastimport_kinitseis():
     vat = request.args.get("vat") or ""
     confirm = request.args.get("confirm_new_partners") == "1"
@@ -17307,7 +17370,9 @@ def export_fastimport_kinitseis():
         return jsonify({"ok": False, "error": "Η λήψη αρχείου HyperLog (.ld) δεν είναι ενεργοποιημένη για την ομάδα σας."}), 403
 
     # Προαιρετικό φιλτράρισμα από το preview: MARKs που ο χρήστης διέγραψε πριν το export
-    excluded_marks_raw = (request.args.get("excluded_marks") or "").strip()
+    # Με εκατοντάδες MARK (π.χ. «Εξαίρεση ήδη εξαγμένων») η λίστα δεν χωράει στο URL (Bad Request) —
+    # ο browser την στέλνει πλέον στο σώμα POST· το GET στο query μένει για συμβατότητα.
+    excluded_marks_raw = (request.form.get("excluded_marks") or request.args.get("excluded_marks") or "").strip()
     excluded_marks = {m.strip() for m in excluded_marks_raw.split(",") if m.strip()}
     temp_invoices_json: Optional[str] = None
 
@@ -18890,6 +18955,27 @@ def _ar_prev_advance_from_aade(vat: str, year: int, legal_kind: Optional[str]) -
 
 @app.route("/api/accounting_result/compute", methods=["POST"])
 def api_accounting_result_compute():
+    """Ατομικός υπολογισμός: κλειδώνει τα λογιστικά αποτελέσματα της ομάδας όσο τρέχει (βλ. _ar_lock_conflict)."""
+    from accounting_result import activity_registry as ar_act
+    _p0 = request.get_json(silent=True) or {}
+    group = _ar_group_key()
+    act_id = None
+    if group:
+        uk, un = _ar_user_ident()
+        act_id, conflict = ar_act.begin_exclusive(
+            "ar_single", ["ar_single"], group, uk, un,
+            label=str(_p0.get("credential_name") or "Ατομικός υπολογισμός"),
+            extra_conflict=_ar_bulk_conflict(""),
+        )
+        if conflict:
+            return _ar_locked_response(conflict)
+    try:
+        return _api_accounting_result_compute_impl()
+    finally:
+        ar_act.end(act_id)
+
+
+def _api_accounting_result_compute_impl():
     try:
         payload = request.get_json(silent=True) or {}
         credential_name, cred = _ar_resolve_credential(payload)
@@ -19038,7 +19124,10 @@ def api_accounting_result_compute():
         epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
         settings = load_settings() or {}
 
-        vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path))
+        # Προαιρετική «Εκτίμηση ΦΠΑ & τροποποιητικών» (έλεγχος δηλώσεων Φ2 στο TAXISnet): χωρίς το checkbox
+        # δεν γίνεται login TAXISnet (πολύ πιο γρήγορα). Παλιοί clients χωρίς το πεδίο = ενεργό, όπως πριν.
+        vat_forecast = bool(payload.get("vat_forecast", True))
+        vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path), verify=vat_forecast)
         report = ar_engine.build_report(
             vat, date_from, date_to, cred, settings,
             epsilon_records, raw_invoices, aade_user, aade_key,
@@ -19084,13 +19173,14 @@ def api_accounting_result_compute():
             report_notes.append(small_business_note)
         if vat_plan["basis"]:
             report["vat_period_basis"] = vat_plan["basis"]
-        _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
-        prev_vat_note = _ar_prev_vat_note(report)
-        if prev_vat_note:
-            report_notes.append(prev_vat_note)
-        declared_note = _ar_vat_declared_check_note(report)
-        if declared_note:
-            report_notes.append(declared_note)
+        if vat_forecast:
+            _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
+            prev_vat_note = _ar_prev_vat_note(report)
+            if prev_vat_note:
+                report_notes.append(prev_vat_note)
+            declared_note = _ar_vat_declared_check_note(report)
+            if declared_note:
+                report_notes.append(declared_note)
         vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
         if vat_inflow_note:
             report_notes.append(vat_inflow_note)
@@ -19388,6 +19478,11 @@ def api_accounting_result_bulk_compute():
         from accounting_result import job_registry as ar_jobs
         settings = load_settings() or {}
 
+        # Κλείδωμα: αν τρέχει ΑΛΛΟΣ έλεγχος λογιστικού αποτελέσματος στην ομάδα (όχι αυτό το run), μην ξεκινάς.
+        _lock_conflict = _ar_lock_conflict(job_id)
+        if _lock_conflict:
+            return _ar_locked_response(_lock_conflict)
+
         total = len(names)
         # ΝΕΟ: ο browser στέλνει τον Μαζικό σε μικρά chunks (ένα μακρύ αίτημα για δεκάδες εταιρίες
         # έπεφτε σε timeout). offset/grand_total = θέση του chunk στο συνολικό run (για πρόοδο),
@@ -19458,6 +19553,10 @@ def api_accounting_result_bulk_compute():
                 continue
 
             path = _ar_store_path(vat)
+            if payload.get("fresh_run"):
+                # Νέο run: οι έλεγχοι μισθοδοσίας/ενοικίου ξαναρωτούν πάντα (καμία παλιά αχρησιμοποίητη
+                # επιλογή). Στον επαναϋπολογισμό μετά το popup ελέγχων ΔΕΝ σβήνονται (είναι οι νέες επιλογές).
+                _ar_clear_stale_resolutions(path, year)
             # ΦΠΑ first, then the rest of THIS company's computation - see
             # _ar_ensure_vat_profile_checked's docstring.
             _step("έλεγχος προφίλ ΦΠΑ/Μητρώου ΑΑΔΕ", idx, name)
@@ -19483,6 +19582,7 @@ def api_accounting_result_bulk_compute():
             # normally a no-op; it only fires if that pre-flight step was
             # skipped/cancelled for this particular company.
             payroll_res = _ar_payroll_resolution(path, year, current_period_entries[0], date_from, date_to)
+            _payroll_flag, _payroll_chk = payroll_res["needs_input"], payroll_res["payroll_check"]
             if payroll_res["needs_input"] and auto_continue:
                 # Χωρίς popup: ο Μαζικός συνεχίζει με τα τρέχοντα στοιχεία, η σημείωση μένει στην αναφορά.
                 payroll_res = {"needs_input": False, "payroll_manual_total": None,
@@ -19498,6 +19598,7 @@ def api_accounting_result_bulk_compute():
                 continue
             # Same blocking pattern for rent - see _ar_rent_resolution.
             rent_res = _ar_rent_resolution(path, year, current_period_entries[0], date_from, date_to)
+            _rent_flag, _rent_chk = rent_res["needs_input"], rent_res["rent_check"]
             if rent_res["needs_input"] and auto_continue:
                 rent_res = {"needs_input": False, "rent_manual_total": None,
                             "rent_check": rent_res["rent_check"], "resolution": "auto"}
@@ -19522,6 +19623,10 @@ def api_accounting_result_bulk_compute():
                 if needs_input:
                     results.append({
                         "credential_name": name, "ok": True, "needs_inventory_input": True,
+                        "precheck": _ar_bulk_precheck_row(
+                            name, vat, path, year, current_period_entries[0], date_from, date_to,
+                            inventory_obligation, True, opening, False,
+                            _payroll_flag, _payroll_chk, _rent_flag, _rent_chk, dep_entries),
                         "vat": vat, "year": year, "opening_inventory": opening,
                         "vat_auto_check": vat_auto_check,
                         "books_category_mismatch": books_category_mismatch,
@@ -19533,8 +19638,9 @@ def api_accounting_result_bulk_compute():
 
             try:
                 epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
-                _step("πρόβλεψη ΦΠΑ (έλεγχος δηλώσεων TAXISnet)", idx, name)
-                vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path))
+                vat_forecast = bool(payload.get("vat_forecast", True))
+                _step("πρόβλεψη ΦΠΑ (έλεγχος δηλώσεων TAXISnet)" if vat_forecast else "ΦΠΑ περιόδου (χωρίς έλεγχο TAXISnet)", idx, name)
+                vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path), verify=vat_forecast)
                 _step("υπολογισμός αναφοράς", idx, name)
                 report = ar_engine.build_report(
                     vat, date_from, date_to, cred, settings,
@@ -19569,13 +19675,14 @@ def api_accounting_result_bulk_compute():
                     report_notes.append(small_business_note)
                 if vat_plan["basis"]:
                     report["vat_period_basis"] = vat_plan["basis"]
-                _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
-                prev_vat_note = _ar_prev_vat_note(report)
-                if prev_vat_note:
-                    report_notes.append(prev_vat_note)
-                declared_note = _ar_vat_declared_check_note(report)
-                if declared_note:
-                    report_notes.append(declared_note)
+                if vat_forecast:
+                    _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
+                    prev_vat_note = _ar_prev_vat_note(report)
+                    if prev_vat_note:
+                        report_notes.append(prev_vat_note)
+                    declared_note = _ar_vat_declared_check_note(report)
+                    if declared_note:
+                        report_notes.append(declared_note)
                 vat_inflow_note = _ar_unclassified_vat_inflow_note(report, aade_user, aade_key)
                 if vat_inflow_note:
                     report_notes.append(vat_inflow_note)
@@ -19618,6 +19725,11 @@ def api_accounting_result_bulk_compute():
                 results.append({
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
                     "depreciation_auto_summed": len(dep_entries) > 1,
+                    "precheck": _ar_bulk_precheck_row(
+                        name, vat, path, year, current_period_entries[0], date_from, date_to,
+                        inventory_obligation, has_inventory, opening, True,
+                        _payroll_flag, _payroll_chk, _rent_flag, _rent_chk, dep_entries,
+                        efka_note=efka_note, efka_check=report.get("efka_self_employed_check")),
                     "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
                     "vat_auto_check": vat_auto_check,
                     "books_category_mismatch": books_category_mismatch,
@@ -19661,6 +19773,138 @@ def _ar_user_ident():
     except Exception:
         pass
     return "", ""
+
+
+_AR_UNSET = object()
+_AR_LOCK_GUARD = threading.Lock()
+
+
+def _ar_bulk_conflict(exclude_job_id: str = ""):
+    """Άλλος ΜΑΖΙΚΟΣ υπολογισμός Λογιστικού Αποτελέσματος που τρέχει στην ενεργή ομάδα (εκτός του exclude_job_id)."""
+    from accounting_result import job_registry as ar_jobs
+    group = _ar_group_key()
+    if not group:
+        return None
+    for j in ar_jobs.active_jobs(group):
+        if j.get("job_id") != exclude_job_id:
+            return {"kind": "ar_bulk", "username": j.get("username") or "", "label": j.get("label") or ""}
+    return None
+
+
+def _ar_lock_conflict(exclude_job_id: str = ""):
+    """Οποιοσδήποτε ΑΛΛΟΣ έλεγχος Λογιστικού Αποτελέσματος (Μαζικός ή Ατομικός) που τρέχει στην ενεργή
+    ομάδα — όσο τρέχει, τα λογιστικά αποτελέσματα είναι κλειδωμένα για όλους."""
+    from accounting_result import activity_registry as ar_act
+    group = _ar_group_key()
+    if not group:
+        return None
+    c = _ar_bulk_conflict(exclude_job_id)
+    if c:
+        return c
+    single = ar_act.find_conflict(["ar_single"], group)
+    if single:
+        return {"kind": "ar_single", "username": single.get("username") or "", "label": single.get("label") or ""}
+    return None
+
+
+def _ar_locked_response(conflict):
+    who = conflict.get("username") or "άλλος χρήστης"
+    what = "Μαζικός υπολογισμός" if conflict.get("kind") == "ar_bulk" else "Ατομικός υπολογισμός"
+    return jsonify({
+        "ok": False, "locked": True, "locked_by": who,
+        "error": f"Τρέχει ήδη έλεγχος Λογιστικού Αποτελέσματος ({what} — εντολή από {who}). "
+                 "Περίμενε να ολοκληρωθεί και ξαναδοκίμασε.",
+    }), 409
+
+
+def _ar_bulk_precheck_row(name, vat, path, year, entries, date_from, date_to, obligation, has_inventory,
+                          opening, closing_known, payroll_flag, payroll_chk, rent_flag, rent_chk,
+                          dep_entries, efka_note=_AR_UNSET, efka_check=None):
+    """Ίδια μορφή με τις γραμμές του /inventory/bulk_status, αλλά από τα δεδομένα που ο υπολογισμός έχει
+    ΗΔΗ στη μνήμη (χωρίς νέα λήψη): τροφοδοτεί το popup ελέγχων ΜΕΤΑ τον υπολογισμό του Μαζικού."""
+    try:
+        if efka_note is _AR_UNSET:
+            efka_note = _ar_efka_self_employed_note(path, year, entries, date_from, date_to)
+        efka_short = bool(efka_note and not efka_note.get("resolved_manual"))
+        if efka_short and not efka_check:
+            efka_check = _ar_efka_completeness(path, year, entries, date_from, date_to)
+        row = {
+            "name": name, "vat": vat,
+            "opening_inventory": opening if has_inventory else {},
+            "closing_inventory_known": bool(closing_known),
+            "inventory_applicable": bool(has_inventory),
+            "depreciation_ambiguous": len(dep_entries) > 1,
+            "payroll_needs_input": bool(payroll_flag), "payroll_check": payroll_chk,
+            "rent_needs_input": bool(rent_flag), "rent_check": rent_chk,
+            "efka_shortfall": efka_short,
+            "efka_saved_reason": (efka_note or {}).get("saved_reason") or "",
+            "legal_kind": _ar_legal_kind(path, vat),
+            "efka_check": efka_check if efka_short else None,
+        }
+        if has_inventory and obligation:
+            row["inventory_obligation_reason"] = obligation.get("reason")
+            row["inventory_obligation_message"] = obligation.get("message")
+            row["inventory_new_obligation"] = obligation.get("new_obligation")
+        return row
+    except Exception:
+        log.exception("could not build bulk precheck row for %s", name)
+        return None
+
+
+@app.before_request
+def _ar_e3_cache_bypass_hook():
+    """Το checkbox «Φρέσκια λήψη από myDATA» στέλνει X-AR-Fresh: 1 — τότε αγνοείται το cache λήψης E3."""
+    try:
+        from e3.checks import fetch_e3 as _fe3
+        _fe3.set_cache_bypass(request.headers.get("X-AR-Fresh") == "1")
+    except Exception:
+        pass
+
+
+@app.route("/api/accounting_result/lock/acquire", methods=["POST"])
+def api_accounting_result_lock_acquire():
+    """Ξεκίνημα Μαζικού: ελέγχει ότι δεν τρέχει άλλος έλεγχος λογιστικού αποτελέσματος στην ομάδα και
+    καταχωρεί το run (ο browser συνεχίζει με heartbeat στο /bulk_job)."""
+    try:
+        from accounting_result import job_registry as ar_jobs
+        payload = request.get_json(silent=True) or {}
+        job_id = str(payload.get("job_id") or "").strip()
+        group = _ar_group_key()
+        if not job_id or not group:
+            return jsonify({"ok": True, "lock": "none"}), 200
+        with _AR_LOCK_GUARD:
+            conflict = _ar_lock_conflict(job_id)
+            if conflict:
+                return _ar_locked_response(conflict)
+            uk, un = _ar_user_ident()
+            ar_jobs.touch_job(job_id, group, uk, un, payload.get("label"), payload.get("total"))
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/group_activity", methods=["GET"])
+def api_group_activity():
+    """Ό,τι τρέχει ΤΩΡΑ στην ενεργή ομάδα (Μαζικός/Ατομικός Λογιστικού Αποτελέσματος, Λήψη παραστατικών),
+    με το ποιος έδωσε την εντολή — για flash μηνύματα σε όλους τους χρήστες και κλείδωμα κουμπιών."""
+    try:
+        from accounting_result import job_registry as ar_jobs
+        from accounting_result import activity_registry as ar_act
+        group = _ar_group_key()
+        me, _ = _ar_user_ident()
+        acts = []
+        if group:
+            for j in ar_jobs.active_jobs(group):
+                acts.append({"id": j["job_id"], "kind": "ar_bulk", "label": j.get("label") or "",
+                             "percent": j.get("percent"), "username": j.get("username") or "",
+                             "mine": bool(me) and j.get("user_key") == me, "started": j.get("started")})
+            for e in ar_act.active(group):
+                acts.append({"id": e["id"], "kind": e["kind"], "label": e.get("label") or "",
+                             "percent": e.get("percent"), "username": e.get("username") or "",
+                             "mine": bool(me) and e.get("user_key") == me, "started": e.get("started")})
+        return jsonify({"ok": True, "activities": acts}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/accounting_result/bulk_job", methods=["POST"])
@@ -20449,7 +20693,7 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 _AR_SMALL_BUSINESS_LIMIT = 10000.0
 
 
-def _ar_plan_vat_period(vat: str, path: str, date_to: str, vat_applicable: bool) -> Dict[str, Any]:
+def _ar_plan_vat_period(vat: str, path: str, date_to: str, vat_applicable: bool, verify: bool = True) -> Dict[str, Any]:
     """Περίοδος ΦΠΑ της πρόβλεψης, ΠΡΙΝ το build_report: η πιο πρόσφατη περίοδος (μήνας/τρίμηνο)
     ως την ημερομηνία ελέγχου για την οποία δεν έχει υποβληθεί δήλωση Φ2 (βλ.
     aade_vat_prev.fetch_vat_periods_for_anchor). Ένα login TAXISnet — τα previous/current
@@ -20464,8 +20708,11 @@ def _ar_plan_vat_period(vat: str, path: str, date_to: str, vat_applicable: bool)
         anchor = ar_engine.parse_date(date_to)
         if not anchor:
             return out
-        user, pw = _ar_lookup_taxis_creds(vat)
-        failure = "δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία"
+        # verify=False (checkbox «Εκτίμηση ΦΠΑ & τροποποιητικών» ανενεργό): κανένα login TAXISnet — μόνο η
+        # τελευταία ολοκληρωμένη περίοδος ως την ημερομηνία ελέγχου, από το myDATA.
+        user, pw = _ar_lookup_taxis_creds(vat) if verify else ("", "")
+        failure = ("δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία" if verify
+                   else "ο έλεγχος δηλώσεων TAXISnet είναι απενεργοποιημένος")
         if user and pw:
             try:
                 from e3.checks.aade_vat_prev import fetch_vat_periods_for_anchor
