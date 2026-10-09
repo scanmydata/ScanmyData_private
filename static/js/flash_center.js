@@ -264,7 +264,11 @@
           var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
           if (!a) return;
           var u = new URL(a.getAttribute('href'), window.location.href);
-          if (/\/(api\/)?logout\/?$/.test(u.pathname)) { skipPersist = true; writeStore([]); }
+          if (/\/(api\/)?logout\/?$/.test(u.pathname)) {
+            skipPersist = true; writeStore([]);
+            // το banner προόδου Μαζικού Λογιστικού Αποτελέσματος δεν πρέπει να περάσει στη σελίδα σύνδεσης
+            try { sessionStorage.removeItem('arBulkActiveJob'); } catch (_) {}
+          }
         } catch (_) {}
       }, true);
       window.addEventListener('pagehide', persistOnLeave);

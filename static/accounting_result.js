@@ -428,7 +428,7 @@ function buildReportSectionHtml(name, vat, from, to, r, opts) {
     ${forPdf ? '' : arIncomeTaxSectionHtml(r.income_tax)}
 
     ${r.vat_applicable !== false && r.vat_period_from && r.vat_period_to ? `
-    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${arEscapeHtml(ddmmyyyy(r.vat_period_from))} – ${arEscapeHtml(ddmmyyyy(r.vat_period_to))}</div>` : ''}
+    <div style="font-size:1rem;font-weight:700;color:#0f172a;margin-top:6px;">ΦΠΑ περιόδου ${arEscapeHtml(ddmmyyyy(r.vat_period_from))} – ${arEscapeHtml(ddmmyyyy(r.vat_period_to))}</div>${r.vat_period_basis && r.vat_period_basis.text ? `<div style="font-size:0.78rem;color:#475569;margin-top:2px;">${arEscapeHtml(r.vat_period_basis.text)}</div>` : ''}` : ''}
     <table class="ar-report-table" style="margin-top:4px;">
       <tbody>
         <tr>
@@ -2197,10 +2197,22 @@ function initSavedDataTable() {
 // style as the E3 Bulk one and as fetch.py's bulk-download banner), driven
 // by a sessionStorage flag so it keeps showing (and stays abortable) even
 // if the user navigates away from this page while the run continues.
+// ΝΕΟ: ενημέρωση του server για το run που οδηγεί αυτός ο browser (φάσεις ΑΑΔΕ/προελέγχου/popup), ώστε
+// το banner προόδου να φαίνεται σε κάθε χρήστη της ομάδας όσο το run ζει (και να χάνεται αν ο browser φύγει).
+function arSyncBulkJob(jobId, total, label) {
+  try {
+    fetch('/api/accounting_result/bulk_job', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', keepalive: true,
+      body: JSON.stringify({ job_id: jobId, total, label }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 function startBulkCrossPageBanner(jobId, total, label) {
   try {
     sessionStorage.setItem('arBulkActiveJob', JSON.stringify({ jobId, total, startedAt: Date.now(), label: label || '', updatedAt: Date.now() }));
   } catch (_) {}
+  arSyncBulkJob(jobId, total, label || '');
   // Heartbeat: while THIS page's script is alive (it survives partial
   // navigation) it keeps updatedAt fresh. A full page load / logout kills
   // the script, the heartbeat stops, and base_01.js drops the label within
@@ -2216,6 +2228,7 @@ function startBulkCrossPageBanner(jobId, total, label) {
       if (!a) { clearInterval(window.__arBulkHeartbeat); return; }
       a.updatedAt = Date.now();
       sessionStorage.setItem('arBulkActiveJob', JSON.stringify(a));
+      arSyncBulkJob(a.jobId, a.total, a.label || '');
     } catch (_) {}
   }, 3000);
   window.addEventListener('beforeunload', arBulkBeforeUnload);
@@ -2258,6 +2271,15 @@ function stopBulkCrossPageBanner() {
   clearInterval(window.__arBulkHeartbeat);
   window.removeEventListener('beforeunload', arBulkBeforeUnload);
   try {
+    const a = JSON.parse(sessionStorage.getItem('arBulkActiveJob') || 'null');
+    if (a && a.jobId) {
+      fetch('/api/accounting_result/bulk_job/finish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', keepalive: true,
+        body: JSON.stringify({ job_id: a.jobId }),
+      }).catch(() => {});
+    }
+  } catch (_) {}
+  try {
     sessionStorage.removeItem('arBulkActiveJob');
     const el = document.getElementById('arBulkProgressFlash');
     if (el) el.remove();
@@ -2269,6 +2291,10 @@ function stopBulkCrossPageBanner() {
 // this page keeps its own fixed top-right stack (#arFlashContainer, styled in
 // accounting_result.html) rather than depending on globals that don't exist.
 function _arEnsureFlashContainer() {
+  // ΝΕΟ: το κοινό #flashContainer (εκτός #appShell, μένει στο partial nav) — μία στήλη για
+  // όλα τα μηνύματα, χωρίς δεύτερο fixed container που επικαλυπτόταν με το πρώτο.
+  const shared = document.getElementById('flashContainer');
+  if (shared) return shared;
   let container = document.getElementById('arFlashContainer');
   if (!container) {
     container = document.createElement('div');

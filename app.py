@@ -1592,6 +1592,15 @@ def _drop_stale_flashes_on_logout(sender, user=None, **extra):
         session.pop("_flashes", None)
     except Exception:
         pass
+    # Η πρόοδος Μαζικού Λογιστικού Αποτελέσματος που οδηγούσε ο browser αυτού του χρήστη
+    # (ΑΑΔΕ/προέλεγχος) δεν τρέχει πια μετά το logout — να μη φαίνεται σε κανέναν.
+    try:
+        from accounting_result import job_registry as _ar_jobs_lo
+        _uid = str(getattr(user, "id", "") or getattr(user, "username", "") or "")
+        if _uid:
+            _ar_jobs_lo.drop_client_jobs(_uid)
+    except Exception:
+        pass
 
 
 try:
@@ -11371,6 +11380,7 @@ def search():
                 "einvoice.impact.gr",
                 "eskap.gr",
                 "epsilonnet.gr",
+                "parochos.gr",
             )
             is_invoice_url = any(d in domain for d in invoice_domains)
             if expect_receipt and is_invoice_url:
@@ -11426,7 +11436,8 @@ def search():
                             scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                             if not scraped_afm:
                                 scraped_afm = scraped_afm_impact
-                        elif "epsilonnet.gr" in domain:
+                        elif "epsilonnet.gr" in domain or "parochos.gr" in domain:
+                            # Parochos/Atlas DocViewer: ίδιο API με το Epsilon (getfile myDATA XML) -> MARK + ΑΦΜ πελάτη
                             mark_val, scraped_afm_eps, _ = scrape_epsilon(mark)
                             scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                             if not scraped_afm:
@@ -12916,7 +12927,7 @@ def _scan_mark_from_url(url: str) -> str:
         if "einvoice.impact.gr" in domain or "impact.gr" in domain or "eskap.gr" in domain:
             mv = str(scrape_impact(u)[0] or "").strip()
             return mv if len(mv) == 15 and mv.isdigit() else ""
-        if "epsilonnet.gr" in domain:
+        if "epsilonnet.gr" in domain or "parochos.gr" in domain:
             mv = str(scrape_epsilon(u)[0] or "").strip()
             return mv if len(mv) == 15 and mv.isdigit() else ""
         if "e-invoicing.pegcloud.io" in domain:
@@ -19027,6 +19038,7 @@ def api_accounting_result_compute():
         epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
         settings = load_settings() or {}
 
+        vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path))
         report = ar_engine.build_report(
             vat, date_from, date_to, cred, settings,
             epsilon_records, raw_invoices, aade_user, aade_key,
@@ -19035,6 +19047,7 @@ def api_accounting_result_compute():
             excel_group_totals=excel_group_totals,
             vat_applicable=_ar_vat_applicable(path),
             vat_period_type=_ar_vat_period_type(path),
+            vat_period_override=vat_plan["override"],
             current_period_entries=current_period_entries,
             payroll_manual_total=payroll_res["payroll_manual_total"],
             rent_manual_total=rent_res["rent_manual_total"],
@@ -19069,7 +19082,9 @@ def api_accounting_result_compute():
         small_business_note = _ar_small_business_note(path, report, date_from, date_to)
         if small_business_note:
             report_notes.append(small_business_note)
-        _ar_apply_prev_vat_period(report, vat)
+        if vat_plan["basis"]:
+            report["vat_period_basis"] = vat_plan["basis"]
+        _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
         prev_vat_note = _ar_prev_vat_note(report)
         if prev_vat_note:
             report_notes.append(prev_vat_note)
@@ -19371,6 +19386,9 @@ def api_accounting_result_bulk_compute():
         total = len(names)
         aborted = False
         results = []
+        if job_id:
+            _uk, _un = _ar_user_ident()
+            ar_jobs.mark_server_running(job_id, _ar_group_key(), _uk, _un, total)
         # The run's «αποθηκευμένα μαζικά» folder exists from the start and is
         # refreshed after every company, so a request that dies midway
         # (gateway timeout on a long run) still leaves it findable/deletable
@@ -19470,6 +19488,7 @@ def api_accounting_result_bulk_compute():
 
             try:
                 epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
+                vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path))
                 report = ar_engine.build_report(
                     vat, date_from, date_to, cred, settings,
                     epsilon_records, raw_invoices, aade_user, aade_key,
@@ -19477,6 +19496,7 @@ def api_accounting_result_bulk_compute():
                     depreciation_amount=depreciation_amount,
                     vat_applicable=_ar_vat_applicable(path),
                     vat_period_type=_ar_vat_period_type(path),
+                    vat_period_override=vat_plan["override"],
                     current_period_entries=current_period_entries,
                     payroll_manual_total=payroll_res["payroll_manual_total"],
                     rent_manual_total=rent_res["rent_manual_total"],
@@ -19500,7 +19520,9 @@ def api_accounting_result_bulk_compute():
                 small_business_note = _ar_small_business_note(path, report, date_from, date_to)
                 if small_business_note:
                     report_notes.append(small_business_note)
-                _ar_apply_prev_vat_period(report, vat)
+                if vat_plan["basis"]:
+                    report["vat_period_basis"] = vat_plan["basis"]
+                _ar_apply_prev_vat_period(report, vat, vat_plan["both"])
                 prev_vat_note = _ar_prev_vat_note(report)
                 if prev_vat_note:
                     report_notes.append(prev_vat_note)
@@ -19569,6 +19591,68 @@ def api_accounting_result_bulk_compute():
         return jsonify({"ok": True, "results": results, "aborted": aborted}), 200
     except Exception as e:
         log.exception("api_accounting_result_bulk_compute failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _ar_group_key() -> str:
+    try:
+        from admin.auth import get_active_group
+        g = get_active_group()
+        return str(getattr(g, "id", None) or getattr(g, "data_folder", "") or "") if g else ""
+    except Exception:
+        return ""
+
+
+def _ar_user_ident():
+    """(user_key, username) του τρέχοντος χρήστη."""
+    try:
+        from flask_login import current_user
+        if getattr(current_user, "is_authenticated", False):
+            return str(getattr(current_user, "id", "") or getattr(current_user, "username", "") or ""), str(getattr(current_user, "username", "") or "")
+    except Exception:
+        pass
+    return "", ""
+
+
+@app.route("/api/accounting_result/bulk_job", methods=["POST"])
+def api_accounting_result_bulk_job_touch():
+    """Heartbeat του browser που οδηγεί έναν Μαζικό υπολογισμό (βήματα ΑΑΔΕ/προελέγχου/popup)
+    — κάνει το banner προόδου ορατό σε κάθε χρήστη της ομάδας, όσο το run ζει πραγματικά."""
+    try:
+        from accounting_result import job_registry as ar_jobs
+        payload = request.get_json(silent=True) or {}
+        user_key, username = _ar_user_ident()
+        ar_jobs.touch_job(str(payload.get("job_id") or ""), _ar_group_key(), user_key, username,
+                          payload.get("label"), payload.get("total"))
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/bulk_job/finish", methods=["POST"])
+def api_accounting_result_bulk_job_finish():
+    try:
+        from accounting_result import job_registry as ar_jobs
+        payload = request.get_json(silent=True) or {}
+        ar_jobs.finish_job(str(payload.get("job_id") or ""))
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/accounting_result/active_jobs", methods=["GET"])
+def api_accounting_result_active_jobs():
+    """Ενεργοί Μαζικοί υπολογισμοί της ενεργής ομάδας (για το banner προόδου όλων των χρηστών)."""
+    try:
+        from accounting_result import job_registry as ar_jobs
+        group = _ar_group_key()
+        me, _ = _ar_user_ident()
+        jobs = ar_jobs.active_jobs(group) if group else []
+        for j in jobs:
+            j["mine"] = bool(me) and j.get("user_key") == me
+            j.pop("user_key", None)
+        return jsonify({"ok": True, "jobs": jobs}), 200
+    except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -20311,7 +20395,57 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 _AR_SMALL_BUSINESS_LIMIT = 10000.0
 
 
-def _ar_apply_prev_vat_period(report: Dict[str, Any], vat: str) -> None:
+def _ar_plan_vat_period(vat: str, path: str, date_to: str, vat_applicable: bool) -> Dict[str, Any]:
+    """Περίοδος ΦΠΑ της πρόβλεψης, ΠΡΙΝ το build_report: η πιο πρόσφατη περίοδος (μήνας/τρίμηνο)
+    ως την ημερομηνία ελέγχου για την οποία δεν έχει υποβληθεί δήλωση Φ2 (βλ.
+    aade_vat_prev.fetch_vat_periods_for_anchor). Ένα login TAXISnet — τα previous/current
+    ξαναχρησιμοποιούνται από την _ar_apply_prev_vat_period (preloaded), χωρίς δεύτερο login.
+    Χωρίς κωδικούς/σύνδεση: τελευταία ολοκληρωμένη περίοδος ως την ημερομηνία (χωρίς επαλήθευση).
+    {"override": (from_iso, to_iso)|None, "both": dict|None, "basis": {...}|None}"""
+    out: Dict[str, Any] = {"override": None, "both": None, "basis": None}
+    if not vat_applicable:
+        return out
+    try:
+        from accounting_result import engine as ar_engine
+        anchor = ar_engine.parse_date(date_to)
+        if not anchor:
+            return out
+        user, pw = _ar_lookup_taxis_creds(vat)
+        failure = "δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία"
+        if user and pw:
+            try:
+                from e3.checks.aade_vat_prev import fetch_vat_periods_for_anchor
+                both = fetch_vat_periods_for_anchor(user, pw, anchor)
+            except Exception as e:
+                log.exception("VAT period selection failed for vat=%s", vat)
+                both = {"ok": False, "error": _friendly_net_error(e) or str(e)}
+            if both.get("ok"):
+                ex = both["examined"]
+                to_d = min(ex["to"], anchor)
+                kind = ex.get("kind")
+                text = {
+                    "unfiled_last": f"Πρόβλεψη — δεν έχει υποβληθεί δήλωση Φ2 για την περίοδο ({ex.get('period')})",
+                    "in_progress": f"Πρόβλεψη τρέχουσας περιόδου ({ex.get('period')}, έως {to_d.strftime('%d/%m/%Y')}) — η προηγούμενη έχει ήδη υποβληθεί",
+                    "filed_last": f"Έχει ήδη υποβληθεί δήλωση Φ2 για την περίοδο ({ex.get('period')}) — σύγκριση με το myDATA",
+                }.get(kind, "")
+                out.update({"override": (ex["from"].isoformat(), to_d.isoformat()), "both": both,
+                            "basis": {"kind": kind, "text": text, "period": ex.get("period"), "period_type": ex.get("period_type")}})
+                return out
+            failure = both.get("error") or "αποτυχία ανάγνωσης περιόδων Φ2"
+            out["both"] = {"ok": False, "error": failure}
+        f, t = ar_engine.compute_vat_period_for_anchor(_ar_vat_period_type(path), anchor)
+        out["override"] = (f, t)
+        out["basis"] = {
+            "kind": "offline",
+            "text": f"Πρόβλεψη για την τελευταία ολοκληρωμένη περίοδο ως {anchor.strftime('%d/%m/%Y')} — δεν επαληθεύτηκε η υποβολή δήλωσης ({failure})",
+        }
+    except Exception:
+        log.exception("_ar_plan_vat_period failed (falling back to the date-of-today period)")
+        return {"override": None, "both": None, "basis": None}
+    return out
+
+
+def _ar_apply_prev_vat_period(report: Dict[str, Any], vat: str, preloaded: Optional[Dict[str, Any]] = None) -> None:
     """Previous Φ2 period (month/quarter before the report's ΦΠΑ period) from
     ΑΑΔΕ — e3/checks/aade_vat_prev.py. Runs on EVERY computation (no cache:
     a newer amending declaration may have been filed since). A credit
@@ -20320,16 +20454,20 @@ def _ar_apply_prev_vat_period(report: Dict[str, Any], vat: str) -> None:
     balance; a debit / missing declaration becomes a note (_ar_prev_vat_note)."""
     if report.get("vat_applicable") is False or not report.get("vat_period_from") or report.get("vat_outflow") is None:
         return
-    user, pw = _ar_lookup_taxis_creds(vat)
-    if not user or not pw:
-        report["vat_prev_period"] = {"ok": False, "error": "δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία"}
-        return
-    try:
-        from e3.checks.aade_vat_prev import fetch_vat_periods
-        both = fetch_vat_periods(user, pw, datetime.date.fromisoformat(str(report["vat_period_from"])[:10]))
-    except Exception as e:
-        log.exception("previous VAT period fetch failed for vat=%s", vat)
-        both = {"ok": False, "error": _friendly_net_error(e) or str(e)}
+    if preloaded is not None:
+        # ΝΕΟ: τα έχει ήδη φέρει η _ar_plan_vat_period με το ΙΔΙΟ login — κανένα δεύτερο login.
+        both = preloaded
+    else:
+        user, pw = _ar_lookup_taxis_creds(vat)
+        if not user or not pw:
+            report["vat_prev_period"] = {"ok": False, "error": "δεν υπάρχουν αποθηκευμένοι κωδικοί TAXISnet για την εταιρία"}
+            return
+        try:
+            from e3.checks.aade_vat_prev import fetch_vat_periods
+            both = fetch_vat_periods(user, pw, datetime.date.fromisoformat(str(report["vat_period_from"])[:10]))
+        except Exception as e:
+            log.exception("previous VAT period fetch failed for vat=%s", vat)
+            both = {"ok": False, "error": _friendly_net_error(e) or str(e)}
     if not both.get("ok"):
         report["vat_prev_period"] = {"ok": False, "error": both.get("error")}
         return

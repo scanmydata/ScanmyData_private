@@ -304,6 +304,25 @@ def compute_vat_declaration_period(vat_period_type: str, today: Optional[date] =
     return period_from.isoformat(), period_to.isoformat()
 
 
+def compute_vat_period_for_anchor(vat_period_type: str, anchor: date) -> Tuple[str, str]:
+    """Εκτός σύνδεσης (χωρίς να ξέρουμε αν υποβλήθηκε δήλωση): η τελευταία ΟΛΟΚΛΗΡΩΜΕΝΗ
+    περίοδος ΦΠΑ ως την ημερομηνία ελέγχου `anchor` — μήνας (Γ' κατηγορία/άγνωστο) ή τρίμηνο.
+    Έως 30/9 -> 9ος (ή Γ' τρίμηνο)· έως 9/10 -> επίσης 9ος (ή Γ' τρίμηνο, που έχει ολοκληρωθεί).
+    Επιστρέφει ISO (date_from, date_to)."""
+    if vat_period_type == "quarterly":
+        q_end_month = ((anchor.month - 1) // 3 + 1) * 3
+        q_end = date(anchor.year, q_end_month, calendar.monthrange(anchor.year, q_end_month)[1])
+        if anchor < q_end:  # το τρίμηνο του anchor είναι σε εξέλιξη -> το προηγούμενο
+            y, m = (anchor.year, q_end_month - 3) if q_end_month > 3 else (anchor.year - 1, 12)
+            q_end = date(y, m, calendar.monthrange(y, m)[1])
+        q_start_month = q_end.month - 2
+        return date(q_end.year, q_start_month, 1).isoformat(), q_end.isoformat()
+    month_end = date(anchor.year, anchor.month, calendar.monthrange(anchor.year, anchor.month)[1])
+    if anchor < month_end:  # ο μήνας του anchor δεν έχει κλείσει -> ο προηγούμενος
+        month_end = date(anchor.year, anchor.month, 1) - timedelta(days=1)
+    return month_end.replace(day=1).isoformat(), month_end.isoformat()
+
+
 def _fnum(v: Any) -> float:
     try:
         return float(str(v).replace(",", "."))
@@ -836,6 +855,7 @@ def build_report(
     excel_group_totals: Optional[Dict[str, float]] = None,
     vat_applicable: bool = True,
     vat_period_type: str = "",
+    vat_period_override: Optional[Tuple[str, str]] = None,
     current_period_entries: Optional[Tuple[List[dict], float, List[Dict[str, Any]]]] = None,
     payroll_manual_total: Optional[float] = None,
     rent_manual_total: Optional[float] = None,
@@ -860,7 +880,12 @@ def build_report(
     # have stray classified rows that shouldn't drive a ΦΠΑ figure that
     # doesn't apply to it).
     if vat_applicable:
-        vat_period_from, vat_period_to = compute_vat_declaration_period(vat_period_type)
+        # ΝΕΟ: η περίοδος μπορεί να έρθει έτοιμη από τον caller (πρόβλεψη βάσει ημερομηνίας
+        # ελέγχου και κατάστασης δηλώσεων)· αλλιώς η παλιά λογική με βάση τη σημερινή ημερομηνία.
+        if vat_period_override and vat_period_override[0] and vat_period_override[1]:
+            vat_period_from, vat_period_to = vat_period_override
+        else:
+            vat_period_from, vat_period_to = compute_vat_declaration_period(vat_period_type)
         vat_details = fetch_vat_details(
             vat, to_ddmmyyyy(vat_period_from), to_ddmmyyyy(vat_period_to), aade_user, aade_key,
         )

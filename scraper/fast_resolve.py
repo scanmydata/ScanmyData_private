@@ -127,6 +127,10 @@ def repair_scanned_url(url: str) -> str:
         if m:
             path = path[: m.start()] + f"/{m.group(1)}_{m.group(2)}"
 
+    # Parochos/Atlas DocViewer: «/docviewer/<uuid>» (χαμένο Shift) -> «/DocViewer/<uuid>», uuid πεζά
+    elif host.endswith("parochos.gr") and re.search(r"/docviewer/", path, re.I):
+        path = re.sub(r"/docviewer/", "/DocViewer/", path, flags=re.I)
+
     # Megasoft InvoiceLink: /invoiceinspect/qr?QrCode=...
     elif ("megasoft" in host or "invoicelink" in host) and re.search(r"(?:^|&)qrcode=", query, re.I):
         if not path.lower().startswith("/invoiceinspect/"):
@@ -219,11 +223,13 @@ def parse_provider_page(html: str) -> Dict[str, Optional[str]]:
     return out
 
 
-def aade_uid(issuer_vat: str, issue_date: str, branch: Any, doc_type: str, series: str, aa: str) -> str:
+def aade_uid(issuer_vat: str, issue_date: str, branch: Any, doc_type: str, series: str, aa: str,
+             encoding: str = "utf-8") -> str:
     """UID παραστατικού κατά ΑΑΔΕ: SHA-1 (κεφαλαία hex) του
-    «ΑΦΜ-ΕΕΕΕ-ΜΜ-ΗΗ-εγκατάσταση-τύπος-σειρά-ΑΑ»."""
+    «ΑΦΜ-ΕΕΕΕ-ΜΜ-ΗΗ-εγκατάσταση-τύπος-σειρά-ΑΑ». Η κωδικοποίηση της σειράς εξαρτάται από τον πάροχο:
+    οι περισσότεροι (impact, vs.gr) UTF-8, ο Parochos/Atlas Windows-1253 (ελληνική σειρά π.χ. «ΤΠΥ»)."""
     raw = "-".join([str(issuer_vat), str(issue_date), str(branch), str(doc_type), str(series), str(aa)])
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest().upper()
+    return hashlib.sha1(raw.encode(encoding, errors="replace")).hexdigest().upper()
 
 
 def _iso_date(value: Any) -> str:
@@ -258,6 +264,8 @@ def _doc_uid_candidates(doc: Dict[str, Any], branches: Iterable[int]) -> Iterabl
     for series in _series_variants(doc.get("series")):
         for br in branch_list:
             yield aade_uid(vat, date, br, dtype, series, aa)
+            if not str(series).isascii():  # ελληνική σειρά: ο πάροχος μπορεί να κάνει hash σε Windows-1253
+                yield aade_uid(vat, date, br, dtype, series, aa, encoding="cp1253")
 
 
 def find_cached_invoice(docs: Iterable[Dict[str, Any]], ids: Dict[str, Optional[str]],
@@ -289,6 +297,124 @@ def find_cached_invoice(docs: Iterable[Dict[str, Any]], ids: Dict[str, Optional[
 
 def find_cached_invoice_for_url(url: str, docs: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return find_cached_invoice(docs, extract_url_ids(repair_scanned_url(url)))
+
+
+# --------------------------------------------------------------------------- #
+# 2β) Parochos / Epsilon DocViewer (Blazor): τα δεδομένα βγαίνουν από απλά HTTP endpoints
+#     /filedocument/getfile?fileType=3 (myDATA XML) και fileType=4 (UBL 2.1) με το documentId του URL
+# --------------------------------------------------------------------------- #
+_UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+
+def fix_docviewer_path(url: str) -> str:
+    """Το scanner χάνει το Shift: «/docviewer/…» -> «/DocViewer/…» (το scrape ψάχνει ακριβώς «/DocViewer/»).
+    Αμετάβλητο όταν δεν ταιριάζει."""
+    try:
+        s = str(url or "")
+        return re.sub(r"/docviewer/", "/DocViewer/", s, flags=re.I)
+    except Exception:
+        return url
+
+
+def parse_docviewer_url(url: str):
+    """(base, documentId) από DocViewer/<uuid>, fd/<hex32>[:n], filedocument/get/<uuid> ή ?documentId=. (None, None) αλλιώς."""
+    try:
+        p = urlparse(str(url or ""))
+    except Exception:
+        return None, None
+    if not p.netloc:
+        return None, None
+    base = f"{p.scheme or 'https'}://{p.netloc}"
+    path = p.path or ""
+    m = re.search(r"/docviewer/(" + _UUID_RE + ")", path, re.I)
+    if m:
+        return base, m.group(1).lower()
+    m = re.search(r"/(?:fd|filedocument/get)/([0-9a-f\-]{32,36})", path, re.I)
+    if m:
+        hx = re.sub(r"[^0-9a-f]", "", m.group(1).lower())
+        if len(hx) == 32:
+            return base, f"{hx[0:8]}-{hx[8:12]}-{hx[12:16]}-{hx[16:20]}-{hx[20:32]}"
+    q = parse_qs(p.query or "")
+    for key in ("documentId", "documentid"):
+        if q.get(key) and re.fullmatch(_UUID_RE, q[key][0], re.I):
+            return base, q[key][0].lower()
+    return None, None
+
+
+def _ldate(iso_or_dmy: str) -> str:
+    d = _iso_date(iso_or_dmy)
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", d or "")
+    return f"{m.group(3)}/{m.group(2)}/{m.group(1)}" if m else (iso_or_dmy or "")
+
+
+def fetch_getfile_summary(base: str, docid: str, timeout: float = 15, session: Any = None) -> Dict[str, Any]:
+    """Συμπληρωματικά στοιχεία από το API του DocViewer: UID, MARK, ΑΦΜ/επωνυμία εκδότη και αντισυμβαλλόμενου.
+    fileType=3 (myDATA XML) για uid/mark/αντισυμβαλλόμενο, fileType=4 (UBL) για ονομασίες και ως εφεδρικό
+    όταν το XML δεν απαντά. Κάθε αποτυχία είναι ανεκτή (επιστρέφει ό,τι βρήκε)."""
+    import requests
+    import xml.etree.ElementTree as ET
+    sess = session or requests.Session()
+    hdr = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+    out: Dict[str, Any] = {"uid": None, "mark": None, "issuer_vat": None, "issuer_name": None, "counterpart_vat": None,
+                           "counterpart_name": None, "issue_date": None, "series": None, "aa": None,
+                           "doc_type": None, "total_amount": None, "branch": None}
+
+    def _get(ft: int):
+        try:
+            r = sess.get(f"{base}/filedocument/getfile", params={"fileType": ft, "documentId": docid}, headers=hdr, timeout=timeout)
+            r.raise_for_status()
+            return ET.fromstring(r.content)
+        except Exception:
+            return None
+
+    def _ft(root, path):
+        el = root.find(path)
+        return (el.text or "").strip() if el is not None and el.text else ""
+
+    x = _get(3)
+    if x is not None:
+        out["uid"] = (_ft(x, ".//{*}uid") or "").upper() or None
+        out["mark"] = _ft(x, ".//{*}mark") or None
+        out["issuer_vat"] = _ft(x, ".//{*}issuer/{*}vatNumber") or None
+        out["counterpart_vat"] = _ft(x, ".//{*}counterpart/{*}vatNumber") or None
+        out["series"] = _ft(x, ".//{*}invoiceHeader/{*}series") or None
+        out["aa"] = _ft(x, ".//{*}invoiceHeader/{*}aa") or None
+        out["issue_date"] = _ldate(_ft(x, ".//{*}invoiceHeader/{*}issueDate")) or None
+        out["doc_type"] = _ft(x, ".//{*}invoiceHeader/{*}invoiceType") or None
+        out["total_amount"] = _ft(x, ".//{*}invoiceSummary/{*}totalGrossValue") or None
+        out["branch"] = _ft(x, ".//{*}issuer/{*}branch") or None
+
+    u = _get(4)
+    if u is not None:
+        def _party(kind):
+            party = u.find(f".//{{*}}Accounting{kind}Party/{{*}}Party")
+            if party is None:
+                return None, None
+            name = _ft(party, ".//{*}PartyLegalEntity/{*}RegistrationName") or _ft(party, ".//{*}PartyName/{*}Name")
+            vat = re.sub(r"^[A-Z]{2}(?=\d)", "", _ft(party, ".//{*}PartyTaxScheme/{*}CompanyID"))
+            return name or None, vat or None
+        sname, svat = _party("Supplier")
+        cname, cvat = _party("Customer")
+        out["issuer_name"] = out["issuer_name"] or sname
+        out["issuer_vat"] = out["issuer_vat"] or svat
+        out["counterpart_name"] = cname
+        out["counterpart_vat"] = out["counterpart_vat"] or cvat
+        if not out["mark"]:
+            for ref in u.findall(".//{*}AdditionalDocumentReference"):
+                if "M.AR.K" in _ft(ref, "{*}DocumentDescription"):
+                    out["mark"] = _ft(ref, "{*}ID") or None
+        if not out["total_amount"]:
+            out["total_amount"] = _ft(u, ".//{*}LegalMonetaryTotal/{*}PayableAmount") or None
+        ident = _ft(u, "{*}ID")  # «ΑΦΜ|ηη/μμ/εεεε|εγκατάσταση|τύπος|σειρά|ΑΑ»
+        parts = ident.split("|")
+        if len(parts) == 6:
+            out["issuer_vat"] = out["issuer_vat"] or parts[0]
+            out["issue_date"] = out["issue_date"] or parts[1]
+            out["branch"] = out["branch"] or parts[2]
+            out["doc_type"] = out["doc_type"] or parts[3]
+            out["series"] = out["series"] or parts[4]
+            out["aa"] = out["aa"] or parts[5]
+    return out
 
 
 # --------------------------------------------------------------------------- #

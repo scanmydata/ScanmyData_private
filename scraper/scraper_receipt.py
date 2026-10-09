@@ -1372,6 +1372,17 @@ def scrape_epsilon(url, timeout=20, debug=False):
             return u
 
     # εφαρμόζουμε την κανονικοποίηση
+    # ΝΕΟ: «/docviewer/» (χαμένο Shift από scanner) -> «/DocViewer/» + στοιχεία UID/αντισυμβαλλόμενου/επωνυμίας
+    try:
+        from .fast_resolve import fix_docviewer_path, fetch_getfile_summary
+    except Exception:
+        try:
+            from fast_resolve import fix_docviewer_path, fetch_getfile_summary
+        except Exception:
+            fix_docviewer_path = lambda u: u  # noqa: E731
+            fetch_getfile_summary = None
+    url = fix_docviewer_path(url)
+
     url = _normalize_epsilon_url_to_docviewer(url)
 
     def _clean_amount_to_comma(raw):
@@ -1531,6 +1542,25 @@ def scrape_epsilon(url, timeout=20, debug=False):
         if debug: print("No documentId found in DocViewer URL.")
         return out
 
+    def _enrich_from_ubl():
+        # ΝΕΟ: συμπλήρωση από το UBL (fileType=4) του ίδιου API όταν λείπουν επωνυμία εκδότη / MARK / ΑΦΜ.
+        try:
+            if fetch_getfile_summary and (not out.get("issuer_name") or not out.get("MARK") or not out.get("issuer_vat")):
+                _extra = fetch_getfile_summary(base, docid, timeout=min(float(timeout or 15), 15))
+                out["issuer_name"] = out.get("issuer_name") or _extra.get("issuer_name")
+                out["MARK"] = out.get("MARK") or _extra.get("mark")
+                out["issuer_vat"] = out.get("issuer_vat") or _extra.get("issuer_vat")
+                out["issue_date"] = out.get("issue_date") or _extra.get("issue_date")
+                out["progressive_aa"] = out.get("progressive_aa") or _extra.get("aa")
+                out["doc_type"] = out.get("doc_type") or _extra.get("doc_type")
+                out["uid"] = out.get("uid") or _extra.get("uid")
+                out["counterpart_vat"] = out.get("counterpart_vat") or _extra.get("counterpart_vat")
+                if out.get("MARK") and out.get("doc_type") and not out.get("is_invoice"):
+                    if str(out["doc_type"]).strip() not in NON_INVOICE_CODES:
+                        out["is_invoice"] = True
+        except Exception:
+            pass
+
     getfile_url = f"{base}/filedocument/getfile?fileType=3&documentId={docid}"
     out["tried_url"] = getfile_url
 
@@ -1541,6 +1571,7 @@ def scrape_epsilon(url, timeout=20, debug=False):
         r.raise_for_status()
     except Exception as e:
         if debug: print("getfile request failed:", e)
+        _enrich_from_ubl()
         return out
 
     content = r.content
@@ -1553,6 +1584,12 @@ def scrape_epsilon(url, timeout=20, debug=False):
             extracted = _extract_from_ubl_root(root)
             for k, v in extracted.items():
                 if v: out[k] = v
+            try:  # ΝΕΟ: uid + αντισυμβαλλόμενος από το myDATA XML (χωρίς επιπλέον αίτημα)
+                _ns = "{http://www.aade.gr/myDATA/invoice/v1.0}"
+                out["uid"] = (root.findtext(f".//{_ns}uid") or "").strip().upper() or None
+                out["counterpart_vat"] = (root.findtext(f".//{_ns}counterpart/{_ns}vatNumber") or "").strip() or None
+            except Exception:
+                pass
             itype = out.get("doc_type")
             if itype and str(itype).strip() not in NON_INVOICE_CODES:
                 out["is_invoice"] = True
@@ -1621,6 +1658,7 @@ def scrape_epsilon(url, timeout=20, debug=False):
         if mcode and mcode.group(1) not in NON_INVOICE_CODES:
             out["is_invoice"] = True
 
+    _enrich_from_ubl()
     if debug:
         print("scrape_epsilon (getfile-only) result:", out)
 

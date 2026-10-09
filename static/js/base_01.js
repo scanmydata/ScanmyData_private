@@ -220,23 +220,28 @@
         if (el) try { el.remove(); } catch (_) {}
       }
       function renderBanner(active, text) {
-        // Same column as Λογιστικό Αποτέλεσμα's own messages when that page's
-        // script is loaded (#arFlashContainer, on <body>), else the app-wide slot.
-        var container = document.getElementById('arFlashContainer');
+        // ΕΝΑ κοινό container (#flashContainer, εκτός #appShell) για ΟΛΑ τα μηνύματα, ώστε να
+        // στοιβάζονται σε μία στήλη: το μόνιμο banner προόδου πάει ΤΕΛΕΥΤΑΙΟ (order) και τα
+        // υπόλοιπα (dismissable) εμφανίζονται από πάνω του. Το #arFlashContainer μένει μόνο
+        // fallback όταν δεν υπάρχει το κοινό.
+        var container = document.getElementById('flashContainer');
+        if (!container) container = document.getElementById('arFlashContainer');
         if (!container) container = (typeof ensureFlashContainer === 'function') ? ensureFlashContainer() : null;
-        if (!container) container = document.getElementById('flashContainer') || document.body;
+        if (!container) container = document.body;
         var el = document.getElementById(BANNER_ID);
         if (!el) {
           el = document.createElement('div');
           el.id = BANNER_ID;
           el.className = 'flash-banner flash-info';
           el.setAttribute('data-flash', '');
+          el.setAttribute('data-progress-flash', '');
           el.setAttribute('data-ttl', '0'); // sticky — do not auto-dismiss
           el.style.display = 'flex';
           el.style.alignItems = 'center';
           el.style.gap = '0.5rem';
           el.style.pointerEvents = 'auto';
-          container.prepend(el);
+          el.style.order = '100'; // πάντα στο κάτω μέρος της στήλης, κάτω από τα dismissable
+          container.appendChild(el);
         }
         el.innerHTML = '';
         var textSpan = document.createElement('span');
@@ -267,7 +272,52 @@
       }
       var pollTimer = null;
       var consecutiveEmpty = 0;
+      var serverFailures = 0;
+      // ΝΕΟ: το banner οδηγείται από τον server (/api/accounting_result/active_jobs) ώστε
+      // κάθε χρήστης της ομάδας να βλέπει τον Μαζικό που τρέχει — και μετά από logout/login.
+      // Στη σελίδα σύνδεσης ή μετά από logout/auto-logout δεν δείχνει τίποτα και σβήνει το τοπικό κλειδί.
       function poll() {
+        if (window.IS_LOGGED_IN !== true) { clearActive(); removeBanner(); return; }
+        fetch('/api/accounting_result/active_jobs', { cache: 'no-store', credentials: 'same-origin' })
+          .then(function (r) {
+            var ct = r.headers.get('content-type') || '';
+            if (!r.ok || ct.indexOf('json') < 0) {
+              var e = new Error('active_jobs HTTP ' + r.status);
+              // redirect στη σελίδα σύνδεσης (HTML) ή 401/403 = δεν είμαστε πια συνδεδεμένοι
+              e.unauth = (r.status === 401 || r.status === 403 || ct.indexOf('json') < 0);
+              throw e;
+            }
+            return r.json();
+          })
+          .then(function (data) {
+            serverFailures = 0;
+            var jobs = (data && data.jobs) || [];
+            var local = readActive();
+            if (jobs.length) {
+              var j = jobs[0];
+              var label = j.label || '';
+              // στο tab που οδηγεί το run, η τοπική ετικέτα είναι πιο φρέσκια από τον server
+              if (local && local.jobId === j.job_id && local.label && j.phase !== 'server' && (Date.now() - (local.updatedAt || 0)) < 20000) label = local.label;
+              var pct = (typeof j.percent === 'number') ? ' (' + j.percent + '%)' : '';
+              var by = (!j.mine && j.username) ? ' — από ' + j.username : '';
+              renderBanner({ jobId: j.job_id, total: j.total }, 'Λογιστικό Αποτέλεσμα — ' + (label || 'εκτέλεση σε εξέλιξη') + pct + by);
+              return;
+            }
+            // Ο server δεν ξέρει ενεργό run. Μόλις ξεκίνησε εδώ και δεν έφτασε ακόμη ο 1ος heartbeat;
+            if (local && local.label && (Date.now() - (local.updatedAt || 0)) < 8000) {
+              renderBanner(local, 'Λογιστικό Αποτέλεσμα — ' + local.label);
+              return;
+            }
+            clearActive();
+            removeBanner();
+          })
+          .catch(function (err) {
+            if (err && err.unauth) { clearActive(); removeBanner(); return; }
+            serverFailures++;
+            if (serverFailures >= 2) legacyPoll(); // ο server δεν απαντά στο νέο endpoint -> παλιά λογική
+          });
+      }
+      function legacyPoll() {
         var active = readActive();
         if (!active) { removeBanner(); return; }
         renderBanner(active, document.getElementById(BANNER_ID) ? null : ('Λογιστικό Αποτέλεσμα — εκτέλεση σε εξέλιξη' + (active.total ? ' για ' + active.total + ' εταιρίες' : '') + '…'));

@@ -237,6 +237,88 @@ def fetch_vat_periods(username: str, password: str, current_period_from: date) -
     return {"ok": True, "previous": previous, "current": current}
 
 
+def _is_unfiled(outcome: Optional[Dict[str, Any]]) -> bool:
+    """Δεν έχει υποβληθεί (οριστική) δήλωση: NOT_SUBMITTED ή εκκρεμότητα χωρίς οριστική με αποτέλεσμα."""
+    if not outcome:
+        return True
+    st = outcome.get("status")
+    return st == "NOT_SUBMITTED" or (st == "PENDING" and not outcome.get("result"))
+
+
+def fetch_vat_periods_for_anchor(username: str, password: str, anchor: date) -> Dict[str, Any]:
+    """Επιλογή της περιόδου ΦΠΑ για πρόβλεψη με βάση την ημερομηνία ελέγχου `anchor`
+    (το «έως» του Λογιστικού Αποτελέσματος) και την πραγματική κατάσταση υποβολής στο TAXISnet.
+
+    Κανόνας (μήνας ή τρίμηνο — όπως τις δείχνει η λίστα υποχρεώσεων του φορολογούμενου):
+      * L = η τελευταία ΟΛΟΚΛΗΡΩΜΕΝΗ περίοδος ως την ημερομηνία (τέλος περιόδου <= anchor).
+        Αν για την L ΔΕΝ έχει υποβληθεί δήλωση -> πρόβλεψη για την L.
+      * Αλλιώς, αν υπάρχει περίοδος σε εξέλιξη που περιέχει το anchor -> αυτή (μέχρι το anchor).
+      * Αλλιώς (π.χ. έλεγχος ως 30/9 και ο 9ος έχει ήδη υποβληθεί) -> η L, με σύγκριση με τη δήλωση.
+    Π.χ. έως 30/9 χωρίς δήλωση 9ου -> 9ος· έως 9/10 χωρίς δήλωση 9ου -> 9ος, με δήλωση 9ου -> 10ος.
+
+    ΕΝΑ login: επιστρέφει και την προηγούμενη/τρέχουσα δήλωση όπως η fetch_vat_periods, ώστε να μην
+    χρειαστεί δεύτερο login. -> {ok, examined: {...}, previous, current} ή {ok: False, error}."""
+    L = aade_login(username, password)
+    if not L.get("ok"):
+        return {"ok": False, "error": f"Αποτυχία σύνδεσης TAXISnet ({L.get('reason')})"}
+    http = L["http"]
+    http.deadline = time.monotonic() + 90
+
+    candidates: List[Dict[str, Any]] = []
+    for y in (anchor.year, anchor.year - 1):
+        page = _liabilities(http, y)
+        if page is None:
+            continue
+        for row in _rows(page):
+            texts = [_strip(c) for c in row["cells"]]
+            args = _decl_list_args(row["cells"][3] if len(row["cells"]) > 3 else "")
+            if not args:
+                continue
+            p_from = _parse_dmy(args.get("effectivePeriodStart") or args.get("periodStart"))
+            p_to = _parse_dmy(args.get("effectivePeriodEnd") or args.get("periodEnd"))
+            if not p_from or not p_to:
+                continue
+            status_text = next((t for t in texts if re.search(r"Υποβληθεί|εκκρεμότητα|Δεν έχ", t)), texts[2] if len(texts) > 2 else "")
+            candidates.append({"args": args, "from": p_from, "to": p_to, "status_text": status_text})
+    if not candidates:
+        return {"ok": False, "error": "Δεν βρέθηκαν περίοδοι Φ2 στο TAXISnet (ή η εταιρία δεν έχει υποχρέωση Φ2)"}
+
+    done = [c for c in candidates if c["to"] <= anchor]
+    opened = [c for c in candidates if c["from"] <= anchor < c["to"]]
+    last = max(done, key=lambda c: c["to"]) if done else None
+    last_out = _period_outcome(http, last) if last else None
+
+    if last and _is_unfiled(last_out):
+        exam, exam_out, kind = last, last_out, "unfiled_last"
+    elif opened:
+        exam = min(opened, key=lambda c: c["from"])
+        exam_out = _period_outcome(http, exam)
+        kind = "in_progress"
+    elif last:
+        exam, exam_out, kind = last, last_out, "filed_last"
+    else:
+        return {"ok": False, "error": "Δεν βρέθηκε περίοδος Φ2 πριν από την ημερομηνία ελέγχου"}
+
+    before = [c for c in candidates if c["to"] < exam["from"]]
+    if last and exam is not last and last["to"] < exam["from"]:
+        previous = last_out  # ήδη διαβασμένη
+    else:
+        previous = _period_outcome(http, max(before, key=lambda c: c["to"])) if before else None
+
+    span_days = (exam["to"] - exam["from"]).days
+    return {
+        "ok": True,
+        "examined": {
+            "from": exam["from"], "to": exam["to"], "kind": kind,
+            "in_progress": exam["to"] > anchor,
+            "period": _period_label(exam["args"]),
+            "period_type": "quarterly" if span_days > 40 else "monthly",
+        },
+        "previous": previous,
+        "current": exam_out,
+    }
+
+
 def fetch_previous_vat_period(username: str, password: str, current_period_from: date) -> Dict[str, Any]:
     """Backwards-compatible: just the previous period (see fetch_vat_periods)."""
     r = fetch_vat_periods(username, password, current_period_from)

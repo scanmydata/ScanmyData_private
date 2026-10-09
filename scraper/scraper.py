@@ -1380,6 +1380,17 @@ def scrape_epsilon(url):
         docid = f"{hexonly[0:8]}-{hexonly[8:12]}-{hexonly[12:16]}-{hexonly[16:20]}-{hexonly[20:32]}"
         return f"{p.scheme}://{p.netloc}/DocViewer/{docid}"
 
+    # ΝΕΟ: «/docviewer/» (χαμένο Shift από scanner) -> «/DocViewer/»
+    try:
+        from .fast_resolve import fix_docviewer_path, fetch_getfile_summary
+    except Exception:
+        try:
+            from fast_resolve import fix_docviewer_path, fetch_getfile_summary
+        except Exception:
+            fix_docviewer_path = lambda u: u  # noqa: E731
+            fetch_getfile_summary = None
+    url = fix_docviewer_path(url)
+
     # Εφάρμοσε κανονικοποίηση στην είσοδο
     url = _normalize_fd_to_docviewer(url)
 
@@ -1403,10 +1414,19 @@ def scrape_epsilon(url):
         r = sess.get(getfile_url, timeout=20)
         r.raise_for_status()
     except Exception as e:
+        # ΝΕΟ (εφεδρικό): το myDATA XML δεν απάντησε -> δοκίμασε το UBL (fileType=4) του ίδιου API
+        if fetch_getfile_summary:
+            try:
+                extra = fetch_getfile_summary(base, docid, timeout=15)
+                if extra.get("mark"):
+                    return extra["mark"], extra.get("counterpart_vat"), {"attempt_url": getfile_url, "status_code": None, "uid": extra.get("uid"), "fallback": "ubl"}
+            except Exception:
+                pass
         return None, None, {"error": f"Request failed: {e}", "attempt_url": getfile_url}
 
     mark = None
     counterpart_vat = None
+    uid = None
     if "xml" in r.headers.get("Content-Type", "").lower() or r.text.strip().startswith("<"):
         try:
             ns = {"a": "http://www.aade.gr/myDATA/invoice/v1.0"}
@@ -1417,6 +1437,9 @@ def scrape_epsilon(url):
             counterpart_vat_el = root.find(".//a:counterpart/a:vatNumber", ns)
             if counterpart_vat_el is not None:
                 counterpart_vat = counterpart_vat_el.text.strip()
+            uid_el = root.find(".//a:uid", ns)
+            if uid_el is not None and uid_el.text:
+                uid = uid_el.text.strip().upper()
         except Exception as e:
             return None, None, {"error": f"XML parse failed: {e}", "attempt_url": getfile_url}
     else:
@@ -1433,7 +1456,17 @@ def scrape_epsilon(url):
         if m2:
             counterpart_vat = m2.group(1)
 
-    return mark, counterpart_vat, {"attempt_url": getfile_url, "status_code": r.status_code}
+    # ΝΕΟ (εφεδρικό): αν το myDATA XML δεν έδωσε MARK/ΑΦΜ, δοκίμασε το UBL (fileType=4) του ίδιου API.
+    if (not mark or not counterpart_vat) and fetch_getfile_summary:
+        try:
+            extra = fetch_getfile_summary(base, docid, timeout=15)
+            mark = mark or extra.get("mark")
+            counterpart_vat = counterpart_vat or extra.get("counterpart_vat")
+            uid = uid or extra.get("uid")
+        except Exception:
+            pass
+
+    return mark, counterpart_vat, {"attempt_url": getfile_url, "status_code": r.status_code, "uid": uid}
 
 
 # -------------------- VS.GR --------------------
