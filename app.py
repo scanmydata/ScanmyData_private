@@ -19954,6 +19954,7 @@ _GROUP_BUSY_WHAT = {
     "ar_bulk": "Μαζικός υπολογισμός Λογιστικού Αποτελέσματος",
     "ar_single": "Ατομικός υπολογισμός Λογιστικού Αποτελέσματος",
     "fetch": "Λήψη παραστατικών",
+    "e3_bulk": "Μαζικός έλεγχος Ε3",
 }
 
 
@@ -19961,6 +19962,8 @@ def _group_busy_message(conflict) -> str:
     """«Τρέχει ήδη … — εντολή από <χρήστης>» για οποιοδήποτε είδος εργασίας της ομάδας."""
     who = (conflict or {}).get("username") or "άλλος χρήστης"
     what = _GROUP_BUSY_WHAT.get((conflict or {}).get("kind"), "εργασία")
+    if (conflict or {}).get("kind") == "e3_bulk":
+        return f"Τρέχει ήδη {what} — εντολή από {who}. Περίμενε να ολοκληρωθεί και ξαναδοκίμασε."
     return (f"Τρέχει ήδη {what} — εντολή από {who}. "
             "Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ο ένας τον άλλον· "
             "περίμενε να ολοκληρωθεί και ξαναδοκίμασε.")
@@ -20197,8 +20200,13 @@ def api_e3_brain_bulk_start():
         payload["job_id"] = jid
         n = len(payload.get("clients") or []) or len(payload.get("active_group_clients") or [])
         uk, un = _ar_user_ident()
-        act_id = ar_act.begin("e3_bulk", group, uk, un, label=f"Έλεγχος Ε3 (Μαζικός, {n} πελάτες)",
-                              ttl=6 * 3600, ref="e3bulk:" + jid)
+        # Ένας μαζικός έλεγχος Ε3 τη φορά ανά ομάδα (όπως η λήψη/ο Λογιστικό Αποτέλεσμα): οι άλλοι χρήστες βλέπουν
+        # κλειδωμένα τα κουμπιά/πεδία και ο server αρνείται δεύτερη εκκίνηση.
+        act_id, _e3_conflict = ar_act.begin_exclusive(
+            "e3_bulk", ["e3_bulk"], group, uk, un, label=f"Έλεγχος Ε3 (Μαζικός, {n} πελάτες)",
+            ttl=6 * 3600, ref="e3bulk:" + jid)
+        if _e3_conflict:
+            return _ar_locked_response(_e3_conflict)
         job = {"id": jid, "group": group, "user_key": uk, "username": un, "status": "running", "activity_id": act_id,
                "started": time.time(), "finished": None, "result": None, "error": "", "claimed": "", "consumed": False,
                "total": n}

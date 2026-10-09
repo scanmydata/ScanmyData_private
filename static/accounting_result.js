@@ -867,7 +867,9 @@ function downloadBlob(blob, filename) {
 // Παρατηρήσεων/Υπομνήματος στο κάτω-πάνω μέρος κάθε σελίδας). Εδώ αποδίδεται ΜΙΑ φορά ολόκληρο το περιεχόμενο σε
 // canvas και κόβεται σε σελίδες A4 οριζόντιες στα όρια των γραμμών (<tr>) και των ενοτήτων· κρατιούνται και οι
 // εσωτερικοί σύνδεσμοι (data-ar-goto) του συγκεντρωτικού.
-var AR_CONSOLIDATED_PDF = { widthPx: 1500, marginXmm: 6, marginYmm: 8 };
+// widthPx 1140 σε A4 οριζόντια (285mm χρήσιμο πλάτος) = 0.25mm/px, ΙΔΙΑ κλίμακα με το ατομικό (800px σε 200mm) —
+// άρα και ίδιο μέγεθος γραμμάτων (το CSS του πίνακα έχει το ίδιο font-size 0.85rem).
+var AR_CONSOLIDATED_PDF = { widthPx: 1140, marginXmm: 6, marginYmm: 8 };
 
 async function buildConsolidatedPdfBlob(innerHtml) {
   await ensureHtml2Pdf();
@@ -894,8 +896,24 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     const top0 = cr.top;
     const breaks = [];
     container.querySelectorAll('tr').forEach((el) => {
+      if (el.parentElement && el.parentElement.tagName === 'THEAD') return;   // όχι αμέσως μετά την κεφαλίδα
       const b = Math.round(el.getBoundingClientRect().bottom - top0);
       if (b > 0 && b < capturedHeight) breaks.push(b);
+    });
+    // Υποχρεωτική αλλαγή σελίδας (π.χ. ο 2ος πίνακας ξεκινά σε νέα σελίδα).
+    const forced = [];
+    container.querySelectorAll('[data-ar-newpage]').forEach((el) => {
+      const t = Math.round(el.getBoundingClientRect().top - top0);
+      if (t > 0 && t < capturedHeight) forced.push(t);
+    });
+    forced.sort((a, b) => a - b);
+    // Πίνακες με κεφαλίδα: όταν μια σελίδα ξεκινά μέσα στον πίνακα, η κεφαλίδα επαναλαμβάνεται στην κορυφή της.
+    const tables = [];
+    container.querySelectorAll('table').forEach((tb) => {
+      const th = tb.querySelector('thead');
+      if (!th) return;
+      const hr = th.getBoundingClientRect();
+      tables.push({ headTop: Math.round(hr.top - top0), headBottom: Math.round(hr.bottom - top0), bottom: Math.round(tb.getBoundingClientRect().bottom - top0) });
     });
     // Όρια ενοτήτων (τίτλοι/πίνακες/υπόμνημα): κόψιμο ΠΡΙΝ από την ενότητα.
     const sectionBreaks = [];
@@ -968,33 +986,41 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     const mmPerPx = usableW / (srcW / canvasPerPx);
     const pagePx = usableH / mmPerPx;
 
-    const slices = [];
+    const slices = [];   // [start, end, table|null, headerPx]
     let start = 0;
     while (start < capturedHeight - 1) {
-      const limit = start + pagePx;
+      const tb = tables.find((x) => start >= x.headBottom - 1 && start < x.bottom - 2) || null;
+      const hdrH = tb ? (tb.headBottom - tb.headTop) : 0;
+      const cap = pagePx - hdrH;
+      const limit = start + cap;
       let end = capturedHeight;
-      if (limit < capturedHeight) {
-        const sectionCands = sectionBreaks.filter((b) => b > start + pagePx * 0.8 && b <= limit);
-        const candidates = breaks.filter((b) => b > start + pagePx * 0.5 && b <= limit);
+      const f = forced.find((b) => b > start + 1 && b <= limit);
+      if (f) {
+        end = f;
+      } else if (limit < capturedHeight) {
+        const sectionCands = sectionBreaks.filter((b) => b > start + cap * 0.8 && b <= limit);
+        const candidates = breaks.filter((b) => b > start + cap * 0.5 && b <= limit);
         end = sectionCands.length ? sectionCands[sectionCands.length - 1]
           : (candidates.length ? candidates[candidates.length - 1] : Math.floor(limit));
       }
-      slices.push([start, end]);
+      slices.push([start, end, tb, hdrH]);
       start = end;
     }
 
-    slices.forEach(([st, en]) => {
+    slices.forEach(([st, en, tb, hdrH]) => {
       pdf.addPage('a4', 'landscape');
       pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, pageW, pageH, 'F');
       const part = document.createElement('canvas');
       part.width = srcW;
-      part.height = Math.max(1, Math.round((en - st) * canvasPerPx));
+      const hdrC = hdrH ? Math.round(hdrH * canvasPerPx) : 0;
+      part.height = Math.max(1, hdrC + Math.round((en - st) * canvasPerPx));
       const ctx2 = part.getContext('2d');
       ctx2.fillStyle = '#ffffff';
       ctx2.fillRect(0, 0, part.width, part.height);
-      ctx2.drawImage(canvas, srcX, Math.round(st * canvasPerPx), srcW, part.height, 0, 0, part.width, part.height);
-      pdf.addImage(part.toDataURL('image/jpeg', 0.95), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (en - st) * mmPerPx);
+      if (hdrC && tb) ctx2.drawImage(canvas, srcX, Math.round(tb.headTop * canvasPerPx), srcW, hdrC, 0, 0, part.width, hdrC);
+      ctx2.drawImage(canvas, srcX, Math.round(st * canvasPerPx), srcW, part.height - hdrC, 0, hdrC, part.width, part.height - hdrC);
+      pdf.addImage(part.toDataURL('image/jpeg', 0.95), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (hdrH + en - st) * mmPerPx);
     });
     for (let k = 0; k < capturePages; k++) pdf.deletePage(1);
 
@@ -1009,7 +1035,7 @@ async function buildConsolidatedPdfBlob(innerHtml) {
         const fromIdx = pageOf(topPx);
         const toIdx = pageOf(target.getBoundingClientRect().top - top0);
         const x = cfg.marginXmm + ((r.left - cr.left) * canvasPerPx - srcX) / canvasPerPx * mmPerPx;
-        const y = cfg.marginYmm + (topPx - slices[fromIdx][0]) * mmPerPx;
+        const y = cfg.marginYmm + (slices[fromIdx][3] + topPx - slices[fromIdx][0]) * mmPerPx;
         pdf.setPage(fromIdx + 1);
         pdf.link(x, y, r.width * mmPerPx, r.height * mmPerPx, { pageNumber: toIdx + 1 });
       });
@@ -1074,18 +1100,17 @@ function buildConsolidatedTableHtml(companies) {
   companies = (companies || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'el'));
   // Income-tax columns only when the run computed it for at least one company.
   const withIncomeTax = companies.some((c) => c.report && c.report.income_tax);
-  const taxCells = (t) => {
-    if (!withIncomeTax) return '';
-    if (!t) return '<td class="ar-num">—</td><td class="ar-num">—</td><td class="ar-num">—</td><td class="ar-num">—</td>';
+  const taxCellList = (t) => {
+    if (!t) return ['<td class="ar-num">—</td>', '<td class="ar-num">—</td>', '<td class="ar-num">—</td>', '<td class="ar-num">—</td>'];
     const bal = Number(t.balance || 0);
     const balCell = bal < 0 ? `<span style="color:#15803d;">−${arFmtMoney(Math.abs(bal))}</span>` : arFmtMoney(bal);
     const prevMark = t.prev_advance_source === 'not_found' ? '<sup style="color:#b45309;font-weight:700;">?</sup>'
       : (t.prev_advance_source === 'history_derived' ? '<sup style="color:#475569;">≈</sup>'
         : (t.prev_advance_source === 'aade' ? '<sup style="color:#15803d;font-weight:700;">Α</sup>' : ''));
-    return `<td class="ar-num">${arFmtMoney(t.tax)}</td>
-      <td class="ar-num">${arFmtMoney(t.advance)}</td>
-      <td class="ar-num">${arFmtMoney(t.prev_advance)}${prevMark}</td>
-      <td class="ar-num" style="font-weight:700;">${balCell}</td>`;
+    return [`<td class="ar-num">${arFmtMoney(t.tax)}</td>`,
+      `<td class="ar-num">${arFmtMoney(t.advance)}</td>`,
+      `<td class="ar-num">${arFmtMoney(t.prev_advance)}${prevMark}</td>`,
+      `<td class="ar-num" style="font-weight:700;">${balCell}</td>`];
   };
   // Findings (report notes) become markers next to the affected cell —
   // * μισθοδοσία, ** ενοίκιο, *** ΕΦΚΑ on Δαπάνες, † on Αχαρακτ. — each
@@ -1098,39 +1123,70 @@ function buildConsolidatedTableHtml(companies) {
       noteRows.push({ id, mark: AR_NOTE_TYPES[n.type].mark, name: c.name, message: n.message, highlight: n.highlight, bold: !!AR_NOTE_TYPES[n.type].bold });
       return `<sup data-ar-goto="${id}" style="color:#b91c1c;font-weight:700;">${arEscapeHtml(AR_NOTE_TYPES[n.type].mark)}</sup>`;
     }).join('');
-  const rowsHtml = companies.map((c, i) => {
+  // Οι σημάδες παρατηρήσεων υπολογίζονται ΜΙΑ φορά ανά εταιρία (με τη σειρά που ήταν πάντα), ώστε οι παρατηρήσεις
+  // της ίδιας εταιρίας να μένουν διαδοχικές στη λίστα «Παρατηρήσεις» ακόμη κι αν οι στήλες μοιράζονται σε 2 πίνακες.
+  const markSets = companies.map((c, i) => ({
+    expenses: marksFor(c, i, 'expenses'),
+    unclassified: marksFor(c, i, 'unclassified'),
+    vat: marksFor(c, i, 'vat'),
+    stock: marksFor(c, i, 'stock'),
+    income: marksFor(c, i, 'income'),
+  }));
+  const sums = (c) => {
     const r = c.report;
-    const openingSum = (r.stock_rows || []).reduce((a, s) => a + (s.opening || 0), 0);
-    const purchasesSum = (r.stock_rows || []).reduce((a, s) => a + (s.purchases || 0), 0);
-    const closingSum = (r.stock_rows || []).reduce((a, s) => a + (s.closing || 0), 0);
-    const expenseMarks = marksFor(c, i, 'expenses');
-    const unclassifiedMarks = marksFor(c, i, 'unclassified');
-    const vatMarks = marksFor(c, i, 'vat');
-    const stockMarks = marksFor(c, i, 'stock');
-    const incomeMarks = marksFor(c, i, 'income');
-    // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
-    const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
-    return `<tr>
-      <td class="ar-num">${i + 1}</td>
-      <td><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;text-decoration:underline;">${arEscapeHtml(c.name)}</span></td>
-      <td>${arEscapeHtml(c.vat || '')}</td>
-      <td>${todayStr()}</td>
-      <td>${ddmmyyyy(c.from)}</td>
-      <td>${ddmmyyyy(c.to)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(openingSum)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(purchasesSum)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(closingSum)}${stockMarks}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.cogs_total)}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.expenses_total)}${expenseMarks}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.sales_total)}${incomeMarks}</td>
-      <td class="ar-num"></td>
-      <td class="ar-num">${fmtAmountOrBlank(-Math.abs(r.unclassified_net || 0))}${unclassifiedMarks}</td>
-      <td class="ar-num">${fmtAmountOrBlank(r.taxable_result)}</td>
-      ${taxCells(r.income_tax)}
-      <td class="ar-num"></td>
-      <td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}${vatMarks}</td>
-    </tr>`;
-  }).join('');
+    const sr = r.stock_rows || [];
+    return {
+      opening: sr.reduce((a, s) => a + (s.opening || 0), 0),
+      purchases: sr.reduce((a, s) => a + (s.purchases || 0), 0),
+      closing: sr.reduce((a, s) => a + (s.closing || 0), 0),
+    };
+  };
+  // Στήλες σε δύο πίνακες (g=1: στοιχεία περιόδου/απόθεμα/δαπάνες/έσοδα, g=2: αποτέλεσμα/φόρος/ΦΠΑ). Με όλες τις
+  // στήλες σε ένα πίνακα το PDF έβγαινε πολύ φαρδύ και η γραμματοσειρά μίκραινε· έτσι έχει το ίδιο μέγεθος
+  // γραμμάτων με το ατομικό PDF (οι γραμμές επαναλαμβάνουν Κωδ. και Επωνυμία).
+  const colDefs = [
+    { g: 0, th: 'Κωδ.', td: (c, i) => `<td class="ar-num">${i + 1}</td>` },
+    { g: 0, th: 'Επωνυμία', td: (c, i, tbl) => (tbl === 1
+      ? `<td class="ar-name"><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;">${arEscapeHtml(c.name)}</span></td>`
+      : `<td class="ar-name">${arEscapeHtml(c.name)}</td>`) },
+    { g: 1, th: 'ΑΦΜ', td: (c) => `<td>${arEscapeHtml(c.vat || '')}</td>` },
+    { g: 1, th: 'Ημερ. Υπολ.', td: () => `<td>${todayStr()}</td>` },
+    { g: 1, th: 'Από', td: (c) => `<td>${ddmmyyyy(c.from)}</td>` },
+    { g: 1, th: 'Έως', td: (c) => `<td>${ddmmyyyy(c.to)}</td>` },
+    { g: 1, th: 'Απ. Έναρξης', td: (c) => `<td class="ar-num">${fmtAmountOrBlank(sums(c).opening)}</td>` },
+    { g: 1, th: 'Αγορές Χρ.', td: (c) => `<td class="ar-num">${fmtAmountOrBlank(sums(c).purchases)}</td>` },
+    { g: 1, th: 'Απ. Τέλους', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(sums(c).closing)}${markSets[i].stock}</td>` },
+    { g: 1, th: 'Κόστος Πωλ.', td: (c) => `<td class="ar-num">${fmtAmountOrBlank(c.report.cogs_total)}</td>` },
+    { g: 1, th: 'Δαπάνες', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(c.report.expenses_total)}${markSets[i].expenses}</td>` },
+    { g: 1, th: 'Ακ. Έσοδα Βιβ.', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(c.report.sales_total)}${markSets[i].income}</td>` },
+    { g: 2, th: 'Ακ. Έσοδα Αυτ.', td: () => '<td class="ar-num"></td>' },
+    { g: 2, th: 'Εκκρεμ. myDATA (Αχαρακτ.)', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(-Math.abs(c.report.unclassified_net || 0))}${markSets[i].unclassified}</td>` },
+    { g: 2, th: 'Φορολογητέα Κέρδη', td: (c) => `<td class="ar-num">${fmtAmountOrBlank(c.report.taxable_result)}</td>` },
+    ...(withIncomeTax ? [
+      { g: 2, th: 'Φόρος Εισ. Επαγγ. (εκτ.)', td: (c) => taxCellList(c.report.income_tax)[0] },
+      { g: 2, th: 'Προκ. Τρέχ.', td: (c) => taxCellList(c.report.income_tax)[1] },
+      { g: 2, th: 'Προκ. Προηγ.', td: (c) => taxCellList(c.report.income_tax)[2] },
+      { g: 2, th: 'Υπόλ. Φόρου', td: (c) => taxCellList(c.report.income_tax)[3] },
+    ] : []),
+    { g: 2, th: 'Τελ. Κέρδη Β.Α.', td: () => '<td class="ar-num"></td>' },
+    { g: 2, th: 'ΦΠΑ', td: (c, i) => {
+      const r = c.report;
+      // Not subject to ΦΠΑ -> "Χ" instead of an empty/zero balance.
+      const vatCell = r.vat_applicable === false ? 'Χ' : fmtAmountOrBlank(r.vat_period_balance);
+      return `<td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}${markSets[i].vat}</td>`;
+    } },
+  ];
+  const buildTable = (tbl, caption) => {
+    const cols = colDefs.filter((d) => d.g === 0 || d.g === tbl);
+    const body = companies.map((c, i) => `<tr>${cols.map((d) => d.td(c, i, tbl)).join('')}</tr>`).join('');
+    return `<div${tbl === 2 ? ' data-ar-newpage="1" style="margin-top:14px;"' : ''}>
+      <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:3px;">${caption}</div>
+      <table class="ar-consolidated-table">
+        <thead><tr>${cols.map((d) => `<th>${d.th}</th>`).join('')}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`;
+  };
 
   const notesHtml = noteRows.length
     ? `<div style="margin-top:24px;">
@@ -1171,15 +1227,8 @@ function buildConsolidatedTableHtml(companies) {
       <div style="font-size:20px;font-weight:700;">Λογιστικό Αποτέλεσμα (Συγκεντρωτική)</div>
       <div style="font-size:12px;font-weight:600;">Ημερομηνία: ${todayStr()}</div>
     </div>
-    <table class="ar-consolidated-table">
-      <thead><tr>
-        <th>Κωδ.</th><th>Επωνυμία</th><th>ΑΦΜ</th><th>Ημερ. Υπολ.</th><th>Από</th><th>Έως</th>
-        <th>Απ. Έναρξης</th><th>Αγορές Χρ.</th><th>Απ. Τέλους</th><th>Κόστος Πωλ.</th><th>Δαπάνες</th>
-        <th>Ακ. Έσοδα Βιβ.</th><th>Ακ. Έσοδα Αυτ.</th><th>Εκκρεμ. myDATA (Αχαρακτ.)</th>
-        <th>Φορολογητέα Κέρδη</th>${withIncomeTax ? '<th>Φόρος Εισ. Επαγγ. (εκτ.)</th><th>Προκ. Τρέχ.</th><th>Προκ. Προηγ.</th><th>Υπόλ. Φόρου</th>' : ''}<th>Τελ. Κέρδη Β.Α.</th><th>ΦΠΑ</th>
-      </tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
+    ${buildTable(1, 'Πίνακας 1/2 — Περίοδος, απόθεμα, κόστος, δαπάνες, έσοδα')}
+    ${buildTable(2, 'Πίνακας 2/2 — Εκκρεμότητες myDATA, φορολογητέο αποτέλεσμα, φόρος εισοδήματος, ΦΠΑ')}
     ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση): εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>` : ''}
     ${notesHtml}
     ${legendHtml}
@@ -1611,10 +1660,15 @@ function arBuildCheckGroups(rows, post) {
         const row = r || {};
         const noOpening = !!row.inventory_new_obligation
           || !Object.values(row.opening_inventory || {}).some((v) => Number(v) > 0);
+        const zero = { key: 'zero', label: 'Συνέχεια χωρίς απόθεμα λήξης (0 €)' };
+        // Νέα υποχρέωση απογραφής: προεπιλογή (πρώτη επιλογή) η «Συνέχεια χωρίς απόθεμα λήξης», ώστε ο υπολογισμός
+        // να προχωρά κανονικά· η «Παράλειψη» (δεν υπολογίζεται) μένει διαθέσιμη αλλά ΔΕΝ είναι η προεπιλογή.
+        const zeroFirst = !!row.inventory_new_obligation;
         return [
-          ...(post ? [{ key: '', label: 'Παράλειψη (δεν υπολογίζεται)' }] : []),
+          ...(zeroFirst ? [zero] : []),
+          ...(post ? [{ key: '', label: 'Παράλειψη (δεν υπολογίζεται — δεν θα βγει αποτέλεσμα)' }] : []),
           { key: 'manual', label: 'Χειροκίνητα' },
-          { key: 'zero', label: 'Συνέχεια χωρίς απόθεμα λήξης (0 €)' },
+          ...(zeroFirst ? [] : [zero]),
           ...(noOpening ? [] : [
             { key: 'same_as_opening', label: 'Ίσο με έναρξη' },
             { key: 'pct10_up', label: '+10% επί έναρξης' },
@@ -1886,7 +1940,7 @@ function showBulkNotesByTypeModal(results, opts) {
   modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
   modal.setAttribute('data-managed', '1');
   modal.innerHTML = `
-    <div class="modal-warning-panel w-11/12" style="max-width:56rem;max-height:88vh;overflow-y:auto;">
+    <div class="modal-warning-panel" style="width:min(96vw,1500px);max-width:96vw;max-height:92vh;overflow-y:auto;">
       <div class="modal-warning-title">${opts.message ? '🧮 Λογιστικό Αποτέλεσμα — Μαζικός' : '📋 Διαφορές ανά είδος'}</div>
       <div class="modal-warning-body">${summary}${body}</div>
       <div class="modal-warning-actions">

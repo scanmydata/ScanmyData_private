@@ -380,7 +380,8 @@
     (function () {
       // Λήψη παραστατικών και έλεγχοι Λογιστικού Αποτελέσματος κλειδώνουν ΟΛΑ μεταξύ τους (ο υπολογισμός δεν πρέπει
       // να τρέχει πάνω σε δεδομένα που αλλάζουν και η λήψη δεν ξεκινά όσο υπολογίζεται αποτέλεσμα).
-      var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single', 'fetch'], fetch: ['fetch', 'ar_bulk', 'ar_single'] };
+      var LOCK_KINDS = { ar: ['ar_bulk', 'ar_single', 'fetch'], fetch: ['fetch', 'ar_bulk', 'ar_single'], e3: ['e3_bulk'] };
+      var STORE_KEY = 'smd_group_activity_v1';
       var WHAT = { ar_bulk: 'Μαζικός υπολογισμός Λογιστικού Αποτελέσματος', ar_single: 'Ατομικός υπολογισμός Λογιστικού Αποτελέσματος', fetch: 'Λήψη παραστατικών', e3_bulk: 'Έλεγχος Ε3 (Μαζικός)' };
       var state = [];
       var timer = null;
@@ -464,32 +465,84 @@
         Object.keys(rendered).forEach(function (k) { if (!wanted[k]) delete rendered[k]; });
       }
       function holderFor(group) {
+        // Το κλείδωμα ακολουθεί ό,τι τρέχει ΤΩΡΑ: κρατά ΟΛΕΣ τις ενεργές εργασίες που αφορούν την ομάδα κουμπιών
+        // (π.χ. λήψη + Μαζικός Λογιστικού μαζί) — ξεκλειδώνει μόνο όταν τελειώσουν όλες.
         var kinds = LOCK_KINDS[group] || [];
-        for (var i = 0; i < state.length; i++) if (kinds.indexOf(state[i].kind) >= 0) return state[i];
-        return null;
+        var all = state.filter(function (a) { return kinds.indexOf(a.kind) >= 0; });
+        if (!all.length) return null;
+        return { kind: all[0].kind, username: all[0].username, all: all };
       }
-      function applyLocks() {
-        document.querySelectorAll('[data-lock-group]').forEach(function (el) {
-          var holder = holderFor(el.getAttribute('data-lock-group'));
-          var marked = el.getAttribute('data-group-locked') === '1';
-          if (holder) {
-            if (!el.disabled) {
-              el.disabled = true;
-              if (!marked) {
-                el.setAttribute('data-group-locked', '1');
-                el.setAttribute('data-orig-title', el.getAttribute('title') || '');
-                marked = true;
-              }
+      function holderText(holder) {
+        return (holder.all || [holder]).map(function (a) {
+          return (WHAT[a.kind] || 'εργασία') + ' (εντολή: ' + (a.username || '—') + ')';
+        }).join(' · ');
+      }
+      // Κλείδωμα/ξεκλείδωμα ενός στοιχείου. Κλειδώνουμε ΜΟΝΟ ό,τι ήταν ενεργό (και το σημειώνουμε), ώστε το
+      // ξεκλείδωμα να μην ενεργοποιήσει στοιχεία που η ίδια η σελίδα είχε απενεργοποιήσει.
+      function lockEl(el, holder) {
+        var marked = el.getAttribute('data-group-locked') === '1';
+        if (holder) {
+          if (!el.disabled) {
+            el.disabled = true;
+            if (!marked) {
+              el.setAttribute('data-group-locked', '1');
+              el.setAttribute('data-orig-title', el.getAttribute('title') || '');
+              marked = true;
             }
-            if (marked) el.title = 'Κλειδωμένο: τρέχει ' + (WHAT[holder.kind] || 'εργασία') + ' (εντολή: ' + (holder.username || '—') + ')';
-          } else if (marked) {
-            el.disabled = false;
-            var ot = el.getAttribute('data-orig-title') || '';
-            if (ot) el.title = ot; else el.removeAttribute('title');
-            el.removeAttribute('data-group-locked');
-            el.removeAttribute('data-orig-title');
           }
+          if (marked) el.title = 'Κλειδωμένο: τρέχει ' + holderText(holder);
+        } else if (marked) {
+          el.disabled = false;
+          var ot = el.getAttribute('data-orig-title') || '';
+          if (ot) el.title = ot; else el.removeAttribute('title');
+          el.removeAttribute('data-group-locked');
+          el.removeAttribute('data-orig-title');
+        }
+      }
+      // Στοιχεία που δεν κλειδώνουν ποτέ μέσα σε περιοχή data-lock-scope: tabs πλοήγησης, ό,τι έχει data-lock-exempt
+      // (π.χ. λήψη PDF έτοιμων αποτελεσμάτων, Διακοπή) και ό,τι βρίσκεται μέσα σε data-lock-skip (αποτελέσματα).
+      var EXEMPT_SEL = '.brain-tab-button,.fetch-mode-tab,[data-lock-exempt],[data-lock-skip],[data-lock-skip] *';
+      function applyLocks() {
+        // 1) Ρητά κουμπιά εκκίνησης (data-lock-group)
+        document.querySelectorAll('[data-lock-group]').forEach(function (el) {
+          lockEl(el, holderFor(el.getAttribute('data-lock-group')));
         });
+        // 2) Ολόκληρες περιοχές (data-lock-scope): ΟΛΑ τα κουμπιά και τα πεδία μέσα τους
+        document.querySelectorAll('[data-lock-scope]').forEach(function (scope) {
+          var holder = holderFor(scope.getAttribute('data-lock-scope'));
+          scope.querySelectorAll('button,input,select,textarea').forEach(function (el) {
+            if (el.matches(EXEMPT_SEL)) return;
+            if (el.hasAttribute('data-lock-group')) return;   // το χειρίστηκε το (1)
+            lockEl(el, holder);
+          });
+          if (holder) scope.setAttribute('data-scope-locked', '1'); else scope.removeAttribute('data-scope-locked');
+        });
+      }
+      // Η κατάσταση κρατιέται στο sessionStorage: μετά από πλήρη ανανέωση/νέα σελίδα τα κουμπιά και τα πεδία
+      // είναι κλειδωμένα ΑΜΕΣΑ (χωρίς να περιμένουν το πρώτο αίτημα στον server), και ξαναελέγχονται από τον server.
+      function saveState() {
+        try { sessionStorage.setItem(STORE_KEY, JSON.stringify({ t: Date.now(), state: state })); } catch (_) {}
+      }
+      function loadState() {
+        try {
+          var raw = sessionStorage.getItem(STORE_KEY);
+          if (!raw) return;
+          var o = JSON.parse(raw);
+          if (o && Array.isArray(o.state) && (Date.now() - (o.t || 0)) < 90000) state = o.state;
+        } catch (_) {}
+      }
+      function clearState() {
+        state = [];
+        try { sessionStorage.removeItem(STORE_KEY); } catch (_) {}
+      }
+      // Νέα στοιχεία μετά από partial navigation / δυναμικό render: κλείδωμα στο επόμενο frame (όχι μόνο ανά 1s).
+      var applyQueued = false;
+      function queueApply() {
+        if (applyQueued) return;
+        if (!state.length && !document.querySelector('[data-group-locked]')) return;
+        applyQueued = true;
+        var run = function () { applyQueued = false; try { applyLocks(); } catch (_) {} };
+        setTimeout(run, 20);   // όχι requestAnimationFrame: δεν τρέχει σε κρυφά/background tabs
       }
       // Εκκρεμή αποτελέσματα/έλεγχοι του ΙΔΙΟΥ χρήστη (π.χ. έκανε logout όσο έτρεχε και ξανασυνδέθηκε): αν είναι
       // ανοιχτή η σελίδα της εργασίας συνεχίζει αυτόματα, αλλιώς flash με κουμπί «Συνέχεια».
@@ -537,16 +590,20 @@
         });
       }
       function poll() {
-        if (window.IS_LOGGED_IN !== true) { state = []; removeAll(); applyLocks(); return; }
+        if (window.IS_LOGGED_IN !== true) { clearState(); removeAll(); applyLocks(); return; }
         fetch('/api/group_activity', { cache: 'no-store', credentials: 'same-origin', headers: { 'X-Wait-Overlay': 'skip' } })
           .then(function (r) {
             var ct = r.headers.get('content-type') || '';
-            if (!r.ok || ct.indexOf('json') < 0) { var e = new Error('group_activity HTTP ' + r.status); e.unauth = true; throw e; }
+            // Ξεκλείδωμα ΜΟΝΟ όταν ο χρήστης δεν είναι πια συνδεδεμένος (401/403 ή ανακατεύθυνση σε σελίδα login).
+            // Σφάλματα server/δικτύου (π.χ. 5xx όσο ο server είναι φορτωμένος) κρατούν την τελευταία γνωστή κατάσταση.
+            if (r.status === 401 || r.status === 403 || (r.ok && ct.indexOf('json') < 0)) { var e = new Error('group_activity HTTP ' + r.status); e.unauth = true; throw e; }
+            if (!r.ok) throw new Error('group_activity HTTP ' + r.status);
             return r.json();
           })
           .then(function (data) {
             state = (data && data.activities) || [];
             window.__groupActivity = state;
+            saveState();
             // Ο Μαζικός μου (που τρέχει στον server) τελείωσε ενώ δεν είμαι στη σελίδα Μαζικού/δεν τον παρακολουθεί
             // κανένα script: ειδοποίηση ότι τα αποτελέσματα και οι έλεγχοι περιμένουν στη σελίδα.
             try {
@@ -591,13 +648,23 @@
             try { window.dispatchEvent(new CustomEvent('group-activity', { detail: state })); } catch (_) {}
           })
           .catch(function (err) {
-            if (err && err.unauth) { state = []; removeAll(); applyLocks(); }
+            if (err && err.unauth) { clearState(); removeAll(); applyLocks(); }
           });
       }
       function start() {
         if (timer) return;
+        if (window.IS_LOGGED_IN === true) loadState();
         timer = setInterval(poll, 3000);
-        setInterval(applyLocks, 1000); // κουμπιά που ξαναγράφονται/ενεργοποιούνται από τη σελίδα ή μετά από partial-nav
+        setInterval(applyLocks, 1000); // δίχτυ ασφαλείας (κουμπιά που ξαναενεργοποιεί η σελίδα)
+        // Άμεση εφαρμογή σε κάθε αλλαγή του DOM (partial navigation, δυναμικός πίνακας) ή του disabled.
+        try {
+          new MutationObserver(queueApply).observe(document.documentElement, {
+            childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'],
+          });
+        } catch (_) {}
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyLocks);
+        window.addEventListener('pageshow', applyLocks);
+        applyLocks();
         poll();
       }
       try { start(); } catch (_) {}

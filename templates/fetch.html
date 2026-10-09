@@ -88,7 +88,7 @@
     <div style="position:absolute;inset:0;z-index:10;border-radius:16px;cursor:not-allowed;"
          title="Επιλέξτε ενεργό πελάτη από τη σελίδα των Credentials για να χρησιμοποιήσετε αυτή τη φόρμα"></div>
     {% endif %}
-        <form method="POST" class="space-y-4" autocomplete="off" novalidate {% if not active_credential and user_role != 'admin' %}style="pointer-events:none;opacity:0.55;" onsubmit="return false;"{% endif %}>
+        <form method="POST" class="space-y-4" autocomplete="off" novalidate data-lock-scope="fetch" {% if not active_credential and user_role != 'admin' %}style="pointer-events:none;opacity:0.55;" onsubmit="return false;"{% endif %}>
       {% if user_role == 'admin' %}
       <div id="fetchModeTabs" class="mb-4">
         <button id="singleFetchTabBtn" type="button" class="fetch-mode-tab is-active font-semibold py-2 px-4 rounded-lg shadow-sm">Ατομική Λήψη</button>
@@ -176,7 +176,7 @@
           </div>
           <div class="flex flex-col justify-end gap-2">
             <button id="bulkFetchStartBtn" type="button" data-lock-group="fetch" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg shadow">Εκκίνηση Μαζικής Λήψης</button>
-            <button id="bulkFetchStopBtn" type="button" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow" disabled>Διακοπή Μαζικής Λήψης</button>
+            <button id="bulkFetchStopBtn" type="button" data-lock-exempt class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow" disabled>Διακοπή Μαζικής Λήψης</button>
             <div id="bulkFetchStatus" class="text-sm text-indigo-800"></div>
             <div class="text-xs text-gray-600">Η μαζική λήψη χρησιμοποιεί το παραπάνω δικό της διάστημα «Από / Έως».</div>
           </div>

@@ -1145,7 +1145,7 @@
     <button id="analyticTabBtn" type="button" class="brain-tab-button">Αναλυτικός</button>
   </div>
 
-  <div id="quickCheckTab">
+  <div id="quickCheckTab" data-lock-scope="e3">
   <!-- Credentials & Period Selection -->
   <div class="bg-white dark:bg-gray-800 rounded-lg p-6 mb-6 shadow">
     <h2 class="text-lg font-semibold text-gray-800 dark:text-white mb-4">Επιλογή Πελάτη & Περιόδου</h2>
@@ -1216,7 +1216,7 @@
 
 </div>
 
-  <div id="analyticTab" class="hidden">
+  <div id="analyticTab" class="hidden" data-lock-scope="e3">
   <!-- E3 Brain Controls -->
   <div class="bg-white dark:bg-gray-800 rounded-lg p-6 mb-6 shadow">
     <h2 class="text-lg font-semibold text-gray-800 dark:text-white mb-4">E3 Brain (Beta)</h2>
@@ -1685,7 +1685,7 @@
 
     <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto hidden" style="max-height: 340px;display:none;"></pre>
     <!-- Bulk results accordion (one card per client, toggle to expand). -->
-    <div id="brainBulkResults" class="mt-4 brain-bulk-results"></div>
+    <div id="brainBulkResults" class="mt-4 brain-bulk-results" data-lock-skip></div>
   </div>
 
   <!-- Status Area -->
@@ -6380,6 +6380,8 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(payload),
       });
       started = await resp.json();
+      // Κλειδωμένο (τρέχει ήδη μαζικός Ε3 στην ομάδα): ΟΧΙ fallback σε δεύτερο run από τον browser.
+      if (resp.status === 409 || (started && started.locked)) return { ok: false, locked: true, error: (started && started.error) || 'Τρέχει ήδη μαζικός έλεγχος Ε3.' };
     } catch (_) { return { unsupported: true }; }
     if (!started || !started.ok) return { unsupported: true, error: started && started.error };
     return await _e3BulkWaitJob(started.job_id);
