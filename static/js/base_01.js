@@ -273,6 +273,15 @@
       var pollTimer = null;
       var consecutiveEmpty = 0;
       var serverFailures = 0;
+      // Δείχνει πόση ώρα μένει το ίδιο βήμα, ώστε ο χρήστης να βλέπει ότι δεν έχει κολλήσει
+      // (η ετικέτα αλλάζει σε κάθε εταιρία/βήμα· το χρονόμετρο μηδενίζεται σε κάθε αλλαγή).
+      var lastText = '', lastChange = 0;
+      function withElapsed(text) {
+        if (text !== lastText) { lastText = text; lastChange = Date.now(); return text; }
+        var secs = Math.round((Date.now() - lastChange) / 1000);
+        if (secs < 6) return text;
+        return text + ' · ' + (secs >= 120 ? Math.floor(secs / 60) + '′' + (secs % 60) + '″' : secs + '″');
+      }
       // ΝΕΟ: το banner οδηγείται από τον server (/api/accounting_result/active_jobs) ώστε
       // κάθε χρήστης της ομάδας να βλέπει τον Μαζικό που τρέχει — και μετά από logout/login.
       // Στη σελίδα σύνδεσης ή μετά από logout/auto-logout δεν δείχνει τίποτα και σβήνει το τοπικό κλειδί.
@@ -300,12 +309,12 @@
               if (local && local.jobId === j.job_id && local.label && j.phase !== 'server' && (Date.now() - (local.updatedAt || 0)) < 20000) label = local.label;
               var pct = (typeof j.percent === 'number') ? ' (' + j.percent + '%)' : '';
               var by = (!j.mine && j.username) ? ' — από ' + j.username : '';
-              renderBanner({ jobId: j.job_id, total: j.total }, 'Λογιστικό Αποτέλεσμα — ' + (label || 'εκτέλεση σε εξέλιξη') + pct + by);
+              renderBanner({ jobId: j.job_id, total: j.total }, withElapsed('Λογιστικό Αποτέλεσμα — ' + (label || 'εκτέλεση σε εξέλιξη') + pct + by));
               return;
             }
             // Ο server δεν ξέρει ενεργό run. Μόλις ξεκίνησε εδώ και δεν έφτασε ακόμη ο 1ος heartbeat;
             if (local && local.label && (Date.now() - (local.updatedAt || 0)) < 8000) {
-              renderBanner(local, 'Λογιστικό Αποτέλεσμα — ' + local.label);
+              renderBanner(local, withElapsed('Λογιστικό Αποτέλεσμα — ' + local.label));
               return;
             }
             clearActive();

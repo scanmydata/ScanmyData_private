@@ -2717,6 +2717,39 @@ async function deleteBulkRun(batchId, onDone) {
   }
 }
 
+// Πρόοδος ΑΝΑΛΥΤΙΚΑ: ο υπολογισμός πάει σε μικρά chunks (ένα μακρύ αίτημα για δεκάδες εταιρίες
+// έπεφτε σε timeout/σταματούσε μόνο του) και ο server δημοσιεύει εταιρία + βήμα ανά στιγμή στο banner.
+var AR_BULK_PRECHECK_POPUPS = false;
+var AR_BULK_CHUNK_SIZE = 2;
+
+async function arBulkComputeChunked(names, from, to, jobId) {
+  const batchId = 'b' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+  const incomeTax = arIncomeTaxEnabled('arBulkIncomeTax');
+  const results = [];
+  let aborted = false;
+  for (let i = 0; i < names.length; i += AR_BULK_CHUNK_SIZE) {
+    if (await isBulkAbortRequested(jobId)) { aborted = true; break; }
+    const chunk = names.slice(i, i + AR_BULK_CHUNK_SIZE);
+    setBulkCrossPageLabel(`Βήμα 3/3 — υπολογισμός ${i + 1}–${i + chunk.length}/${names.length}: ${chunk.join(', ')}`);
+    const body = {
+      credential_names: chunk, date_from: from, date_to: to, job_id: jobId, income_tax: incomeTax,
+      batch_id: batchId, offset: i, grand_total: names.length, chunked: true, auto_continue: true,
+    };
+    let resp = await postJson('/api/accounting_result/bulk_compute', body);
+    if (!resp.ok) { // στιγμιαίο πρόβλημα δικτύου/gateway: μία επανάληψη
+      await new Promise((res) => setTimeout(res, 2500));
+      resp = await postJson('/api/accounting_result/bulk_compute', body);
+    }
+    if (!resp.ok) {
+      chunk.forEach((n) => results.push({ credential_name: n, ok: false, error: resp.error || 'σφάλμα υπολογισμού' }));
+      continue; // δεν σταματά όλο το run για ένα chunk
+    }
+    (resp.results || []).forEach((r) => results.push(r));
+    if (resp.aborted) { aborted = true; break; }
+  }
+  return { ok: true, results, aborted };
+}
+
 async function runBulk() {
   const from = document.getElementById('arBulkFrom').value;
   const to = document.getElementById('arBulkTo').value;
@@ -2750,39 +2783,47 @@ async function runBulk() {
     showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): διακόπηκε από τον χρήστη.', 'warning', 8000);
     return;
   }
-  const step2 = `Βήμα 2/3 — προέλεγχος myDATA (απόθεμα, μισθοδοσία, ενοίκιο, ΕΦΚΑ) για ${names.length} εταιρίες`;
-  setBulkCrossPageLabel(step2);
-  showArOverlay('Λήψη δεδομένων από myDATA...', step2 + '.');
-  const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
-  hideArOverlay();
-  if (!statusResp.ok) {
-    statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
-    showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα προελέγχου αποθεμάτων/μισθοδοσίας/ενοικίου/ΕΦΚΑ — ' + (statusResp.error || ''), 'error');
-    return;
-  }
-
-  const depreciationAmbiguousNames = (statusResp.rows || [])
-    .filter((r) => r.depreciation_ambiguous)
-    .map((r) => r.name);
-
-  // Every finding in ONE popup, grouped by kind (απόθεμα / μισθοδοσία /
-  // ενοίκιο / ΕΦΚΑ Μη-Μισθωτών) with a row per company, then any manual
-  // entries one after the other.
-  const groups = arBuildCheckGroups(statusResp.rows);
-  if (groups.length) {
-    setBulkCrossPageLabel('αναμονή για τις επιλογές σου στο popup «Διαφορές προελέγχου»');
-    const choices = await showGroupedChecksModal(groups);
-    if (!choices) {
-      statusEl.textContent = 'Ακυρώθηκε.';
-      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — διαφορές προελέγχου.', 'warning', 7000);
+  // ΝΕΟ: ΧΩΡΙΣ «Βήμα 2» προελέγχου και popup «Διαφορές προελέγχου» (AR_BULK_PRECHECK_POPUPS = false).
+  // Ο Μαζικός προχωρά μόνος: μισθοδοσία/ενοίκιο/ΕΦΚΑ συνεχίζουν με τα τρέχοντα στοιχεία και οι
+  // διαφορές φαίνονται στις σημειώσεις/στο τελικό παράθυρο· εταιρίες που χρειάζονται απόθεμα λήξης
+  // αναφέρονται στο τέλος ως «δεν υπολογίστηκαν». Το παλιό popup μένει πίσω από τη σημαία.
+  let depreciationAmbiguousNames = [];
+  if (AR_BULK_PRECHECK_POPUPS) {
+    const step2 = `Βήμα 2/3 — προέλεγχος myDATA (απόθεμα, μισθοδοσία, ενοίκιο, ΕΦΚΑ) για ${names.length} εταιρίες`;
+    setBulkCrossPageLabel(step2);
+    showArOverlay('Λήψη δεδομένων από myDATA...', step2 + '.');
+    const statusResp = await postJson('/api/accounting_result/inventory/bulk_status', { credential_names: names, year, date_from: from, date_to: to });
+    hideArOverlay();
+    if (!statusResp.ok) {
+      statusEl.textContent = 'Σφάλμα: ' + (statusResp.error || '');
+      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα προελέγχου αποθεμάτων/μισθοδοσίας/ενοικίου/ΕΦΚΑ — ' + (statusResp.error || ''), 'error');
       return;
     }
-    const applied = await applyGroupedChecks(choices, statusResp.rows, year, from, to, statusEl);
-    if (!applied) {
-      statusEl.textContent = 'Ακυρώθηκε.';
-      showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — χειροκίνητη καταχώρηση.', 'warning', 7000);
-      return;
+
+    depreciationAmbiguousNames = (statusResp.rows || [])
+      .filter((r) => r.depreciation_ambiguous)
+      .map((r) => r.name);
+
+    // Every finding in ONE popup, grouped by kind (απόθεμα / μισθοδοσία /
+    // ενοίκιο / ΕΦΚΑ Μη-Μισθωτών) with a row per company, then any manual
+    // entries one after the other.
+    const groups = arBuildCheckGroups(statusResp.rows);
+    if (groups.length) {
+      setBulkCrossPageLabel('αναμονή για τις επιλογές σου στο popup «Διαφορές προελέγχου»');
+      const choices = await showGroupedChecksModal(groups);
+      if (!choices) {
+        statusEl.textContent = 'Ακυρώθηκε.';
+        showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — διαφορές προελέγχου.', 'warning', 7000);
+        return;
+      }
+      const applied = await applyGroupedChecks(choices, statusResp.rows, year, from, to, statusEl);
+      if (!applied) {
+        statusEl.textContent = 'Ακυρώθηκε.';
+        showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ακυρώθηκε — χειροκίνητη καταχώρηση.', 'warning', 7000);
+        return;
+      }
     }
+
   }
 
   window.__arBulkPeriod = { from, to };
@@ -2792,11 +2833,11 @@ async function runBulk() {
     return;
   }
   setBulkCrossPageLabel(`Βήμα 3/3 — υπολογισμός ${names.length} εταιριών…`);
-  const bulkResp = await postJson('/api/accounting_result/bulk_compute', {
-    credential_names: names, date_from: from, date_to: to, job_id: jobId,
-    income_tax: arIncomeTaxEnabled('arBulkIncomeTax'),
-  });
+  const bulkResp = await arBulkComputeChunked(names, from, to, jobId);
   stopBulkCrossPageBanner();
+  if (bulkResp.ok && !depreciationAmbiguousNames.length) {
+    depreciationAmbiguousNames = (bulkResp.results || []).filter((r) => r.depreciation_auto_summed).map((r) => r.credential_name);
+  }
   if (!bulkResp.ok) {
     statusEl.textContent = 'Σφάλμα: ' + (bulkResp.error || '');
     showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): σφάλμα — ' + (bulkResp.error || ''), 'error');

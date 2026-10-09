@@ -19360,7 +19360,12 @@ def _ar_bulk_batch_save(batch: Dict[str, Any], results: List[Dict[str, Any]], ab
                 else "εκκρεμεί απόθεμα λήξης" if r.get("needs_inventory_input") else None
             ),
         } for r in results]
-        ar_history.upsert_bulk_batch(_ar_bulk_runs_path(), batch)
+        # ΝΕΟ: ο Μαζικός τρέχει σε μικρά chunks (πολλά αιτήματα) — οι εταιρίες των προηγούμενων
+        # chunks του ίδιου run (batch["_prior"]) μπαίνουν πριν από τις τρέχουσες.
+        prior = batch.get("_prior") or []
+        to_save = {k: v for k, v in batch.items() if k != "_prior"}
+        to_save["companies"] = list(prior) + batch["companies"]
+        ar_history.upsert_bulk_batch(_ar_bulk_runs_path(), to_save)
     except Exception:
         log.exception("could not save bulk-run folder %s", batch.get("id"))
 
@@ -19384,22 +19389,55 @@ def api_accounting_result_bulk_compute():
         settings = load_settings() or {}
 
         total = len(names)
+        # ΝΕΟ: ο browser στέλνει τον Μαζικό σε μικρά chunks (ένα μακρύ αίτημα για δεκάδες εταιρίες
+        # έπεφτε σε timeout). offset/grand_total = θέση του chunk στο συνολικό run (για πρόοδο),
+        # batch_id = ο ίδιος φάκελος «αποθηκευμένων μαζικών», auto_continue = χωρίς popup ελέγχων.
+        try:
+            chunk_offset = max(0, int(payload.get("offset") or 0))
+            grand_total = max(total, int(payload.get("grand_total") or total))
+        except Exception:
+            chunk_offset, grand_total = 0, total
+        chunked = bool(payload.get("chunked"))
+        auto_continue = bool(payload.get("auto_continue"))
         aborted = False
         results = []
         if job_id:
             _uk, _un = _ar_user_ident()
-            ar_jobs.mark_server_running(job_id, _ar_group_key(), _uk, _un, total)
+            ar_jobs.mark_server_running(job_id, _ar_group_key(), _uk, _un, grand_total)
+
+        def _step(msg, i, nm):
+            # Αναλυτική πρόοδος: ποια εταιρία και ποιο βήμα επεξεργάζεται αυτή τη στιγμή.
+            ar_jobs.publish_progress(
+                job_id, f"Βήμα 3/3 — {nm} ({chunk_offset + i + 1}/{grand_total}): {msg}",
+                percent=round((chunk_offset + i) / grand_total * 100) if grand_total else None,
+                current=chunk_offset + i + 1, total=grand_total,
+            )
         # The run's «αποθηκευμένα μαζικά» folder exists from the start and is
         # refreshed after every company, so a request that dies midway
         # (gateway timeout on a long run) still leaves it findable/deletable
         # — it used to be written only at the very end.
         import uuid as _uuid
-        bulk_batch = {
-            "id": _uuid.uuid4().hex,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "date_from": date_from, "date_to": date_to,
-            "computed_by": _ar_computed_by(), "aborted": False, "companies": [],
-        }
+        bulk_batch = None
+        _batch_id = str(payload.get("batch_id") or "").strip()
+        if _batch_id:
+            try:
+                from accounting_result import history_store as _ar_hist_b
+                _existing = _ar_hist_b.get_bulk_batch(_ar_bulk_runs_path(), _batch_id)
+                if _existing:
+                    bulk_batch = {k: v for k, v in _existing.items() if k != "companies"}
+                    _chunk_names = {str(n) for n in names}
+                    bulk_batch["_prior"] = [c for c in (_existing.get("companies") or [])
+                                            if str(c.get("credential_name")) not in _chunk_names]
+                    bulk_batch["companies"] = []
+            except Exception:
+                log.exception("could not reload bulk-run folder %s", _batch_id)
+        if bulk_batch is None:
+            bulk_batch = {
+                "id": _batch_id or _uuid.uuid4().hex,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "date_from": date_from, "date_to": date_to,
+                "computed_by": _ar_computed_by(), "aborted": False, "companies": [],
+            }
         _ar_bulk_batch_save(bulk_batch, results)
         for idx, name in enumerate(names):
             if results:
@@ -19407,11 +19445,7 @@ def api_accounting_result_bulk_compute():
             if job_id and ar_jobs.is_abort_requested(job_id):
                 aborted = True
                 break
-            ar_jobs.publish_progress(
-                job_id, f"{name} ({idx + 1}/{total})",
-                percent=round((idx) / total * 100) if total else None,
-                current=idx + 1, total=total,
-            )
+            _step("έναρξη", idx, name)
             cred = get_cred_by_name(str(name)) or _ar_credential_from_store_by_name(str(name))
             if not cred:
                 results.append({"credential_name": name, "ok": False, "error": "Άγνωστο credential"})
@@ -19426,14 +19460,18 @@ def api_accounting_result_bulk_compute():
             path = _ar_store_path(vat)
             # ΦΠΑ first, then the rest of THIS company's computation - see
             # _ar_ensure_vat_profile_checked's docstring.
+            _step("έλεγχος προφίλ ΦΠΑ/Μητρώου ΑΑΔΕ", idx, name)
             vat_auto_check = _ar_ensure_vat_profile_checked(vat)
             _ar_ensure_company_type_saved(vat)
             books_category_mismatch = _ar_check_books_category_mismatch(cred, path)
 
+            _step("ανάκτηση προηγούμενου έτους από myDATA", idx, name)
             prior_entries = ar_engine.fetch_prior_year_classified_entries(year, aade_user, aade_key)
             # Fetched once, reused by build_report below — see the single-
             # compute route's identical comment.
+            _step("ανάκτηση παραστατικών περιόδου από myDATA", idx, name)
             current_period_entries = ar_engine.fetch_and_split_e3_entries(date_from, date_to, aade_user, aade_key)
+            _step("έλεγχοι αποθέματος/μισθοδοσίας/ενοικίου/ΕΦΚΑ", idx, name)
             inventory_obligation = _ar_determine_inventory_obligation(
                 vat, path, cred, prior_entries, current_period_entries[0], date_from, date_to,
             )
@@ -19445,6 +19483,10 @@ def api_accounting_result_bulk_compute():
             # normally a no-op; it only fires if that pre-flight step was
             # skipped/cancelled for this particular company.
             payroll_res = _ar_payroll_resolution(path, year, current_period_entries[0], date_from, date_to)
+            if payroll_res["needs_input"] and auto_continue:
+                # Χωρίς popup: ο Μαζικός συνεχίζει με τα τρέχοντα στοιχεία, η σημείωση μένει στην αναφορά.
+                payroll_res = {"needs_input": False, "payroll_manual_total": None,
+                               "payroll_check": payroll_res["payroll_check"], "resolution": "auto"}
             if payroll_res["needs_input"]:
                 results.append({
                     "credential_name": name, "ok": True, "needs_payroll_input": True,
@@ -19456,6 +19498,9 @@ def api_accounting_result_bulk_compute():
                 continue
             # Same blocking pattern for rent - see _ar_rent_resolution.
             rent_res = _ar_rent_resolution(path, year, current_period_entries[0], date_from, date_to)
+            if rent_res["needs_input"] and auto_continue:
+                rent_res = {"needs_input": False, "rent_manual_total": None,
+                            "rent_check": rent_res["rent_check"], "resolution": "auto"}
             if rent_res["needs_input"]:
                 results.append({
                     "credential_name": name, "ok": True, "needs_rent_input": True,
@@ -19488,7 +19533,9 @@ def api_accounting_result_bulk_compute():
 
             try:
                 epsilon_records, raw_invoices = _ar_load_epsilon_and_raw(vat)
+                _step("πρόβλεψη ΦΠΑ (έλεγχος δηλώσεων TAXISnet)", idx, name)
                 vat_plan = _ar_plan_vat_period(vat, path, date_to, _ar_vat_applicable(path))
+                _step("υπολογισμός αναφοράς", idx, name)
                 report = ar_engine.build_report(
                     vat, date_from, date_to, cred, settings,
                     epsilon_records, raw_invoices, aade_user, aade_key,
@@ -19570,6 +19617,7 @@ def api_accounting_result_bulk_compute():
 
                 results.append({
                     "credential_name": name, "ok": True, "needs_inventory_input": False,
+                    "depreciation_auto_summed": len(dep_entries) > 1,
                     "vat": vat, "year": year, "report": report, "entry_id": hist_entry.get("id"),
                     "vat_auto_check": vat_auto_check,
                     "books_category_mismatch": books_category_mismatch,
@@ -19582,7 +19630,8 @@ def api_accounting_result_bulk_compute():
 
         if job_id:
             ar_jobs.clear_progress(job_id)
-            ar_jobs.clear_abort(job_id)
+            if not chunked:  # σε chunks, το abort καθαρίζεται στο τέλος ολόκληρου του run (bulk_job/finish)
+                ar_jobs.clear_abort(job_id)
 
         # Final state of the run's folder (written from the start and after
         # every company — see _ar_bulk_batch_save).
@@ -19635,6 +19684,7 @@ def api_accounting_result_bulk_job_finish():
         from accounting_result import job_registry as ar_jobs
         payload = request.get_json(silent=True) or {}
         ar_jobs.finish_job(str(payload.get("job_id") or ""))
+        ar_jobs.clear_abort(str(payload.get("job_id") or ""))
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -20331,6 +20381,8 @@ def _ar_payroll_note(payroll_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(payroll_res['payroll_manual_total'])}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. διακοπή μισθοδοσίας εντός του έτους)"
+    elif resolution == "auto":
+        detail = "δεν επιβεβαιώθηκε — ο Μαζικός συνέχισε με τα τρέχοντα στοιχεία (έλεγξε την εταιρία στον Ατομικό)"
     else:
         detail = "εκκρεμεί επιβεβαίωση"
     return {
@@ -20381,6 +20433,8 @@ def _ar_rent_note(rent_res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         detail = f"επιβεβαιώθηκε/διορθώθηκε χειροκίνητα (σύνολο περιόδου {_ar_gr_money(rent_res['rent_manual_total'])}€)"
     elif resolution == "skip":
         detail = "παραλείφθηκε ως γνωστή περίπτωση (π.χ. λήξη μίσθωσης/ιδιόκτητος χώρος εντός του έτους)"
+    elif resolution == "auto":
+        detail = "δεν επιβεβαιώθηκε — ο Μαζικός συνέχισε με τα τρέχοντα στοιχεία (έλεγξε την εταιρία στον Ατομικό)"
     else:
         detail = "εκκρεμεί επιβεβαίωση"
     return {
