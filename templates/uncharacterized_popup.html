@@ -6,6 +6,11 @@
    τη βιβλιοθήκη) με κεχριμπαρί κεφαλίδα για να ξεχωρίζει. Η καταχώρηση περνά από
    το κανονικό /save_summary, ένα παραστατικό τη φορά.
 
+   PDF: κάθε γραμμή έχει κουμπί λήψης του PDF από τον πάροχο και η γραμμή
+   εργαλείων κουμπί για όλα μαζί σε ZIP (/api/uncharacterized_invoices/pdf).
+   Όπου ο πάροχος δεν δίνει αρχείο, ο σύνδεσμος αντιγράφεται και ανοίγει σε
+   νέα καρτέλα.
+
    Τα στυλ είναι δικά του (όχι Tailwind): το tailwind.css είναι προ-χτισμένο και
    δεν περιέχει κλάσεις που δεν υπήρχαν ήδη στα templates. #}
 <style>
@@ -16,6 +21,8 @@
   background: #b45309 !important; color: #fff !important; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.18);
 }
 .unchar-launch-btn:hover { background: #92400e !important; }
+.unchar-launch-btn.is-pdf { background: #1d4ed8 !important; }
+.unchar-launch-btn.is-pdf:hover { background: #1e40af !important; }
 .unchar-launch-count { background: #fff; color: #92400e; border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700; }
 .unchar-launch-hint { font-size: 12px; color: #6b7280; }
 [data-theme="dark"] .unchar-launch-hint { color: #9ca3af; }
@@ -60,12 +67,21 @@
 .unchar-btn-save:hover:not(:disabled) { background: #047857 !important; }
 .unchar-btn-plain { background: #fff; color: #374151; border-color: #d1d5db; }
 .unchar-btn-plain:hover:not(:disabled) { background: #f3f4f6; }
+.unchar-btn-pdf { background: #1d4ed8 !important; color: #fff !important; }
+.unchar-btn-pdf:hover:not(:disabled) { background: #1e40af !important; }
 
 .unchar-notice {
   margin: 0 20px 10px; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 8px;
   background: #fef2f2; color: #991b1b; font-size: 13px; max-height: 130px; overflow: auto;
 }
 .unchar-notice ul { margin: 6px 0 0; padding-left: 18px; }
+.unchar-notice.is-info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
+.unchar-notice a { color: inherit; font-weight: 600; text-decoration: underline; }
+.unchar-notice-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.unchar-notice-actions button {
+  padding: 4px 10px; border: 1px solid currentColor; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: transparent !important; color: inherit !important;
+}
 
 #uncharTableHost { flex: 1 1 auto; min-height: 150px; padding: 0 20px; overflow: hidden; }
 #uncharTableHost.unchar-locked { pointer-events: none; opacity: .6; }
@@ -80,7 +96,8 @@
 #uncharTableHost .tabulator { border-radius: 14px !important; overflow: hidden !important; }
 #uncharTableHost .tabulator .tabulator-header,
 #uncharTableHost .tabulator .tabulator-header .tabulator-col { background-color: #b45309 !important; color: #fff !important; }
-#uncharTableHost .tabulator .tabulator-col.unchar-selcol .tabulator-col-title::after { content: none; }
+#uncharTableHost .tabulator .tabulator-col.unchar-selcol .tabulator-col-title::after,
+#uncharTableHost .tabulator .tabulator-col.unchar-pdfcol .tabulator-col-title::after { content: none; }
 /* Οι τίτλοι αναδιπλώνονται αντί να κόβονται με «…» όταν στενέψει μια στήλη. */
 #uncharTableHost .tabulator .tabulator-header .tabulator-col .tabulator-col-title {
   white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
@@ -98,6 +115,15 @@
 #uncharTableHost .tabulator select.unchar-cat-select.is-missing {
   border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.25) !important;
 }
+#uncharTableHost .tabulator button.unchar-pdf-btn {
+  height: 28px; min-width: 58px; padding: 0 8px; border: 1px solid #1d4ed8 !important; border-radius: 6px;
+  background: #eff6ff !important; color: #1d4ed8 !important; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+#uncharTableHost .tabulator button.unchar-pdf-btn:hover:not(:disabled) { background: #dbeafe !important; }
+#uncharTableHost .tabulator button.unchar-pdf-btn.is-link { border-color: #b45309 !important; background: #fffbeb !important; color: #92400e !important; }
+#uncharTableHost .tabulator button.unchar-pdf-btn:disabled {
+  border-color: #d1d5db !important; background: transparent !important; color: #9ca3af !important; cursor: default;
+}
 
 [data-theme="dark"] .unchar-dialog { background: #111827; color: #e5e7eb; }
 [data-theme="dark"] .unchar-sub,
@@ -111,6 +137,10 @@
 [data-theme="dark"] .unchar-btn-plain { background: #374151; color: #f3f4f6; border-color: #4b5563; }
 [data-theme="dark"] .unchar-btn-plain:hover:not(:disabled) { background: #4b5563; }
 [data-theme="dark"] .unchar-notice { background: #450a0a; border-color: #7f1d1d; color: #fecaca; }
+[data-theme="dark"] .unchar-notice.is-info { background: #172554; border-color: #1e3a8a; color: #dbeafe; }
+[data-theme="dark"] #uncharTableHost .tabulator button.unchar-pdf-btn { background: #172554 !important; color: #bfdbfe !important; border-color: #3b82f6 !important; }
+[data-theme="dark"] #uncharTableHost .tabulator button.unchar-pdf-btn.is-link { background: #422006 !important; color: #fde68a !important; border-color: #b45309 !important; }
+[data-theme="dark"] #uncharTableHost .tabulator button.unchar-pdf-btn:disabled { background: transparent !important; color: #6b7280 !important; border-color: #4b5563 !important; }
 [data-theme="dark"] #uncharTableHost .tabulator .tabulator-header,
 [data-theme="dark"] #uncharTableHost .tabulator .tabulator-header .tabulator-col { background-color: #7c2d12 !important; color: #ffedd5 !important; }
 [data-theme="dark"] #uncharTableHost .tabulator .tabulator-row:hover,
@@ -146,6 +176,8 @@
         Είδος κίνησης:
         <select id="uncharMtype"></select>
       </label>
+      <button type="button" id="uncharZipBtn" class="unchar-btn unchar-btn-pdf" disabled
+              title="Λήψη των PDF από τους παρόχους σε ένα αρχείο ZIP: των επιλεγμένων, αλλιώς όλων όσων εμφανίζονται">⬇ PDF όλων (ZIP)</button>
       <span class="unchar-spacer"></span>
       <span id="uncharStatus" class="unchar-status"></span>
       <label>
@@ -177,6 +209,7 @@
 
   var modal = document.getElementById('uncharModal');
   var openBtn = document.getElementById('uncharOpenBtn');
+  var openPdfBtn = document.getElementById('uncharPdfBtn');
   if (!modal || !openBtn) return;
 
   // Το partial navigation ξανατρέχει αυτό το script πάνω σε φρέσκο DOM.
@@ -185,6 +218,7 @@
 
   var RULE = '__rule__';      // «χαρακτήρισε όπως ορίζει ο κανόνας ΑΦΜ του προμηθευτή»
   var PREPARE_CHUNK = 25;
+  var PDF_PARALLEL = 3;       // ταυτόχρονες λήψεις PDF στο ZIP
 
   var el = {
     subtitle: document.getElementById('uncharSubtitle'),
@@ -201,12 +235,16 @@
     closeBtn: document.getElementById('uncharCloseBtn'),
     closeX: document.getElementById('uncharCloseX'),
     saveBtn: document.getElementById('uncharSaveBtn'),
+    zipBtn: document.getElementById('uncharZipBtn'),
     launchCount: document.getElementById('uncharOpenCount')
   };
 
   var state = {
     vat: '', categories: [], labels: {}, constraints: {}, gCategory: false,
-    table: null, built: false, headerBox: null, saving: false, dirty: false, lastSavedMark: ''
+    table: null, built: false, headerBox: null, saving: false, dirty: false, lastSavedMark: '',
+    // PDF: host παρόχων που φάνηκε ότι δεν δίνουν αρχείο, εκκρεμές αίτημα συνδέσμων,
+    // και «ξεκίνα ZIP μόλις φορτώσει ο πίνακας» (κουμπί PDF της Αναζήτησης).
+    pageHosts: {}, linksPromise: null, autoZip: false
   };
 
   // ---------- μικρά βοηθητικά ----------
@@ -272,23 +310,61 @@
     return o;
   }
 
-  function setNotice(title, items){
+  // items: κείμενο, ή { text, href, note } για σύνδεσμο που ανοίγει σε νέα καρτέλα.
+  // opts.info: ενημέρωση, όχι σφάλμα. opts.actions: [{ label, run }] κουμπιά.
+  function setNotice(title, items, opts){
+    opts = opts || {};
     el.notice.textContent = '';
+    el.notice.classList.toggle('is-info', !!opts.info);
     if (!title) { el.notice.hidden = true; fitHeight(); return; }
     var strong = document.createElement('strong');
     strong.textContent = title;
     el.notice.appendChild(strong);
     if (items && items.length) {
       var ul = document.createElement('ul');
-      items.forEach(function(text){
+      items.forEach(function(item){
         var li = document.createElement('li');
-        li.textContent = text;
+        var href = item && item.href ? safeUrl(item.href) : '';
+        if (href) {
+          var a = document.createElement('a');
+          a.href = href;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.textContent = item.text;
+          li.appendChild(a);
+          if (item.note) li.appendChild(document.createTextNode(' — ' + item.note));
+        } else if (item && typeof item === 'object') {
+          li.textContent = item.text + (item.note ? ' — ' + item.note : '');
+        } else {
+          li.textContent = item;
+        }
         ul.appendChild(li);
       });
       el.notice.appendChild(ul);
     }
+    if (opts.actions && opts.actions.length) {
+      var bar = document.createElement('div');
+      bar.className = 'unchar-notice-actions';
+      opts.actions.forEach(function(action){
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = action.label;
+        b.addEventListener('click', action.run);
+        bar.appendChild(b);
+      });
+      el.notice.appendChild(bar);
+    }
     el.notice.hidden = false;
     fitHeight();
+  }
+
+  function safeUrl(url){
+    var u = String(url || '').trim();
+    return /^https?:\/\//i.test(u) ? u : '';
+  }
+
+  function hostOf(url){
+    try { return new URL(url).hostname.toLowerCase(); } catch (_) { return ''; }
   }
 
   function hostMessage(text, isError){
@@ -374,6 +450,51 @@
     el.status.textContent = t ? text : '';
     el.saveBtn.textContent = '💾 Αποθήκευση επιλεγμένων' + (selected ? ' (' + selected + ')' : '');
     el.saveBtn.disabled = !selected || state.saving;
+    el.zipBtn.textContent = selected ? '⬇ PDF επιλεγμένων (' + selected + ')' : '⬇ PDF όλων (ZIP)';
+    el.zipBtn.disabled = !visible || state.saving;
+  }
+
+  // Γραμμή που ο πάροχός της δεν δίνει αρχείο PDF (γνωστό από τον server ή από
+  // προηγούμενη προσπάθεια σε αυτό το άνοιγμα): ανοίγει κατευθείαν ο σύνδεσμος.
+  // Τα ίδια τα αντικείμενα των γραμμών (το table.getData() δίνει αντίγραφα), ώστε
+  // ό,τι γράφεται πάνω τους (σύνδεσμος, κατάσταση λήψης) να φαίνεται στον πίνακα.
+  function rowObjects(scope){
+    var t = state.table;
+    if (!t) return [];
+    try { return (scope ? t.getRows(scope) : t.getRows()).map(function(r){ return r.getData(); }); } catch (_) { return []; }
+  }
+
+  function isPageOnly(row){
+    return !!row.url && (row.pdf === 'page' || !!state.pageHosts[hostOf(row.url)]);
+  }
+
+  function pdfCell(cell){
+    var data = cell.getRow().getData();
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'unchar-pdf-btn';
+    if (data._pdfBusy) {
+      btn.textContent = '…';
+      btn.disabled = true;
+    } else if (data.url_known && !data.url) {
+      btn.textContent = '—';
+      btn.disabled = true;
+      btn.title = 'Δεν εκδόθηκε μέσω παρόχου: δεν υπάρχει σύνδεσμος για PDF';
+    } else if (isPageOnly(data)) {
+      btn.textContent = '🔗 Link';
+      btn.classList.add('is-link');
+      btn.title = 'Ο πάροχος δεν δίνει αρχείο PDF: αντιγραφή του συνδέσμου και άνοιγμα σε νέα καρτέλα';
+    } else {
+      btn.textContent = '⬇ PDF';
+      btn.title = 'Λήψη του PDF από τον πάροχο';
+    }
+    btn.setAttribute('aria-label', btn.title || 'PDF');
+    // Το κλικ στο κουμπί δεν πρέπει να αλλάζει την επιλογή της γραμμής.
+    ['click', 'mousedown', 'dblclick'].forEach(function(type){
+      btn.addEventListener(type, function(e){ e.stopPropagation(); });
+    });
+    btn.addEventListener('click', function(){ rowPdf(data); });
+    return btn;
   }
 
   function categoryCell(cell){
@@ -413,6 +534,7 @@
     }
     // Αναλογίες πλάτους ώστε να χωράνε ολόκληρα το 15ψήφιο MARK και η ημερομηνία.
     var columns = [
+      { title: 'PDF', field: 'pdf', formatter: pdfCell, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, width: 82, minWidth: 74, cssClass: 'unchar-pdfcol' },
       { title: 'MARK', field: 'mark', formatter: 'plaintext', widthGrow: 1.5, minWidth: 140 },
       { title: 'ΑΦΜ', field: 'afm', formatter: 'plaintext', minWidth: 92 },
       { title: 'Επωνυμία', field: 'name', formatter: 'plaintext', widthGrow: 2.6, minWidth: 140 },
@@ -508,7 +630,12 @@
     window.__UNCHAR_TABLE = table;
 
     function uncheckHeader(){ if (state.headerBox) state.headerBox.checked = false; }
-    table.on('tableBuilt', function(){ state.built = true; fitHeight(); refreshStatus(); });
+    table.on('tableBuilt', function(){
+      state.built = true;
+      fitHeight();
+      refreshStatus();
+      if (state.autoZip) { state.autoZip = false; downloadZip(); }
+    });
     table.on('rowSelectionChanged', refreshStatus);
     // Το dataFiltered έρχεται πριν ενημερωθούν οι ενεργές γραμμές: μέτρησε στο επόμενο tick.
     table.on('dataFiltered', function(){ uncheckHeader(); setTimeout(refreshStatus, 0); });
@@ -534,6 +661,7 @@
     state.gCategory = !!payload.g_category;
     state.labels = {};
     state.categories.forEach(function(c){ state.labels[c.key] = c.label; });
+    state.pageHosts = {};
 
     var rows = (payload.rows || []).map(function(r){
       r.category = r.rule_label ? RULE : '';
@@ -754,6 +882,279 @@
     if (!failed.length && saved.length && t.getDataCount() === 0) closeModal();
   }
 
+  // ---------- PDF από τον πάροχο ----------
+  // Όνομα αρχείου για λογιστή: ΠΡΟΜΗΘΕΥΤΗΣ_ΑΦΜ_ΗΜ/ΝΙΑ_ΣΕΙΡΑ_ΑΑ_ΑΞΙΑ.pdf
+  function pdfFileName(row){
+    function clean(part){
+      return String(part == null ? '' : part).replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim();
+    }
+    var m = String(row.date || '').match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+    var iso = m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : clean(row.date);
+    var parts = [clean(row.name).slice(0, 40).trim(), clean(row.afm), iso, clean(row.series), clean(row.number), fmtNum(row.total).replace(/\./g, '')];
+    return (parts.filter(Boolean).join('_') || row.mark) + '.pdf';
+  }
+
+  function saveBlob(blob, filename){
+    var href = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = href;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(href); }, 60000);
+  }
+
+  function copyText(text){
+    function legacy(){
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      modal.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) {}
+      ta.remove();
+      return ok;
+    }
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(function(){ return true; }, function(){ return legacy(); });
+      }
+    } catch (_) {}
+    return Promise.resolve(legacy());
+  }
+
+  function requestPdf(mark){
+    return fetch('/api/uncharacterized_invoices/pdf', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify({ mark: mark, vat: state.vat })
+    }).then(function(res){
+      var type = String(res.headers.get('Content-Type') || '');
+      if (res.ok && type.indexOf('application/pdf') === 0) {
+        return res.blob().then(function(blob){ return { ok: true, blob: blob }; });
+      }
+      return res.json().catch(function(){ return null; }).then(function(d){
+        return {
+          ok: false, status: res.status, reason: (d && d.reason) || '',
+          error: (d && d.error) || ('HTTP ' + res.status), url: (d && d.url) || '',
+          clientChanged: !!(d && d.client_changed)
+        };
+      });
+    }).catch(function(){ return { ok: false, status: 0, reason: 'network', error: 'Σφάλμα δικτύου', url: '' }; });
+  }
+
+  // Παλιότερες λήψεις δεν έχουν αποθηκευμένο τον σύνδεσμο παρόχου: ζητιέται μία
+  // φορά από το myDATA για όλα τα αχαρακτήριστα και μένει στα αρχεία του πελάτη.
+  function ensureLinks(){
+    var t = state.table;
+    if (!t) return Promise.resolve(false);
+    var all = rowObjects();
+    if (!all.some(function(r){ return !r.url_known; })) return Promise.resolve(true);
+    if (state.linksPromise) return state.linksPromise;
+    el.progress.textContent = 'Ανάκτηση συνδέσμων παραστατικών από το myDATA…';
+    state.linksPromise = postJson('/api/uncharacterized_invoices/links', { vat: state.vat }).then(function(res){
+      state.linksPromise = null;
+      el.progress.textContent = '';
+      var data = res.data;
+      if (!res.ok || !data || !data.ok) {
+        setNotice('Δεν ανακτήθηκαν οι σύνδεσμοι των παραστατικών: ' + ((data && data.error) || (res.status ? 'HTTP ' + res.status : 'Σφάλμα δικτύου')));
+        return false;
+      }
+      var links = data.links || {};
+      all.forEach(function(r){
+        var info = links[r.mark];
+        r.url = info ? (info.url || '') : (r.url || '');
+        r.pdf = info ? (info.pdf || '') : (r.pdf || '');
+        r.url_known = true;
+      });
+      try { if (state.table === t) t.redraw(true); } catch (_) {}
+      return true;
+    });
+    return state.linksPromise;
+  }
+
+  function setRowBusy(row, on){
+    row._pdfBusy = on;
+    try { if (state.table) state.table.getRow(row.mark).reformat(); } catch (_) {}
+  }
+
+  // Ο πάροχος δεν δίνει αρχείο: αντιγραφή του συνδέσμου και άνοιγμα σε νέα καρτέλα.
+  // Αν ο browser μπλοκάρει το άνοιγμα (έχει περάσει ώρα από το κλικ), ο σύνδεσμος
+  // μένει κλικαριστός στο μήνυμα.
+  function openLink(row){
+    var url = safeUrl(row.url);
+    if (!url) return;
+    var copied = copyText(url);   // πριν το άνοιγμα: θέλει εστίαση στη σελίδα
+    var win = null;
+    try { win = window.open(url, '_blank'); if (win) win.opener = null; } catch (_) {}
+    copied.then(function(ok){
+      if (win) {
+        flash('Ο πάροχος δεν δίνει αρχείο PDF: ο σύνδεσμος άνοιξε σε νέα καρτέλα' + (ok ? ' και αντιγράφηκε.' : '.'), 'info', 5000);
+        return;
+      }
+      setNotice(
+        'Ο πάροχος δεν δίνει αρχείο PDF' + (ok ? ' — ο σύνδεσμος αντιγράφηκε' : '') + '. Άνοιξέ τον από εδώ:',
+        [{ text: rowTitle(row), href: url }], { info: true }
+      );
+    });
+  }
+
+  async function rowPdf(row){
+    if (state.saving || row._pdfBusy) return;
+    if (!row.url_known && !(await ensureLinks())) return;
+    if (!row.url) {
+      flash('Το παραστατικό δεν εκδόθηκε μέσω παρόχου: δεν υπάρχει σύνδεσμος για PDF.', 'warning', 5000);
+      return;
+    }
+    if (isPageOnly(row)) { openLink(row); return; }
+    setRowBusy(row, true);
+    var res = await requestPdf(row.mark);
+    if (res.ok) {
+      setRowBusy(row, false);
+      saveBlob(res.blob, pdfFileName(row));
+      return;
+    }
+    if (res.reason === 'viewer_only') {
+      var host = hostOf(row.url);
+      if (host) state.pageHosts[host] = true;
+      row._pdfBusy = false;
+      try { if (state.table) state.table.redraw(true); } catch (_) {}
+      openLink(row);
+      return;
+    }
+    setRowBusy(row, false);
+    setNotice('Το PDF δεν κατέβηκε: ' + res.error + '.',
+      res.clientChanged ? [] : [{ text: rowTitle(row), href: row.url, note: 'άνοιγμα συνδέσμου παρόχου' }]);
+  }
+
+  function ensureJsZip(){
+    if (window.JSZip) return Promise.resolve();
+    if (!window.__uncharJsZipPromise) {
+      window.__uncharJsZipPromise = new Promise(function(resolve, reject){
+        var s = document.createElement('script');
+        s.src = '/static/vendor/jszip.min.js';
+        s.onload = function(){ resolve(); };
+        s.onerror = function(){ window.__uncharJsZipPromise = null; reject(new Error('Αποτυχία φόρτωσης βιβλιοθήκης ZIP')); };
+        document.head.appendChild(s);
+      });
+    }
+    return window.__uncharJsZipPromise;
+  }
+
+  // Όλα τα PDF σε ένα ZIP: των επιλεγμένων, αλλιώς όσων εμφανίζονται (με το φίλτρο
+  // αναζήτησης). Όσα δεν δίνει ο πάροχος ως αρχείο μένουν ως σύνδεσμοι στο μήνυμα.
+  async function downloadZip(){
+    var t = state.table;
+    if (!t || state.saving) return;
+    var rows = t.getSelectedData();
+    if (!rows.length) rows = rowObjects('active');
+    if (!rows.length) { flash('Δεν υπάρχουν παραστατικά για λήψη PDF.', 'warning', 3000); return; }
+
+    setNotice('');
+    setSaving(true);
+    var got = [], linkOnly = [], noLink = [], errors = [];
+    var fatal = '', linksOk = false;
+    try {
+      linksOk = await ensureLinks();   // σε αποτυχία το μήνυμα το έβαλε ήδη το ensureLinks
+      if (linksOk) {
+        var queue = [];
+        rows.forEach(function(r){
+          if (!r.url) noLink.push(r);
+          else if (isPageOnly(r)) linkOnly.push(r);
+          else queue.push(r);
+        });
+
+        var total = queue.length, done = 0, next = 0;
+        var worker = async function(){
+          while (next < queue.length && !fatal) {
+            var row = queue[next++];
+            var res = await requestPdf(row.mark);
+            done++;
+            el.progress.textContent = 'Λήψη PDF ' + done + '/' + total + '…';
+            if (res.ok) got.push({ row: row, blob: res.blob });
+            else if (res.clientChanged) fatal = res.error;
+            else if (res.reason === 'viewer_only') {
+              linkOnly.push(row);
+              var host = hostOf(row.url);
+              if (host) state.pageHosts[host] = true;
+            }
+            else if (res.reason === 'no_url') noLink.push(row);
+            else errors.push({ row: row, error: res.error });
+          }
+        };
+        if (total) {
+          el.progress.textContent = 'Λήψη PDF 0/' + total + '…';
+          var workers = [];
+          for (var w = 0; w < Math.min(PDF_PARALLEL, total); w++) workers.push(worker());
+          await Promise.all(workers);
+        }
+
+        if (got.length === 1 && rows.length === 1) {
+          saveBlob(got[0].blob, pdfFileName(got[0].row));
+        } else if (got.length) {
+          el.progress.textContent = 'Δημιουργία ZIP…';
+          await ensureJsZip();
+          var zip = new window.JSZip();
+          var used = {};
+          got.forEach(function(g){
+            var name = pdfFileName(g.row);
+            if (used[name.toLowerCase()]) name = name.replace(/\.pdf$/, '_' + g.row.mark + '.pdf');
+            used[name.toLowerCase()] = true;
+            zip.file(name, g.blob);
+          });
+          // STORE: τα PDF είναι ήδη συμπιεσμένα.
+          var blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+          var d = new Date();
+          var stamp = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+          saveBlob(blob, 'Αχαρακτήριστα_' + (state.vat || 'myDATA') + '_' + stamp + '.zip');
+        }
+      }
+    } catch (err) {
+      fatal = fatal || ((err && err.message) || String(err));
+    } finally {
+      el.progress.textContent = '';
+      setSaving(false);
+    }
+
+    if (fatal) { setNotice('Η λήψη PDF διακόπηκε: ' + fatal); return; }
+    if (!linksOk) return;
+    try { t.redraw(true); } catch (_) {}
+
+    var items = [];
+    linkOnly.forEach(function(r){ items.push({ text: rowTitle(r), href: r.url, note: 'ο πάροχος δεν δίνει αρχείο PDF' }); });
+    errors.forEach(function(e){ items.push({ text: rowTitle(e.row), href: e.row.url, note: e.error }); });
+    noLink.forEach(function(r){ items.push({ text: rowTitle(r), note: 'χωρίς σύνδεσμο παρόχου' }); });
+    var urls = linkOnly.concat(errors.map(function(e){ return e.row; })).map(function(r){ return safeUrl(r.url); }).filter(Boolean);
+    var summary = got.length
+      ? (got.length === 1 ? 'Κατέβηκε 1 PDF' : 'Κατέβηκαν ' + got.length + ' PDF') + ' από ' + docs(rows.length) + '.'
+      : 'Δεν κατέβηκε κανένα PDF από ' + docs(rows.length) + '.';
+    if (!items.length) { flash(summary, 'success', 4000); return; }
+
+    var actions = [];
+    if (urls.length) {
+      summary += ' Τα υπόλοιπα ανοίγουν από τον σύνδεσμό τους:';
+      actions.push({
+        label: '📋 Αντιγραφή ' + (urls.length === 1 ? 'συνδέσμου' : urls.length + ' συνδέσμων'),
+        run: function(){
+          copyText(urls.join('\n')).then(function(ok){
+            flash(ok ? 'Οι σύνδεσμοι αντιγράφηκαν.' : 'Η αντιγραφή δεν επιτράπηκε από τον browser.', ok ? 'success' : 'warning', 3000);
+          });
+        }
+      });
+    } else {
+      summary += ' Τα υπόλοιπα δεν έχουν σύνδεσμο παρόχου:';
+    }
+    setNotice(summary, items, { info: true, actions: actions });
+    // Ένα μόνο παραστατικό χωρίς αρχείο: συμπεριφορά όπως στο κουμπί της γραμμής.
+    if (rows.length === 1 && linkOnly.length === 1) openLink(linkOnly[0]);
+  }
+
   function reloadList(mark){
     try {
       if (typeof window.partiallyReloadInvoiceTable === 'function') window.partiallyReloadInvoiceTable({ highlightMark: mark || '' });
@@ -762,6 +1163,7 @@
   }
 
   function openModal(){
+    state.autoZip = false;
     modal.style.display = 'flex';
     el.search.value = '';
     load();
@@ -783,6 +1185,9 @@
 
   // ---------- συνδέσεις ----------
   openBtn.addEventListener('click', openModal);
+  // Κουμπί PDF της Αναζήτησης: ανοίγει το popup και ξεκινά το ZIP όλων.
+  if (openPdfBtn) openPdfBtn.addEventListener('click', function(){ openModal(); state.autoZip = true; });
+  el.zipBtn.addEventListener('click', downloadZip);
   el.closeBtn.addEventListener('click', closeModal);
   el.closeX.addEventListener('click', closeModal);
   el.bulkApply.addEventListener('click', applyBulkCategory);

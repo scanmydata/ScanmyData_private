@@ -168,6 +168,14 @@ def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str,
             if issuer_el is not None:
                 branch_val = _safe_strip(issuer_el.findtext("ns:branch", default="", namespaces=ns) or issuer_el.findtext("branch") or "")
 
+            # Σύνδεσμος του παρόχου ηλεκτρονικής τιμολόγησης για το ίδιο το
+            # παραστατικό (ό,τι δείχνει και το QR του εντύπου). Από αυτόν
+            # κατεβαίνει το PDF (invoice_pdf.py). Λείπει όταν το παραστατικό δεν
+            # εκδόθηκε μέσω παρόχου (ERP/timologio).
+            download_url = _safe_strip(invoice.findtext("ns:downloadingInvoiceUrl", default="", namespaces=ns))
+            if not download_url:
+                download_url = find_in_element_by_localnames(invoice, ["downloadingInvoiceUrl"])
+
             # Extract paymentMethodDetails type
             payment_method_type = ""
             payment_methods = invoice.findall(".//ns:paymentMethods/ns:paymentMethodDetails", ns)
@@ -213,7 +221,10 @@ def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str,
                     "classification": "αχαρακτηριστο",
                     "AFM_issuer": vatissuer,
                     "Name_issuer": Name_issuer,
-                    "paymentMethodType": payment_method_type
+                    "paymentMethodType": payment_method_type,
+                    # Πάντα παρόν (και κενό): η ύπαρξη του κλειδιού δείχνει ότι
+                    # ο σύνδεσμος έχει ήδη ζητηθεί από το myDATA.
+                    "downloadingInvoiceUrl": download_url,
                 }
                 if uid_val:
                     row["uid"] = uid_val.upper()

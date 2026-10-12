@@ -17765,6 +17765,7 @@ def api_uncharacterized_invoices():
                 "total": total,
                 "vat_keys": vat_keys,
             }
+            row.update(_unchar_link_info(rec, item["docs"]))
             if afm_rules:
                 rule_info = _unchar_rule_info(afm_rules, afm, _unchar_lines(mark, src_docs, negative))
                 if rule_info:
@@ -17873,6 +17874,183 @@ def api_uncharacterized_invoices_prepare():
         return jsonify({"ok": True, "vat": vat, "summaries": summaries, "rules": rules, "skipped": skipped})
     except Exception as exc:
         log.exception("api_uncharacterized_invoices_prepare failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# --- PDF των αχαρακτήριστων από τον πάροχο ---------------------------------
+# Η Λήψη (fetch.py) αποθηκεύει για κάθε παραστατικό το downloadingInvoiceUrl
+# του παρόχου. Από εκεί κατεβαίνει το PDF (invoice_pdf.py)· όπου ο πάροχος δεν
+# δίνει αρχείο, το popup ανοίγει τον σύνδεσμο στον browser.
+_UNCHAR_URL_KEY = "downloadingInvoiceUrl"
+
+
+def _unchar_stored_url(rec: Optional[Dict[str, Any]], src_docs: Optional[List[Dict[str, Any]]]):
+    """(url, known). known=False όταν η εγγραφή κατέβηκε πριν αρχίσει να
+    αποθηκεύεται ο σύνδεσμος, οπότε δεν ξέρουμε αν υπάρχει."""
+    known = False
+    for src in [rec] + list(src_docs or []):
+        if isinstance(src, dict) and _UNCHAR_URL_KEY in src:
+            known = True
+            url = str(src.get(_UNCHAR_URL_KEY) or "").strip()
+            if url:
+                return url, True
+    return "", known
+
+
+def _unchar_link_info(rec: Optional[Dict[str, Any]], src_docs: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Πεδία συνδέσμου για το popup. pdf: 'direct' = δοκίμασε λήψη αρχείου,
+    'page' = ο πάροχος έχει μόνο σελίδα προβολής, '' = χωρίς σύνδεσμο."""
+    url, known = _unchar_stored_url(rec, src_docs)
+    mode = ""
+    if url:
+        import invoice_pdf
+        mode = "page" if invoice_pdf.is_viewer_only(url) else "direct"
+    return {"url": url, "url_known": known, "pdf": mode}
+
+
+def _unchar_active_vat(expected_vat: Any = ""):
+    """(vat, active_credential, error_response). Ο ενεργός πελάτης της συνεδρίας,
+    με έλεγχο ότι δεν άλλαξε από τότε που άνοιξε το popup."""
+    active = get_active_credential_from_session() or {}
+    vat = str(active.get("vat") or "").strip()
+    if not vat:
+        return "", active, (jsonify({"ok": False, "error": "Επίλεξε πρώτα έναν πελάτη (ΑΦΜ)."}), 400)
+    expected_vat = str(expected_vat or "").strip()
+    if expected_vat and expected_vat != vat:
+        return vat, active, (jsonify({
+            "ok": False,
+            "client_changed": True,
+            "error": "Ο ενεργός πελάτης άλλαξε. Κλείσε το παράθυρο και άνοιξέ το ξανά.",
+        }), 409)
+    return vat, active, None
+
+
+@app.route('/api/uncharacterized_invoices/links', methods=['POST'])
+def api_uncharacterized_invoices_links():
+    """Σύνδεσμοι παρόχου όλων των αχαρακτήριστων του ενεργού πελάτη.
+
+    Body JSON: { "vat": "<ΑΦΜ με το οποίο άνοιξε το popup>" }
+
+    Όσα κατέβηκαν με παλιότερη Λήψη δεν έχουν αποθηκευμένο σύνδεσμο: τους
+    ζητάμε εδώ από το myDATA (μία κλήση RequestDocs για το διάστημά τους) και
+    τους γράφουμε στα αρχεία του πελάτη, ώστε να μη ξαναζητηθούν.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        vat, active, error = _unchar_active_vat(payload.get("vat"))
+        if error:
+            return error
+
+        items = _unchar_collect(vat)["items"]
+        pending: Dict[str, str] = {}
+        for mark, item in items.items():
+            if not _unchar_stored_url(item["rec"], item["docs"])[1]:
+                first = (item["docs"] or [item["rec"]])[0]
+                pending[mark] = str(_unchar_pick(first, "issueDate", "issue_date", default="") or _unchar_pick(item["rec"], "issueDate", "issue_date", default="")).strip()
+
+        resolved = 0
+        if pending:
+            iso_dates = sorted(d for d in (normalize_input_date_to_iso(v) for v in pending.values()) if d)
+            if not iso_dates:
+                return jsonify({"ok": False, "error": "Δεν βρέθηκαν ημερομηνίες έκδοσης για την αναζήτηση στο myDATA."}), 400
+            cred = get_cred_by_vat(vat) or active
+            aade_user = cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV)
+            aade_key = cred.get("key") or os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV)
+            if not aade_user or not aade_key:
+                return jsonify({"ok": False, "error": "Λείπουν τα στοιχεία σύνδεσης myDATA του πελάτη."}), 400
+
+            from fetch import _fetch_request_docs
+            try:
+                fetched = _fetch_request_docs(
+                    # το myDATA επιστρέφει MARK μεγαλύτερα από αυτό που δίνεται
+                    str(min(int(m) for m in pending) - 1),
+                    datetime.datetime.fromisoformat(iso_dates[0]).strftime("%d/%m/%Y"),
+                    datetime.datetime.fromisoformat(iso_dates[-1]).strftime("%d/%m/%Y"),
+                    aade_user, aade_key,
+                )
+            except Exception as exc:
+                log.exception("api_uncharacterized_invoices_links: RequestDocs failed")
+                return jsonify({"ok": False, "error": f"Το myDATA δεν απάντησε: {str(exc)[:200]}"}), 502
+
+            url_by_mark: Dict[str, str] = {}
+            for r in fetched or []:
+                mk = str(r.get("mark") or "").strip()
+                if mk and not url_by_mark.get(mk):
+                    url_by_mark[mk] = str(r.get(_UNCHAR_URL_KEY) or "").strip()
+            # Ό,τι ζητήθηκε και δεν ήρθε (π.χ. ακυρωμένο) σημειώνεται «χωρίς σύνδεσμο».
+            for mk in pending:
+                url_by_mark.setdefault(mk, "")
+
+            with _save_summary_lock_for_group():
+                for path in (get_customer_summary_file(vat), get_customer_docs_file(vat)):
+                    records = json_read(path)
+                    if not isinstance(records, list):
+                        continue
+                    changed = False
+                    for rec in records:
+                        if not isinstance(rec, dict):
+                            continue
+                        mk = str(rec.get("mark") or "").strip()
+                        if mk in url_by_mark and not rec.get(_UNCHAR_URL_KEY) and (
+                            _UNCHAR_URL_KEY not in rec or url_by_mark[mk]
+                        ):
+                            rec[_UNCHAR_URL_KEY] = url_by_mark[mk]
+                            changed = True
+                    if changed:
+                        json_write(path, records)
+            resolved = len(pending)
+            items = _unchar_collect(vat)["items"]
+
+        links = {mark: _unchar_link_info(item["rec"], item["docs"]) for mark, item in items.items()}
+        return jsonify({"ok": True, "vat": vat, "resolved": resolved, "links": links})
+    except Exception as exc:
+        log.exception("api_uncharacterized_invoices_links failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route('/api/uncharacterized_invoices/pdf', methods=['POST'])
+def api_uncharacterized_invoices_pdf():
+    """Το PDF ενός παραστατικού του ενεργού πελάτη, όπως το δίνει ο πάροχος.
+
+    Body JSON: { "mark": "...", "vat": "..." }. Επιστρέφει application/pdf, αλλιώς JSON
+    { ok: false, reason, error, url } — με reason 'viewer_only' όταν ο πάροχος
+    έχει μόνο σελίδα προβολής, ώστε το popup να ανοίξει τον σύνδεσμο.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        vat, _active, error = _unchar_active_vat(body.get("vat"))
+        if error:
+            return error
+        mark = _unchar_digits(body.get("mark"))
+        if not mark:
+            return jsonify({"ok": False, "error": "Λείπει το MARK."}), 400
+
+        # Ο σύνδεσμος διαβάζεται από τα αρχεία του πελάτη, ποτέ από το αίτημα.
+        url = ""
+        for path in (get_customer_summary_file(vat), get_customer_docs_file(vat)):
+            records = json_read(path)
+            for rec in records if isinstance(records, list) else []:
+                if isinstance(rec, dict) and str(rec.get("mark") or "").strip() == mark:
+                    url = str(rec.get(_UNCHAR_URL_KEY) or "").strip()
+                    if url:
+                        break
+            if url:
+                break
+        if not url:
+            return jsonify({"ok": False, "reason": "no_url", "error": "Το παραστατικό δεν έχει σύνδεσμο παρόχου."}), 404
+
+        import invoice_pdf
+        try:
+            payload = invoice_pdf.fetch_pdf(url)
+        except invoice_pdf.PdfError as exc:
+            status = 422 if exc.reason == "viewer_only" else 502
+            return jsonify({"ok": False, "reason": exc.reason, "error": exc.message_el, "url": url}), status
+        resp = Response(payload, mimetype="application/pdf")
+        resp.headers["Content-Disposition"] = f'attachment; filename="{mark}.pdf"'
+        resp.headers["Cache-Control"] = "private, no-store"
+        return resp
+    except Exception as exc:
+        log.exception("api_uncharacterized_invoices_pdf failed")
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

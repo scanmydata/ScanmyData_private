@@ -194,10 +194,15 @@ def add_to_review_queue(
     mark: str = "",
     missing_fields: Optional[List[str]] = None,
     fields: Optional[Dict[str, Any]] = None,
+    customer_vat: str = "",
+    customer_name: str = "",
 ) -> bool:
     """
     Add/refresh a receipt in the active group's review queue. Keyed by MARK when
     present, otherwise by URL, so re-scanning the same receipt updates in place.
+
+    customer_vat/customer_name tag the entry with the customer that was active
+    at scrape time, so list_review_queue() can scope the warning per customer.
     """
     if not group_dir:
         return False
@@ -221,6 +226,11 @@ def add_to_review_queue(
                 "fields": fields or {},
                 "updated_at": now,
             })
+            # A re-scan with no active customer keeps the tag already on file.
+            cust_vat = str(customer_vat or "").strip()
+            if cust_vat:
+                row["customer_vat"] = cust_vat
+                row["customer_name"] = str(customer_name or "").strip()
             store[key] = row
             _write_json_atomic(path, store)
         return True
@@ -229,12 +239,18 @@ def add_to_review_queue(
         return False
 
 
-def list_review_queue(group_dir: str) -> List[Dict[str, Any]]:
+def list_review_queue(group_dir: str, customer_vat: str = "") -> List[Dict[str, Any]]:
+    """
+    Receipts still awaiting completion. With customer_vat, entries tagged with a
+    different customer are left out; untagged (legacy) entries are always listed.
+    Without it, the whole group's queue is returned.
+    """
     if not group_dir:
         return []
     store = _read_json(_queue_path(group_dir), {})
     if not isinstance(store, dict):
         return []
+    only_vat = str(customer_vat or "").strip()
     rows = []
     stale_keys = []
     for key, row in store.items():
@@ -245,6 +261,9 @@ def list_review_queue(group_dir: str) -> List[Dict[str, Any]]:
         if not missing:
             # Nothing genuinely missing anymore → this entry is stale.
             stale_keys.append(key)
+            continue
+        row_vat = str(row.get("customer_vat") or "").strip()
+        if only_vat and row_vat and row_vat != only_vat:
             continue
         row = dict(row)
         row["missing_fields"] = missing
