@@ -123,11 +123,11 @@
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="flex flex-col">
           <label for="date_from" class="text-sm font-medium text-gray-700 mb-2">Από (dd/mm/yyyy)</label>
-          <input id="date_from" name="date_from" type="text" value="{{ default_from or '' }}" placeholder="dd/mm/yyyy" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
+          <input id="date_from" name="date_from" type="text" value="{{ default_from or '' }}" placeholder="dd/mm/yyyy" autocomplete="off" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
         </div>
         <div class="flex flex-col">
           <label for="date_to" class="text-sm font-medium text-gray-700 mb-2">Έως (dd/mm/yyyy)</label>
-          <input id="date_to" name="date_to" type="text" value="{{ default_to or '' }}" placeholder="dd/mm/yyyy" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
+          <input id="date_to" name="date_to" type="text" value="{{ default_to or '' }}" placeholder="dd/mm/yyyy" autocomplete="off" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
         </div>
       </div>
 
@@ -146,11 +146,11 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
           <div class="flex flex-col">
             <label for="bulk_date_from" class="text-sm font-medium text-gray-700 mb-2">Από (dd/mm/yyyy)</label>
-            <input id="bulk_date_from" name="bulk_date_from" type="text" value="{{ default_from or '' }}" placeholder="dd/mm/yyyy" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
+            <input id="bulk_date_from" name="bulk_date_from" type="text" value="{{ default_from or '' }}" placeholder="dd/mm/yyyy" autocomplete="off" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
           </div>
           <div class="flex flex-col">
             <label for="bulk_date_to" class="text-sm font-medium text-gray-700 mb-2">Έως (dd/mm/yyyy)</label>
-            <input id="bulk_date_to" name="bulk_date_to" type="text" value="{{ default_to or '' }}" placeholder="dd/mm/yyyy" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
+            <input id="bulk_date_to" name="bulk_date_to" type="text" value="{{ default_to or '' }}" placeholder="dd/mm/yyyy" autocomplete="off" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300" required>
           </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -313,8 +313,10 @@
     try {
       // Greek locale key in flatpickr is 'gr' (not 'el'); only pass it if the
       // locale bundle actually loaded, else flatpickr throws and no picker binds.
+      // Ίδιες επιλογές με τις σελίδες Λογιστικό Αποτέλεσμα / Έλεγχος Ε3: ημερολόγιο στο <body> (δεν κόβεται από
+      // κάρτες/overflow), αυτόματη θέση, πληκτρολόγηση με αυτόματες «/».
       const _fpOpts = Object.assign(
-        { dateFormat: 'd/m/Y', allowInput: true },
+        { dateFormat: 'd/m/Y', allowInput: true, appendTo: document.body, position: 'auto' },
         (window.flatpickr.l10ns && window.flatpickr.l10ns.gr) ? { locale: 'gr' } : {}
       );
       const fromPicker = window.flatpickr(fromInput, _fpOpts);

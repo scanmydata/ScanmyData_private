@@ -31,6 +31,90 @@ function fmtPct(v) {
   return Number(v).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
 }
 
+// ---- Ελληνική μορφή ποσών στα πεδία εισαγωγής: «.» χιλιάδες (αυτόματα), «,» δεκαδικά ----
+// Αναλύει κείμενο ποσού («1.234,56», «1234,5», «12.5») σε αριθμό· NaN αν είναι κενό/άκυρο.
+function arParseMoney(v) {
+  let s = String(v == null ? '' : v).trim().replace(/[\s€]/g, '');
+  if (!s) return NaN;
+  const neg = s[0] === '-' || s[0] === '\u2212';
+  s = s.replace(/[^0-9.,]/g, '');
+  let intPart = '', decPart = '';
+  const ci = s.indexOf(',');
+  if (ci >= 0) {
+    intPart = s.slice(0, ci).replace(/\./g, '');
+    decPart = s.slice(ci + 1).replace(/[.,]/g, '');
+  } else {
+    const m = /^(\d+)\.(\d{1,2})$/.exec(s);   // «12.5»: μία τελεία με 1-2 ψηφία = δεκαδικά· αλλιώς χιλιάδες
+    if (m) { intPart = m[1]; decPart = m[2]; } else { intPart = s.replace(/\./g, ''); }
+  }
+  if (!intPart && !decPart) return NaN;
+  const n = Number((intPart || '0') + (decPart ? '.' + decPart : ''));
+  return Number.isFinite(n) ? (neg ? -n : n) : NaN;
+}
+
+// Μορφοποίηση «ενώ πληκτρολογείς»: κρατά ψηφία και ΜΙΑ υποδιαστολή «,», ομαδοποιεί τις χιλιάδες με «.»
+// (π.χ. 1234567,8 → 1.234.567,8). maxDec = μέγιστα δεκαδικά.
+function arFormatMoneyTyping(raw, maxDec) {
+  const s0 = String(raw == null ? '' : raw);
+  const neg = /^\s*[-\u2212]/.test(s0);
+  let t = s0.replace(/[^0-9,]/g, '');
+  const ci = t.indexOf(',');
+  let intPart = ci >= 0 ? t.slice(0, ci) : t;
+  let dec = ci >= 0 ? t.slice(ci + 1).replace(/,/g, '').slice(0, maxDec) : null;
+  intPart = intPart.replace(/^0+(?=\d)/, '');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return (neg ? '-' : '') + grouped + (dec !== null ? ',' + dec : '');
+}
+
+// Ποσό για εμφάνιση μέσα σε πεδίο (ελληνική μορφή). minDec/maxDec = δεκαδικά.
+function arMoneyFieldValue(v, minDec, maxDec) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === '' || !Number.isFinite(n)) return '';
+  return n.toLocaleString('el-GR', { minimumFractionDigits: minDec, maximumFractionDigits: maxDec, useGrouping: true });
+}
+
+// Συνδέει πεδίο ποσού: type=text + αυτόματη μορφοποίηση. Η τελεία που πληκτρολογεί ο χρήστης ισχύει ως υποδιαστολή.
+function arBindMoneyInput(input, maxDec) {
+  if (!input || input.dataset.arMoneyBound === '1') return;
+  input.dataset.arMoneyBound = '1';
+  const dec = maxDec == null ? 2 : maxDec;
+  try { input.type = 'text'; } catch (_) { /* ignore */ }
+  input.setAttribute('inputmode', 'decimal');
+  input.setAttribute('autocomplete', 'off');
+  input.removeAttribute('step');
+  input.addEventListener('input', (e) => {
+    let raw = input.value;
+    const caret = input.selectionStart == null ? raw.length : input.selectionStart;
+    const it = (e && e.inputType) ? String(e.inputType) : 'insertText';
+    if (it === 'insertFromPaste' || it === 'insertFromDrop') {
+      // Επικόλληση (π.χ. «1234.56» ή «1.234,56»): ερμηνεία ως αριθμός και επανεμφάνιση σε ελληνική μορφή.
+      const n = arParseMoney(raw);
+      if (Number.isFinite(n)) {
+        let t = Math.abs(n).toFixed(dec);
+        if (t.indexOf('.') >= 0) t = t.replace(/0+$/, '').replace(/\.$/, '');
+        t = t.replace('.', ',');
+        raw = (n < 0 ? '-' : '') + t;
+      }
+    }
+    // Οι τελείες είναι ΜΟΝΟ διαχωριστικό χιλιάδων και μπαίνουν αυτόματα· υποδιαστολή = κόμμα. Μια τελεία που
+    // πληκτρολογείται αγνοείται (δεν γίνεται δεκαδικό ψηφίο).
+    const keep = (raw.slice(0, caret).match(/[0-9,]/g) || []).length;
+    const out = arFormatMoneyTyping(raw, dec);
+    if (out !== input.value) {
+      input.value = out;
+      let pos = 0, seen = 0;
+      while (pos < out.length && seen < keep) { if (/[0-9,]/.test(out[pos])) seen++; pos++; }
+      try { input.setSelectionRange(pos, pos); } catch (_) { /* ignore */ }
+    }
+  });
+  input.addEventListener('blur', () => {
+    const n = arParseMoney(input.value);
+    if (Number.isFinite(n) && dec > 0 && input.dataset.arMoneyPad !== '0') {
+      input.value = arMoneyFieldValue(n, 2, Math.max(2, dec));
+    }
+  });
+}
+
 function todayStr() {
   const d = new Date();
   return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
@@ -226,15 +310,13 @@ function arIncomeTaxEnabled(id) {
 function arPrevAdvanceOverride() {
   const el = document.getElementById('arSinglePrevAdvance');
   if (!el || el.classList.contains('hidden')) return null;
-  let raw = String(el.value || '').trim().replace(/\s|€/g, '');
-  if (!raw) return null;
-  if (raw.indexOf(',') !== -1) raw = raw.replace(/\./g, '').replace(',', '.');
-  const n = Number(raw);
+  const n = arParseMoney(el.value);
   return Number.isFinite(n) ? n : null;
 }
 
 function arSyncPrevAdvanceInput() {
   const input = document.getElementById('arSinglePrevAdvance');
+  if (input) arBindMoneyInput(input, 2);
   if (input) input.classList.toggle('hidden', !arIncomeTaxEnabled('arSingleIncomeTax'));
 }
 
@@ -864,22 +946,27 @@ function downloadBlob(blob, filename) {
 
 // ---------------- PDF συγκεντρωτικού: αλλαγή σελίδας ΜΟΝΟ ανάμεσα σε γραμμές ----------------
 // Η απόδοση του html2pdf («legacy») κόβει τη σελίδα σε σταθερό ύψος, ΜΕΣΑ σε γραμμές πίνακα (κομμένες γραμμές
-// Παρατηρήσεων/Υπομνήματος στο κάτω-πάνω μέρος κάθε σελίδας). Εδώ αποδίδεται ΜΙΑ φορά ολόκληρο το περιεχόμενο σε
-// canvas και κόβεται σε σελίδες A4 οριζόντιες στα όρια των γραμμών (<tr>) και των ενοτήτων· κρατιούνται και οι
-// εσωτερικοί σύνδεσμοι (data-ar-goto) του συγκεντρωτικού.
-// widthPx 1140 σε A4 οριζόντια (285mm χρήσιμο πλάτος) = 0.25mm/px, ΙΔΙΑ κλίμακα με το ατομικό (800px σε 200mm) —
-// άρα και ίδιο μέγεθος γραμμάτων (το CSS του πίνακα έχει το ίδιο font-size 0.85rem).
-var AR_CONSOLIDATED_PDF = { widthPx: 1140, marginXmm: 6, marginYmm: 8 };
+// Παρατηρήσεων/Υπομνήματος στο κάτω-πάνω μέρος κάθε σελίδας). Εδώ κάθε ενότητα (data-ar-section) αποδίδεται ΜΙΑ φορά
+// σε canvas και κόβεται σε σελίδες A4 στα όρια των γραμμών (<tr>) και των ενοτήτων, με επανάληψη της κεφαλίδας του
+// πίνακα σε κάθε σελίδα· κρατιούνται και οι εσωτερικοί σύνδεσμοι (data-ar-goto), ακόμη και ανάμεσα σε ενότητες.
+//  * landscape: ο ενιαίος πίνακας αριθμών (όλες οι στήλες σε μία σελίδα-πλάτος, μεγάλα γράμματα στην επωνυμία)
+//  * portrait : εταιρίες που δεν υπολογίστηκαν, Παρατηρήσεις, Υπόμνημα (ίδια κλίμακα με το ατομικό: 800px ↔ 200mm)
+var AR_CONSOLIDATED_PDF = {
+  landscape: { widthPx: 1400, marginXmm: 6, marginYmm: 8, pageW: 297, pageH: 210, paddingPx: 10 },
+  portrait: { widthPx: 800, marginXmm: 5, marginYmm: 7, pageW: 210, pageH: 297, paddingPx: 4 },
+};
 
-async function buildConsolidatedPdfBlob(innerHtml) {
-  await ensureHtml2Pdf();
-  const cfg = AR_CONSOLIDATED_PDF;
+// Αποδίδει ΜΙΑ ενότητα στο έγγραφο `pdf` (προσθέτει σελίδες). Επιστρέφει τον αριθμό των σελίδων που προστέθηκαν.
+// `links`: [{page, x, y, w, h, target}] και `anchors`: {id: pageIndex} με ΟΛΟΥΣ τους δείκτες σελίδας (0-based, από
+// την πρώτη σελίδα του τελικού PDF = pageBase).
+async function arRenderPdfSection(html, orient, pdf, links, anchors, pageBase) {
+  const cfg = AR_CONSOLIDATED_PDF[orient] || AR_CONSOLIDATED_PDF.landscape;
   const container = document.createElement('div');
   container.style.width = cfg.widthPx + 'px';
   container.style.background = '#fff';
   container.style.color = '#111';
-  container.style.padding = '10px';
-  container.innerHTML = innerHtml;
+  container.style.padding = cfg.paddingPx + 'px';
+  container.innerHTML = html;
   document.body.appendChild(container);
   try {
     try { await document.fonts.ready; } catch (_) {}
@@ -900,13 +987,6 @@ async function buildConsolidatedPdfBlob(innerHtml) {
       const b = Math.round(el.getBoundingClientRect().bottom - top0);
       if (b > 0 && b < capturedHeight) breaks.push(b);
     });
-    // Υποχρεωτική αλλαγή σελίδας (π.χ. ο 2ος πίνακας ξεκινά σε νέα σελίδα).
-    const forced = [];
-    container.querySelectorAll('[data-ar-newpage]').forEach((el) => {
-      const t = Math.round(el.getBoundingClientRect().top - top0);
-      if (t > 0 && t < capturedHeight) forced.push(t);
-    });
-    forced.sort((a, b) => a - b);
     // Πίνακες με κεφαλίδα: όταν μια σελίδα ξεκινά μέσα στον πίνακα, η κεφαλίδα επαναλαμβάνεται στην κορυφή της.
     const tables = [];
     container.querySelectorAll('table').forEach((tb) => {
@@ -917,8 +997,8 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     });
     // Όρια ενοτήτων (τίτλοι/πίνακες/υπόμνημα): κόψιμο ΠΡΙΝ από την ενότητα.
     const sectionBreaks = [];
-    const root = container.firstElementChild;
-    Array.from((root && root.children) || []).forEach((el) => {
+    const rootEls = Array.from(container.children);
+    rootEls.forEach((el) => {
       const t = Math.round(el.getBoundingClientRect().top - top0);
       if (t > 0 && t < capturedHeight) sectionBreaks.push(t);
     });
@@ -929,34 +1009,13 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     // κλίμακα που δεν ξεπερνά το όριο του canvas (~32k px ύψος).
     const EXTRA = 48;
     const scale = Math.max(1, Math.min(2, 30000 / Math.max(capturedHeight, 1)));
-    const pxToMm = 25.4 / 96;
-    const captureWmm = Math.max(210, Math.ceil((capturedWidth + EXTRA) * pxToMm) + 6);
     const worker = window.html2pdf().from(container).set({
       margin: 0,
       image: { type: 'jpeg', quality: 0.95 },
       html2canvas: { scale, useCORS: true, backgroundColor: '#ffffff', width: capturedWidth + EXTRA, height: capturedHeight, scrollX: 0, scrollY: 0 },
-      jsPDF: { unit: 'mm', format: [captureWmm, Math.max(297, captureWmm + 1)], orientation: 'portrait' },
       pagebreak: { mode: ['legacy'] },
     });
     const canvas = await worker.toCanvas().get('canvas');
-    // Έγγραφο jsPDF: ΔΕΝ προσθέτουμε στο έγγραφο την ολόκληρη σύλληψη (θα έμενε μέσα στο αρχείο και θα το φούσκωνε) —
-    // παίρνουμε ένα μικροσκοπικό «probe» έγγραφο από το html2pdf (το jsPDF δεν εκτίθεται αλλιώς), προσθέτουμε
-    // μόνο τις δικές μας σελίδες και σβήνουμε την αρχική. Fallback: η παλιά διαδρομή (σύλληψη ως σελίδες).
-    let pdf = null;
-    let capturePages = 0;
-    try {
-      const probeEl = document.createElement('div');
-      probeEl.style.cssText = 'width:20px;height:10px;background:#fff';
-      probeEl.textContent = '.';
-      document.body.appendChild(probeEl);
-      try {
-        pdf = await window.html2pdf().from(probeEl).set({ margin: 0, jsPDF: { unit: 'mm', format: [20, 20] }, html2canvas: { scale: 0.2 } }).toPdf().get('pdf');
-      } finally { probeEl.remove(); }
-      capturePages = pdf.internal.getNumberOfPages();
-    } catch (_) {
-      pdf = await worker.toPdf().get('pdf');
-      capturePages = pdf.internal.getNumberOfPages();
-    }
 
     const canvasPerPx = canvas.width / (capturedWidth + EXTRA);
     // Οριζόντια όρια περιεχομένου στο canvas.
@@ -980,7 +1039,7 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     const srcX = Math.max(0, minX - padC);
     const srcW = Math.min(canvas.width, maxX + padC + 1) - srcX;
 
-    const pageW = 297, pageH = 210;
+    const pageW = cfg.pageW, pageH = cfg.pageH;
     const usableW = pageW - 2 * cfg.marginXmm;
     const usableH = pageH - 2 * cfg.marginYmm;
     const mmPerPx = usableW / (srcW / canvasPerPx);
@@ -994,10 +1053,7 @@ async function buildConsolidatedPdfBlob(innerHtml) {
       const cap = pagePx - hdrH;
       const limit = start + cap;
       let end = capturedHeight;
-      const f = forced.find((b) => b > start + 1 && b <= limit);
-      if (f) {
-        end = f;
-      } else if (limit < capturedHeight) {
+      if (limit < capturedHeight) {
         const sectionCands = sectionBreaks.filter((b) => b > start + cap * 0.8 && b <= limit);
         const candidates = breaks.filter((b) => b > start + cap * 0.5 && b <= limit);
         end = sectionCands.length ? sectionCands[sectionCands.length - 1]
@@ -1008,7 +1064,7 @@ async function buildConsolidatedPdfBlob(innerHtml) {
     }
 
     slices.forEach(([st, en, tb, hdrH]) => {
-      pdf.addPage('a4', 'landscape');
+      pdf.addPage('a4', orient === 'portrait' ? 'portrait' : 'landscape');
       pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, pageW, pageH, 'F');
       const part = document.createElement('canvas');
@@ -1022,31 +1078,70 @@ async function buildConsolidatedPdfBlob(innerHtml) {
       ctx2.drawImage(canvas, srcX, Math.round(st * canvasPerPx), srcW, part.height - hdrC, 0, hdrC, part.width, part.height - hdrC);
       pdf.addImage(part.toDataURL('image/jpeg', 0.95), 'JPEG', cfg.marginXmm, cfg.marginYmm, usableW, (hdrH + en - st) * mmPerPx);
     });
-    for (let k = 0; k < capturePages; k++) pdf.deletePage(1);
 
-    // Εσωτερικοί σύνδεσμοι (όνομα εταιρίας -> στοιχεία επικοινωνίας, σημάδια -> Παρατηρήσεις).
-    try {
-      const pageOf = (yPx) => { for (let k = 0; k < slices.length; k++) if (yPx < slices[k][1]) return k; return slices.length - 1; };
-      container.querySelectorAll('[data-ar-goto]').forEach((el) => {
-        const target = container.querySelector('#' + el.getAttribute('data-ar-goto'));
-        if (!target) return;
-        const r = el.getBoundingClientRect();
-        const topPx = r.top - top0;
-        const fromIdx = pageOf(topPx);
-        const toIdx = pageOf(target.getBoundingClientRect().top - top0);
-        const x = cfg.marginXmm + ((r.left - cr.left) * canvasPerPx - srcX) / canvasPerPx * mmPerPx;
-        const y = cfg.marginYmm + (slices[fromIdx][3] + topPx - slices[fromIdx][0]) * mmPerPx;
-        pdf.setPage(fromIdx + 1);
-        pdf.link(x, y, r.width * mmPerPx, r.height * mmPerPx, { pageNumber: toIdx + 1 });
+    // Θέσεις στόχων (id) και εσωτερικοί σύνδεσμοι (data-ar-goto), σε αριθμούς σελίδας του ΤΕΛΙΚΟΥ PDF.
+    const pageOf = (yPx) => { for (let k = 0; k < slices.length; k++) if (yPx < slices[k][1]) return k; return slices.length - 1; };
+    container.querySelectorAll('[id]').forEach((el) => {
+      anchors[el.id] = pageBase + pageOf(el.getBoundingClientRect().top - top0);
+    });
+    container.querySelectorAll('[data-ar-goto]').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      const topPx = r.top - top0;
+      const fromIdx = pageOf(topPx);
+      links.push({
+        page: pageBase + fromIdx,
+        x: cfg.marginXmm + ((r.left - cr.left) * canvasPerPx - srcX) / canvasPerPx * mmPerPx,
+        y: cfg.marginYmm + (slices[fromIdx][3] + topPx - slices[fromIdx][0]) * mmPerPx,
+        w: r.width * mmPerPx, h: r.height * mmPerPx,
+        target: el.getAttribute('data-ar-goto'),
       });
-      pdf.setPage(slices.length);
-    } catch (e) {
-      console.warn('PDF internal links skipped:', e);
-    }
-    return pdf.output('blob');
+    });
+    return slices.length;
   } finally {
     document.body.removeChild(container);
   }
+}
+
+async function buildConsolidatedPdfBlob(innerHtml) {
+  await ensureHtml2Pdf();
+  const holder = document.createElement('div');
+  holder.innerHTML = innerHtml;
+  let sections = Array.from(holder.querySelectorAll('[data-ar-section]')).map((el) => ({
+    orient: el.getAttribute('data-ar-section') === 'portrait' ? 'portrait' : 'landscape', html: el.innerHTML,
+  }));
+  if (!sections.length) sections = [{ orient: 'landscape', html: innerHtml }];
+
+  // Έγγραφο jsPDF: το html2pdf δεν το εκθέτει αλλιώς — παίρνουμε ένα μικροσκοπικό «probe» έγγραφο, προσθέτουμε
+  // ΜΟΝΟ τις δικές μας σελίδες και σβήνουμε την αρχική. Αν αποτύχει, το exportHtmlAsPdf πέφτει στην παλιά απόδοση.
+  const probeEl = document.createElement('div');
+  probeEl.style.cssText = 'width:20px;height:10px;background:#fff';
+  probeEl.textContent = '.';
+  document.body.appendChild(probeEl);
+  let pdf;
+  try {
+    pdf = await window.html2pdf().from(probeEl).set({ margin: 0, jsPDF: { unit: 'mm', format: [20, 20] }, html2canvas: { scale: 0.2 } }).toPdf().get('pdf');
+  } finally { probeEl.remove(); }
+  const probePages = pdf.internal.getNumberOfPages();
+
+  const links = [];
+  const anchors = {};
+  let pageBase = 0;
+  for (const sec of sections) {
+    pageBase += await arRenderPdfSection(sec.html, sec.orient, pdf, links, anchors, pageBase);
+  }
+  for (let k = 0; k < probePages; k++) pdf.deletePage(1);
+
+  try {
+    links.forEach((l) => {
+      if (!(l.target in anchors)) return;
+      pdf.setPage(l.page + 1);
+      pdf.link(l.x, l.y, l.w, l.h, { pageNumber: anchors[l.target] + 1 });
+    });
+    pdf.setPage(pageBase);
+  } catch (e) {
+    console.warn('PDF internal links skipped:', e);
+  }
+  return pdf.output('blob');
 }
 
 // `innerHtml` may be a function: it's then built only AFTER the contact
@@ -1096,7 +1191,10 @@ async function exportZipOfIndividualPdfs(companies, zipFilename, statusEl) {
   }
 }
 
-function buildConsolidatedTableHtml(companies) {
+// `failed`: [{name, vat, message}] — εταιρίες που ΔΕΝ υπολογίστηκαν (αναγράφονται στο PDF).
+// Επιστρέφει δύο ενότητες (data-ar-section): «landscape» = ο ενιαίος πίνακας αριθμών, «portrait» = εταιρίες που δεν
+// υπολογίστηκαν + Παρατηρήσεις + Υπόμνημα (το buildConsolidatedPdfBlob τις αποδίδει με διαφορετικό προσανατολισμό).
+function buildConsolidatedTableHtml(companies, failed) {
   companies = (companies || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'el'));
   // Income-tax columns only when the run computed it for at least one company.
   const withIncomeTax = companies.some((c) => c.report && c.report.income_tax);
@@ -1141,14 +1239,10 @@ function buildConsolidatedTableHtml(companies) {
       closing: sr.reduce((a, s) => a + (s.closing || 0), 0),
     };
   };
-  // Στήλες σε δύο πίνακες (g=1: στοιχεία περιόδου/απόθεμα/δαπάνες/έσοδα, g=2: αποτέλεσμα/φόρος/ΦΠΑ). Με όλες τις
-  // στήλες σε ένα πίνακα το PDF έβγαινε πολύ φαρδύ και η γραμματοσειρά μίκραινε· έτσι έχει το ίδιο μέγεθος
-  // γραμμάτων με το ατομικό PDF (οι γραμμές επαναλαμβάνουν Κωδ. και Επωνυμία).
+  // Όλες οι στήλες σε ΕΝΑΝ πίνακα (οριζόντια σελίδα)· η επωνυμία με μεγάλα γράμματα.
   const colDefs = [
     { g: 0, th: 'Κωδ.', td: (c, i) => `<td class="ar-num">${i + 1}</td>` },
-    { g: 0, th: 'Επωνυμία', td: (c, i, tbl) => (tbl === 1
-      ? `<td class="ar-name"><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;">${arEscapeHtml(c.name)}</span></td>`
-      : `<td class="ar-name">${arEscapeHtml(c.name)}</td>`) },
+    { g: 0, th: 'Επωνυμία', td: (c, i) => `<td class="ar-name"><span data-ar-goto="ar-contact-${i}" style="color:#1d4ed8;">${arEscapeHtml(c.name)}</span></td>` },
     { g: 1, th: 'ΑΦΜ', td: (c) => `<td>${arEscapeHtml(c.vat || '')}</td>` },
     { g: 1, th: 'Ημερ. Υπολ.', td: () => `<td>${todayStr()}</td>` },
     { g: 1, th: 'Από', td: (c) => `<td>${ddmmyyyy(c.from)}</td>` },
@@ -1176,17 +1270,10 @@ function buildConsolidatedTableHtml(companies) {
       return `<td class="ar-num" style="${r.vat_applicable === false ? 'text-align:center;font-weight:700;' : ''}">${vatCell}${markSets[i].vat}</td>`;
     } },
   ];
-  const buildTable = (tbl, caption) => {
-    const cols = colDefs.filter((d) => d.g === 0 || d.g === tbl);
-    const body = companies.map((c, i) => `<tr>${cols.map((d) => d.td(c, i, tbl)).join('')}</tr>`).join('');
-    return `<div${tbl === 2 ? ' data-ar-newpage="1" style="margin-top:14px;"' : ''}>
-      <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:3px;">${caption}</div>
-      <table class="ar-consolidated-table">
-        <thead><tr>${cols.map((d) => `<th>${d.th}</th>`).join('')}</tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>`;
-  };
+  const mainTableHtml = `<table class="ar-consolidated-table ar-cons-main">
+      <thead><tr>${colDefs.map((d) => `<th>${d.th}</th>`).join('')}</tr></thead>
+      <tbody>${companies.map((c, i) => `<tr>${colDefs.map((d) => d.td(c, i)).join('')}</tr>`).join('')}</tbody>
+    </table>`;
 
   const notesHtml = noteRows.length
     ? `<div style="margin-top:24px;">
@@ -1221,17 +1308,33 @@ function buildConsolidatedTableHtml(companies) {
     </div>`
     : '';
 
+  // Εταιρίες που δεν υπολογίστηκαν (με την αιτία) — ώστε η έλλειψή τους να φαίνεται στο συγκεντρωτικό.
+  const failedList = (failed || []).filter((f) => f && (f.name || f.credential_name));
+  const failedHtml = failedList.length
+    ? `<div style="margin-bottom:22px;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;color:#b91c1c;">Εταιρίες που ΔΕΝ υπολογίστηκαν (${failedList.length})</div>
+      <table class="ar-consolidated-table"><thead><tr><th>Επωνυμία</th><th>ΑΦΜ</th><th>Αιτία</th></tr></thead><tbody>${failedList.map((f) =>
+        `<tr><td style="font-weight:600;">${arEscapeHtml(f.name || f.credential_name || '')}</td><td class="ar-mono">${arEscapeHtml(f.vat || '')}</td><td>${arEscapeHtml(f.message || f.error || 'δεν υπολογίστηκε')}</td></tr>`).join('')}</tbody></table>
+    </div>`
+    : '';
+  const taxNote = withIncomeTax
+    ? `<div style="font-size:11px;color:#475569;margin-top:6px;">Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση): εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>`
+    : '';
+  const noteLegend = (failedHtml || notesHtml || legendHtml)
+    ? `<div data-ar-section="portrait">${failedHtml}${notesHtml}${legendHtml}</div>`
+    : '';
+
   return `
   <div>
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-      <div style="font-size:20px;font-weight:700;">Λογιστικό Αποτέλεσμα (Συγκεντρωτική)</div>
-      <div style="font-size:12px;font-weight:600;">Ημερομηνία: ${todayStr()}</div>
+    <div data-ar-section="landscape">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+        <div style="font-size:20px;font-weight:700;">Λογιστικό Αποτέλεσμα (Συγκεντρωτική)</div>
+        <div style="font-size:12px;font-weight:600;">Ημερομηνία: ${todayStr()}</div>
+      </div>
+      ${mainTableHtml}
+      ${taxNote}
     </div>
-    ${buildTable(1, 'Πίνακας 1/2 — Περίοδος, απόθεμα, κόστος, δαπάνες, έσοδα')}
-    ${buildTable(2, 'Πίνακας 2/2 — Εκκρεμότητες myDATA, φορολογητέο αποτέλεσμα, φόρος εισοδήματος, ΦΠΑ')}
-    ${withIncomeTax ? `<div style="font-size:11px;color:#475569;margin-top:4px;">Φόρος εισοδήματος επαγγελματικής δραστηριότητας (εκτίμηση): εκτίμηση επί των φορολογητέων κερδών (φυσικά πρόσωπα: κλίμακα, προκαταβολή 55% · νομικά: 22%, προκαταβολή 80%). Υπόλοιπο = φόρος + προκαταβολή τρέχ. έτους − προκαταβολή προηγ. έτους (αρνητικό = επιστροφή). Προκ. προηγ. έτους: <b>Α</b> από την ΑΑΔΕ (εκκαθαριστικό / δήλωση Ν) · <b>≈</b> εκτίμηση από το φορολογητέο του περσινού υπολογισμού · <b>?</b> δεν βρέθηκε ούτε στην ΑΑΔΕ ούτε στο ιστορικό (0).</div>` : ''}
-    ${notesHtml}
-    ${legendHtml}
+    ${noteLegend}
   </div>`;
 }
 
@@ -1250,9 +1353,9 @@ function showManualInventoryModal(title, opening) {
       label.className = 'block text-xs text-gray-600 mb-1';
       label.textContent = code + ' ' + (window.AR_STOCK_LABELS[code] || '');
       const input = document.createElement('input');
-      input.type = 'number';
-      input.step = '0.01';
+      input.type = 'text';
       input.className = 'border rounded px-2 py-1 w-full text-sm';
+      arBindMoneyInput(input, 2);
       // Closing stock is typed fresh; the opening (last year's declared
       // closing) is shown underneath as a reference, not pre-filled.
       input.value = '';
@@ -1289,7 +1392,7 @@ function showManualInventoryModal(title, opening) {
     function onSave() {
       const values = {};
       fields.querySelectorAll('input').forEach((inp) => {
-        values[inp.dataset.code] = parseFloat(inp.value) || 0;
+        values[inp.dataset.code] = arParseMoney(inp.value) || 0;
       });
       cleanup();
       resolve(values);
@@ -1406,10 +1509,10 @@ function showManualPayrollModal(title, months, prefill) {
       lbl.className = 'block text-xs text-gray-600 mb-1';
       lbl.textContent = label;
       const input = document.createElement('input');
-      input.type = 'number';
-      input.step = '0.01';
+      input.type = 'text';
       input.className = 'border rounded px-2 py-1 w-full text-sm';
-      input.value = (prefill && prefill[key] != null) ? prefill[key] : 0;
+      arBindMoneyInput(input, 2);
+      input.value = arMoneyFieldValue((prefill && prefill[key] != null) ? prefill[key] : 0, 2, 2);
       input.dataset.key = key;
       wrap.appendChild(lbl);
       wrap.appendChild(input);
@@ -1429,7 +1532,7 @@ function showManualPayrollModal(title, months, prefill) {
     function onSave() {
       const values = {};
       fields.querySelectorAll('input').forEach((inp) => {
-        const v = parseFloat(inp.value) || 0;
+        const v = arParseMoney(inp.value) || 0;
         if (v) values[inp.dataset.key] = v;
       });
       cleanup();
@@ -1736,7 +1839,7 @@ function showGroupedChecksModal(groups, opts) {
         const val = c.value(r);
         const inner = c.kind === 'select'
           ? `<select class="ar-gc-ctl border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}" data-key="${c.key}">${c.options.map((o) => `<option value="${arEscapeHtml(o.key)}"${o.key === val ? ' selected' : ''}>${arEscapeHtml(o.label)}</option>`).join('')}</select>`
-          : `<input type="number" class="ar-gc-ctl border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}" data-key="${c.key}" value="${arEscapeHtml(val)}" step="${c.step || 'any'}"${c.min !== '' && c.min !== undefined ? ` min="${c.min}"` : ''}${c.max ? ` max="${c.max}"` : ''}>`;
+          : `<input type="text" inputmode="decimal" data-ar-money="1" class="ar-gc-ctl border rounded px-1 py-1 text-xs" style="width:100%;" data-group="${g.key}" data-name="${arEscapeHtml(r.name)}" data-key="${c.key}" value="${arEscapeHtml(arMoneyFieldValue(val, 0, 2))}" data-min="${c.min === undefined ? '' : c.min}" data-max="${c.max || ''}">`;
         return `<label style="display:block;font-size:0.7rem;color:#64748b;margin-bottom:2px;">${arEscapeHtml(c.label)}${inner}</label>`;
       };
       const trs = g.rows.map((r) => `<tr>
@@ -1750,7 +1853,7 @@ function showGroupedChecksModal(groups, opts) {
       const allHtml = g.controls
         ? g.controls.map((c) => (c.kind === 'select'
           ? `<label class="text-xs text-gray-600" style="margin-left:10px;">${arEscapeHtml(c.label)} (όλες): <select class="ar-gc-allctl border rounded px-1 py-1 text-xs" data-group="${g.key}" data-key="${c.key}"><option value="__">—</option>${c.options.map((o) => `<option value="${arEscapeHtml(o.key)}">${arEscapeHtml(o.label)}</option>`).join('')}</select></label>`
-          : `<label class="text-xs text-gray-600" style="margin-left:10px;">${arEscapeHtml(c.label)} (όλες): <input type="number" class="ar-gc-allctl border rounded px-1 py-1 text-xs" style="width:90px;" data-group="${g.key}" data-key="${c.key}" step="${c.step || 'any'}" placeholder="—"></label>`)).join('')
+          : `<label class="text-xs text-gray-600" style="margin-left:10px;">${arEscapeHtml(c.label)} (όλες): <input type="text" inputmode="decimal" data-ar-money="1" class="ar-gc-allctl border rounded px-1 py-1 text-xs" style="width:90px;" data-group="${g.key}" data-key="${c.key}" placeholder="—"></label>`)).join('')
         : `<label class="text-xs text-gray-600">Όλες:
             <select class="ar-gc-all border rounded px-1 py-1 text-xs" data-group="${g.key}"><option value="__">—</option>${optionsHtml(common)}</select>
           </label>`;
@@ -1780,6 +1883,7 @@ function showGroupedChecksModal(groups, opts) {
         </div>
       </div>`;
     document.body.appendChild(modal);
+    modal.querySelectorAll('input[data-ar-money]').forEach((inp) => { inp.dataset.arMoneyPad = '0'; arBindMoneyInput(inp, 2); });
     modal.querySelectorAll('.ar-gc-tab').forEach((btn) => {
       btn.addEventListener('click', () => {
         modal.querySelectorAll('.ar-gc-tab').forEach((b) => {
@@ -1816,7 +1920,13 @@ function showGroupedChecksModal(groups, opts) {
       // controls: {group: {company: {controlKey: value}}}
       modal.querySelectorAll('.ar-gc-ctl').forEach((x) => {
         const grp = (out[x.dataset.group] = out[x.dataset.group] || {});
-        (grp[x.dataset.name] = grp[x.dataset.name] || {})[x.dataset.key] = x.value;
+        // Αριθμητικά πεδία: ελληνική μορφή → κανονικός αριθμός (κενό μένει κενό)· select: η τιμή όπως είναι.
+        let v = x.value;
+        if (x.tagName === 'INPUT') {
+          const n = arParseMoney(v);
+          v = Number.isFinite(n) ? String(n) : '';
+        }
+        (grp[x.dataset.name] = grp[x.dataset.name] || {})[x.dataset.key] = v;
       });
       finish(out);
     });
@@ -3011,7 +3121,10 @@ async function openBulkRun(batchId) {
     const res = await fetch('/api/accounting_result/bulk_runs/' + encodeURIComponent(batchId));
     const data = await res.json();
     if (!data.ok) { detailStatus.textContent = 'Σφάλμα: ' + (data.error || ''); return; }
-    AR_OPEN_BATCH = { batch: data.batch, companies: data.companies || [] };
+    AR_OPEN_BATCH = {
+      batch: data.batch, companies: data.companies || [],
+      failed: (data.failed || []).map((f) => ({ name: f.name, vat: f.vat, message: f.error })),
+    };
     detailStatus.textContent = '📂 Μαζική κατάσταση από ' + ddmmyyyy(data.batch.date_from) + ' – ' + ddmmyyyy(data.batch.date_to) +
       ' (υπολογίστηκε ' + _arBatchTimestamp(data.batch.timestamp) + ').';
     const container = document.getElementById('arBulkRunsDetailContainer');
@@ -3402,15 +3515,18 @@ async function arBulkFinishRun(ctx) {
   // Ατομικός tab's own history.
   const companies = [];
   const errors = [];
+  const failedForPdf = [];
   (bulkResp.results || []).forEach((res) => {
     if (!res.ok || res.needs_inventory_input || res.needs_payroll_input || res.needs_rent_input) {
       const reason = res.error
         || (res.needs_payroll_input ? 'εκκρεμεί μισθοδοσία' : (res.needs_rent_input ? 'εκκρεμεί ενοίκιο' : 'εκκρεμεί απόθεμα λήξης'));
       errors.push(`${res.credential_name}: ${reason}`);
+      failedForPdf.push({ name: res.credential_name, vat: res.vat || '', message: reason });
       return;
     }
     companies.push({ name: res.credential_name, vat: res.vat, from, to, report: res.report, notes: res.notes });
   });
+  window.__arBulkFailed = failedForPdf;   // αναγράφονται στο Συγκεντρωτικό PDF
   renderBulkCompaniesSummary(companies);
   let statusMsg = bulkResp.aborted
     ? `Διακόπηκε από τον χρήστη μετά από ${(bulkResp.results || []).length} εταιρίες.`
@@ -3494,16 +3610,17 @@ async function arBulkFinishRun(ctx) {
     hasWarningAdvisory = true;
     statusMsg += ` Έλεγχος ΑΑΔΕ (τύπος/επικοινωνία/ΦΠΑ) χωρίς επιτυχία: ${aadeWarnings.join(' · ')}.`;
   }
-  // The outcome is a popup (on whatever page the user is on), not text
-  // left under the Μαζικός table.
-  statusEl.textContent = '';
+  // Το αναλυτικό report (παρατηρήσεις ανά εταιρία) ΔΕΝ ανοίγει πια ως popup στον Μαζικό — είναι πολύ μεγάλο και
+  // περιλαμβάνεται στο Συγκεντρωτικό PDF (Παρατηρήσεις + εταιρίες που δεν υπολογίστηκαν). Εδώ μένει σύντομο μήνυμα.
   const needsAttention = !!(bulkResp.aborted || errors.length || hasWarningAdvisory);
-  showBulkNotesByTypeModal(bulkResp.results, {
-    message: statusMsg,
-    kind: needsAttention ? 'warning' : 'success',
-    zip: companies.length ? () => arBulkDownloadZipNow() : null,
-    consolidated: companies.length ? () => arBulkDownloadConsolidatedNow() : null,
-  });
+  const shortMsg = bulkResp.aborted
+    ? `Λογιστικό Αποτέλεσμα (Μαζικός): διακόπηκε μετά από ${(bulkResp.results || []).length} εταιρίες.`
+    : `Λογιστικό Αποτέλεσμα (Μαζικός): ολοκληρώθηκε — ${companies.length} εταιρίες υπολογίστηκαν`
+      + (errors.length ? `, ${errors.length} δεν υπολογίστηκαν` : '')
+      + '. Οι παρατηρήσεις και οι εταιρίες που δεν υπολογίστηκαν αναγράφονται στο Συγκεντρωτικό PDF.';
+  statusEl.textContent = shortMsg;
+  statusEl.title = statusMsg;   // το πλήρες κείμενο (ό,τι έβγαινε παλιότερα στο popup) μένει ως tooltip
+  showArFlash(shortMsg, needsAttention ? 'warning' : 'success', 15000);
 }
 
 function arBulkDownloadZipNow() {
@@ -3518,7 +3635,7 @@ function arBulkDownloadConsolidatedNow() {
   const p = window.__arBulkPeriod || {};
   const suffix = periodSuffix(p.from, p.to);
   if (window.__arBulkCompanies && window.__arBulkCompanies.length) {
-    exportHtmlAsPdf(() => buildConsolidatedTableHtml(window.__arBulkCompanies), 'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''), 'landscape');
+    exportHtmlAsPdf(() => buildConsolidatedTableHtml(window.__arBulkCompanies, window.__arBulkFailed || []), 'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''), 'landscape');
   }
 }
 
@@ -4440,7 +4557,7 @@ function arInitPageHandlers() {
       const p = window.__arBulkPeriod || {};
       const suffix = periodSuffix(p.from, p.to);
       exportHtmlAsPdf(
-        () => buildConsolidatedTableHtml(window.__arBulkCompanies),
+        () => buildConsolidatedTableHtml(window.__arBulkCompanies, window.__arBulkFailed || []),
         'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''),
         'landscape',
       );
@@ -4474,7 +4591,7 @@ function arInitPageHandlers() {
       const b = AR_OPEN_BATCH.batch;
       const suffix = periodSuffix(b.date_from, b.date_to);
       exportHtmlAsPdf(
-        () => buildConsolidatedTableHtml(AR_OPEN_BATCH.companies),
+        () => buildConsolidatedTableHtml(AR_OPEN_BATCH.companies, AR_OPEN_BATCH.failed || []),
         'Λογιστικό_Αποτέλεσμα_Συγκεντρωτική' + (suffix ? '_' + suffix : ''),
         'landscape',
       );

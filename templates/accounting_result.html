@@ -39,7 +39,10 @@
   .ar-consolidated-table th, .ar-consolidated-table td { border: 1px solid #d1d5db; padding: 2px 4px; white-space: normal; vertical-align: top; }
   .ar-consolidated-table th { font-weight: 700; background: #f8fafc; }
   .ar-consolidated-table .ar-num { text-align: right; white-space: nowrap; }
-  .ar-consolidated-table .ar-name { min-width: 130px; }
+  /* Ενιαίος πίνακας αριθμών (οριζόντια σελίδα): μικρότεροι αριθμοί, ΜΕΓΑΛΑ γράμματα στην επωνυμία */
+  .ar-consolidated-table.ar-cons-main { font-size: 0.78rem; }
+  .ar-consolidated-table.ar-cons-main th { font-size: 0.74rem; }
+  .ar-consolidated-table .ar-name { min-width: 150px; font-size: 1.12rem; font-weight: 600; line-height: 1.2; }
   [data-theme="dark"] .ar-consolidated-table th { background: #1f2937; }
   [data-theme="dark"] .ar-consolidated-table th, [data-theme="dark"] .ar-consolidated-table td { border-color: #4b5563; }
 
