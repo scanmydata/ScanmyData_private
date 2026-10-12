@@ -112,6 +112,18 @@
         <!-- Toggle switch for receipts scrape -->
 
     </form>
+
+    {% if vat %}
+    {# Τιμολόγια της Λήψης που δεν έχουν καταχωρηθεί ακόμα: για παραστατικά χωρίς QR/MARK στο έντυπο. #}
+    <div class="unchar-launch">
+        <button type="button" id="uncharOpenBtn" class="unchar-launch-btn" aria-haspopup="dialog"
+                title="Εμφάνιση των αχαρακτήριστων τιμολογίων του myDATA για καταχώρηση χωρίς QR/MARK">
+            📋 Αχαρακτήριστα τιμολόγια myDATA
+            <span id="uncharOpenCount" class="unchar-launch-count" hidden></span>
+        </button>
+        <span class="unchar-launch-hint">Για παραστατικά χωρίς QR ή MARK στο έντυπο: επίλεξε, χαρακτήρισε και αποθήκευσε στη λίστα.</span>
+    </div>
+    {% endif %}
 </div>
 
 {# ΣΗΜΕΙΩΣΗ: το στατικό confirmation modal που υπήρχε εδώ αφαιρέθηκε όπως ζήτησες. Χρησιμοποιείται πλέον το summaryModal για όλες τις περιπτώσεις. #}
@@ -333,6 +345,7 @@
 
 {% include 'list_inner.html' %}
 
+{% if vat %}{% include 'uncharacterized_popup.html' %}{% endif %}
 
 {% endblock %}
 

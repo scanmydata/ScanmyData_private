@@ -1,0 +1,841 @@
+{# Popup «Αχαρακτήριστα τιμολόγια myDATA» της Αναζήτησης.
+
+   Δείχνει τα τιμολόγια της Λήψης που δεν έχουν καταχωρηθεί ακόμα στη λίστα του
+   πελάτη, ώστε να περνιούνται και παραστατικά χωρίς QR/MARK στο έντυπο. Ο πίνακας
+   είναι Tabulator όπως της Λίστας Παραστατικών (list_inner.html, που φορτώνει και
+   τη βιβλιοθήκη) με κεχριμπαρί κεφαλίδα για να ξεχωρίζει. Η καταχώρηση περνά από
+   το κανονικό /save_summary, ένα παραστατικό τη φορά.
+
+   Τα στυλ είναι δικά του (όχι Tailwind): το tailwind.css είναι προ-χτισμένο και
+   δεν περιέχει κλάσεις που δεν υπήρχαν ήδη στα templates. #}
+<style>
+.unchar-launch { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* Τα χρώματα των κουμπιών είναι !important: το dark theme της εφαρμογής ξαναβάφει όλα τα <button>. */
+.unchar-launch-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border: 0; border-radius: 8px;
+  background: #b45309 !important; color: #fff !important; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+.unchar-launch-btn:hover { background: #92400e !important; }
+.unchar-launch-count { background: #fff; color: #92400e; border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700; }
+.unchar-launch-hint { font-size: 12px; color: #6b7280; }
+[data-theme="dark"] .unchar-launch-hint { color: #9ca3af; }
+
+.unchar-overlay {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(0,0,0,.45);
+}
+.unchar-dialog {
+  display: flex; flex-direction: column; width: min(1500px, 97vw); max-height: 94vh; overflow: hidden;
+  background: #fff; color: #111827; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.3);
+}
+.unchar-dialog [hidden] { display: none !important; }
+.unchar-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 14px 20px 12px; border-bottom: 3px solid #b45309;
+}
+.unchar-head h3 { margin: 0; font-size: 18px; font-weight: 600; }
+.unchar-sub { margin-top: 2px; font-size: 13px; color: #6b7280; }
+.unchar-x { border: 0; background: transparent; color: #6b7280; font-size: 20px; line-height: 1; cursor: pointer; padding: 4px 8px; }
+.unchar-x:hover { color: #111827; }
+
+.unchar-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 20px; }
+.unchar-toolbar input[type="search"],
+.unchar-toolbar select {
+  height: 38px; padding: 0 10px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; color: #111827; font-size: 14px;
+}
+.unchar-toolbar input[type="search"] { width: 260px; max-width: 100%; }
+.unchar-toolbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: #374151; }
+.unchar-group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.unchar-spacer { flex: 1 1 auto; }
+.unchar-status { font-size: 14px; font-weight: 500; color: #374151; }
+
+.unchar-btn {
+  height: 38px; padding: 0 16px; border: 1px solid transparent; border-radius: 8px; font-size: 14px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.unchar-btn:disabled { opacity: .55; cursor: not-allowed; }
+.unchar-btn-apply { background: #b45309 !important; color: #fff !important; }
+.unchar-btn-apply:hover:not(:disabled) { background: #92400e !important; }
+.unchar-btn-save { background: #059669 !important; color: #fff !important; }
+.unchar-btn-save:hover:not(:disabled) { background: #047857 !important; }
+.unchar-btn-plain { background: #fff; color: #374151; border-color: #d1d5db; }
+.unchar-btn-plain:hover:not(:disabled) { background: #f3f4f6; }
+
+.unchar-notice {
+  margin: 0 20px 10px; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 8px;
+  background: #fef2f2; color: #991b1b; font-size: 13px; max-height: 130px; overflow: auto;
+}
+.unchar-notice ul { margin: 6px 0 0; padding-left: 18px; }
+
+#uncharTableHost { flex: 1 1 auto; min-height: 150px; padding: 0 20px; overflow: hidden; }
+#uncharTableHost.unchar-locked { pointer-events: none; opacity: .6; }
+.unchar-host-msg { padding: 48px 12px; text-align: center; color: #6b7280; font-size: 14px; }
+.unchar-host-msg.is-error { color: #b91c1c; }
+
+.unchar-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; padding: 12px 20px 16px; }
+.unchar-progress { margin-right: auto; font-size: 13px; color: #374151; }
+
+/* Ο πίνακας κληρονομεί τα γενικά .tabulator στυλ της Λίστας· εδώ μόνο ό,τι τον
+   διαφοροποιεί. Το #id χρειάζεται για να υπερισχύει των !important της Λίστας. */
+#uncharTableHost .tabulator { border-radius: 14px !important; overflow: hidden !important; }
+#uncharTableHost .tabulator .tabulator-header,
+#uncharTableHost .tabulator .tabulator-header .tabulator-col { background-color: #b45309 !important; color: #fff !important; }
+#uncharTableHost .tabulator .tabulator-col.unchar-selcol .tabulator-col-title::after { content: none; }
+/* Οι τίτλοι αναδιπλώνονται αντί να κόβονται με «…» όταν στενέψει μια στήλη. */
+#uncharTableHost .tabulator .tabulator-header .tabulator-col .tabulator-col-title {
+  white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+}
+#uncharTableHost .tabulator .tabulator-row:hover { background-color: #fff7ed !important; }
+#uncharTableHost .tabulator .tabulator-row.tabulator-selected { background-color: #fef3c7 !important; }
+#uncharTableHost .tabulator .tabulator-row.unchar-row-failed { background-color: #fee2e2 !important; }
+#uncharTableHost .tabulator .tabulator-calcs-holder .tabulator-row {
+  border-top: 2px solid #b45309 !important; font-weight: 700;
+}
+#uncharTableHost .tabulator select.unchar-cat-select {
+  width: 100%; height: 30px; padding: 0 6px; border: 1px solid #d1d5db !important; border-radius: 6px;
+  background: #fff !important; color: #111827; font-size: 13px;
+}
+#uncharTableHost .tabulator select.unchar-cat-select.is-missing {
+  border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.25) !important;
+}
+
+[data-theme="dark"] .unchar-dialog { background: #111827; color: #e5e7eb; }
+[data-theme="dark"] .unchar-sub,
+[data-theme="dark"] .unchar-host-msg { color: #9ca3af; }
+[data-theme="dark"] .unchar-x:hover { color: #f9fafb; }
+[data-theme="dark"] .unchar-toolbar label,
+[data-theme="dark"] .unchar-status,
+[data-theme="dark"] .unchar-progress { color: #e5e7eb; }
+[data-theme="dark"] .unchar-toolbar input[type="search"],
+[data-theme="dark"] .unchar-toolbar select,
+[data-theme="dark"] .unchar-btn-plain { background: #374151; color: #f3f4f6; border-color: #4b5563; }
+[data-theme="dark"] .unchar-btn-plain:hover:not(:disabled) { background: #4b5563; }
+[data-theme="dark"] .unchar-notice { background: #450a0a; border-color: #7f1d1d; color: #fecaca; }
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-header,
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-header .tabulator-col { background-color: #7c2d12 !important; color: #ffedd5 !important; }
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row:hover,
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row:hover .tabulator-cell { background-color: #2a1a0b !important; }
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row.tabulator-selected,
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row.tabulator-selected .tabulator-cell { background-color: #422006 !important; }
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row.unchar-row-failed,
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-row.unchar-row-failed .tabulator-cell { background-color: #450a0a !important; }
+[data-theme="dark"] #uncharTableHost .tabulator select.unchar-cat-select { background: #374151 !important; color: #f3f4f6; border-color: #4b5563 !important; }
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-footer,
+[data-theme="dark"] #uncharTableHost .tabulator .tabulator-footer .tabulator-page { color: #cbd5e1 !important; }
+</style>
+
+<div id="uncharModal" class="unchar-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="uncharTitle">
+  <div class="unchar-dialog">
+    <div class="unchar-head">
+      <div>
+        <h3 id="uncharTitle">Αχαρακτήριστα τιμολόγια myDATA</h3>
+        <div id="uncharSubtitle" class="unchar-sub"></div>
+      </div>
+      <button type="button" id="uncharCloseX" class="unchar-x" aria-label="Κλείσιμο">✕</button>
+    </div>
+
+    <div class="unchar-toolbar">
+      <input id="uncharSearch" type="search" placeholder="🔎 Αναζήτηση..." aria-label="Αναζήτηση στα αχαρακτήριστα τιμολόγια">
+      <div class="unchar-group">
+        <select id="uncharBulkCategory" aria-label="Χαρακτηρισμός για τα επιλεγμένα" style="min-width:200px;">
+          <option value="">— κατηγορία χαρακτηρισμού —</option>
+        </select>
+        <button type="button" id="uncharBulkApply" class="unchar-btn unchar-btn-apply">Εφαρμογή στα επιλεγμένα</button>
+      </div>
+      <label id="uncharMtypeWrap" hidden>
+        Είδος κίνησης:
+        <select id="uncharMtype"></select>
+      </label>
+      <span class="unchar-spacer"></span>
+      <span id="uncharStatus" class="unchar-status"></span>
+      <label>
+        Εγγραφές/σελίδα:
+        <select id="uncharPageLen" style="min-width:80px;">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="uncharNotice" class="unchar-notice" role="alert" hidden></div>
+
+    <div id="uncharTableHost"></div>
+
+    <div class="unchar-foot">
+      <span id="uncharProgress" class="unchar-progress" aria-live="polite"></span>
+      <button type="button" id="uncharCloseBtn" class="unchar-btn unchar-btn-plain">Κλείσιμο</button>
+      <button type="button" id="uncharSaveBtn" class="unchar-btn unchar-btn-save" disabled>💾 Αποθήκευση επιλεγμένων</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  var modal = document.getElementById('uncharModal');
+  var openBtn = document.getElementById('uncharOpenBtn');
+  if (!modal || !openBtn) return;
+
+  // Το partial navigation ξανατρέχει αυτό το script πάνω σε φρέσκο DOM.
+  try { if (window.__UNCHAR_TABLE && window.__UNCHAR_TABLE.destroy) window.__UNCHAR_TABLE.destroy(); } catch (_) {}
+  window.__UNCHAR_TABLE = null;
+
+  var RULE = '__rule__';      // «χαρακτήρισε όπως ορίζει ο κανόνας ΑΦΜ του προμηθευτή»
+  var PREPARE_CHUNK = 25;
+
+  var el = {
+    subtitle: document.getElementById('uncharSubtitle'),
+    search: document.getElementById('uncharSearch'),
+    bulkCategory: document.getElementById('uncharBulkCategory'),
+    bulkApply: document.getElementById('uncharBulkApply'),
+    mtypeWrap: document.getElementById('uncharMtypeWrap'),
+    mtype: document.getElementById('uncharMtype'),
+    status: document.getElementById('uncharStatus'),
+    pageLen: document.getElementById('uncharPageLen'),
+    notice: document.getElementById('uncharNotice'),
+    host: document.getElementById('uncharTableHost'),
+    progress: document.getElementById('uncharProgress'),
+    closeBtn: document.getElementById('uncharCloseBtn'),
+    closeX: document.getElementById('uncharCloseX'),
+    saveBtn: document.getElementById('uncharSaveBtn'),
+    launchCount: document.getElementById('uncharOpenCount')
+  };
+
+  var state = {
+    vat: '', categories: [], labels: {}, constraints: {}, gCategory: false,
+    table: null, built: false, headerBox: null, saving: false, dirty: false, lastSavedMark: ''
+  };
+
+  // ---------- μικρά βοηθητικά ----------
+  function flash(message, type, ms){
+    if (typeof window.showFlash === 'function') { window.showFlash(message, type || 'info', ms || 4000); return; }
+    if (type === 'error') window.alert(message);
+  }
+
+  function fmtNum(n){
+    var v = Number(n) || 0;
+    var parts = Math.abs(v).toFixed(2).split('.');
+    return (v < 0 ? '-' : '') + parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + parts[1];
+  }
+
+  // «1 παραστατικό» / «5 παραστατικά»
+  function docs(n){ return n === 1 ? '1 παραστατικό' : n + ' παραστατικά'; }
+
+  function norm(s){
+    var t = String(s == null ? '' : s).toLowerCase();
+    try { t = t.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (_) {}
+    return t;
+  }
+
+  function dateValue(s){
+    var t = String(s || '').trim();
+    var m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1]).getTime();
+    m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+    return 0;
+  }
+
+  function lsKey(suffix){ return 'unchar_tab_state:vat:' + (state.vat || 'default') + ':' + suffix; }
+  function lsGet(suffix, fallback){
+    try { var raw = localStorage.getItem(lsKey(suffix)); return raw ? JSON.parse(raw) : fallback; } catch (_) { return fallback; }
+  }
+  function lsSet(suffix, value){
+    try { localStorage.setItem(lsKey(suffix), JSON.stringify(value)); } catch (_) {}
+  }
+
+  // Ίδιος κανόνας με το categoryAllowedForVat της φόρμας: μια κατηγορία μπαίνει σε
+  // παραστατικό μόνο αν έχει λογαριασμό για ΟΛΑ τα ποσοστά ΦΠΑ του.
+  function categoryAllowed(cat, vatKeys){
+    if (!cat) return false;
+    var keys = vatKeys || [];
+    if (cat === 'εγγυοδοσια' && keys.some(function(k){ return k !== '0%'; })) return false;
+    var allowed = state.constraints[cat];
+    if (!allowed || !allowed.length) return true;
+    return keys.every(function(k){ return allowed.indexOf(k) !== -1; });
+  }
+
+  function categoryLabel(row){
+    if (!row || !row.category) return '';
+    if (row.category === RULE) return 'Κανόνας ΑΦΜ: ' + (row.rule_label || '');
+    return state.labels[row.category] || row.category;
+  }
+
+  function addOption(select, value, text){
+    var o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;
+    select.appendChild(o);
+    return o;
+  }
+
+  function setNotice(title, items){
+    el.notice.textContent = '';
+    if (!title) { el.notice.hidden = true; fitHeight(); return; }
+    var strong = document.createElement('strong');
+    strong.textContent = title;
+    el.notice.appendChild(strong);
+    if (items && items.length) {
+      var ul = document.createElement('ul');
+      items.forEach(function(text){
+        var li = document.createElement('li');
+        li.textContent = text;
+        ul.appendChild(li);
+      });
+      el.notice.appendChild(ul);
+    }
+    el.notice.hidden = false;
+    fitHeight();
+  }
+
+  function hostMessage(text, isError){
+    destroyTable();
+    var div = document.createElement('div');
+    div.className = 'unchar-host-msg' + (isError ? ' is-error' : '');
+    div.textContent = text;
+    el.host.appendChild(div);
+  }
+
+  function destroyTable(){
+    try { if (state.table) state.table.destroy(); } catch (_) {}
+    state.table = null;
+    state.built = false;
+    state.headerBox = null;
+    window.__UNCHAR_TABLE = null;
+    el.host.textContent = '';
+  }
+
+  function postJson(url, body){
+    // XHR, όχι fetch: η σελίδα τυλίγει το window.fetch ώστε κάθε POST στο /save_summary
+    // να καθαρίζει το πεδίο αναζήτησης και να ξαναφορτώνει τη λίστα. Εδώ στέλνουμε
+    // πολλά στη σειρά και ξαναφορτώνουμε τη λίστα μία φορά, όταν κλείσει το popup.
+    return new Promise(function(resolve){
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.onload = function(){
+        var data = null;
+        try { data = JSON.parse(xhr.responseText); } catch (_) {}
+        resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, data: data });
+      };
+      xhr.onerror = function(){ resolve({ status: 0, ok: false, data: null }); };
+      xhr.send(JSON.stringify(body));
+    });
+  }
+
+  // ---------- πίνακας ----------
+  // Ύψος που μένει για τον πίνακα μέσα στο παράθυρο (κεφαλίδα και σελιδοποίηση
+  // του πίνακα μένουν σταθερές, κυλάνε μόνο οι γραμμές).
+  function availableHeight(){
+    var dialog = modal.querySelector('.unchar-dialog');
+    var used = 0;
+    ['.unchar-head', '.unchar-toolbar', '.unchar-foot'].forEach(function(sel){
+      var node = dialog.querySelector(sel);
+      if (node) used += node.offsetHeight;
+    });
+    if (!el.notice.hidden) used += el.notice.offsetHeight + 10;
+    return Math.max(220, Math.floor(window.innerHeight * 0.94) - used - 34);
+  }
+
+  function fitHeight(){
+    var t = state.table;
+    if (!t) return;
+    try {
+      var max = availableHeight();
+      if (typeof t.setMaxHeight === 'function') t.setMaxHeight(max);
+      else { t.element.style.maxHeight = max + 'px'; t.redraw(); }
+    } catch (_) {}
+  }
+
+  function pageMarks(){
+    var t = state.table;
+    if (!t) return [];
+    var active = t.getData('active') || [];
+    var size = Math.max(1, Number(t.getPageSize()) || active.length || 1);
+    var page = Math.max(1, Number(t.getPage()) || 1);
+    return active.slice((page - 1) * size, page * size).map(function(r){ return r.mark; });
+  }
+
+  function refreshStatus(){
+    var t = state.built ? state.table : null;   // το Tabulator δεν απαντά σωστά πριν το tableBuilt
+    var total = 0, visible = 0, selected = 0;
+    if (t) {
+      try { total = t.getDataCount(); visible = t.getDataCount('active'); selected = t.getSelectedData().length; } catch (_) {}
+    }
+    var text;
+    if (selected) text = 'Επιλεγμένες: ' + selected + ' από ' + total;
+    else if (el.search.value.trim() && visible !== total) text = 'Εμφανίζονται ' + visible + ' από ' + total + ' εγγραφές';
+    else text = 'Σύνολο εγγραφών: ' + total;
+    el.status.textContent = t ? text : '';
+    el.saveBtn.textContent = '💾 Αποθήκευση επιλεγμένων' + (selected ? ' (' + selected + ')' : '');
+    el.saveBtn.disabled = !selected || state.saving;
+  }
+
+  function categoryCell(cell){
+    var row = cell.getRow();
+    var data = row.getData();
+    var select = document.createElement('select');
+    select.className = 'unchar-cat-select' + (data._missing && !data.category ? ' is-missing' : '');
+    select.setAttribute('aria-label', 'Κατηγορία χαρακτηρισμού');
+    addOption(select, '', '— επιλογή —');
+    if (data.rule_label) addOption(select, RULE, '⚙ Κανόνας ΑΦΜ: ' + data.rule_label);
+    state.categories.forEach(function(c){
+      if (categoryAllowed(c.key, data.vat_keys)) addOption(select, c.key, c.label);
+    });
+    select.value = data.category || '';
+    // Το κλικ στο dropdown δεν πρέπει να αλλάζει την επιλογή της γραμμής.
+    ['click', 'mousedown', 'dblclick'].forEach(function(type){
+      select.addEventListener(type, function(e){ e.stopPropagation(); });
+    });
+    select.addEventListener('change', function(){
+      data.category = select.value;
+      data._missing = false;
+      select.classList.remove('is-missing');
+      if (select.value) { try { row.select(); } catch (_) {} }
+      refreshStatus();
+    });
+    return select;
+  }
+
+  function buildColumns(){
+    function numberCol(title, field){
+      return {
+        title: title, field: field, hozAlign: 'right', sorter: 'number', minWidth: 84,
+        formatter: function(cell){ return fmtNum(cell.getValue()); },
+        bottomCalc: 'sum',
+        bottomCalcFormatter: function(cell){ return fmtNum(cell.getValue()); }
+      };
+    }
+    // Αναλογίες πλάτους ώστε να χωράνε ολόκληρα το 15ψήφιο MARK και η ημερομηνία.
+    var columns = [
+      { title: 'MARK', field: 'mark', formatter: 'plaintext', widthGrow: 1.5, minWidth: 140 },
+      { title: 'ΑΦΜ', field: 'afm', formatter: 'plaintext', minWidth: 92 },
+      { title: 'Επωνυμία', field: 'name', formatter: 'plaintext', widthGrow: 2.6, minWidth: 140 },
+      { title: 'Σειρά', field: 'series', formatter: 'plaintext', widthGrow: 0.8, minWidth: 60 },
+      { title: 'Αριθμός', field: 'number', formatter: 'plaintext', sorter: 'alphanum', widthGrow: 1.1, minWidth: 80 },
+      {
+        title: 'Ημερομηνία', field: 'date', formatter: 'plaintext', minWidth: 98,
+        sorter: function(a, b){ return dateValue(a) - dateValue(b); },
+        bottomCalc: function(){ return 'ΣΥΝΟΛΑ'; }
+      },
+      { title: 'Είδος', field: 'type', formatter: 'plaintext', widthGrow: 1.8, minWidth: 110 },
+      {
+        title: 'Κατηγορία Χαρακτηρισμού', field: 'category', formatter: categoryCell, widthGrow: 2.2, minWidth: 210,
+        sorter: function(a, b, aRow, bRow){
+          return categoryLabel(aRow.getData()).localeCompare(categoryLabel(bRow.getData()), 'el');
+        }
+      },
+      numberCol('Καθαρή Αξία', 'net'),
+      numberCol('ΦΠΑ', 'vat'),
+      numberCol('Σύνολο', 'total')
+    ];
+
+    // Πλάτη και σειρά στηλών όπως τα άφησε ο χρήστης (ανά πελάτη).
+    var widths = lsGet('col_widths', {}) || {};
+    columns.forEach(function(col){
+      var w = Number(widths[col.field]);
+      if (w > 0) col.width = w;
+    });
+    var order = lsGet('col_order', []) || [];
+    if (order.length) {
+      var rest = columns.slice();
+      var ordered = [];
+      order.forEach(function(field){
+        for (var i = 0; i < rest.length; i++) {
+          if (rest[i].field === field) { ordered.push(rest.splice(i, 1)[0]); break; }
+        }
+      });
+      columns = ordered.concat(rest);
+    }
+
+    columns.unshift({
+      formatter: 'rowSelection', hozAlign: 'center', headerHozAlign: 'center', headerSort: false, resizable: false,
+      width: 44, frozen: true, cssClass: 'unchar-selcol',
+      titleFormatter: function(){
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.title = 'Επιλογή όλων της σελίδας';
+        box.setAttribute('aria-label', 'Επιλογή όλων της σελίδας');
+        box.addEventListener('click', function(e){ e.stopPropagation(); });
+        box.addEventListener('change', function(){
+          if (!state.table) return;
+          var marks = pageMarks();
+          if (box.checked) state.table.selectRow(marks); else state.table.deselectRow(marks);
+        });
+        state.headerBox = box;
+        return box;
+      }
+    });
+    return columns;
+  }
+
+  function buildTable(rows){
+    destroyTable();
+    if (typeof window.Tabulator === 'undefined') {
+      hostMessage('Η βιβλιοθήκη του πίνακα δεν φορτώθηκε. Ανανέωσε τη σελίδα.', true);
+      return;
+    }
+    var pageSize = parseInt(lsGet('page_len', 25), 10) || 25;
+    el.pageLen.value = String(pageSize);
+    if (el.pageLen.value !== String(pageSize)) { pageSize = 25; el.pageLen.value = '25'; }
+
+    var mount = document.createElement('div');
+    el.host.appendChild(mount);
+    var table = new window.Tabulator(mount, {
+      data: rows,
+      index: 'mark',
+      layout: 'fitColumns',
+      columns: buildColumns(),
+      maxHeight: availableHeight() + 'px',
+      movableColumns: true,
+      selectable: true,
+      placeholder: 'Δεν υπάρχουν αχαρακτήριστα τιμολόγια προς καταχώρηση',
+      pagination: 'local',
+      paginationSize: pageSize,
+      initialSort: [{ column: 'date', dir: 'desc' }],
+      locale: 'el',
+      langs: { el: { pagination: {
+        first: 'Πρώτη', first_title: 'Πρώτη σελίδα', last: 'Τελευταία', last_title: 'Τελευταία σελίδα',
+        prev: 'Προηγ.', prev_title: 'Προηγούμενη σελίδα', next: 'Επόμενη', next_title: 'Επόμενη σελίδα'
+      } } }
+    });
+    state.table = table;
+    window.__UNCHAR_TABLE = table;
+
+    function uncheckHeader(){ if (state.headerBox) state.headerBox.checked = false; }
+    table.on('tableBuilt', function(){ state.built = true; fitHeight(); refreshStatus(); });
+    table.on('rowSelectionChanged', refreshStatus);
+    // Το dataFiltered έρχεται πριν ενημερωθούν οι ενεργές γραμμές: μέτρησε στο επόμενο tick.
+    table.on('dataFiltered', function(){ uncheckHeader(); setTimeout(refreshStatus, 0); });
+    table.on('pageLoaded', function(){ uncheckHeader(); refreshStatus(); });
+    table.on('columnMoved', function(){
+      lsSet('col_order', table.getColumns().map(function(c){ return c.getField(); }).filter(Boolean));
+    });
+    table.on('columnResized', function(column){
+      // Μόνο η στήλη που άλλαξε ο χρήστης: οι υπόλοιπες συνεχίζουν να προσαρμόζονται στο πλάτος του παραθύρου.
+      var field = column && column.getField && column.getField();
+      if (!field) return;
+      var widths = lsGet('col_widths', {}) || {};
+      widths[field] = Math.round(column.getWidth());
+      lsSet('col_widths', widths);
+    });
+  }
+
+  // ---------- φόρτωση ----------
+  function applyPayload(payload){
+    state.vat = String(payload.vat || '');
+    state.categories = payload.categories || [];
+    state.constraints = payload.vat_constraints || {};
+    state.gCategory = !!payload.g_category;
+    state.labels = {};
+    state.categories.forEach(function(c){ state.labels[c.key] = c.label; });
+
+    var rows = (payload.rows || []).map(function(r){
+      r.category = r.rule_label ? RULE : '';
+      return r;
+    });
+
+    var parts = [];
+    if (payload.client_name) parts.push(payload.client_name);
+    if (state.vat) parts.push('ΑΦΜ ' + state.vat);
+    if (payload.fiscal_year) parts.push('χρήση ' + payload.fiscal_year);
+    var subtitle = parts.join(' · ');
+    if (payload.hidden_other_year) {
+      subtitle += (subtitle ? ' — ' : '') + 'δεν εμφανίζονται ' + payload.hidden_other_year + ' αχαρακτήριστα άλλων χρήσεων';
+    }
+    el.subtitle.textContent = subtitle;
+
+    el.bulkCategory.textContent = '';
+    addOption(el.bulkCategory, '', '— κατηγορία χαρακτηρισμού —');
+    if (rows.some(function(r){ return !!r.rule_label; })) addOption(el.bulkCategory, RULE, '⚙ Κανόνας ΑΦΜ (όπου υπάρχει)');
+    state.categories.forEach(function(c){ addOption(el.bulkCategory, c.key, c.label); });
+
+    el.mtype.textContent = '';
+    var movementTypes = payload.movement_types || [];
+    el.mtypeWrap.hidden = !(state.gCategory && movementTypes.length);
+    addOption(el.mtype, '', 'Αυτόματα');
+    movementTypes.forEach(function(m){ addOption(el.mtype, m.value, m.label); });
+
+    setLaunchCount(rows.length);
+    buildTable(rows);
+    refreshStatus();
+  }
+
+  function setLaunchCount(n){
+    if (!el.launchCount) return;
+    el.launchCount.textContent = String(n);
+    el.launchCount.hidden = false;
+  }
+
+  function load(){
+    setNotice('');
+    el.subtitle.textContent = '';
+    el.progress.textContent = '';
+    hostMessage('Φόρτωση αχαρακτήριστων τιμολογίων…', false);
+    refreshStatus();
+    fetch('/api/uncharacterized_invoices', { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function(res){
+        return res.json().catch(function(){ return null; }).then(function(payload){
+          if (!payload || !payload.ok) throw new Error((payload && payload.error) || ('HTTP ' + res.status));
+          return payload;
+        });
+      })
+      .then(applyPayload)
+      .catch(function(err){ hostMessage('Αποτυχία φόρτωσης: ' + ((err && err.message) || err), true); });
+  }
+
+  // ---------- ενέργειες ----------
+  function applyBulkCategory(){
+    var t = state.table;
+    var cat = el.bulkCategory.value;
+    if (!t) return;
+    if (!cat) { flash('Επίλεξε πρώτα κατηγορία χαρακτηρισμού.', 'warning', 3000); return; }
+    var rows = t.getSelectedData();
+    if (!rows.length) { flash('Επίλεξε πρώτα παραστατικά από τη λίστα.', 'warning', 3000); return; }
+    var skipped = 0, applied = 0;
+    rows.forEach(function(r){
+      var ok = (cat === RULE) ? !!r.rule_label : categoryAllowed(cat, r.vat_keys);
+      if (!ok) { skipped++; return; }
+      r.category = cat;
+      r._missing = false;
+      applied++;
+      try { t.getRow(r.mark).reformat(); } catch (_) {}
+    });
+    var msg = 'Ο χαρακτηρισμός εφαρμόστηκε σε ' + docs(applied) + '.';
+    if (skipped) {
+      msg += ' Παραλείφθηκαν ' + skipped + (cat === RULE ? ' χωρίς κανόνα ΑΦΜ.' : ': η κατηγορία δεν επιτρέπεται για το ΦΠΑ τους.');
+    }
+    flash(msg, skipped && !applied ? 'warning' : 'success', 4000);
+    refreshStatus();
+  }
+
+  function rowTitle(row){
+    return [row.name || row.afm, [row.series, row.number].filter(Boolean).join(' '), row.date].filter(Boolean).join(' · ') || row.mark;
+  }
+
+  function buildSaveBody(summary, row, rule){
+    var body = JSON.parse(JSON.stringify(summary));
+    var useRule = row.category === RULE;
+    var ruleCats = (useRule && rule && Array.isArray(rule.categories)) ? rule.categories : null;
+    var lines = body.lines || [];
+    if (useRule && (!ruleCats || ruleCats.length !== lines.length)) return null;
+    lines.forEach(function(line, i){ line.category = ruleCats ? ruleCats[i] : row.category; });
+    if (state.gCategory) {
+      var mtype = el.mtype.value || (useRule && rule && rule.mtype) || '';
+      if (mtype) body.mtype = mtype;
+    }
+    return body;
+  }
+
+  function setSaving(on){
+    state.saving = on;
+    el.host.classList.toggle('unchar-locked', on);
+    [el.search, el.bulkCategory, el.bulkApply, el.mtype, el.pageLen, el.closeBtn, el.closeX].forEach(function(node){
+      if (node) node.disabled = on;
+    });
+    refreshStatus();
+  }
+
+  async function saveSelected(){
+    var t = state.table;
+    if (!t || state.saving) return;
+    var rows = t.getSelectedData();
+    if (!rows.length) { flash('Επίλεξε πρώτα παραστατικά από τη λίστα.', 'warning', 3000); return; }
+
+    var missing = rows.filter(function(r){ return !r.category; });
+    if (missing.length) {
+      missing.forEach(function(r){
+        r._missing = true;
+        try { t.getRow(r.mark).reformat(); } catch (_) {}
+      });
+      try { t.setPageToRow(missing[0].mark); } catch (_) {}
+      flash('Επίλεξε χαρακτηρισμό για όλα τα επιλεγμένα παραστατικά (λείπει σε ' + missing.length + ').', 'error', 5000);
+      return;
+    }
+
+    setNotice('');
+    setSaving(true);
+    var total = rows.length, done = 0;
+    var saved = [], failed = [], conflicts = [];
+
+    function report(res, row, job){
+      var data = res.data;
+      if (res.ok && data && data.ok !== false) { saved.push(row); return; }
+      if (res.status === 409 && data && data.afm_rule_conflict && job && !job.forced) { conflicts.push(job); return; }
+      failed.push({ row: row, error: (data && (data.error || data.message)) || (res.status ? 'HTTP ' + res.status : 'Σφάλμα δικτύου') });
+    }
+
+    try {
+      for (var i = 0; i < rows.length; i += PREPARE_CHUNK) {
+        var chunk = rows.slice(i, i + PREPARE_CHUNK);
+        el.progress.textContent = 'Προετοιμασία… ' + done + '/' + total;
+        var prep = await postJson('/api/uncharacterized_invoices/prepare', {
+          marks: chunk.map(function(r){ return r.mark; }),
+          vat: state.vat
+        });
+        var pdata = prep.data;
+        if (!prep.ok || !pdata || !pdata.ok) {
+          var prepError = (pdata && pdata.error) || (prep.status ? 'HTTP ' + prep.status : 'Σφάλμα δικτύου');
+          rows.slice(i).forEach(function(r){ failed.push({ row: r, error: prepError }); });
+          break;   // ίδιο σφάλμα θα έβγαζαν και τα επόμενα (π.χ. άλλαξε ο ενεργός πελάτης)
+        }
+        for (var k = 0; k < chunk.length; k++) {
+          var row = chunk[k];
+          var summary = (pdata.summaries || {})[row.mark];
+          var rule = (pdata.rules || {})[row.mark];
+          var body = summary ? buildSaveBody(summary, row, rule) : null;
+          if (!summary) {
+            failed.push({ row: row, error: (pdata.skipped || {})[row.mark] || 'Δεν βρέθηκε το παραστατικό.' });
+          } else if (!body) {
+            failed.push({ row: row, error: 'Ο κανόνας ΑΦΜ δεν καλύπτει πια το παραστατικό. Διάλεξε κατηγορία.' });
+          } else {
+            el.progress.textContent = 'Αποθήκευση ' + (done + 1) + '/' + total + '…';
+            report(await postJson('/save_summary', body), row, { row: row, body: body, forced: false });
+          }
+          done++;
+        }
+      }
+
+      if (conflicts.length) {
+        el.progress.textContent = '';
+        var preview = conflicts.slice(0, 5).map(function(c){ return '• ' + rowTitle(c.row); }).join('\n');
+        if (conflicts.length > 5) preview += '\n… και ' + (conflicts.length - 5) + ' ακόμα';
+        var proceed = window.confirm(
+          docs(conflicts.length) + (conflicts.length === 1 ? ' διαφέρει' : ' διαφέρουν') +
+          ' από αποθηκευμένο κανόνα χαρακτηρισμών ΑΦΜ:\n\n' + preview +
+          '\n\nΑποθήκευση με τον χαρακτηρισμό που επέλεξες;'
+        );
+        for (var c = 0; c < conflicts.length; c++) {
+          var job = conflicts[c];
+          if (!proceed) {
+            failed.push({ row: job.row, error: 'Δεν αποθηκεύτηκε: διαφέρει από τον κανόνα ΑΦΜ.' });
+            continue;
+          }
+          el.progress.textContent = 'Αποθήκευση με παράκαμψη κανόνα ' + (c + 1) + '/' + conflicts.length + '…';
+          job.forced = true;
+          report(await postJson('/save_summary?force_afm_rule=1', job.body), job.row, job);
+        }
+      }
+    } catch (err) {
+      setNotice('Η αποθήκευση διακόπηκε: ' + ((err && err.message) || err));
+    }
+
+    if (saved.length) {
+      state.dirty = true;
+      state.lastSavedMark = saved[saved.length - 1].mark;
+      try { await t.deleteRow(saved.map(function(r){ return r.mark; })); } catch (_) {}
+      setLaunchCount(t.getDataCount());
+      // Αν το φίλτρο αναζήτησης δεν αφήνει πια καμία γραμμή, δείξε τις υπόλοιπες.
+      if (el.search.value && t.getDataCount() && !t.getDataCount('active')) {
+        el.search.value = '';
+        t.clearFilter();
+      }
+    }
+    failed.forEach(function(f){
+      try { t.getRow(f.row.mark).getElement().classList.add('unchar-row-failed'); } catch (_) {}
+    });
+    if (failed.length) {
+      setNotice(
+        (failed.length === 1 ? 'Δεν αποθηκεύτηκε ' : 'Δεν αποθηκεύτηκαν ') + docs(failed.length) + ':',
+        failed.map(function(f){ return rowTitle(f.row) + ' (MARK ' + f.row.mark + '): ' + String(f.error).split('\n')[0]; })
+      );
+    }
+    el.progress.textContent = '';
+    setSaving(false);
+
+    if (saved.length) {
+      flash(saved.length === 1 ? 'Το παραστατικό αποθηκεύτηκε επιτυχώς.' : 'Αποθηκεύτηκαν ' + docs(saved.length) + ' επιτυχώς.', 'success', 4000);
+    }
+    if (!failed.length && saved.length && t.getDataCount() === 0) closeModal();
+  }
+
+  function reloadList(mark){
+    try {
+      if (typeof window.partiallyReloadInvoiceTable === 'function') window.partiallyReloadInvoiceTable({ highlightMark: mark || '' });
+      else if (typeof window.FBP_REFRESH_LIST_FRAGMENT === 'function') window.FBP_REFRESH_LIST_FRAGMENT();
+    } catch (_) {}
+  }
+
+  function openModal(){
+    modal.style.display = 'flex';
+    el.search.value = '';
+    load();
+    try { el.search.focus(); } catch (_) {}
+  }
+
+  function closeModal(){
+    if (state.saving) return;
+    modal.style.display = 'none';
+    destroyTable();
+    try { openBtn.focus(); } catch (_) {}
+    // Η Λίστα Παραστατικών ξαναφορτώνει μία φορά, αφού κλείσει το popup: το reload
+    // της σελίδας φέρνει το focus στο πεδίο αναζήτησης.
+    if (state.dirty) {
+      state.dirty = false;
+      reloadList(state.lastSavedMark);
+    }
+  }
+
+  // ---------- συνδέσεις ----------
+  openBtn.addEventListener('click', openModal);
+  el.closeBtn.addEventListener('click', closeModal);
+  el.closeX.addEventListener('click', closeModal);
+  el.bulkApply.addEventListener('click', applyBulkCategory);
+  el.saveBtn.addEventListener('click', saveSelected);
+
+  var searchTimer = null;
+  el.search.addEventListener('input', function(){
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function(){
+      var t = state.table;
+      if (!t) return;
+      var q = norm(el.search.value).trim();
+      if (!q) { t.clearFilter(); return; }
+      t.setFilter(function(d){
+        return norm([d.mark, d.afm, d.name, d.series, d.number, d.date, d.type, categoryLabel(d),
+          fmtNum(d.net), fmtNum(d.vat), fmtNum(d.total)].join(' ')).indexOf(q) !== -1;
+      });
+    }, 150);
+  });
+
+  el.pageLen.addEventListener('change', function(){
+    var size = parseInt(el.pageLen.value, 10) || 25;
+    lsSet('page_len', size);
+    if (state.table) { try { state.table.setPageSize(size); } catch (_) {} }
+    fitHeight();
+  });
+
+  // Η γραμμή εργαλείων αναδιπλώνεται όταν αλλάζει το κείμενο κατάστασης ή το πλάτος:
+  // ξαναϋπολόγισε το ύψος του πίνακα ώστε να μην κόβεται η σελιδοποίησή του.
+  if (typeof ResizeObserver === 'function') {
+    var toolbar = modal.querySelector('.unchar-toolbar');
+    var toolbarHeight = 0;
+    new ResizeObserver(function(){
+      var h = toolbar.offsetHeight;
+      if (h === toolbarHeight) return;
+      toolbarHeight = h;
+      fitHeight();
+    }).observe(toolbar);
+  }
+
+  // Τα document/window listeners μένουν μετά το partial navigation: δένονται μία
+  // φορά και καλούν πάντα το τρέχον instance.
+  window.__uncharHandlers = { close: closeModal, fit: fitHeight, isOpen: function(){ return modal.style.display !== 'none'; } };
+  if (!window.__UNCHAR_GLOBAL_BOUND) {
+    window.__UNCHAR_GLOBAL_BOUND = true;
+    document.addEventListener('keydown', function(e){
+      var h = window.__uncharHandlers;
+      if (e.key === 'Escape' && h && h.isOpen()) h.close();
+    });
+    window.addEventListener('resize', function(){
+      var h = window.__uncharHandlers;
+      if (h && h.isOpen()) h.fit();
+    });
+  }
+})();
+</script>

@@ -17443,6 +17443,439 @@ def api_bulk_characterize():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Αχαρακτήριστα τιμολόγια myDATA -> κλασική καταχώρηση από την Αναζήτηση
+# ---------------------------------------------------------------------------
+# Τιμολόγια που ήρθαν με τη Λήψη (data/<vat>_summary.json, classification
+# "αχαρακτηριστο") αλλά δεν υπάρχουν ακόμα στη λίστα του πελάτη (epsilon).
+# Η Αναζήτηση τα δείχνει σε popup ώστε να καταχωρηθούν και παραστατικά που δεν
+# έχουν QR/MARK πάνω στο έντυπο. Η ίδια η καταχώρηση γίνεται από το κανονικό
+# /save_summary: εδώ μόνο τα απαριθμούμε και ετοιμάζουμε το summary με το ίδιο
+# σχήμα που φτιάχνει το search() για τη ροή τιμολογίων.
+# Μόνο τιμολόγια: οι αποδείξεις δεν έρχονται από το myDATA.
+
+# Ίδιοι κωδικοί με το HARD STOP της ροής τιμολογίων στο search().
+_UNCHAR_BLOCKED_TYPE_CODES = {"8.2", "8.4", "8.5", "8.6", "9.3", "11.1", "11.2", "11.5"}
+_UNCHAR_NEGATIVE_TYPE_CODES = {"5.1", "5.2", "11.4"}
+# Κατηγορία ΦΠΑ myDATA -> κλειδί ποσοστού όπως το περιμένει το _category_vat_constraints.
+_UNCHAR_VAT_KEY_BY_CODE = {
+    "1": "24%", "2": "13%", "3": "6%", "4": "17%", "5": "9%",
+    "6": "4%", "7": "0%", "8": "0%", "9": "0%", "10": "3%",
+}
+_UNCHAR_PREPARE_MAX_MARKS = 50
+
+
+def _unchar_digits(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _unchar_pick(src: Dict[str, Any], *keys, default=""):
+    for k in keys:
+        v = src.get(k)
+        if v not in (None, ""):
+            return v
+    return default
+
+
+def _unchar_type_code(rec: Dict[str, Any]) -> str:
+    """Κωδικός είδους (π.χ. '1.1'). Μετά από παλιά αποθήκευση το `type` του
+    summary έχει γίνει ετικέτα, οπότε δοκιμάζουμε και αντίστροφη αντιστοίχιση."""
+    for key in ("type_code", "type", "invoiceType"):
+        raw = str(rec.get(key) or "").strip()
+        if re.fullmatch(r"\d{1,2}\.\d{1,2}", raw):
+            return raw
+    for key in ("type", "type_name"):
+        label = str(rec.get(key) or "").strip()
+        if not label:
+            continue
+        for code, lbl in INVOICE_TYPE_LABELS.items():
+            if lbl == label:
+                return code
+    return ""
+
+
+def _unchar_amounts(src_docs: List[Dict[str, Any]], negative: bool):
+    net = sum(_pfloat_any(_unchar_pick(d, "totalNetValue", "totalNet", "lineTotal", default=0)) for d in src_docs)
+    vat_amt = sum(_pfloat_any(_unchar_pick(d, "totalVatAmount", "totalVat", default=0)) for d in src_docs)
+    total = net + vat_amt
+    if negative:
+        net, vat_amt, total = -abs(net), -abs(vat_amt), -abs(total)
+    # "+ 0.0" ώστε να μη βγαίνει ποτέ -0.0
+    return round(net, 2) + 0.0, round(vat_amt, 2) + 0.0, round(total, 2) + 0.0
+
+
+def _unchar_collect(vat: str) -> Dict[str, Any]:
+    """Αχαρακτήριστα, μη-καταχωρημένα τιμολόγια του πελάτη για την ενεργή χρήση.
+
+    Επιστρέφει {"items": {mark: {"rec", "docs", "code"}}, "hidden_other_year": int}.
+    """
+    summaries = json_read(get_customer_summary_file(vat)) or []
+    docs = json_read(get_customer_docs_file(vat)) or []
+
+    docs_by_mark: Dict[str, List[Dict[str, Any]]] = {}
+    for d in docs if isinstance(docs, list) else []:
+        if not isinstance(d, dict):
+            continue
+        mk = str(d.get("mark", "")).strip()
+        if mk:
+            docs_by_mark.setdefault(mk, []).append(d)
+
+    registered = set()
+    for rec in load_epsilon_cache_for_vat(vat) or []:
+        if isinstance(rec, dict):
+            mk = _unchar_digits(rec.get("mark") or rec.get("MARK"))
+            if mk:
+                registered.add(mk)
+
+    try:
+        selected_year = get_active_fiscal_year()
+        selected_year = int(selected_year) if selected_year is not None else None
+    except Exception:
+        selected_year = None
+
+    items: Dict[str, Dict[str, Any]] = {}
+    hidden_other_year = 0
+    for rec in summaries if isinstance(summaries, list) else []:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("classification") or "").strip().lower() != "αχαρακτηριστο":
+            continue
+        mark = str(rec.get("mark") or rec.get("MARK") or "").strip()
+        if not re.fullmatch(r"\d{15}", mark) or mark == RECEIPT_FALLBACK_MARK:
+            continue
+        if mark in registered or mark in items:
+            continue
+        if rec.get("is_receipt") or rec.get("_is_receipt"):
+            continue
+        if str(rec.get("docType") or rec.get("doc_type") or "").strip().lower().startswith("receipt"):
+            continue
+        mark_docs = docs_by_mark.get(mark) or []
+        # Αν το myDATA το έχει ήδη χαρακτηρισμένο σε νεότερη λήψη, δεν είναι αχαρακτήριστο.
+        if any(str(d.get("classification") or "").strip().lower() == "χαρακτηρισμενο" for d in mark_docs):
+            continue
+        code = (_unchar_type_code(mark_docs[0]) if mark_docs else "") or _unchar_type_code(rec)
+        if code in _UNCHAR_BLOCKED_TYPE_CODES:
+            continue
+        if selected_year is not None:
+            issue_year = parse_year_from_date_string(str(rec.get("issueDate") or rec.get("issue_date") or "").strip())
+            if issue_year is not None and issue_year != selected_year:
+                hidden_other_year += 1
+                continue
+        items[mark] = {"rec": rec, "docs": mark_docs, "code": code}
+
+    return {"items": items, "hidden_other_year": hidden_other_year, "fiscal_year": selected_year}
+
+
+def _unchar_lines(mark: str, src_docs: List[Dict[str, Any]], negative: bool) -> List[Dict[str, Any]]:
+    """Γραμμές παραστατικού (μία ανά κατηγορία ΦΠΑ), όπως τις φτιάχνει η ροή τιμολογίων στο search()."""
+
+    def _signed(raw: Any) -> str:
+        v = _pfloat_any(raw)
+        return f"{(-abs(v) if negative else v) + 0.0:.2f}".replace(".", ",")
+
+    lines: List[Dict[str, Any]] = []
+    seen_vat_categories = set()
+    for idx, inst in enumerate(src_docs):
+        raw_vatcat = _unchar_pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat")
+        mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
+        if mapped_vatcat and mapped_vatcat in seen_vat_categories:
+            continue
+        if mapped_vatcat:
+            seen_vat_categories.add(mapped_vatcat)
+        lines.append({
+            "id": inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}",
+            "description": _unchar_pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx + 1}",
+            "amount": _signed(_unchar_pick(inst, "amount", "lineTotal", "totalNetValue", "totalValue", "value", default=0)),
+            "vat": _signed(_unchar_pick(inst, "vat", "vatRate", "vatPercent", "totalVatAmount", default=0)),
+            "category": "",
+            "vatCategory": mapped_vatcat,
+        })
+    return lines
+
+
+def _unchar_afm_rules(cred: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Ενεργοί κανόνες ΑΦΜ του πελάτη ανά ΑΦΜ προμηθευτή (κενό αν δεν ισχύουν κανόνες)."""
+    if not isinstance(cred, dict) or not _afm_rules_apply_for_client(cred, is_receipt=False):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for entry in cred.get("afm_rules") or []:
+        rule = _normalize_afm_rule(entry)
+        if rule and rule.get("enabled"):
+            out.setdefault(rule["supplier_afm"], rule)
+    return out
+
+
+def _unchar_rule_info(
+    afm_rules: Dict[str, Dict[str, Any]],
+    issuer_afm: str,
+    lines: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Ο χαρακτηρισμός που ορίζει ο κανόνας ΑΦΜ του προμηθευτή για ΚΑΘΕ γραμμή.
+
+    Επιστρέφει None αν δεν υπάρχει κανόνας ή αν αφήνει κάποια γραμμή ακάλυπτη —
+    τότε ο χρήστης διαλέγει ο ίδιος. Η αναζήτηση ανά γραμμή είναι ίδια με του
+    _validate_summary_against_afm_rules, ώστε ό,τι προτείνουμε να περνά τον
+    έλεγχο κανόνα του /save_summary.
+    """
+    rule = afm_rules.get(_normalize_afm(issuer_afm) or "") if afm_rules else None
+    if not rule or not lines:
+        return None
+    mapping = rule.get("mapping") if isinstance(rule.get("mapping"), dict) else {}
+    per_line = []
+    for ln in lines:
+        vat_key = _extract_vat_percent_from_line(ln)
+        expected = str(mapping.get(vat_key) or mapping.get(AFM_RULE_RATE_TO_KEY.get(vat_key, "")) or "").strip() if vat_key else ""
+        if not expected:
+            return None
+        per_line.append(expected)
+    return {"categories": per_line, "mtype": str(rule.get("invoice_mtype") or "").strip()}
+
+
+def _unchar_build_summary(vat: str, mark: str, item: Dict[str, Any], name_memo: Dict[str, str]) -> Dict[str, Any]:
+    """Summary για το /save_summary — ίδιο σχήμα με το modal_summary της ροής τιμολογίων στο search()."""
+    rec = item["rec"]
+    src_docs = item["docs"] or [rec]
+    first = src_docs[0]
+    code = item["code"]
+    negative = code in _UNCHAR_NEGATIVE_TYPE_CODES
+
+    def _fmt(x: float) -> str:
+        return f"{x:.2f}".replace(".", ",")
+
+    lines = _unchar_lines(mark, src_docs, negative)
+    net, vat_amt, total = _unchar_amounts(src_docs, negative)
+
+    issuer_afm = str(_unchar_pick(first, "AFM_issuer", default="") or _unchar_pick(rec, "AFM_issuer", "AFM", default="") or vat).strip()
+    issuer_name = str(_unchar_pick(first, "Name", "Name_issuer", default="") or _unchar_pick(rec, "Name_issuer", "Name", default="")).strip()
+    if not issuer_name and issuer_afm:
+        if issuer_afm not in name_memo:
+            try:
+                name_memo[issuer_afm] = str(_enrich_issuer_name_from_afm(vat, issuer_afm, "") or "").strip()
+            except Exception:
+                log.exception("uncharacterized prepare: issuer enrichment failed for AFM %s", issuer_afm)
+                name_memo[issuer_afm] = ""
+        issuer_name = name_memo[issuer_afm]
+
+    payment_method_type = ""
+    for d in src_docs:
+        payment_method_type = str(_unchar_pick(d, "paymentMethodType", default="") or "").strip()
+        if payment_method_type:
+            break
+
+    type_label = map_invoice_type_label(code) if code else str(rec.get("type_name") or rec.get("type") or "").strip()
+    number = str(_unchar_pick(first, "number", "aa", "AA", default="") or _unchar_pick(rec, "number", "aa", "AA", default="")).strip()
+    return {
+        "mark": mark,
+        "AA": str(_unchar_pick(first, "AA", "aa", default="") or number).strip(),
+        "AFM": issuer_afm,
+        "Name": issuer_name,
+        "paymentMethodType": payment_method_type,
+        "paymentMethodLabel": get_payment_method_label(payment_method_type),
+        "series": str(_unchar_pick(first, "series", "Series", "serie", default="") or rec.get("series") or "").strip(),
+        "number": number,
+        "issueDate": str(_unchar_pick(first, "issueDate", "issue_date", default="") or _unchar_pick(rec, "issueDate", "issue_date", default="")).strip(),
+        "totalNetValue": _fmt(net),
+        "totalVatAmount": _fmt(vat_amt),
+        "totalValue": _fmt(total),
+        "type": type_label,
+        "type_code": code,
+        "type_name": type_label,
+        "docType": "invoice",
+        "lines": lines,
+        "is_receipt": False,
+    }
+
+
+@app.route('/api/uncharacterized_invoices', methods=['GET'])
+def api_uncharacterized_invoices():
+    """Λίστα αχαρακτήριστων τιμολογίων myDATA του ενεργού πελάτη που δεν έχουν
+    καταχωρηθεί ακόμα, μαζί με τις κατηγορίες χαρακτηρισμού που δέχεται."""
+    try:
+        active = get_active_credential_from_session() or {}
+        vat = str(active.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Επίλεξε πρώτα έναν πελάτη (ΑΦΜ)."}), 400
+
+        cred = get_cred_by_vat(vat) or active
+        collected = _unchar_collect(vat)
+
+        name_memo: Dict[str, str] = {}
+        seeded_from_client_db = False
+
+        def _cached_name(afm: str) -> str:
+            # Επωνυμία από την κοινή τοπική βάση ΑΦΜ->επωνυμία (και, στην πρώτη
+            # αστοχία, από το client_db της ομάδας). Καμία εξωτερική κλήση στη
+            # λίστα· ο VAT validator τρέχει μόνο για ό,τι τελικά αποθηκευτεί.
+            nonlocal seeded_from_client_db
+            if afm in name_memo:
+                return name_memo[afm]
+            found = ""
+            try:
+                import vat_name_cache
+                found = str(vat_name_cache.lookup_name(afm) or "").strip()
+                if not found and not seeded_from_client_db:
+                    seeded_from_client_db = True
+                    client_db_path = _resolve_client_db_path(vat)
+                    if client_db_path and os.path.exists(client_db_path):
+                        version = os.path.getmtime(client_db_path)
+                        if _CLIENT_DB_SEED_VERSIONS.get(client_db_path) != version:
+                            from epsilon_bridges import _load_client_map
+                            vat_name_cache.store_from_client_map(_load_client_map(client_db_path))
+                            _CLIENT_DB_SEED_VERSIONS[client_db_path] = version
+                            found = str(vat_name_cache.lookup_name(afm) or "").strip()
+            except Exception:
+                log.exception("api_uncharacterized_invoices: issuer name lookup failed")
+            name_memo[afm] = found
+            return found
+
+        labels = dict(DEFAULT_INVOICE_CATEGORY_LABELS)
+        labels.update(_category_labels_for_client(cred))
+
+        def _label(key: str) -> str:
+            return labels.get(key) or labels.get(str(key).lower()) or key
+
+        afm_rules = _unchar_afm_rules(cred)
+        rows = []
+        for mark, item in collected["items"].items():
+            rec = item["rec"]
+            src_docs = item["docs"] or [rec]
+            first = src_docs[0]
+            code = item["code"]
+            negative = code in _UNCHAR_NEGATIVE_TYPE_CODES
+            net, vat_amt, total = _unchar_amounts(src_docs, negative)
+            afm = str(_unchar_pick(first, "AFM_issuer", default="") or _unchar_pick(rec, "AFM_issuer", "AFM", default="")).strip()
+            name = str(_unchar_pick(first, "Name", "Name_issuer", default="") or _unchar_pick(rec, "Name_issuer", "Name", default="")).strip()
+            if not name and afm:
+                name = _cached_name(afm)
+            vat_keys = []
+            for d in src_docs:
+                key = _UNCHAR_VAT_KEY_BY_CODE.get(str(_unchar_pick(d, "vatCategory", "vat_category", default="")).strip())
+                if key and key not in vat_keys:
+                    vat_keys.append(key)
+            row = {
+                "mark": mark,
+                "afm": afm,
+                "name": name,
+                "series": str(_unchar_pick(first, "series", default="") or rec.get("series") or "").strip(),
+                "number": str(_unchar_pick(first, "number", "aa", "AA", default="") or _unchar_pick(rec, "number", "aa", "AA", default="")).strip(),
+                "date": str(_unchar_pick(first, "issueDate", "issue_date", default="") or _unchar_pick(rec, "issueDate", "issue_date", default="")).strip(),
+                "type": (map_invoice_type_label(code) if code else str(rec.get("type_name") or rec.get("type") or "").strip()) or "ΤΙΜΟΛΟΓΙΟ",
+                "net": net,
+                "vat": vat_amt,
+                "total": total,
+                "vat_keys": vat_keys,
+            }
+            if afm_rules:
+                rule_info = _unchar_rule_info(afm_rules, afm, _unchar_lines(mark, src_docs, negative))
+                if rule_info:
+                    rule_labels = []
+                    for cat in rule_info["categories"]:
+                        lbl = _label(cat)
+                        if lbl not in rule_labels:
+                            rule_labels.append(lbl)
+                    row["rule_label"] = ", ".join(rule_labels)
+            rows.append(row)
+
+        # Ίδιες κατηγορίες (και ίδιο fallback) με το modal της ροής τιμολογίων.
+        category_keys = _list_invoice_categories(cred) or [
+            "αγορες_εμπορευματων",
+            "αγορες_α_υλων",
+            "γενικες_δαπανες",
+            "αμοιβες_τριτων",
+            "δαπανες_χωρις_φπα",
+        ]
+        categories = [{"key": k, "label": _label(k)} for k in category_keys]
+
+        # Γ κατηγορία: το Είδος Κίνησης είναι σε επίπεδο παραστατικού.
+        movement_types = []
+        is_g_category = str(cred.get("book_category") or "").strip().upper() in ("Γ", "G")
+        if is_g_category:
+            try:
+                from g_category_helpers import get_movement_types
+                movement_types = [
+                    {"value": m.get("value"), "label": m.get("label")}
+                    for m in get_movement_types(load_settings() or {})
+                ]
+            except Exception:
+                log.exception("api_uncharacterized_invoices: movement types failed")
+
+        return jsonify({
+            "ok": True,
+            "vat": vat,
+            "client_name": str(cred.get("name") or "").strip(),
+            "fiscal_year": collected["fiscal_year"],
+            "hidden_other_year": collected["hidden_other_year"],
+            "rows": rows,
+            "categories": categories,
+            "vat_constraints": _category_vat_constraints(cred),
+            "g_category": is_g_category,
+            "movement_types": movement_types,
+        })
+    except Exception as exc:
+        log.exception("api_uncharacterized_invoices failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route('/api/uncharacterized_invoices/prepare', methods=['POST'])
+def api_uncharacterized_invoices_prepare():
+    """Ετοιμάζει τα summaries των επιλεγμένων MARK για αποστολή στο /save_summary.
+
+    Body JSON: { "marks": ["...", ...], "vat": "<ΑΦΜ με το οποίο άνοιξε το popup>" }
+
+    Ξαναελέγχει ότι κάθε MARK είναι ακόμα αχαρακτήριστο και μη-καταχωρημένο, και
+    ότι ο ενεργός πελάτης δεν άλλαξε στο μεταξύ (π.χ. από άλλη καρτέλα) — το
+    /save_summary γράφει πάντα στον ενεργό πελάτη της συνεδρίας.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        raw_marks = payload.get("marks") or []
+        if not isinstance(raw_marks, list):
+            raw_marks = [raw_marks]
+        marks = []
+        for m in raw_marks:
+            mk = _unchar_digits(m)
+            if mk and mk not in marks:
+                marks.append(mk)
+        if not marks:
+            return jsonify({"ok": False, "error": "Δεν επιλέχθηκαν παραστατικά."}), 400
+        if len(marks) > _UNCHAR_PREPARE_MAX_MARKS:
+            return jsonify({"ok": False, "error": f"Έως {_UNCHAR_PREPARE_MAX_MARKS} παραστατικά ανά αίτημα."}), 400
+
+        active = get_active_credential_from_session() or {}
+        vat = str(active.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": False, "error": "Επίλεξε πρώτα έναν πελάτη (ΑΦΜ)."}), 400
+        expected_vat = str(payload.get("vat") or "").strip()
+        if expected_vat and expected_vat != vat:
+            return jsonify({
+                "ok": False,
+                "client_changed": True,
+                "error": "Ο ενεργός πελάτης άλλαξε. Κλείσε το παράθυρο και άνοιξέ το ξανά.",
+            }), 409
+
+        items = _unchar_collect(vat)["items"]
+        afm_rules = _unchar_afm_rules(get_cred_by_vat(vat) or active)
+        name_memo: Dict[str, str] = {}
+        summaries: Dict[str, Any] = {}
+        rules: Dict[str, Any] = {}
+        skipped: Dict[str, str] = {}
+        for mark in marks:
+            item = items.get(mark)
+            if not item:
+                skipped[mark] = "Δεν είναι πλέον διαθέσιμο (ήδη καταχωρημένο ή χαρακτηρισμένο)."
+                continue
+            summary = _unchar_build_summary(vat, mark, item, name_memo)
+            summaries[mark] = summary
+            # Εκτός summary: ό,τι σταλεί στο /save_summary αποθηκεύεται αυτούσιο.
+            rule_info = _unchar_rule_info(afm_rules, summary.get("AFM") or "", summary["lines"])
+            if rule_info:
+                rules[mark] = rule_info
+        return jsonify({"ok": True, "vat": vat, "summaries": summaries, "rules": rules, "skipped": skipped})
+    except Exception as exc:
+        log.exception("api_uncharacterized_invoices_prepare failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route('/activity/check_updates', methods=['GET'])
 def activity_check_updates():
     """Return recent activity events relevant to current active credential (vat) and group.
