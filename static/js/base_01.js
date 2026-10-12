@@ -578,6 +578,8 @@
           btn.textContent = 'Συνέχεια';
           btn.style.cssText = 'background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;';
           btn.addEventListener('click', function () {
+            // ρητή επιθυμία του χρήστη: να παραλάβει το αποτέλεσμα ΕΔΩ (ακόμη κι αν παλιό tab το κρατά)
+            try { sessionStorage.setItem(k === 'e3_bulk' ? 'smd_e3_takeover' : 'smd_ar_takeover', '1'); } catch (_) {}
             var a = document.createElement('a');
             a.href = def.path;
             document.body.appendChild(a);

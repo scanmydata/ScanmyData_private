@@ -1908,7 +1908,9 @@ function showGroupedChecksModal(groups, opts) {
       ctl.addEventListener('change', apply);
       ctl.addEventListener('input', apply);
     });
-    const finish = (val) => { document.removeEventListener('keydown', onKey); modal.remove(); resolve(val); };
+    const onDrop = () => finish(null);   // άλλο tab παρέλαβε το αποτέλεσμα (takeover)
+    document.addEventListener('ar-drop-checks', onDrop);
+    const finish = (val) => { document.removeEventListener('keydown', onKey); document.removeEventListener('ar-drop-checks', onDrop); modal.remove(); resolve(val); };
     const onKey = (e) => { if (e.key === 'Escape') finish(null); };
     document.addEventListener('keydown', onKey);
     modal.querySelector('#arGcCancel').addEventListener('click', () => finish(null));
@@ -3351,8 +3353,9 @@ async function arBulkStartServerJob(body) {
 }
 
 // Περιμένει το job (polling) και επιστρέφει {ok, results, aborted, batchId, warnings, from, to}.
-async function arBulkWaitJob(jobId, onTick) {
+async function arBulkWaitJob(jobId, onTick, opts) {
   const enc = encodeURIComponent(jobId);
+  const takeover = !!(opts && opts.takeover);
   let unknown = 0, failures = 0;
   for (;;) {
     await arSleep(AR_BULK_POLL_MS);
@@ -3376,7 +3379,7 @@ async function arBulkWaitJob(jobId, onTick) {
     if (st.status !== 'done' && st.status !== 'error') continue;
     let res = null;
     try {
-      res = await (await fetch(`/api/accounting_result/bulk_job_result?job_id=${enc}&tab=${encodeURIComponent(window.__arTabId)}`, { cache: 'no-store', credentials: 'same-origin' })).json();
+      res = await (await fetch(`/api/accounting_result/bulk_job_result?job_id=${enc}&tab=${encodeURIComponent(window.__arTabId)}${takeover ? '&takeover=1' : ''}`, { cache: 'no-store', credentials: 'same-origin' })).json();
     } catch (_) { continue; }
     if (res && res.status === 'claimed') return { ok: false, claimed: true };
     if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'Δεν βρέθηκε το αποτέλεσμα.' };
@@ -3414,12 +3417,35 @@ async function arBulkAttachAndFinish(jobId, meta) {
   // δείχνουν κανονικά wait overlay (και σε όποια σελίδα κι αν βρίσκεται ο χρήστης).
   AR_BULK_RUNNING = false;
   let delivered = false;
+  let lost = false;          // άλλο tab παρέλαβε το αποτέλεσμα (takeover) — αυτό το tab παραιτείται
+  let beatTimer = null;
   try {
     statusEl.textContent = 'Ο υπολογισμός τρέχει στον server — μπορείς να αλλάξεις σελίδα· όταν ολοκληρωθεί θα εμφανιστούν τα αποτελέσματα και οι έλεγχοι.';
     const res = await arBulkWaitJob(jobId, (st) => {
       if (st.label) statusEl.textContent = `Στον server: ${st.label}`;
-    });
-    if (res.claimed) { window.__arClaimedUntil = Date.now() + 60000; return; }   // άλλο tab του χρήστη το διαχειρίζεται
+    }, { takeover: !!(meta && meta.takeover) });
+    if (res.claimed) {
+      // Το αποτέλεσμα το χειρίζεται (ή το χειριζόταν πρόσφατα) άλλο tab/παράθυρο του browser σου. Πριν: σιωπηλά
+      // «τίποτα»· τώρα ενημερώνει, και ξαναδοκιμάζει αυτόματα όταν το άλλο tab σταματήσει να το χειρίζεται.
+      window.__arClaimedUntil = Date.now() + 15000;
+      showArFlash('Ο Μαζικός υπολογισμός περιμένει σε άλλο tab/παράθυρο του browser σου (εκεί εμφανίζονται οι έλεγχοι). '
+        + 'Αν δεν το βλέπεις, κλείσε εκείνο το tab — μέσα σε λίγο θα παραληφθεί εδώ αυτόματα.', 'warning', 14000);
+      return;
+    }
+    // Heartbeat όσο το tab χειρίζεται το αποτέλεσμα: αν σταματήσει (κλείσιμο tab), η «διεκδίκηση» λήγει και
+    // άλλο tab μπορεί να το παραλάβει· αν άλλο tab το πάρει ρητά, παραιτούμαστε (κλείνουν τα popup εδώ).
+    if (res.ok || (res.results || []).length) {
+      beatTimer = setInterval(async () => {
+        try {
+          const b = await postJson('/api/accounting_result/bulk_job_claim_beat', { job_id: jobId, tab: window.__arTabId });
+          if (b && b.ok && b.owner === false) {
+            lost = true;
+            clearInterval(beatTimer); beatTimer = null;
+            document.dispatchEvent(new CustomEvent('ar-drop-checks'));
+          }
+        } catch (_) { /* προσωρινή διακοπή επικοινωνίας: δοκιμάζει ξανά */ }
+      }, 15000);
+    }
     if (res.detached || (!res.ok && !(res.results || []).length)) {
       statusEl.textContent = 'Σφάλμα: ' + (res.error || '');
       showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): ' + (res.error || 'αποτυχία'), res.detached ? 'warning' : 'error', 12000);
@@ -3433,13 +3459,15 @@ async function arBulkAttachAndFinish(jobId, meta) {
     await arBulkFinishRun({
       bulkResp: { ok: true, results: res.results, aborted: res.aborted, batchId: res.batchId || meta.batchId },
       from, to, year: yearFromDMY(to), statusEl, aadeWarnings: res.warnings || [], depreciationAmbiguousNames: [],
+      isLost: () => lost,
     });
   } catch (err) {
     hideArOverlay();
     statusEl.textContent = 'Σφάλμα: ' + (err && err.message ? err.message : String(err));
     showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): μη αναμενόμενο σφάλμα — ' + (err && err.message ? err.message : String(err)), 'error');
   } finally {
-    if (delivered) { try { await postJson('/api/accounting_result/bulk_job_consume', { job_id: jobId }); } catch (_) {} }
+    if (beatTimer) { clearInterval(beatTimer); beatTimer = null; }
+    if (delivered && !lost) { try { await postJson('/api/accounting_result/bulk_job_consume', { job_id: jobId }); } catch (_) {} }
     AR_BULK_RUNNING = false;
     setBulkTableLocked(false);
     window.__arBulkAttached = null;
@@ -3449,12 +3477,16 @@ async function arBulkAttachAndFinish(jobId, meta) {
 // Μετά από ανανέωση/νέα σύνδεση: αν ο χρήστης έχει Μαζικό που τρέχει ή τελείωσε και δεν παραλήφθηκε, ξαναπιάνεται.
 async function arBulkResumePending() {
   if (window.__arBulkAttached) return;
-  if (window.__arClaimedUntil && Date.now() < window.__arClaimedUntil) return;
+  // «Συνέχεια» από το flash: ρητή επιθυμία του χρήστη να παραλάβει το αποτέλεσμα ΕΔΩ (ακόμη κι αν ένα παλιό tab
+  // του το κρατά) — takeover.
+  let takeover = false;
+  try { takeover = sessionStorage.getItem('smd_ar_takeover') === '1'; sessionStorage.removeItem('smd_ar_takeover'); } catch (_) {}
+  if (!takeover && window.__arClaimedUntil && Date.now() < window.__arClaimedUntil) return;
   try {
     const d = await (await fetch('/api/accounting_result/bulk_jobs_mine', { cache: 'no-store', credentials: 'same-origin' })).json();
     const j = d && d.ok && (d.jobs || [])[0];
     if (!j || window.__arBulkAttached) return;
-    await arBulkAttachAndFinish(j.id, { from: j.date_from, to: j.date_to, names: [], batchId: j.batch_id });
+    await arBulkAttachAndFinish(j.id, { from: j.date_from, to: j.date_to, names: [], batchId: j.batch_id, takeover });
   } catch (_) { /* χωρίς σύνδεση/endpoint: τίποτα να ξαναπιαστεί */ }
 }
 
@@ -3507,6 +3539,7 @@ async function arBulkFinishRun(ctx) {
       showArFlash('Λογιστικό Αποτέλεσμα (Μαζικός): αποτυχία εφαρμογής ελέγχων — ' + (postErr && postErr.message ? postErr.message : String(postErr)), 'error');
     }
   }
+  if (ctx.isLost && ctx.isLost()) return;   // το αποτέλεσμα παραλήφθηκε από άλλο tab: εκείνο συνεχίζει
 
   // Bulk mode deliberately does NOT render the full per-company report
   // tables inline (that stays exclusive to Ατομικός) — just a compact

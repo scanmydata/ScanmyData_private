@@ -20249,11 +20249,23 @@ def api_e3_brain_bulk_job_result():
     if job.get("status") not in ("done", "error"):
         return jsonify({"ok": True, "status": job.get("status")}), 200
     tab = str(request.args.get("tab") or "")
-    if job.get("claimed") and tab and job["claimed"] != tab:
+    if not _job_claim_decision(job, tab, request.args.get("takeover") == "1"):
         return jsonify({"ok": True, "status": "claimed"}), 200
-    if tab:
-        job["claimed"] = tab
     return jsonify({"ok": True, **_e3_job_public(job), "result": job.get("result") or {}}), 200
+
+
+@app.route("/api/e3/brain/bulk_job_claim_beat", methods=["POST"])
+@login_required
+def api_e3_brain_bulk_job_claim_beat():
+    p = request.get_json(silent=True) or {}
+    job = _e3_server_job_for_request(p.get("job_id"), owner_only=True)
+    tab = str(p.get("tab") or "")
+    if not job or job.get("consumed"):
+        return jsonify({"ok": True, "owner": False, "gone": True}), 200
+    if job.get("claimed") == tab:
+        job["claimed_at"] = time.time()
+        return jsonify({"ok": True, "owner": True}), 200
+    return jsonify({"ok": True, "owner": False}), 200
 
 
 @app.route("/api/e3/brain/bulk_job_consume", methods=["POST"])
@@ -20330,6 +20342,23 @@ def api_group_activity():
 # ---------------------------------------------------------------------------
 _AR_SERVER_JOBS: Dict[str, Dict[str, Any]] = {}
 _AR_SERVER_JOBS_LOCK = threading.Lock()
+# «Διεκδίκηση» αποτελέσματος από ένα tab: λήγει αν το tab δεν στέλνει heartbeat (έκλεισε/κόλλησε), ώστε το
+# αποτέλεσμα να μη μένει για πάντα «δεσμευμένο» από ένα νεκρό ή ξεχασμένο tab· και μπορεί να παραληφθεί ρητά
+# (takeover) όταν ο χρήστης πατά «Συνέχεια» σε άλλο tab.
+_JOB_CLAIM_STALE_SECONDS = 45
+
+
+def _job_claim_decision(job, tab, takeover):
+    """True = αυτό το tab μπορεί να παραλάβει το αποτέλεσμα (και η διεκδίκηση περνά σε αυτό)."""
+    if not tab:
+        return True
+    cur = job.get("claimed")
+    if cur and cur != tab and not takeover:
+        if (time.time() - float(job.get("claimed_at") or 0)) < _JOB_CLAIM_STALE_SECONDS:
+            return False
+    job["claimed"] = tab
+    job["claimed_at"] = time.time()
+    return True
 _AR_SERVER_JOB_KEEP_SECONDS = 12 * 3600
 _AR_SERVER_CHUNK = 2
 
@@ -20553,12 +20582,26 @@ def api_accounting_result_bulk_job_result():
     if job.get("status") not in ("done", "error"):
         return jsonify({"ok": True, "status": job.get("status")}), 200
     tab = str(request.args.get("tab") or "")
-    if job.get("claimed") and tab and job["claimed"] != tab:
+    if not _job_claim_decision(job, tab, request.args.get("takeover") == "1"):
         return jsonify({"ok": True, "status": "claimed"}), 200
-    if tab:
-        job["claimed"] = tab
     return jsonify({"ok": True, **_ar_server_job_public(job), "results": job.get("results") or [],
                     "warnings": job.get("warnings") or []}), 200
+
+
+@app.route("/api/accounting_result/bulk_job_claim_beat", methods=["POST"])
+@login_required
+def api_accounting_result_bulk_job_claim_beat():
+    """Heartbeat του tab που χειρίζεται το αποτέλεσμα. owner=false → άλλο tab το παρέλαβε (takeover): το tab αυτό
+    πρέπει να παραιτηθεί από τα popup του."""
+    p = request.get_json(silent=True) or {}
+    job = _ar_server_job_for_request(p.get("job_id"), owner_only=True)
+    tab = str(p.get("tab") or "")
+    if not job or job.get("consumed"):
+        return jsonify({"ok": True, "owner": False, "gone": True}), 200
+    if job.get("claimed") == tab:
+        job["claimed_at"] = time.time()
+        return jsonify({"ok": True, "owner": True}), 200
+    return jsonify({"ok": True, "owner": False}), 200
 
 
 @app.route("/api/accounting_result/bulk_job_consume", methods=["POST"])
