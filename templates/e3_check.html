@@ -4693,6 +4693,9 @@
     const afm = String(afmEl.value || '').replace(/\D/g, '');
     if (!afm || afm.length !== 9) {
       brainSetResult('Δώσε έγκυρο ΑΦΜ 9 ψηφίων.');
+      try {
+        showBrainFlash(!afm ? 'Επίλεξε πρώτα πελάτη για έλεγχο Ε3.' : 'Δώσε έγκυρο ΑΦΜ 9 ψηφίων.', 'warning', 3500);
+      } catch (_) {}
       _earlyExit();
       return;
     }
@@ -4714,6 +4717,7 @@
     const toMatch = dateRegex.exec(dateTo);
     if (!fromMatch || !toMatch) {
       brainSetResult('Συμπλήρωσε σωστά τις ημερομηνίες Από και Έως με μορφή dd/mm/yyyy.');
+      try { showBrainFlash('Συμπλήρωσε σωστά τις ημερομηνίες Από και Έως (dd/mm/yyyy).', 'warning', 3500); } catch (_) {}
       _earlyExit();
       return;
     }
@@ -6463,7 +6467,8 @@
   async function executeBulkSelectedClients() {
     const selected = getSelectedBulkClients();
     if (!selected.length) {
-      try { await showModalAlert('Καμία επιλογή', 'Επίλεξε τουλάχιστον έναν πελάτη για έλεγχο.'); } catch (_) {}
+      // flash warning (όπως η διαγραφή χωρίς επιλογή στη Λίστα Παραστατικών)
+      try { showBrainFlash('Επίλεξε πρώτα τουλάχιστον έναν πελάτη για έλεγχο Ε3.', 'warning', 3500); } catch (_) {}
       return;
     }
     // Force the user to deal with missing TAXIS credentials BEFORE we

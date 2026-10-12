@@ -1255,7 +1255,7 @@ function buildConsolidatedTableHtml(companies, failed) {
     { g: 1, th: 'Ακ. Έσοδα Βιβ.', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(c.report.sales_total)}${markSets[i].income}</td>` },
     { g: 2, th: 'Ακ. Έσοδα Αυτ.', td: () => '<td class="ar-num"></td>' },
     { g: 2, th: 'Εκκρεμ. myDATA (Αχαρακτ.)', td: (c, i) => `<td class="ar-num">${fmtAmountOrBlank(-Math.abs(c.report.unclassified_net || 0))}${markSets[i].unclassified}</td>` },
-    { g: 2, th: 'Φορολογητέα Κέρδη', td: (c) => `<td class="ar-num">${fmtAmountOrBlank(c.report.taxable_result)}</td>` },
+    { g: 2, th: 'Φορολογητέα Κέρδη', td: (c) => `<td class="ar-num" style="font-weight:700;">${fmtAmountOrBlank(c.report.taxable_result)}</td>` },
     ...(withIncomeTax ? [
       { g: 2, th: 'Φόρος Εισ. Επαγγ. (εκτ.)', td: (c) => taxCellList(c.report.income_tax)[0] },
       { g: 2, th: 'Προκ. Τρέχ.', td: (c) => taxCellList(c.report.income_tax)[1] },
@@ -2230,6 +2230,8 @@ async function computeSingle() {
 
   if (!name || !from || !to) {
     statusEl.textContent = 'Επιλέξτε εταιρία και περίοδο.';
+    showArFlash(!name ? 'Επίλεξε πρώτα πελάτη για υπολογισμό λογιστικού αποτελέσματος.'
+      : 'Συμπλήρωσε την περίοδο (Από / Έως) για τον υπολογισμό.', 'warning', 3500);
     return;
   }
 
@@ -3499,6 +3501,8 @@ async function runBulk() {
     document.getElementById('arBulkPdfBtn').disabled = true;
     document.getElementById('arBulkConsolidatedPdfBtn').disabled = true;
     statusEl.textContent = 'Επιλέξτε περίοδο και τουλάχιστον μία εταιρία.';
+    showArFlash(!names.length ? 'Επίλεξε πρώτα τουλάχιστον έναν πελάτη για υπολογισμό λογιστικού αποτελέσματος.'
+      : 'Συμπλήρωσε την περίοδο (Από / Έως) για τον υπολογισμό.', 'warning', 3500);
     return;
   }
   const started = await arBulkStartServerJob({
@@ -3682,6 +3686,8 @@ async function runBulkClientDriven() {
 
   if (!from || !to || !names.length) {
     statusEl.textContent = 'Επιλέξτε περίοδο και τουλάχιστον μία εταιρία.';
+    showArFlash(!names.length ? 'Επίλεξε πρώτα τουλάχιστον έναν πελάτη για υπολογισμό λογιστικού αποτελέσματος.'
+      : 'Συμπλήρωσε την περίοδο (Από / Έως) για τον υπολογισμό.', 'warning', 3500);
     return;
   }
 
