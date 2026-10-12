@@ -3383,8 +3383,9 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                 job_id=job_id,
             )
         )
-    # Clear the abort registry entry once the run is done.
-    if job_id:
+    # Clear the abort registry entry once the run is done. (Ο server job που τρέχει πελάτη-πελάτη περνά
+    # `_keep_job_state`: το σημαία διακοπής και η πρόοδος μένουν μεταξύ των κλήσεων — τα καθαρίζει ο ίδιος.)
+    if job_id and not payload.get("_keep_job_state"):
         try:
             _abort_registry.pop(job_id, None)
         except Exception:

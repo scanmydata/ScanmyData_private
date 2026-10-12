@@ -20142,27 +20142,194 @@ _E3_SERVER_JOBS: Dict[str, Dict[str, Any]] = {}
 _E3_SERVER_JOBS_LOCK = threading.Lock()
 
 
+# ---- Αξιοπιστία Μαζικού Ε3 (όπως ο Μαζικός Λογιστικού): πελάτης-πελάτη με απομόνωση σφαλμάτων, μερικά αποτελέσματα
+# που δεν χάνονται, και αποθήκευση σε δίσκο ώστε να επανέρχονται ακόμη και μετά από επανεκκίνηση του server.
+_E3_JOB_STORE_RECOVER_TS = 0.0
+
+
+def _e3_job_store_path(group, jid) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{group}__{jid}")
+    return os.path.join(BASE_DIR, "data", "_cache", "e3_bulk_jobs", safe + ".json")
+
+
+def _e3_job_persist(job, result=None) -> None:
+    """Γράφει την κατάσταση/τα (μερικά) αποτελέσματα του job στο δίσκο (ατομικά). Δεν σηκώνει ποτέ εξαίρεση."""
+    try:
+        path = _e3_job_store_path(job.get("group"), job.get("id"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        doc = {k: job.get(k) for k in ("id", "group", "user_key", "username", "status", "started", "finished",
+                                       "error", "total", "consumed")}
+        doc["result"] = result if result is not None else job.get("result")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        log.exception("could not persist E3 bulk job %s", (job or {}).get("id"))
+
+
+def _e3_job_forget(job) -> None:
+    try:
+        os.remove(_e3_job_store_path(job.get("group"), job.get("id")))
+    except OSError:
+        pass
+
+
+def _e3_recover_jobs(force: bool = False) -> None:
+    """Μετά από επανεκκίνηση του server: jobs που υπάρχουν στο δίσκο αλλά όχι στη μνήμη επανέρχονται ως
+    «τελειωμένα» (όσα ολοκληρώθηκαν πριν διακοπεί), ώστε ο χρήστης να τα παραλάβει αντί να χαθούν."""
+    global _E3_JOB_STORE_RECOVER_TS
+    now = time.time()
+    if not force and now - _E3_JOB_STORE_RECOVER_TS < 10:
+        return
+    _E3_JOB_STORE_RECOVER_TS = now
+    d = os.path.join(BASE_DIR, "data", "_cache", "e3_bulk_jobs")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        path = os.path.join(d, fn)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except Exception:
+            continue
+        jid = str(doc.get("id") or "")
+        if not jid or jid in _E3_SERVER_JOBS:
+            continue
+        if doc.get("consumed") or (now - float(doc.get("started") or 0)) > 24 * 3600:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        res = doc.get("result") if isinstance(doc.get("result"), dict) else {}
+        interrupted = doc.get("status") == "running"
+        err = str(doc.get("error") or "")
+        if interrupted:
+            res = dict(res or {})
+            res["aborted"] = True
+            err = "Ο server επανεκκινήθηκε πριν ολοκληρωθεί ο έλεγχος — εμφανίζονται όσοι πελάτες είχαν ήδη ελεγχθεί."
+        have = bool((res or {}).get("clients"))
+        with _E3_SERVER_JOBS_LOCK:
+            if jid in _E3_SERVER_JOBS:
+                continue
+            _E3_SERVER_JOBS[jid] = {
+                "id": jid, "group": doc.get("group"), "user_key": doc.get("user_key"), "username": doc.get("username"),
+                "status": "done" if (have and doc.get("status") in ("done", "running")) else ("done" if have else "error"),
+                "activity_id": None, "started": doc.get("started"), "finished": doc.get("finished") or now,
+                "result": res if have else None, "error": err, "claimed": "", "consumed": False,
+                "total": doc.get("total"), "recovered": True,
+            }
+
+
+def _e3_abort_requested(jid) -> bool:
+    try:
+        from e3.checks.e3_brain import _get_or_init_brain_abort_registry
+        return bool(_get_or_init_brain_abort_registry().get(str(jid), {}).get("abort"))
+    except Exception:
+        return False
+
+
 def _e3_bulk_worker(app_obj, job, snapshot, env, group_dir, payload):
     from accounting_result import activity_registry as ar_act
     try:
         _set_thread_group_base_dir(group_dir)
     except Exception:
         pass
+    jid = job.get("id")
     try:
-        data, code = _ar_call_view(app_obj, snapshot, env, api_e3_brain, "/api/e3/brain", "POST", body=payload)
-        job["result"] = data
-        if data.get("ok"):
+        clients = payload.get("clients") if isinstance(payload.get("clients"), list) else None
+        chunked = (str(payload.get("mode") or "").lower() == "bulk" and clients is not None
+                   and len([c for c in clients if isinstance(c, dict)]) > 1)
+        if not chunked:
+            # Μία κλήση (όπως πριν): single, Excel ή ενεργή ομάδα χωρίς ρητή λίστα πελατών.
+            data, code = _ar_call_view(app_obj, snapshot, env, api_e3_brain, "/api/e3/brain", "POST", body=payload)
+            job["result"] = data
+            if data.get("ok"):
+                job["status"] = "done"
+            else:
+                job["status"] = "error"
+                job["error"] = str(data.get("error") or f"HTTP {code}")
+            return
+        # ΝΕΟ: πελάτης-πελάτη. Αποτυχία ενός πελάτη (εξαίρεση/σφάλμα) δεν ρίχνει όλο το run· τα αποτελέσματα που
+        # έχουν ήδη βγει μένουν (στη μνήμη και στο δίσκο) και η διακοπή (Διακοπή) τηρείται ανάμεσα στους πελάτες.
+        from e3.checks.e3_brain import _publish_brain_step, _clear_brain_progress, _get_or_init_brain_abort_registry
+        reg = _get_or_init_brain_abort_registry()
+        reg.setdefault(str(jid), {"abort": False})
+        todo = [c for c in clients if isinstance(c, dict)]
+        n = len(todo)
+        results: List[Dict[str, Any]] = []
+        meta: Dict[str, Any] = {}
+        aborted = False
+        failures = 0
+        for i, c in enumerate(todo, start=1):
+            if _e3_abort_requested(jid):
+                aborted = True
+                break
+            name = str(c.get("name") or "").strip() or str(c.get("afm") or "?")
+            try:
+                _publish_brain_step(str(jid), f"Πελάτης {i}/{n}: {name}", percent=int((i - 1) * 100 / n))
+            except Exception:
+                pass
+            sub = dict(payload)
+            sub["clients"] = [c]
+            sub["job_id"] = jid
+            sub["_keep_job_state"] = True
+            data, err = None, ""
+            try:
+                data, code = _ar_call_view(app_obj, snapshot, env, api_e3_brain, "/api/e3/brain", "POST", body=sub)
+                if not (data.get("ok") and data.get("clients")):
+                    err = str(data.get("error") or f"HTTP {code}")
+            except Exception as e:
+                log.exception("E3 bulk job %s: client %s failed", jid, name)
+                err = _friendly_net_error(e) or str(e)
+            if not err:
+                results.extend(data.get("clients") or [])
+                meta = meta or {k: data.get(k) for k in ("year", "date_from", "date_to", "as_of_date")}
+            else:
+                failures += 1
+                results.append({"afm": "".join(ch for ch in str(c.get("afm") or "") if ch.isdigit()), "name": name,
+                                "ok": False, "messages": [f"Αποτυχία ελέγχου: {err}"], "warnings": [],
+                                "errors": ["bulk_client_failed"]})
+            job["done"] = i
+            partial = {"ok": True, "mode": "bulk", **meta, "total_clients": len(results),
+                       "aborted": False, "clients": list(results), "partial": True}
+            job["partial_result"] = partial
+            _e3_job_persist(job, partial)
+        final = {"ok": True, "mode": "bulk", "year": meta.get("year") or payload.get("year"),
+                 "date_from": meta.get("date_from"), "date_to": meta.get("date_to"), "as_of_date": meta.get("as_of_date"),
+                 "total_clients": len(results), "aborted": aborted, "clients": results,
+                 "message": "Η εκτέλεση E3 Brain ολοκληρώθηκε επιτυχώς."}
+        if failures:
+            final["failed_clients"] = failures
+        job["result"] = final
+        job["status"] = "done" if results else "error"
+        if not results:
+            job["error"] = "Δεν ελέγχθηκε κανένας πελάτης."
+        try:
+            reg.pop(str(jid), None)
+            _clear_brain_progress(str(jid))
+        except Exception:
+            pass
+    except Exception as e:
+        log.exception("server E3 bulk job %s failed", jid)
+        pr = job.get("partial_result")
+        if pr and pr.get("clients"):
+            # ό,τι ελέγχθηκε μέχρι τώρα παραδίδεται αντί να χαθεί
+            job["result"] = {**pr, "aborted": True, "partial": False}
             job["status"] = "done"
+            job["error"] = _friendly_net_error(e) or str(e)
         else:
             job["status"] = "error"
-            job["error"] = str(data.get("error") or f"HTTP {code}")
-    except Exception as e:
-        log.exception("server E3 bulk job %s failed", job.get("id"))
-        job["status"] = "error"
-        job["error"] = _friendly_net_error(e) or str(e)
+            job["error"] = _friendly_net_error(e) or str(e)
     finally:
         job["finished"] = time.time()
         ar_act.end(job.get("activity_id"))
+        _e3_job_persist(job)
 
 
 def _e3_progress(job_id) -> Dict[str, Any]:
@@ -20207,6 +20374,7 @@ def api_e3_brain_bulk_start():
                "total": n}
         with _E3_SERVER_JOBS_LOCK:
             _E3_SERVER_JOBS[jid] = job
+        _e3_job_persist(job)
         env = {
             "headers": {k: v for k, v in (("User-Agent", request.headers.get("User-Agent")),
                                           ("X-Forwarded-For", request.headers.get("X-Forwarded-For"))) if v},
@@ -20275,6 +20443,7 @@ def api_e3_brain_bulk_job_consume():
     if job:
         job["consumed"] = True
         job["result"] = None
+        _e3_job_forget(job)
     return jsonify({"ok": True}), 200
 
 
@@ -20282,6 +20451,7 @@ def api_e3_brain_bulk_job_consume():
 @login_required
 def api_e3_brain_bulk_jobs_mine():
     me, _ = _ar_user_ident()
+    _e3_recover_jobs()
     group = _ar_group_key()
     out = [_e3_job_public(j) for j in list(_E3_SERVER_JOBS.values())
            if j.get("group") == group and j.get("user_key") == me and not j.get("consumed")]
@@ -20320,6 +20490,7 @@ def api_group_activity():
         # Εργασίες του ΤΡΕΧΟΝΤΟΣ χρήστη που τελείωσαν και περιμένουν να χειριστεί τα αποτελέσματα/ελέγχους
         # (π.χ. μετά από logout/login): ο browser δείχνει flash «Συνέχεια» σε οποιαδήποτε σελίδα.
         pending = {"ar_bulk": [], "e3_bulk": []}
+        _e3_recover_jobs()
         if group and me:
             for j in list(_AR_SERVER_JOBS.values()):
                 if j.get("group") == group and j.get("user_key") == me and not j.get("consumed") and j.get("status") in ("done", "error"):
