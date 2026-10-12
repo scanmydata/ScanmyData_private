@@ -3584,6 +3584,11 @@ document.addEventListener('DOMContentLoaded', function(){
   };
 })();
 
+// Μετά από επιτυχή αποθήκευση το search bar «παγώνει» (καταστολή auto-submit) μόνο για αυτό το διάστημα (πριν 5s).
+// Διπλοεγγραφή αποτρέπεται ΑΝΕΞΑΡΤΗΤΑ: (1) το ίδιο MARK δεν ξαναστέλνεται για 20s (rc:recentSubmitKeys),
+// (2) ο server υπάρχουσα εγγραφή την ενημερώνει (δεν προσθέτει δεύτερη), (3) κλείδωμα ανά ομάδα στο /save_summary.
+window.RC_POST_SAVE_FREEZE_MS = 2000;
+
 // Μπλόκο διπλών submit στην φόρμα MARK (ειδικά με auto-submit)
 (function(){
   const form = document.getElementById('markSearchForm');
@@ -14660,7 +14665,7 @@ document.addEventListener('click', function(e){
   function clearSearchInputs(){
     const isPostSaveClear = !!window.__RC_CLEAR_MARK_AFTER_SAVE;
     try { rcLiveDebug('clear-search-inputs', { postSave: isPostSaveClear }); } catch(_) {}
-    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + 5000; } catch (_) {}
+    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + (window.RC_POST_SAVE_FREEZE_MS || 2000); } catch (_) {}
     try {
       if (isPostSaveClear) {
         window.__RC_SUPPRESS_MARK_CLEAR_SIDE_EFFECTS_UNTIL = Date.now() + 1500;
@@ -14728,7 +14733,7 @@ document.addEventListener('click', function(e){
       window.__RC_STICKY_SEARCH_FOCUS_UNTIL = Date.now() + duration;
       rcLiveDebug('arm-sticky-search-focus', { reason: String(reason || ''), duration: duration });
     } catch(_) {}
-    try { rcArmSearchBoxFocusLock('sticky:' + String(reason || ''), Math.max(duration, 5000)); } catch(_) {}
+    try { rcArmSearchBoxFocusLock('sticky:' + String(reason || ''), Math.max(duration, (window.RC_POST_SAVE_FREEZE_MS || 2000))); } catch(_) {}
     try { rcFocusSearchBoxCursorEnd(); } catch(_) {}
   }
 
@@ -14830,11 +14835,11 @@ document.addEventListener('click', function(e){
   }
 
   function rcScheduleSearchBoxRefocus(reason, delays){
-    const schedule = Array.isArray(delays) && delays.length ? delays : [0, 50, 140, 320, 700, 1200, 2000, 3200, 4300];
+    const schedule = Array.isArray(delays) && delays.length ? delays : [0, 50, 140, 320, 700, 1200, 2000];
     try { rcLiveDebug('schedule-refocus', { reason: String(reason || ''), delays: schedule }); } catch(_) {}
-    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + 5000; } catch(_) {}
-    try { window.__RC_SUPPRESS_LIST_FOCUS_UNTIL = Date.now() + 4000; } catch(_) {}
-    try { rcArmSearchBoxFocusLock(reason, 5000); } catch(_) {}
+    try { window.__RC_SUPPRESS_AUTOSUBMIT_UNTIL = Date.now() + (window.RC_POST_SAVE_FREEZE_MS || 2000); } catch(_) {}
+    try { window.__RC_SUPPRESS_LIST_FOCUS_UNTIL = Date.now() + (window.RC_POST_SAVE_FREEZE_MS || 2000); } catch(_) {}
+    try { rcArmSearchBoxFocusLock(reason, (window.RC_POST_SAVE_FREEZE_MS || 2000)); } catch(_) {}
     try {
       (__rcSearchRefocusTimers || []).forEach(id => {
         try { clearTimeout(id); } catch(_) {}
@@ -15250,7 +15255,7 @@ document.addEventListener('click', function(e){
     window.__RC_FORCE_AJAX_SAVE_IN_PROGRESS = true;
     try {
       window.__RC_SUPPRESS_SUMMARY_MODAL = true;
-      window.__RC_SUPPRESS_SUMMARY_MODAL_UNTIL = Date.now() + 5000;
+      window.__RC_SUPPRESS_SUMMARY_MODAL_UNTIL = Date.now() + (window.RC_POST_SAVE_FREEZE_MS || 2000);
     } catch(_) {}
     try {
       // Keep summary JSON in sync with current DOM selections before validation/save.

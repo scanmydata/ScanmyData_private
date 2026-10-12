@@ -4341,6 +4341,17 @@ def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Option
     # fiscal_meta.json (οπότε την επόμενη φορά βρίσκεται αμέσως από εκεί).
     try:
         grp_base = get_group_base_dir()
+        # ΝΕΟ (πρώτα): βάση activity.db — άμεση ερώτηση με ευρετήριο (ΑΦΜ + ενέργεια), χωρίς ανάγνωση αρχείου.
+        try:
+            import activity_store as _astore
+            if re.fullmatch(r"\d{8,9}", str(credential_name)) and _astore.is_ready(grp_base):
+                _astore.ensure_synced(grp_base, max_seconds=2.0)
+                _dt = _astore.last_ts(grp_base, str(credential_name),
+                                      ("fetch_data", "bulk_fetch_data", "ληψη παραστατικων", "ληψη παραστατικών",
+                                       "Λήψη Παραστατικών", "λήψη παραστατικων"))
+                return _format_fetch_candidate(_dt)
+        except Exception:
+            pass
         act_path = os.path.join(grp_base, 'activity.log')
         if not os.path.exists(act_path):
             return None
@@ -4514,6 +4525,40 @@ def _last_fetch_deep_scan_async(grp_base: str, act_path: str, credential_name: s
         threading.Thread(target=_run, daemon=True).start()
     except Exception:
         _LAST_FETCH_DEEP_RUNNING.discard(key)
+
+
+def _start_activity_db_migration() -> None:
+    """Εισάγει στο background το activity.log κάθε ομάδας στη βάση activity.db (μη καταστροφικά, idempotent).
+    Κλείδωμα με φάκελο ώστε ένας μόνο worker να τρέχει τη μετάβαση· ENV ACTIVITY_DB_MIGRATE=0 την απενεργοποιεί."""
+    if str(os.getenv("ACTIVITY_DB_MIGRATE", "1")).strip() == "0":
+        return
+    lock_dir = os.path.join(BASE_DIR, "data", ".activity_migrate.lock")
+    try:
+        os.makedirs(os.path.dirname(lock_dir), exist_ok=True)
+        if os.path.isdir(lock_dir) and time.time() - os.path.getmtime(lock_dir) > 6 * 3600:
+            os.rmdir(lock_dir)      # παλιό κλείδωμα (διεργασία που έσβησε)
+        os.mkdir(lock_dir)
+    except Exception:
+        return                      # άλλος worker τρέχει ήδη τη μετάβαση
+
+    def _run():
+        try:
+            import activity_store
+            res = activity_store.migrate_all(os.path.join(BASE_DIR, "data"))
+            for g, st in res.items():
+                log.info("activity.db migration %s: %s", g, {k: st.get(k) for k in ("lines", "inserted", "done", "skipped_bad")})
+        except Exception:
+            log.exception("activity.db migration failed")
+        finally:
+            try:
+                os.rmdir(lock_dir)
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_run, name="activity-db-migration", daemon=True).start()
+    except Exception:
+        pass
 
 
 def _format_last_fetch_date_for_display(last_date: Optional[str]) -> Optional[str]:
@@ -14053,8 +14098,32 @@ def save_accounts():
 # --- BEGIN PATCH v3: /save_summary with repeat-entry also for receipts (per-line = "αποδειξακια") ---
 # Paste this over your existing save_summary() in app.py
 
+# Κλείδωμα ανά ομάδα στο /save_summary: δύο ταυτόχρονες αποθηκεύσεις (π.χ. auto-submit με ταχύτερο ρυθμό) δεν
+# διαβάζουν και οι δύο το ίδιο epsilon cache και δεν προσθέτουν το ίδιο MARK δύο φορές — η δεύτερη βλέπει ήδη την
+# υπάρχουσα εγγραφή και απλώς την ενημερώνει.
+_SAVE_SUMMARY_LOCKS: Dict[str, "threading.RLock"] = {}
+_SAVE_SUMMARY_LOCKS_GUARD = threading.Lock()
+
+
+def _save_summary_lock_for_group() -> "threading.RLock":
+    try:
+        key = str(get_group_base_dir() or "")
+    except Exception:
+        key = ""
+    with _SAVE_SUMMARY_LOCKS_GUARD:
+        lk = _SAVE_SUMMARY_LOCKS.get(key)
+        if lk is None:
+            lk = _SAVE_SUMMARY_LOCKS[key] = threading.RLock()
+        return lk
+
+
 @app.route("/save_summary", methods=["POST"])
 def save_summary():
+    with _save_summary_lock_for_group():
+        return _save_summary_impl()
+
+
+def _save_summary_impl():
     """
     Save summary and update epsilon:
       - Αν υπάρχει ήδη detailed εγγραφή στο epsilon για το mark -> update-only per-line
@@ -15163,7 +15232,7 @@ def save_summary():
             _maybe_append_cash_mirror(epsilon_cache, epsilon_entry, mark)
             
             _safe_save_epsilon_cache(vat, epsilon_cache)
-            msg = "Η περίληψη αποθηκεύτηκε και προστέθηκε νέα εγγραφή epsilon."
+            msg = "Το παραστατικό αποθηκεύτηκε επιτυχώς."
             if not is_ajax_save:
                 flash(msg, "success")
             try:
@@ -17005,7 +17074,7 @@ def data_backup_download():
 
                 for root, _, files in os.walk(base):
                     for fname in files:
-                        if fname in {'credentials.json', 'credentials_settings.json', 'activity.log', 'fiscal_meta.json', 'backup_manifest.json'}:
+                        if fname in {'credentials.json', 'credentials_settings.json', 'activity.log', 'activity.db', 'activity.db-wal', 'activity.db-shm', 'fiscal_meta.json', 'backup_manifest.json'}:
                             continue
                         path = os.path.join(root, fname)
                         arc = os.path.relpath(path, base)
@@ -25954,8 +26023,22 @@ def api_admin_activity_logs_clear():
         except Exception:
             current_app.logger.exception('Failed clearing Firebase activity logs for %s', folder)
 
+        # ΝΕΟ: βάση activity.db της ομάδας (η πηγή αλήθειας όταν η μετάβαση έχει ολοκληρωθεί)
+        _db_cleared = False
+        try:
+            import activity_store as _astore
+            _gdir = os.path.join(os.getcwd(), 'data', str(folder))
+            if _astore.is_ready(_gdir):
+                _end_ep = cutoff_end.timestamp() if cutoff_end is not None else None
+                total_deleted += _astore.delete_range(_gdir, cutoff_start.timestamp(), _end_ep)
+                _db_cleared = True
+        except Exception:
+            current_app.logger.exception('Failed clearing activity.db for %s', folder)
+
         # Local JSONL/plain file fallback logs
         try:
+            if _db_cleared:
+                raise StopIteration
             group_dir = os.path.join(os.getcwd(), 'data', str(folder))
             for file_name in ('activity.log.jsonl', 'activity.log'):
                 fpath = os.path.join(group_dir, file_name)
@@ -25983,6 +26066,8 @@ def api_admin_activity_logs_clear():
                         kept_lines.append(line)
                 with open(fpath, 'w', encoding='utf-8') as fw:
                     fw.writelines(kept_lines)
+        except StopIteration:
+            pass
         except Exception:
             current_app.logger.exception('Failed clearing local activity logs for %s', folder)
 
@@ -26288,8 +26373,9 @@ try:
     _debug_mode = bool(app.debug or os.getenv('FLASK_DEBUG', '0') == '1')
     if (not _debug_mode) or _is_reloader_main:
         _start_firebase_backup_scheduler_once()
+        _start_activity_db_migration()
 except Exception:
-    log.exception('Failed to start firebase backup scheduler thread')
+    log.exception('Failed to start firebase backup scheduler thread / activity.db migration')
 
 
 if __name__ == "__main__":

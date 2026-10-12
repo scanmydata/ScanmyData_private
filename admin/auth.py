@@ -1456,9 +1456,13 @@ def _append_group_log(group: Group, message: str) -> None:
             obj['timestamp'] = ts
             obj['ts'] = ts
 
-            # Write one JSON object per line (JSON Lines format), UTF-8, do not escape non-ascii
-            with open(p, 'a', encoding='utf-8') as fh:
-                fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            # ΝΕΟ: στη βάση της ομάδας (activity.db)· fallback σε JSON Lines (UTF-8) στο activity.log
+            try:
+                import activity_store
+                activity_store.append(base, obj)
+            except Exception:
+                with open(p, 'a', encoding='utf-8') as fh:
+                    fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
         except Exception:
             # On JSON or write failure, fall back to plain text entry for resilience
             ts = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()

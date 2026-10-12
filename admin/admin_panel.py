@@ -1212,8 +1212,19 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 activity_jsonl = os.path.join(group_dir, 'activity.log.jsonl')
                 activity_path = os.path.join(group_dir, 'activity.log')
                 local_lines = []
+                # ΝΕΟ: από τη βάση activity.db (ευρετηριασμένη, χωρίς ανάγνωση ολόκληρου αρχείου)· το παλιό αρχείο
+                # διαβάζεται μόνο όσο η μετάβαση δεν έχει ολοκληρωθεί.
+                _db_used = False
+                try:
+                    import activity_store as _astore
+                    if _astore.is_ready(group_dir):
+                        _astore.ensure_synced(group_dir)
+                        local_lines = list(reversed(_astore.recent(group_dir, max(int(limit or 100), 1))))
+                        _db_used = True
+                except Exception:
+                    _db_used = False
                 # If either local JSONL or legacy activity.log exists, read it and normalize into local_lines
-                if os.path.exists(activity_jsonl) or os.path.exists(activity_path):
+                if not _db_used and (os.path.exists(activity_jsonl) or os.path.exists(activity_path)):
                     # Prefer JSONL when available
                     chosen_path = activity_jsonl if os.path.exists(activity_jsonl) else activity_path
                     is_jsonl = chosen_path.endswith('.jsonl')
@@ -1345,6 +1356,19 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                     scanned_local_folders.add(folder_name)
 
                     group_dir = os.path.join(os.getcwd(), 'data', folder_name)
+                    # ΝΕΟ: βάση activity.db (μόνο οι πιο πρόσφατες `limit` εγγραφές — όχι ολόκληρο το αρχείο)
+                    try:
+                        import activity_store as _astore
+                        if _astore.is_ready(group_dir):
+                            _astore.ensure_synced(group_dir)
+                            for _e in _astore.recent(group_dir, max(int(limit or 100), 1)):
+                                if isinstance(_e, dict):
+                                    if not _e.get('group'):
+                                        _e['group'] = folder_name
+                                    all_logs.append(_e)
+                            return
+                    except Exception:
+                        pass
                     activity_jsonl = os.path.join(group_dir, 'activity.log.jsonl')
                     activity_path = os.path.join(group_dir, 'activity.log')
                     if os.path.exists(activity_jsonl):

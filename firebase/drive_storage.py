@@ -55,6 +55,10 @@ _DRIVE_HTTP_TIMEOUT = 300
 # Αρχεία πάνω από αυτό ανεβαίνουν σε κομμάτια (resumable) — ένα αίτημα των εκατοντάδων MB δεν χωρούσε στο timeout.
 _RESUMABLE_THRESHOLD = 8 * 1024 * 1024
 _RESUMABLE_CHUNK = 8 * 1024 * 1024
+# Αρχεία log/βάσης activity που ΔΕΝ συγχρονίζονται ως αρχεία (η βάση activity.db είναι τοπική· το off-site
+# backup του activity είναι το κυλιόμενο απομακρυσμένο activity.log που γράφει το drive_log_activity).
+_LOG_FILES = ("activity.log", "error.log", "activity.db", "activity.db-wal", "activity.db-shm", "activity.log.migrated")
+
 # Το απομακρυσμένο activity.log μένει «κυλιόμενο»: πάνω από το όριο κρατιέται μόνο το τελευταίο κομμάτι.
 _REMOTE_LOG_LIMIT = 4 * 1024 * 1024
 _REMOTE_LOG_KEEP = 1 * 1024 * 1024
@@ -333,7 +337,7 @@ def _local_group_has_payload(data_dir: str) -> bool:
             for name in files:
                 if name.startswith("."):
                     continue
-                if name in {"activity.log", "error.log"}:
+                if name in set(_LOG_FILES):
                     continue
                 return True
     except Exception:
@@ -584,7 +588,7 @@ def _compute_drive_rel_path(file_path: str, source_dir: str) -> Optional[str]:
     # Τα logs (το activity.log της ομάδας φτάνει εκατοντάδες MB) δεν συγχρονίζονται ως αρχεία: το
     # απομακρυσμένο activity.log συντηρείται από το drive_log_activity. Πριν ανέβαιναν κρυπτογραφημένα
     # ολόκληρα σε κάθε push και έριχναν το push της ομάδας με «The read operation timed out».
-    if fname in ("activity.log", "error.log"):
+    if fname in _LOG_FILES:
         return None
     if re.match(r"^epsilon_invoices\.(json|xlsx|xls)$", fname, re.IGNORECASE):
         # Legacy AFM-less epsilon files are skipped, same as firebase backend.
@@ -777,7 +781,7 @@ def drive_push_group_files(
         for rel_path, meta in list(index.items()):
             if rel_path in local_rel_paths:
                 continue
-            if rel_path in ("activity.log", "error.log", ".sync_meta.json"):
+            if rel_path in (*_LOG_FILES, ".sync_meta.json"):
                 continue  # keep server-side logs/meta
             if dry_run:
                 delete_candidates.append(rel_path)
@@ -829,7 +833,7 @@ def drive_push_group_files(
                 file_count = 0
                 for r, _d, fs in os.walk(source_dir):
                     for n in fs:
-                        if n.startswith(".") or n in ("activity.log", "error.log"):
+                        if n.startswith(".") or n in _LOG_FILES:
                             continue
                         try:
                             file_count += 1
@@ -1158,7 +1162,7 @@ def drive_pull_group_to_local(
                 file_count = 0
                 for r, _d, fs in os.walk(target_dir):
                     for n in fs:
-                        if n.startswith(".") or n in ("activity.log", "error.log"):
+                        if n.startswith(".") or n in _LOG_FILES:
                             continue
                         try:
                             file_count += 1
@@ -1203,11 +1207,16 @@ def drive_log_activity(user_id: str, group_name: str, action: str, details: Opti
             pass
 
         # 1) Always append locally — fast, atomic, no Drive call needed for hot path.
+        #    ΝΕΟ: στη βάση SQLite της ομάδας (activity.db) αντί για το τεράστιο activity.log· fallback σε αρχείο.
         try:
             data_dir = os.path.join(os.getcwd(), "data", str(folder_name) if folder_name else "global")
             os.makedirs(data_dir, exist_ok=True)
-            with open(os.path.join(data_dir, "activity.log"), "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            try:
+                import activity_store as _astore
+                _astore.append(data_dir, entry)
+            except Exception:
+                with open(os.path.join(data_dir, "activity.log"), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             pass
 
@@ -1316,7 +1325,7 @@ def drive_compare_group_payload_freshness(
                 for name in files:
                     if name.startswith("."):
                         continue
-                    if name in ("activity.log", "error.log"):
+                    if name in _LOG_FILES:
                         continue
                     try:
                         local_count += 1
@@ -1396,7 +1405,7 @@ def drive_group_sync_diff(group_name: str, local_group_folder: str = None) -> Di
                 except Exception:
                     local[rel] = 0.0
 
-    skip = {"activity.log", "error.log", ".sync_meta.json"}
+    skip = {*_LOG_FILES, ".sync_meta.json"}
     push: List[str] = []
     pull: List[str] = []
     tolerance = 2.0
@@ -1451,7 +1460,7 @@ def drive_ensure_group_data_local(group_folder: str, create_empty_dirs: bool = T
                     for n in files:
                         if n.startswith("."):
                             continue
-                        if n in ("activity.log", "error.log"):
+                        if n in _LOG_FILES:
                             continue
                         return True
             except Exception:
