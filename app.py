@@ -4334,66 +4334,102 @@ def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Option
     except Exception:
         pass
 
-    # Fallback: read activity.log and extract latest fetch timestamp for this credential (VAT)
+    # Fallback: activity.log. ΠΡΟΣΟΧΗ: το αρχείο μπορεί να είναι εκατοντάδες MB — η πλήρης ανάγνωσή του μέσα σε
+    # αίτημα (σελίδα Λήψης, polling ανά 15s, απάντηση του POST /fetch) κολλούσε όλους τους workers για λεπτά.
+    # Τώρα: (1) διαβάζεται ΜΟΝΟ η «ουρά» του αρχείου, (2) αποτέλεσμα σε cache, (3) μία μόνο σάρωση τη φορά,
+    # (4) αν δεν βρεθεί στην ουρά, βαθύτερη σάρωση σε background thread που αποθηκεύει το αποτέλεσμα στο
+    # fiscal_meta.json (οπότε την επόμενη φορά βρίσκεται αμέσως από εκεί).
     try:
-        import re
-        from datetime import datetime, timezone
         grp_base = get_group_base_dir()
         act_path = os.path.join(grp_base, 'activity.log')
         if not os.path.exists(act_path):
             return None
+        ck = (act_path, str(credential_name))
+        now = time.time()
+        cached = _LAST_FETCH_SCAN_CACHE.get(ck)
+        if cached and now - cached[0] < 120:
+            return cached[1]
+        if not _LAST_FETCH_SCAN_LOCK.acquire(blocking=False):
+            return cached[1] if cached else None     # σάρωση σε εξέλιξη από άλλο αίτημα: μην περιμένεις
+        try:
+            cand = _scan_activity_log_last_fetch(act_path, credential_name, _ACT_TAIL_BYTES)
+        finally:
+            _LAST_FETCH_SCAN_LOCK.release()
+        out = _format_fetch_candidate(cand)
+        _LAST_FETCH_SCAN_CACHE[ck] = (now, out)
+        if cand is None:
+            _last_fetch_deep_scan_async(grp_base, act_path, credential_name)
+        return out
+    except Exception:
+        return None
 
-        candidate = None
-        fetch_actions = {"fetch_data", "ληψη παραστατικων", "ληψη παραστατικων", "ληψη παραστατικών", "Λήψη Παραστατικών", "λήψη παραστατικων", "ληψη παραστατικών"}
 
-        with open(act_path, 'r', encoding='utf-8') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                # try JSON line
-                try:
-                    obj = json.loads(line)
-                    act = obj.get('action') or ''
-                    if act and act in fetch_actions:
-                        ts = obj.get('timestamp') or obj.get('ts') or (obj.get('details') or {}).get('timestamp')
-                        if not ts:
-                            continue
-                        # If the tracking key is a VAT, the entry MUST carry a
-                        # *matching* vat. Activity entries are written with a
-                        # nested-details shape, so the vat may live at either
-                        # details.vat or details.details.vat — check both.
-                        # Entries without a confirmable vat are skipped; otherwise
-                        # one company's fetch would be attributed to every company
-                        # (the per-company "wrong date" bug this fixes).
-                        if re.fullmatch(r"\d{8,9}", str(credential_name)):
-                            d1 = obj.get('details') or {}
-                            d2 = d1.get('details') or {} if isinstance(d1, dict) else {}
-                            v = (d1.get('vat') or d1.get('πελατης') or d1.get('client')
-                                 or d2.get('vat') or d2.get('πελατης') or d2.get('client'))
-                            if not v or str(v) != str(credential_name):
-                                continue
-                        try:
-                            dt = datetime.fromisoformat(ts)
-                        except Exception:
-                            try:
-                                dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
-                            except Exception:
-                                dt = None
-                        if dt:
-                            if (candidate is None) or (dt > candidate):
-                                candidate = dt
-                    continue
-                except Exception:
-                    pass
+_ACT_TAIL_BYTES = 8 * 1024 * 1024
+_ACT_DEEP_BYTES = 512 * 1024 * 1024
+_LAST_FETCH_SCAN_CACHE: Dict[Any, Any] = {}
+_LAST_FETCH_SCAN_LOCK = threading.Lock()
+_LAST_FETCH_DEEP_RUNNING: set = set()
 
-                # legacy text lines
-                m = re.search(r'(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:\.\+\-]+)\s+-\s+Bulk fetch performed:.*VAT\s+(?P<vat>\d+)', line)
-                if m:
-                    ts = m.group('ts')
-                    vat = m.group('vat')
-                    if re.fullmatch(r"\d{8,9}", str(credential_name)) and str(vat) != str(credential_name):
+
+class _TailLines:
+    """Context manager/iterable που δίνει τις γραμμές της «ουράς» (τελευταία nbytes) ενός αρχείου."""
+    def __init__(self, path: str, nbytes: int):
+        self._f = open(path, 'rb')
+        try:
+            size = os.fstat(self._f.fileno()).st_size
+            start = max(0, size - int(nbytes))
+            if start:
+                self._f.seek(start)
+                self._f.readline()   # πετάμε την πιθανώς κομμένη πρώτη γραμμή
+        except Exception:
+            self._f.seek(0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+        return False
+
+    def __iter__(self):
+        for raw in self._f:
+            yield raw.decode('utf-8', 'ignore')
+
+
+def _scan_activity_log_last_fetch(act_path: str, credential_name: str, nbytes: int):
+    """Η πιο πρόσφατη ημερομηνία λήψης για το credential/ΑΦΜ μέσα στην ουρά nbytes του activity.log (datetime ή None)."""
+    import re
+    from datetime import datetime
+    candidate = None
+    fetch_actions = {"fetch_data", "ληψη παραστατικων", "ληψη παραστατικων", "ληψη παραστατικών", "Λήψη Παραστατικών", "λήψη παραστατικων", "ληψη παραστατικών"}
+    is_vat = bool(re.fullmatch(r"\d{8,9}", str(credential_name)))
+    with _TailLines(act_path, nbytes) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            # γρήγορο φίλτρο: δεν αξίζει json.loads σε γραμμές που δεν μιλούν για λήψη
+            if 'fetch' not in line and 'ληψη' not in line and 'λήψη' not in line and 'Λήψη' not in line and 'Bulk fetch' not in line:
+                continue
+            try:
+                obj = json.loads(line)
+                act = obj.get('action') or ''
+                if act and act in fetch_actions:
+                    ts = obj.get('timestamp') or obj.get('ts') or (obj.get('details') or {}).get('timestamp')
+                    if not ts:
                         continue
+                    # Αν το tracking key είναι ΑΦΜ, η εγγραφή ΠΡΕΠΕΙ να φέρει ΙΔΙΟ vat (αλλιώς η λήψη μιας εταιρίας
+                    # θα αποδιδόταν σε όλες). Το vat μπορεί να είναι στο details.vat ή στο details.details.vat.
+                    if is_vat:
+                        d1 = obj.get('details') or {}
+                        d2 = d1.get('details') or {} if isinstance(d1, dict) else {}
+                        v = (d1.get('vat') or d1.get('πελατης') or d1.get('client')
+                             or d2.get('vat') or d2.get('πελατης') or d2.get('client'))
+                        if not v or str(v) != str(credential_name):
+                            continue
                     try:
                         dt = datetime.fromisoformat(ts)
                     except Exception:
@@ -4402,28 +4438,82 @@ def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Option
                         except Exception:
                             dt = None
                     if dt:
+                        if candidate is not None and (dt.tzinfo is None) != (candidate.tzinfo is None):
+                            dt = dt.replace(tzinfo=candidate.tzinfo) if candidate.tzinfo else dt.replace(tzinfo=None)
                         if (candidate is None) or (dt > candidate):
                             candidate = dt
+                continue
+            except Exception:
+                pass
+            # legacy text lines
+            m = re.search(r'(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:\.\+\-]+)\s+-\s+Bulk fetch performed:.*VAT\s+(?P<vat>\d+)', line)
+            if m:
+                ts = m.group('ts')
+                vat = m.group('vat')
+                if is_vat and str(vat) != str(credential_name):
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts)
+                except Exception:
+                    try:
+                        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    except Exception:
+                        dt = None
+                if dt:
+                    if candidate is not None and (dt.tzinfo is None) != (candidate.tzinfo is None):
+                        dt = dt.replace(tzinfo=candidate.tzinfo) if candidate.tzinfo else dt.replace(tzinfo=None)
+                    if (candidate is None) or (dt > candidate):
+                        candidate = dt
+    return candidate
 
-        if candidate is None:
+
+def _format_fetch_candidate(candidate) -> Optional[str]:
+    """datetime -> «dd/mm/YYYY HH:MM» Europe/Athens (όπως πριν)."""
+    if candidate is None:
+        return None
+    try:
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+        if candidate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=timezone.utc)
+        return candidate.astimezone(ZoneInfo('Europe/Athens')).strftime('%d/%m/%Y %H:%M')
+    except Exception:
+        try:
+            return candidate.isoformat()
+        except Exception:
             return None
 
-        # convert to Europe/Athens and format dd/mm/YYYY HH:MM
+
+def _last_fetch_deep_scan_async(grp_base: str, act_path: str, credential_name: str) -> None:
+    """Βαθύτερη σάρωση του activity.log σε background thread· ό,τι βρεθεί γράφεται στο fiscal_meta.json ώστε
+    τα επόμενα αιτήματα να το βρίσκουν αμέσως (και να μη χρειάζεται ξανά σάρωση)."""
+    key = (act_path, str(credential_name))
+    if key in _LAST_FETCH_DEEP_RUNNING:
+        return
+    _LAST_FETCH_DEEP_RUNNING.add(key)
+
+    def _run():
         try:
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo('Europe/Athens')
-            if candidate.tzinfo is None:
-                candidate = candidate.replace(tzinfo=timezone.utc)
-            local_dt = candidate.astimezone(tz)
-            return local_dt.strftime('%d/%m/%Y %H:%M')
-        except Exception:
-            # best-effort fallback: return ISO
             try:
-                return candidate.isoformat()
+                _set_thread_group_base_dir(grp_base)
             except Exception:
-                return None
+                pass
+            cand = _scan_activity_log_last_fetch(act_path, credential_name, _ACT_DEEP_BYTES)
+            if cand is not None:
+                try:
+                    set_last_fetch_date(str(credential_name), cand.isoformat())
+                except Exception:
+                    log.exception("could not persist last fetch date for %s", credential_name)
+                _LAST_FETCH_SCAN_CACHE[(act_path, str(credential_name))] = (time.time(), _format_fetch_candidate(cand))
+        except Exception:
+            log.exception("deep activity.log scan failed for %s", credential_name)
+        finally:
+            _LAST_FETCH_DEEP_RUNNING.discard(key)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
     except Exception:
-        return None
+        _LAST_FETCH_DEEP_RUNNING.discard(key)
 
 
 def _format_last_fetch_date_for_display(last_date: Optional[str]) -> Optional[str]:
