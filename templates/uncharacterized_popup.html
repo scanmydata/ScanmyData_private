@@ -8,8 +8,9 @@
 
    PDF: κάθε γραμμή έχει κουμπί λήψης του PDF από τον πάροχο και η γραμμή
    εργαλείων κουμπί για όλα μαζί σε ZIP (/api/uncharacterized_invoices/pdf).
-   Όπου ο πάροχος δεν δίνει αρχείο, ο σύνδεσμος αντιγράφεται και ανοίγει σε
-   νέα καρτέλα.
+   Ο server δίνει το αρχείο του παρόχου ή, αν ο πάροχος έχει μόνο σελίδα, την
+   εκτύπωσή της σε PDF. Όπου δεν γίνεται ούτε αυτό, ο σύνδεσμος αντιγράφεται
+   και ανοίγει σε νέα καρτέλα.
 
    Τα στυλ είναι δικά του (όχι Tailwind): το tailwind.css είναι προ-χτισμένο και
    δεν περιέχει κλάσεις που δεν υπήρχαν ήδη στα templates. #}
@@ -483,7 +484,7 @@
     } else if (isPageOnly(data)) {
       btn.textContent = '🔗 Link';
       btn.classList.add('is-link');
-      btn.title = 'Ο πάροχος δεν δίνει αρχείο PDF: αντιγραφή του συνδέσμου και άνοιγμα σε νέα καρτέλα';
+      btn.title = 'Το παραστατικό φαίνεται μόνο στη σελίδα του παρόχου: αντιγραφή του συνδέσμου και άνοιγμα σε νέα καρτέλα';
     } else {
       btn.textContent = '⬇ PDF';
       btn.title = 'Λήψη του PDF από τον πάροχο';
@@ -937,7 +938,9 @@
     }).then(function(res){
       var type = String(res.headers.get('Content-Type') || '');
       if (res.ok && type.indexOf('application/pdf') === 0) {
-        return res.blob().then(function(blob){ return { ok: true, blob: blob }; });
+        // 'rendered' = εκτύπωση της σελίδας του παρόχου, όχι δικό του αρχείο
+        var source = String(res.headers.get('X-Pdf-Source') || 'provider');
+        return res.blob().then(function(blob){ return { ok: true, blob: blob, rendered: source === 'rendered' }; });
       }
       return res.json().catch(function(){ return null; }).then(function(d){
         return {
@@ -995,11 +998,11 @@
     try { win = window.open(url, '_blank'); if (win) win.opener = null; } catch (_) {}
     copied.then(function(ok){
       if (win) {
-        flash('Ο πάροχος δεν δίνει αρχείο PDF: ο σύνδεσμος άνοιξε σε νέα καρτέλα' + (ok ? ' και αντιγράφηκε.' : '.'), 'info', 5000);
+        flash('Το παραστατικό φαίνεται μόνο στη σελίδα του παρόχου: ο σύνδεσμος άνοιξε σε νέα καρτέλα' + (ok ? ' και αντιγράφηκε.' : '.'), 'info', 5000);
         return;
       }
       setNotice(
-        'Ο πάροχος δεν δίνει αρχείο PDF' + (ok ? ' — ο σύνδεσμος αντιγράφηκε' : '') + '. Άνοιξέ τον από εδώ:',
+        'Το παραστατικό φαίνεται μόνο στη σελίδα του παρόχου' + (ok ? ' — ο σύνδεσμος αντιγράφηκε' : '') + '. Άνοιξέ τον από εδώ:',
         [{ text: rowTitle(row), href: url }], { info: true }
       );
     });
@@ -1018,6 +1021,7 @@
     if (res.ok) {
       setRowBusy(row, false);
       saveBlob(res.blob, pdfFileName(row));
+      if (res.rendered) flash('Ο πάροχος δεν δίνει αρχείο PDF: κατέβηκε η εκτύπωση της σελίδας του παραστατικού.', 'info', 5000);
       return;
     }
     if (res.reason === 'viewer_only') {
@@ -1077,7 +1081,7 @@
             var res = await requestPdf(row.mark);
             done++;
             el.progress.textContent = 'Λήψη PDF ' + done + '/' + total + '…';
-            if (res.ok) got.push({ row: row, blob: res.blob });
+            if (res.ok) got.push({ row: row, blob: res.blob, rendered: res.rendered });
             else if (res.clientChanged) fatal = res.error;
             else if (res.reason === 'viewer_only') {
               linkOnly.push(row);
@@ -1127,12 +1131,14 @@
     try { t.redraw(true); } catch (_) {}
 
     var items = [];
-    linkOnly.forEach(function(r){ items.push({ text: rowTitle(r), href: r.url, note: 'ο πάροχος δεν δίνει αρχείο PDF' }); });
+    linkOnly.forEach(function(r){ items.push({ text: rowTitle(r), href: r.url, note: 'μόνο στη σελίδα του παρόχου' }); });
     errors.forEach(function(e){ items.push({ text: rowTitle(e.row), href: e.row.url, note: e.error }); });
     noLink.forEach(function(r){ items.push({ text: rowTitle(r), note: 'χωρίς σύνδεσμο παρόχου' }); });
     var urls = linkOnly.concat(errors.map(function(e){ return e.row; })).map(function(r){ return safeUrl(r.url); }).filter(Boolean);
+    var rendered = got.filter(function(g){ return g.rendered; }).length;
     var summary = got.length
-      ? (got.length === 1 ? 'Κατέβηκε 1 PDF' : 'Κατέβηκαν ' + got.length + ' PDF') + ' από ' + docs(rows.length) + '.'
+      ? (got.length === 1 ? 'Κατέβηκε 1 PDF' : 'Κατέβηκαν ' + got.length + ' PDF') + ' από ' + docs(rows.length) +
+        (rendered ? ' (' + rendered + ' ως εκτύπωση της σελίδας του παρόχου)' : '') + '.'
       : 'Δεν κατέβηκε κανένα PDF από ' + docs(rows.length) + '.';
     if (!items.length) { flash(summary, 'success', 4000); return; }
 

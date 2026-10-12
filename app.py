@@ -17898,13 +17898,13 @@ def _unchar_stored_url(rec: Optional[Dict[str, Any]], src_docs: Optional[List[Di
 
 
 def _unchar_link_info(rec: Optional[Dict[str, Any]], src_docs: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-    """Πεδία συνδέσμου για το popup. pdf: 'direct' = δοκίμασε λήψη αρχείου,
-    'page' = ο πάροχος έχει μόνο σελίδα προβολής, '' = χωρίς σύνδεσμο."""
+    """Πεδία συνδέσμου για το popup. pdf: 'direct' = ζήτησε το PDF από τον server,
+    'page' = είναι ήδη γνωστό ότι ανοίγει μόνο ως σύνδεσμος, '' = χωρίς σύνδεσμο."""
     url, known = _unchar_stored_url(rec, src_docs)
     mode = ""
     if url:
         import invoice_pdf
-        mode = "page" if invoice_pdf.is_viewer_only(url) else "direct"
+        mode = "direct" if invoice_pdf.expects_pdf(url) else "page"
     return {"url": url, "url_known": known, "pdf": mode}
 
 
@@ -18013,8 +18013,10 @@ def api_uncharacterized_invoices_pdf():
     """Το PDF ενός παραστατικού του ενεργού πελάτη, όπως το δίνει ο πάροχος.
 
     Body JSON: { "mark": "...", "vat": "..." }. Επιστρέφει application/pdf, αλλιώς JSON
-    { ok: false, reason, error, url } — με reason 'viewer_only' όταν ο πάροχος
-    έχει μόνο σελίδα προβολής, ώστε το popup να ανοίξει τον σύνδεσμο.
+    { ok: false, reason, error, url, retryable } — με reason 'viewer_only' όταν
+    το παραστατικό φαίνεται μόνο στη σελίδα του παρόχου, ώστε το popup να ανοίξει
+    τον σύνδεσμο. Το header X-Pdf-Source λέει αν το PDF είναι αρχείο του παρόχου
+    ('provider') ή εκτύπωση της σελίδας του ('rendered').
     """
     try:
         body = request.get_json(silent=True) or {}
@@ -18041,11 +18043,15 @@ def api_uncharacterized_invoices_pdf():
 
         import invoice_pdf
         try:
-            payload = invoice_pdf.fetch_pdf(url)
+            result = invoice_pdf.fetch_pdf(url)
         except invoice_pdf.PdfError as exc:
             status = 422 if exc.reason == "viewer_only" else 502
-            return jsonify({"ok": False, "reason": exc.reason, "error": exc.message_el, "url": url}), status
-        resp = Response(payload, mimetype="application/pdf")
+            return jsonify({
+                "ok": False, "reason": exc.reason, "error": exc.message_el, "url": url,
+                "retryable": bool(exc.retryable),
+            }), status
+        resp = Response(result.payload, mimetype="application/pdf")
+        resp.headers["X-Pdf-Source"] = result.source
         resp.headers["Content-Disposition"] = f'attachment; filename="{mark}.pdf"'
         resp.headers["Cache-Control"] = "private, no-store"
         return resp
