@@ -8231,7 +8231,7 @@ def credentials_add():
             flash('Δεν έχει επιλεγεί ενεργή ομάδα', 'error')
             return redirect(url_for('credentials'))
         if not getattr(current_user, 'is_authenticated', False) or current_user.role_for_group(grp) != 'admin':
-            flash('Απαιτούνται δικαιώματα διαχειριστή για προσθήκη credentials', 'error')
+            flash('Απαιτούνται δικαιώματα διαχειριστή για προσθήκη πελατών', 'error')
             return redirect(url_for('credentials'))
     except Exception:
         flash('Αποτυχία ελέγχου δικαιωμάτων', 'error')
@@ -8308,7 +8308,7 @@ def credentials_delete_post(name):
         if not getattr(current_user, 'is_authenticated', False) or current_user.role_for_group(grp) != 'admin':
             if is_ajax:
                 return jsonify({'status': 'error', 'error': 'admin privileges required'}), 403
-            flash('Απαιτούνται δικαιώματα διαχειριστή για διαγραφή credentials', 'error')
+            flash('Απαιτούνται δικαιώματα διαχειριστή για διαγραφή πελατών', 'error')
             return redirect(url_for('credentials'))
     except Exception:
         if is_ajax:
@@ -8320,7 +8320,7 @@ def credentials_delete_post(name):
     if not credential:
         if is_ajax:
             return jsonify({'status': 'error', 'error': 'not found'}), 404
-        flash(f"Το credential '{name}' δεν βρέθηκε", "error")
+        flash(f"Ο πελάτης '{name}' δεν βρέθηκε", "error")
         return redirect(url_for('credentials'))
 
     if is_ajax:
@@ -8334,9 +8334,9 @@ def credentials_delete_post(name):
     suffix = ''
     if cleanup.get('count'):
         suffix = f" Αφαιρέθηκαν {cleanup['count']} αρχεία δεδομένων πελάτη."
-    flash(f"Το credential «{name}» διαγράφηκε.{suffix}", "success")
+    flash(f"Ο πελάτης «{name}» διαγράφηκε.{suffix}", "success")
     if was_active:
-        flash("Το credential αφαιρέθηκε επίσης από τα ενεργά.", "info")
+        flash("Ο πελάτης αφαιρέθηκε επίσης από τους ενεργούς.", "info")
     if cleanup.get('failed'):
         failed_count = len(cleanup.get('failed') or [])
         if failed_count:
@@ -8352,7 +8352,7 @@ def credentials_set_active():
         c['active'] = (c['name'] == active_name)
     save_credentials(credentials)
     # <-- added flash in case this route is used
-    flash(f"Το ενεργό credential ορίστηκε σε {active_name}", "success")
+    flash(f"Ο ενεργός πελάτης ορίστηκε σε {active_name}", "success")
     return redirect(url_for('credentials'))
 
 @app.route('/credentials/save_settings', methods=['POST'])
@@ -9027,7 +9027,7 @@ def _upload_chart_of_accounts_impl(category='G'):
         if scope == 'credential':
             cred_vat = coa_store.safe_vat(vat)
             if not cred_vat or not any(coa_store.safe_vat(c.get('vat')) == cred_vat for c in (load_credentials() or [])):
-                return jsonify(ok=False, error='Δεν βρέθηκε credential με αυτό το ΑΦΜ στην ενεργή ομάδα.'), 400
+                return jsonify(ok=False, error='Δεν βρέθηκε πελάτης με αυτό το ΑΦΜ στην ενεργή ομάδα.'), 400
             cred_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
             os.makedirs(cred_base, exist_ok=True)
             f.stream.seek(0)
@@ -9729,7 +9729,7 @@ def credentials_edit(name):
     creds = load_credentials()
     credential = next((c for c in creds if c.get("name") == name), None)
     if not credential:
-        flash("Το credential δεν βρέθηκε", "error")
+        flash("Ο πελάτης δεν βρέθηκε", "error")
         return redirect(url_for("credentials"))
 
     can_edit_credential = False
@@ -9745,7 +9745,7 @@ def credentials_edit(name):
         if not can_edit_credential:
             if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                 return jsonify({'ok': False, 'error': 'admin privileges required'}), 403
-            flash("Η επεξεργασία credential επιτρέπεται μόνο σε διαχειριστές της ομάδας.", "error")
+            flash("Η επεξεργασία πελάτη επιτρέπεται μόνο σε διαχειριστές της ομάδας.", "error")
             return redirect(url_for("credentials"))
         new_name = (request.form.get("name") or "").strip()
         user = (request.form.get("user") or "").strip()
@@ -9779,7 +9779,7 @@ def credentials_edit(name):
             return redirect(url_for("credentials_edit", name=name))
 
         if new_name != name and any(c.get("name") == new_name for c in creds):
-            flash("Υπάρχει ήδη άλλο credential με αυτό το όνομα", "error")
+            flash("Υπάρχει ήδη άλλος πελάτης με αυτό το όνομα", "error")
             return redirect(url_for("credentials_edit", name=name))
 
         # Ξεκίνα από το ΥΠΑΡΧΟΝ credential ώστε πεδία που δεν πειράζει η φόρμα
@@ -9819,13 +9819,13 @@ def credentials_edit(name):
 
         # Όταν ο χρήστης αποθηκεύει την επεξεργασία, ορίζουμε το credential ως ενεργό
         session["active_credential"] = new_name
-        flash(f"Το credential '{new_name}' αποθηκεύτηκε και ορίστηκε ως ενεργό", "success")
+        flash(f"Ο πελάτης '{new_name}' αποθηκεύτηκε και ορίστηκε ως ενεργός", "success")
 
         return redirect(url_for("credentials"))
 
     # GET -> εμφανίζουμε τη φόρμα επεξεργασίας
     # Προσθέτουμε flash πληροφορία (παραμένει ως έχει)
-    flash(f"Επεξεργασία credential: {credential.get('name')}", "info")
+    flash(f"Επεξεργασία πελάτη: {credential.get('name')}", "info")
 
     # Ελέγχουμε αν ο χρήστης είναι admin της ενεργής ομάδας
     _is_group_admin = can_edit_credential
@@ -9885,7 +9885,7 @@ def credentials_delete(name):
         # Αν είναι AJAX, επιστρέφουμε JSON
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'status': 'error', 'error': 'not found'}), 404
-        flash(f"Το credential '{name}' δεν βρέθηκε", "error")
+        flash(f"Ο πελάτης '{name}' δεν βρέθηκε", "error")
         return redirect(url_for("credentials"))
 
     # Log credential deletion
@@ -9914,9 +9914,9 @@ def credentials_delete(name):
         suffix = f" Αφαιρέθηκαν {removed_count} αρχεία δεδομένων πελάτη."
 
     if was_active:
-        flash(f"Το ενεργό credential '{name}' διαγράφηκε και αφαιρέθηκε από τα ενεργά.{suffix}", "success")
+        flash(f"Ο ενεργός πελάτης '{name}' διαγράφηκε και αφαιρέθηκε από τους ενεργούς.{suffix}", "success")
     else:
-        flash(f"Το credential '{name}' διαγράφηκε.{suffix}", "success")
+        flash(f"Ο πελάτης '{name}' διαγράφηκε.{suffix}", "success")
 
     if failed_count:
         flash(f"Δεν ήταν δυνατή η διαγραφή {failed_count} αρχείων. Έλεγξε τα δικαιώματα πρόσβασης.", "error")
@@ -9933,20 +9933,20 @@ def set_active_credential():
     )
     name = request.form.get("active_name")
     if not name:
-        msg = "Δεν έχει επιλεγεί credential"
+        msg = "Δεν έχει επιλεγεί πελάτης"
         if wants_json:
             return jsonify({"ok": False, "error": msg}), 400
         flash(msg, "error")
     else:
         cred = get_cred_by_name(name)
         if not cred:
-            msg = "Το credential δεν βρέθηκε"
+            msg = "Ο πελάτης δεν βρέθηκε"
             if wants_json:
                 return jsonify({"ok": False, "error": msg}), 404
             flash(msg, "error")
         else:
             session["active_credential"] = name
-            msg = f"Το ενεργό credential ορίστηκε σε {name}"
+            msg = f"Ο ενεργός πελάτης ορίστηκε σε {name}"
             if wants_json:
                 return jsonify({
                     "ok": True,

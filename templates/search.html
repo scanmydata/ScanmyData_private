@@ -12223,7 +12223,7 @@ document.addEventListener('submit', function(ev){
   };
   window.__rcShowReceiptAnalysisUnavailable = function(){
     if (typeof showFlash === 'function') {
-      showFlash('Για να ενεργοποιήσεις την Ανάλυση πήγαινε: Credentials -> Επεξεργασία ενεργού πελάτη -> Ενεργοποίηση/δημιουργία custom κατηγοριών.', 'warning', 7000);
+      showFlash('Για να ενεργοποιήσεις την Ανάλυση πήγαινε: Πελάτες -> Επεξεργασία ενεργού πελάτη -> Ενεργοποίηση/δημιουργία custom κατηγοριών.', 'warning', 7000);
     }
   };
   console.log('initial hasReceiptCustomCategories', hasReceiptCustomCategories);
@@ -12437,7 +12437,7 @@ document.addEventListener('submit', function(ev){
     if (normalized === 'analysis' && !hasReceiptCustomCategories) {
       normalized = 'mixed';
       if (fire && typeof showFlash === 'function') {
-        showFlash('Για να ενεργοποιήσεις την Ανάλυση πήγαινε: Credentials -> Επεξεργασία ενεργού πελάτη -> Ενεργοποίηση/δημιουργία custom κατηγοριών.', 'warning', 7000);
+        showFlash('Για να ενεργοποιήσεις την Ανάλυση πήγαινε: Πελάτες -> Επεξεργασία ενεργού πελάτη -> Ενεργοποίηση/δημιουργία custom κατηγοριών.', 'warning', 7000);
       }
     }
     logDebug('applyReceiptMode:'+normalized);

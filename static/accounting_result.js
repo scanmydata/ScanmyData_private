@@ -3602,7 +3602,7 @@ async function arBulkFinishRun(ctx) {
   if (booksCategoryMismatches.length) {
     hasWarningAdvisory = true;
     const names = booksCategoryMismatches.map((m) => `${m.credential_name} (ΑΑΔΕ: ${m.aade_category}, εμείς: ${m.our_category})`);
-    statusMsg += ` Ασυμφωνία κατηγορίας βιβλίων με το Μητρώο ΑΑΔΕ — διόρθωσε από τη σελίδα Credentials: ${names.join(', ')}.`;
+    statusMsg += ` Ασυμφωνία κατηγορίας βιβλίων με το Μητρώο ΑΑΔΕ — διόρθωσε από τη σελίδα Πελάτες: ${names.join(', ')}.`;
   }
   // Same μισθοδοσία/ΕΦΚΑ Μη-Μισθωτών/αχαρακτήριστα notes as the Ατομικός
   // flow (see renderReportNotesHtml) — popped here too, per the user's own
@@ -3898,7 +3898,7 @@ function inventoryObligationFlashMessage(obligation, label) {
 // credentials.json entry — see _ar_check_books_category_mismatch in app.py.
 function booksCategoryMismatchFlashMessage(mismatch, label) {
   if (!mismatch) return null;
-  return `Κατηγορία βιβλίων (${label}): το Μητρώο ΑΑΔΕ δείχνει "${mismatch.aade_category_raw}" (${mismatch.aade_category}) ενώ στα Credentials έχουμε καταχωρημένη ${mismatch.our_category} — έλεγξε/διόρθωσε τη ρύθμιση από τη σελίδα Credentials.`;
+  return `Κατηγορία βιβλίων (${label}): το Μητρώο ΑΑΔΕ δείχνει "${mismatch.aade_category_raw}" (${mismatch.aade_category}) ενώ στους Πελάτες έχουμε καταχωρημένη ${mismatch.our_category} — έλεγξε/διόρθωσε τη ρύθμιση από τη σελίδα Πελάτες.`;
 }
 
 // Both async-filled columns below write into cells via raw textContent

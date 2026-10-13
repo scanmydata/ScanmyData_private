@@ -86,7 +86,7 @@
   <div class="bg-white rounded-2xl shadow p-6 mb-6" style="position:relative;">
         {% if not active_credential and user_role != 'admin' %}
     <div style="position:absolute;inset:0;z-index:10;border-radius:16px;cursor:not-allowed;"
-         title="Επιλέξτε ενεργό πελάτη από τη σελίδα των Credentials για να χρησιμοποιήσετε αυτή τη φόρμα"></div>
+         title="Επιλέξτε ενεργό πελάτη από τη σελίδα των Πελατών για να χρησιμοποιήσετε αυτή τη φόρμα"></div>
     {% endif %}
         <form method="POST" class="space-y-4" autocomplete="off" novalidate data-lock-scope="fetch" {% if not active_credential and user_role != 'admin' %}style="pointer-events:none;opacity:0.55;" onsubmit="return false;"{% endif %}>
       {% if user_role == 'admin' %}
