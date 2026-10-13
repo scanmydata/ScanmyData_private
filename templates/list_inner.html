@@ -2006,6 +2006,36 @@ document.addEventListener('click', function(e){
 }
 [data-theme="dark"] #tabulatorStatus { color: #e5e7eb !important; }
 
+/* Φίλτρο ανά στήλη (εικονίδιο φίλτρου στην κεφαλίδα, όπως στο Timologio Downloader) */
+.fbp-cf-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px;
+  border-radius: 4px; border: 1px solid transparent; background: transparent; cursor: pointer; vertical-align: middle;
+  color: #6b7280; flex: 0 0 auto;
+}
+.fbp-cf-btn:hover { background: rgba(0,0,0,.08); color: #111827; }
+.fbp-cf-btn.is-active { color: #fff; background: #2563eb; border-color: #1d4ed8; }
+[data-theme="dark"] .fbp-cf-btn { color: #cbd5e1; }
+[data-theme="dark"] .fbp-cf-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
+[data-theme="dark"] .fbp-cf-btn.is-active { color: #fff; background: #2563eb; }
+.fbp-cf-pop {
+  position: fixed; z-index: 100000; width: 300px; max-width: 92vw; box-sizing: border-box; padding: 10px; background: #fff; color: #111827;
+  border: 1px solid #d1d5db; border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,.25); font-size: 13px;
+}
+[data-theme="dark"] .fbp-cf-pop { background: #1f2937; color: #f3f4f6; border-color: #4b5563; }
+.fbp-cf-pop h4 { margin: 0 0 6px; font-size: 13px; font-weight: 700; }
+.fbp-cf-pop input[type="text"] {
+  width: 100%; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #111827; margin-bottom: 6px;
+}
+[data-theme="dark"] .fbp-cf-pop input[type="text"] { background: #111827; color: #f3f4f6; border-color: #4b5563; }
+.fbp-cf-list { max-height: 220px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 6px; }
+[data-theme="dark"] .fbp-cf-list { border-color: #4b5563; }
+.fbp-cf-list label { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; word-break: break-word; }
+.fbp-cf-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; justify-content: flex-end; }
+.fbp-cf-actions button { padding: 4px 10px; border-radius: 6px; border: 1px solid #d1d5db; background: #f3f4f6; color: #111827; cursor: pointer; font-size: 12px; }
+[data-theme="dark"] .fbp-cf-actions button { background: #374151; color: #f3f4f6; border-color: #4b5563; }
+.fbp-cf-actions button.primary { background: #2563eb !important; color: #fff !important; border-color: #1d4ed8; }
+.fbp-cf-clear-all { margin-top: 6px; font-size: 12px; text-decoration: underline; cursor: pointer; background: none; border: 0; color: inherit; opacity: .8; }
+
 #pageLengthSelect { height: 38px; }
 [data-theme="dark"] #pageLengthSelect {
   background-color: #374151 !important;
@@ -2017,6 +2047,198 @@ document.addEventListener('click', function(e){
 <script>
 // Tabulator migration: build a Tabulator instance from the server-rendered table
 (function(){
+  // ---- Φίλτρο ανά στήλη: εικονίδιο στην κεφαλίδα κάθε στήλης → popover (αναζήτηση + λίστα τιμών). Τα φίλτρα
+  // στηλών συνδυάζονται (AND) με την καθολική αναζήτηση και το φίλτρο αχαρακτήριστων, και μένουν μετά το reload.
+  function fbpInstallColumnFilters(tab, wrapper, stateKeyFn){
+    if(!tab || typeof tab.getColumns !== 'function') return;
+    var storeKey = 'fbp_colfilters:' + (function(){ try{ return stateKeyFn('colfilters'); }catch(_){ return 'default'; } })();
+    var state = {};   // field -> { text: '', values: [..] | null }
+    try{
+      var saved = JSON.parse(sessionStorage.getItem(storeKey) || '{}');
+      if(saved && typeof saved === 'object') state = saved;
+    }catch(_){ state = {}; }
+
+    function norm(v){
+      return String(v == null ? '' : v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    }
+    function save(){ try{ sessionStorage.setItem(storeKey, JSON.stringify(state)); }catch(_){ } }
+    function isActive(f){
+      var st = state[f];
+      return !!(st && ((st.text && st.text.length) || (Array.isArray(st.values))));
+    }
+    function anyActive(){ return Object.keys(state).some(isActive); }
+
+    var valueSets = {};
+    function predicate(data){
+      for(var f in state){
+        if(!isActive(f)) continue;
+        var st = state[f];
+        var raw = data[f];
+        var txt = raw == null ? '' : String(raw).trim();
+        if(st.text && norm(txt).indexOf(norm(st.text)) === -1) return false;
+        if(Array.isArray(st.values)){
+          var set = valueSets[f] || (valueSets[f] = new Set(st.values));
+          if(!set.has(txt)) return false;
+        }
+      }
+      return true;
+    }
+    var origAdd = tab.addFilter.bind(tab);
+    var origRemove = tab.removeFilter.bind(tab);
+    var origSet = tab.setFilter.bind(tab);
+    var origClear = tab.clearFilter.bind(tab);
+    function reapply(){
+      try{ origRemove(predicate); }catch(_){ }
+      if(anyActive()){ try{ origAdd(predicate); }catch(_){ } }
+      refreshIcons();
+    }
+    // Οι υπόλοιπες λειτουργίες της λίστας (καθολική αναζήτηση, φίλτρο αχαρακτήριστων) καλούν setFilter/clearFilter,
+    // που αντικαθιστούν ΟΛΑ τα φίλτρα — ξαναβάζουμε μετά το δικό μας.
+    tab.setFilter = function(){ var r = origSet.apply(null, arguments); if(anyActive()){ try{ origAdd(predicate); }catch(_){ } } return r; };
+    tab.clearFilter = function(){ var r = origClear.apply(null, arguments); if(anyActive()){ try{ origAdd(predicate); }catch(_){ } } return r; };
+
+    var ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 4h18l-7 8.5V20l-4-2v-5.5L3 4z"/></svg>';
+    function colTitle(c){ try{ return String(c.getDefinition().title || c.getField()); }catch(_){ return ''; } }
+
+    function injectIcons(){
+      var cols = [];
+      try{ cols = tab.getColumns(); }catch(_){ cols = []; }
+      cols.forEach(function(c){
+        var f = ''; try{ f = c.getField(); }catch(_){ }
+        if(!f) return;
+        var el = c.getElement && c.getElement();
+        if(!el) return;
+        var content = el.querySelector('.tabulator-col-title') || el;
+        if(el.querySelector('.fbp-cf-btn')) return;
+        var b = document.createElement('span');
+        b.className = 'fbp-cf-btn' + (isActive(f) ? ' is-active' : '');
+        b.setAttribute('role', 'button');
+        b.setAttribute('tabindex', '0');
+        b.setAttribute('data-field', f);
+        b.title = 'Φίλτρο στήλης';
+        b.innerHTML = ICON;
+        content.appendChild(b);
+      });
+    }
+    function refreshIcons(){
+      wrapper.querySelectorAll('.fbp-cf-btn').forEach(function(b){
+        b.classList.toggle('is-active', isActive(b.getAttribute('data-field')));
+      });
+    }
+
+    var pop = null;
+    function closePop(){ if(pop){ try{ pop.remove(); }catch(_){ } pop = null; document.removeEventListener('mousedown', onDocDown, true); document.removeEventListener('keydown', onKey, true); } }
+    function onDocDown(e){ if(pop && !pop.contains(e.target) && !(e.target.closest && e.target.closest('.fbp-cf-btn'))) closePop(); }
+    function onKey(e){ if(e.key === 'Escape') closePop(); }
+
+    function distinct(field){
+      var seen = new Map();
+      var data = [];
+      try{ data = tab.getData() || []; }catch(_){ data = []; }
+      data.forEach(function(r){
+        var v = r[field] == null ? '' : String(r[field]).trim();
+        seen.set(v, (seen.get(v) || 0) + 1);
+      });
+      return Array.from(seen.entries()).sort(function(a, b){ return String(a[0]).localeCompare(String(b[0]), 'el', { numeric: true }); });
+    }
+
+    function openPop(field, anchor){
+      closePop();
+      var st = state[field] || { text: '', values: null };
+      var items = distinct(field);
+      var checked = new Set(Array.isArray(st.values) ? st.values : items.map(function(i){ return i[0]; }));
+      pop = document.createElement('div');
+      pop.className = 'fbp-cf-pop';
+      var title = '';
+      try{ title = colTitle(tab.getColumn(field)); }catch(_){ }
+      pop.innerHTML = '<h4></h4><input type="text" placeholder="Περιέχει… (αναζήτηση)" autocomplete="off">'
+        + '<div class="fbp-cf-list"></div>'
+        + '<div class="fbp-cf-actions"><button type="button" data-a="all">Όλα</button><button type="button" data-a="none">Κανένα</button>'
+        + '<button type="button" data-a="clear">Καθαρισμός</button><button type="button" data-a="apply" class="primary">Εφαρμογή</button></div>'
+        + '<button type="button" class="fbp-cf-clear-all" data-a="clearall">Καθαρισμός όλων των φίλτρων στηλών</button>';
+      pop.querySelector('h4').textContent = 'Φίλτρο: ' + title;
+      var input = pop.querySelector('input');
+      input.value = st.text || '';
+      var list = pop.querySelector('.fbp-cf-list');
+      var MAX = 400;
+      function renderList(){
+        var q = norm(input.value);
+        list.innerHTML = '';
+        var shown = 0;
+        items.forEach(function(it){
+          if(q && norm(it[0]).indexOf(q) === -1) return;
+          if(shown >= MAX) return;
+          shown++;
+          var lab = document.createElement('label');
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = checked.has(it[0]);
+          cb.addEventListener('change', function(){ if(cb.checked) checked.add(it[0]); else checked.delete(it[0]); });
+          var sp = document.createElement('span');
+          sp.textContent = (it[0] === '' ? '(κενό)' : it[0]) + '  (' + it[1] + ')';
+          lab.appendChild(cb); lab.appendChild(sp);
+          list.appendChild(lab);
+        });
+        if(items.length > MAX && !q){
+          var more = document.createElement('div');
+          more.style.cssText = 'opacity:.7;padding:4px 0;';
+          more.textContent = 'Εμφανίζονται οι πρώτες ' + MAX + ' τιμές — χρησιμοποίησε την αναζήτηση.';
+          list.appendChild(more);
+        }
+      }
+      renderList();
+      input.addEventListener('input', renderList);
+      function apply(){
+        var all = items.map(function(i){ return i[0]; });
+        var allChecked = all.every(function(v){ return checked.has(v); });
+        var vals = allChecked ? null : all.filter(function(v){ return checked.has(v); });
+        var text = input.value.trim();
+        if(!text && vals === null){ delete state[field]; } else { state[field] = { text: text, values: vals }; }
+        valueSets = {};
+        save(); reapply(); closePop();
+      }
+      pop.addEventListener('click', function(e){
+        var a = e.target && e.target.getAttribute && e.target.getAttribute('data-a');
+        if(!a) return;
+        if(a === 'apply') apply();
+        else if(a === 'clear'){ delete state[field]; valueSets = {}; save(); reapply(); closePop(); }
+        else if(a === 'clearall'){ state = {}; valueSets = {}; save(); reapply(); closePop(); }
+        else if(a === 'all'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.add(i[0]); }); renderList(); }
+        else if(a === 'none'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.delete(i[0]); }); renderList(); }
+      });
+      input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); apply(); } });
+      document.body.appendChild(pop);
+      var r = anchor.getBoundingClientRect();
+      var left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left));
+      var top = r.bottom + 6;
+      if(top + pop.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - pop.offsetHeight - 6);
+      pop.style.left = left + 'px';
+      pop.style.top = top + 'px';
+      document.addEventListener('mousedown', onDocDown, true);
+      document.addEventListener('keydown', onKey, true);
+      try{ input.focus(); }catch(_){ }
+    }
+
+    // Κλικ στο εικονίδιο (capture): να ΜΗΝ γίνεται ταξινόμηση της στήλης.
+    wrapper.addEventListener('click', function(e){
+      var b = e.target && e.target.closest && e.target.closest('.fbp-cf-btn');
+      if(!b || !wrapper.contains(b)) return;
+      e.stopPropagation(); e.preventDefault();
+      openPop(b.getAttribute('data-field'), b);
+    }, true);
+    wrapper.addEventListener('mousedown', function(e){
+      if(e.target && e.target.closest && e.target.closest('.fbp-cf-btn')) e.stopPropagation();
+    }, true);
+
+    injectIcons();
+    try{ tab.on('renderComplete', injectIcons); }catch(_){ }
+    try{ tab.on('columnMoved', function(){ setTimeout(injectIcons, 0); }); }catch(_){ }
+    setTimeout(injectIcons, 50);
+    // Αποκατάσταση φίλτρων που ήταν ενεργά πριν το reload
+    if(anyActive()) reapply();
+    window.FBP_COLUMN_FILTERS = { clearAll: function(){ state = {}; valueSets = {}; save(); reapply(); }, isActive: anyActive };
+  }
+
   function buildColumnsFromThead(thead){
     const ths = Array.from(thead.querySelectorAll('th'));
     return ths.map((th, i) => ({ title: (th.innerText||th.textContent||'').trim(), field: 'c'+i, headerSort: true, headerFilter:false }));
@@ -2747,6 +2969,7 @@ document.addEventListener('click', function(e){
 
       // expose tabulator instance for other code
       window.FBP_TABULATOR = tab;
+      try{ fbpInstallColumnFilters(tab, wrapper, stateKey); }catch(e){ try{ console.warn('column filters failed', e); }catch(_){ } }
 
       // If a mark is pending from a recent save, highlight it on the visible Tabulator row.
       try {
@@ -3240,6 +3463,7 @@ input[type="checkbox"].rc-switch {
   if (window.__receiptReviewWarnInstalled) return;
   window.__receiptReviewWarnInstalled = true;
   var reviewQueue = [];
+  var groupName = '';
 
   // Place the chip immediately to the LEFT of the download (.xlsx) button.
   function insertBanner(el){
@@ -3293,12 +3517,20 @@ input[type="checkbox"].rc-switch {
     var lines = reviewQueue.slice(0, 20).map(function(r){
       var miss = (r.missing_labels && r.missing_labels.length) ? (' — λείπει: ' + r.missing_labels.join(', ')) : '';
       var ident = r.mark || r.url || r.key || '';
-      var who = r.customer_name ? (' <em>(' + escapeHtmlLocal(r.customer_name) + ')</em>')
-        : (!r.customer_vat ? ' <em style="opacity:.7;">(άγνωστος πελάτης — παλαιά εγγραφή)</em>' : '');
+      // Ποιος πελάτης / ποια ομάδα / ποιος εκδότης: ώστε να ξέρει ο χρήστης πού να συμπληρώσει το παραστατικό.
+      var cust = r.customer_name
+        ? ('Πελάτης: ' + r.customer_name + (r.customer_vat ? ' (' + r.customer_vat + ')' : ''))
+        : (r.customer_vat ? ('Πελάτης ΑΦΜ: ' + r.customer_vat) : '');
+      var f = r.fields || {};
+      var issuer = (f.issuer_name || f.Name_issuer || f.issuer_vat || f.AFM_issuer)
+        ? ('Εκδότης: ' + [f.issuer_name || f.Name_issuer, f.issuer_vat || f.AFM_issuer].filter(Boolean).join(' · ')) : '';
+      var meta = [cust || '(πελάτης άγνωστος — παλιά εγγραφή)', groupName ? ('Ομάδα: ' + groupName) : '', issuer,
+                  (f.issue_date ? ('Ημ/νία: ' + f.issue_date) : '')].filter(Boolean).join(' · ');
+      var who = '<div style="font-size:0.78rem;opacity:.85;margin-top:1px;">' + escapeHtmlLocal(meta) + '</div>';
       var dismissBtn = '<button type="button" class="receiptReviewDismiss" data-key="' + escapeHtmlLocal(r.key || ident) + '" '
         + 'title="Αφαίρεση από τη λίστα" style="margin-left:6px;border:none;background:none;color:#92400e;cursor:pointer;font-weight:700;">✕</button>';
       return '<li style="margin:2px 0;word-break:break-all;display:flex;align-items:baseline;justify-content:space-between;gap:6px;">'
-        + '<span>' + escapeHtmlLocal(ident) + escapeHtmlLocal(miss) + who + '</span>' + dismissBtn + '</li>';
+        + '<span><strong>' + escapeHtmlLocal(ident) + '</strong>' + escapeHtmlLocal(miss) + who + '</span>' + dismissBtn + '</li>';
     }).join('');
     var more = reviewQueue.length > 20 ? ('<div style="margin-top:4px;">…και ' + (reviewQueue.length - 20) + ' ακόμη</div>') : '';
     var chipStyle = 'cursor:pointer;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:9999px;'
@@ -3322,7 +3554,7 @@ input[type="checkbox"].rc-switch {
     try {
       fetch('/api/receipt_review/list', { credentials:'same-origin' })
         .then(function(r){ return r.ok ? r.json() : null; })
-        .then(function(j){ reviewQueue = (j && j.items) ? j.items : []; renderBanner(); })
+        .then(function(j){ reviewQueue = (j && j.items) ? j.items : []; groupName = (j && j.group_name) || ''; renderBanner(); })
         .catch(function(){});
     } catch(_){}
   }

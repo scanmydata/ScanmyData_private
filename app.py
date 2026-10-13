@@ -4588,9 +4588,40 @@ def _start_activity_db_migration() -> None:
     def _run():
         try:
             import activity_store
-            res = activity_store.migrate_all(os.path.join(BASE_DIR, "data"))
+            data_root = os.path.join(BASE_DIR, "data")
+            res = activity_store.migrate_all(data_root)
             for g, st in res.items():
                 log.info("activity.db migration %s: %s", g, {k: st.get(k) for k in ("lines", "inserted", "done", "skipped_bad")})
+            # Καθαρισμός μετά την επιτυχή μετάβαση: παλιό activity.log (μόνο αν εισήχθη ΟΛΟΚΛΗΡΟ) και «σκουπίδια»
+            # (αντίγραφα με υπογραμμίσεις, journal). ACTIVITY_LOG_KEEP_LEGACY=1 κρατά το παλιό αρχείο.
+            try:
+                from firebase.drive_storage import is_junk_name
+            except Exception:
+                is_junk_name = lambda n: False   # noqa: E731
+            for g in sorted(os.listdir(data_root)):
+                gdir = os.path.join(data_root, g)
+                if not os.path.isdir(gdir) or g.startswith((".", "_")):
+                    continue
+                if str(os.getenv("ACTIVITY_LOG_KEEP_LEGACY", "0")).strip() != "1":
+                    if activity_store.delete_legacy_if_imported(gdir):
+                        log.info("activity.log της ομάδας %s σβήστηκε μετά την πλήρη μετάβαση στη βάση", g)
+                for fn in list(os.listdir(gdir)):
+                    fp = os.path.join(gdir, fn)
+                    if not os.path.isfile(fp):
+                        continue
+                    junk = is_junk_name(fn)
+                    if not junk and fn == "error.log":
+                        try:
+                            with open(fp, "rb") as fh:
+                                junk = b"\x00" in fh.read(4096)     # δυαδικό «error.log» (journal βάσης) — όχι log
+                        except OSError:
+                            junk = False
+                    if junk:
+                        try:
+                            os.remove(fp)
+                            log.info("σβήστηκε τοπικό σκουπίδι %s/%s", g, fn)
+                        except OSError:
+                            pass
         except Exception:
             log.exception("activity.db migration failed")
         finally:
@@ -14068,8 +14099,67 @@ def api_receipt_review_list():
             active_vat = str((get_active_credential_from_session() or {}).get("vat") or "").strip()
         except Exception:
             active_vat = ""
-        items = scrape_review.list_review_queue(get_group_base_dir(), customer_vat=active_vat)
-        return jsonify({"ok": True, "count": len(items), "items": items})
+        group_dir = get_group_base_dir()
+        items = scrape_review.list_review_queue(group_dir, customer_vat=active_vat)
+
+        # Παλιές εγγραφές χωρίς tag πελάτη: βρες σε ποιον πελάτη ανήκει το MARK (summary/invoices/epsilon της ομάδας),
+        # σημείωσέ το μόνιμα στην ουρά και δείξε το. Έτσι ο χρήστης ξέρει ΠΟΙΟΝ πελάτη αφορά η προειδοποίηση.
+        try:
+            untagged = [r for r in items if not str(r.get("customer_vat") or "").strip()
+                        and re.fullmatch(r"\d{15}", str(r.get("mark") or "").strip())
+                        and str(r.get("mark")).strip() != RECEIPT_FALLBACK_MARK]
+            if untagged:
+                want = {str(r["mark"]).strip(): r for r in untagged}
+                found: Dict[str, str] = {}
+                scan_files = []
+                for fn in sorted(os.listdir(group_dir)):
+                    m = re.fullmatch(r"(\d{8,9})_(summary|invoices)\.json", fn)
+                    if m:
+                        scan_files.append((m.group(1), os.path.join(group_dir, fn)))
+                eps = os.path.join(group_dir, "epsilon")
+                if os.path.isdir(eps):
+                    for fn in sorted(os.listdir(eps)):
+                        m = re.fullmatch(r"(\d{8,9})_epsilon_invoices\.json", fn)
+                        if m:
+                            scan_files.append((m.group(1), os.path.join(eps, fn)))
+                for vat_k, fp in scan_files:
+                    if len(found) == len(want):
+                        break
+                    data = json_read(fp)
+                    if not isinstance(data, list):
+                        continue
+                    for rec in data:
+                        if isinstance(rec, dict):
+                            mk = str(rec.get("mark") or rec.get("MARK") or "").strip()
+                            if mk in want and mk not in found:
+                                found[mk] = vat_k
+                for mk, vat_k in found.items():
+                    cname = ""
+                    try:
+                        cname = str((get_cred_by_vat(vat_k) or {}).get("name") or "").strip()
+                    except Exception:
+                        cname = ""
+                    scrape_review.set_customer_tag(group_dir, want[mk].get("key") or mk, vat_k, cname)
+                    want[mk]["customer_vat"] = vat_k
+                    want[mk]["customer_name"] = cname
+        except Exception:
+            log.exception("api_receipt_review_list: customer resolution failed")
+
+        group_name = ""
+        try:
+            from admin.auth import get_active_group
+            _g = get_active_group()
+            group_name = str(getattr(_g, "name", "") or getattr(_g, "data_folder", "") or "")
+        except Exception:
+            group_name = ""
+        # Όνομα πελάτη για όσα έχουν μόνο ΑΦΜ
+        for r in items:
+            if r.get("customer_vat") and not r.get("customer_name"):
+                try:
+                    r["customer_name"] = str((get_cred_by_vat(str(r["customer_vat"])) or {}).get("name") or "").strip()
+                except Exception:
+                    pass
+        return jsonify({"ok": True, "count": len(items), "items": items, "group_name": group_name})
     except Exception as e:
         log.exception("api_receipt_review_list failed")
         return jsonify({"ok": False, "error": str(e), "items": []}), 500

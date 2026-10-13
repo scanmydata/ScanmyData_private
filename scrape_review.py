@@ -291,6 +291,26 @@ def list_review_queue(group_dir: str, customer_vat: str = "") -> List[Dict[str, 
     return rows
 
 
+def set_customer_tag(group_dir: str, key: str, customer_vat: str, customer_name: str = "") -> bool:
+    """Σημειώνει σε υπάρχουσα εγγραφή ουράς τον πελάτη στον οποίο ανήκει (για παλιές εγγραφές χωρίς tag)."""
+    if not group_dir or not key or not customer_vat:
+        return False
+    try:
+        with _lock:
+            path = _queue_path(group_dir)
+            store = _read_json(path, {})
+            row = store.get(str(key).strip()) if isinstance(store, dict) else None
+            if not isinstance(row, dict):
+                return False
+            row["customer_vat"] = str(customer_vat).strip()
+            row["customer_name"] = str(customer_name or "").strip()
+            _write_json_atomic(path, store)
+            return True
+    except Exception:
+        log.exception("scrape_review: set_customer_tag failed (%s)", group_dir)
+        return False
+
+
 def resolve_review(group_dir: str, key: str) -> bool:
     """Remove one item from the queue (e.g. after the user completes it)."""
     if not group_dir or not key:

@@ -301,6 +301,130 @@ def ensure_synced(group_dir: str, max_seconds: float = 5.0) -> None:
         log.exception("activity_store.ensure_synced failed")
 
 
+# --------------------------------------------------------------------------- Drive (κρυπτογραφημένο backup)
+def last_modified(group_dir: str) -> float:
+    """Τελευταία αλλαγή της βάσης (αρχείο ή WAL)."""
+    t = 0.0
+    for suffix in ("", "-wal"):
+        try:
+            t = max(t, os.path.getmtime(db_path(group_dir) + suffix))
+        except OSError:
+            pass
+    return t
+
+
+def snapshot_bytes(group_dir: str) -> Optional[bytes]:
+    """Συνεπές αντίγραφο της βάσης (sqlite backup API — ασφαλές ενώ γράφονται εγγραφές) ως bytes."""
+    if not os.path.exists(db_path(group_dir)):
+        return None
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="activity_snapshot_", suffix=".db")
+    os.close(fd)
+    try:
+        src = sqlite3.connect(db_path(group_dir), timeout=15)
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        with open(tmp, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def merge_from(group_dir: str, other_db_file: str) -> int:
+    """Συγχωνεύει τις εγγραφές μιας άλλης βάσης activity (π.χ. από το Drive) στην τοπική — χωρίς διπλότυπα."""
+    with _lock_for(db_path(group_dir)):
+        conn = _connect(group_dir)
+        try:
+            conn.execute("ATTACH DATABASE ? AS other", (other_db_file,))
+            try:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO activity(uid, ts, ts_epoch, action, vat, user_id, raw) "
+                    "SELECT uid, ts, ts_epoch, action, vat, user_id, raw FROM other.activity")
+                n = max(int(cur.rowcount or 0), 0)
+            finally:
+                conn.execute("DETACH DATABASE other")
+            return n
+        finally:
+            conn.close()
+
+
+def get_meta(group_dir: str, key: str, default: str = "") -> str:
+    if not os.path.exists(db_path(group_dir)):
+        return default
+    conn = _connect(group_dir)
+    try:
+        return _meta_get(conn, key, default)
+    finally:
+        conn.close()
+
+
+def set_meta(group_dir: str, key: str, value: str) -> None:
+    conn = _connect(group_dir)
+    try:
+        _meta_set(conn, key, value)
+    finally:
+        conn.close()
+
+
+def _max_id(group_dir: str) -> int:
+    if not os.path.exists(db_path(group_dir)):
+        return 0
+    conn = _connect(group_dir)
+    try:
+        r = conn.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()
+        return int(r[0] or 0)
+    finally:
+        conn.close()
+
+
+def mark_pushed(group_dir: str) -> None:
+    """Καταγράφει ότι η βάση ανέβηκε στο Drive τώρα (χρόνος + τελευταίο id)."""
+    set_meta(group_dir, "drive_pushed_at", f"{time.time():.3f}")
+    set_meta(group_dir, "drive_pushed_maxid", str(_max_id(group_dir)))
+
+
+def push_due(group_dir: str, min_age_seconds: float = 6 * 3600) -> bool:
+    """Να ανέβει η βάση στο Drive; Μόνο αν μπήκαν νέες εγγραφές ΚΑΙ πέρασε το min_age από το τελευταίο ανέβασμα
+    (γράφεται συνέχεια — όχι push σε κάθε αλλαγή)."""
+    if not os.path.exists(db_path(group_dir)):
+        return False
+    try:
+        pushed_at = float(get_meta(group_dir, "drive_pushed_at", "0") or 0)
+        pushed_max = int(get_meta(group_dir, "drive_pushed_maxid", "0") or 0)
+    except ValueError:
+        pushed_at, pushed_max = 0.0, 0
+    cur = _max_id(group_dir)
+    return cur > pushed_max and (time.time() - pushed_at) >= min_age_seconds
+
+
+def delete_legacy_if_imported(group_dir: str) -> bool:
+    """Σβήνει το παλιό activity.log ΜΟΝΟ όταν έχει εισαχθεί ολόκληρο (offset == μέγεθος, import_done)."""
+    p = legacy_path(group_dir)
+    if not os.path.exists(p) or not os.path.exists(db_path(group_dir)):
+        return False
+    try:
+        conn = _connect(group_dir)
+        try:
+            off = int(_meta_get(conn, "import_offset:" + LEGACY_NAME, "-1") or -1)
+            done = bool(_meta_get(conn, "import_done:" + LEGACY_NAME))
+        finally:
+            conn.close()
+        if done and off == os.path.getsize(p):
+            os.remove(p)
+            _READY_CACHE.pop(group_dir, None)
+            return True
+    except Exception:
+        log.exception("activity_store.delete_legacy_if_imported failed")
+    return False
+
+
 def delete_range(group_dir: str, start_epoch: float, end_epoch: Optional[float] = None) -> int:
     """Σβήνει εγγραφές με χρόνο ≥ start_epoch (και ≤ end_epoch αν δοθεί). Επιστρέφει πόσες."""
     try:

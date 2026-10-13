@@ -57,7 +57,23 @@ _RESUMABLE_THRESHOLD = 8 * 1024 * 1024
 _RESUMABLE_CHUNK = 8 * 1024 * 1024
 # Αρχεία log/βάσης activity που ΔΕΝ συγχρονίζονται ως αρχεία (η βάση activity.db είναι τοπική· το off-site
 # backup του activity είναι το κυλιόμενο απομακρυσμένο activity.log που γράφει το drive_log_activity).
-_LOG_FILES = ("activity.log", "error.log", "activity.db", "activity.db-wal", "activity.db-shm", "activity.log.migrated")
+_LOG_FILES = ("activity.log", "error.log", "activity.db-wal", "activity.db-shm", "activity.log.migrated")
+# Η βάση activity.db ΑΝΕΒΑΙΝΕΙ (κρυπτογραφημένη, ως συνεπές snapshot) αλλά δεν μετρά στον έλεγχο «άλλαξε κάτι»:
+# γράφεται σε κάθε ενέργεια και θα προκαλούσε push σε κάθε tick (το push_due την ανεβάζει το πολύ ανά 6 ώρες).
+_FRESHNESS_SKIP = _LOG_FILES + ("activity.db",)
+_ACTIVITY_DB = "activity.db"
+
+# «Σκουπίδια» που δημιούργησε η απολύμανση ονομάτων (ίδιο αρχείο με πολλά ονόματα και υπογράμμιση στο τέλος).
+# Ούτε ανεβαίνουν ούτε κατεβαίνουν· το push τα σβήνει από το Drive αφού δεν υπάρχουν «τοπικά».
+_JUNK_NAME_RE = re.compile(
+    r"^(activity_log_jsonl_+"                              # αντίγραφα του activity.log.jsonl
+    r"|client_db_xlsx?_bak_[0-9A-Za-z]+_+"                  # αντίγραφα backup του client_db
+    r"|.*\.db-journal.*"                                    # journal SQLite
+    r")$", re.IGNORECASE)
+
+
+def is_junk_name(name: str) -> bool:
+    return bool(_JUNK_NAME_RE.match(os.path.basename(str(name or ""))))
 
 # Το απομακρυσμένο activity.log μένει «κυλιόμενο»: πάνω από το όριο κρατιέται μόνο το τελευταίο κομμάτι.
 _REMOTE_LOG_LIMIT = 4 * 1024 * 1024
@@ -180,7 +196,14 @@ def _service():
             # «The read operation timed out» και τα push της ομάδας αποτύγχαναν ολόκληρα.
             import httplib2
             import google_auth_httplib2
-            http = google_auth_httplib2.AuthorizedHttp(_drive_creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT))
+            _raw_http = httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT)
+            # Το resumable upload απαντά 308 «Resume Incomplete» ανά κομμάτι· το httplib2 το θεωρεί redirect και
+            # σκάει με «Redirected but the response is missing a Location header». Όπως κάνει το googleapiclient.
+            try:
+                _raw_http.redirect_codes = set(_raw_http.redirect_codes) - {308}
+            except Exception:
+                pass
+            http = google_auth_httplib2.AuthorizedHttp(_drive_creds, http=_raw_http)
             svc = build("drive", "v3", http=http, cache_discovery=False)
         except ImportError:
             svc = build("drive", "v3", credentials=_drive_creds, cache_discovery=False)
@@ -337,7 +360,7 @@ def _local_group_has_payload(data_dir: str) -> bool:
             for name in files:
                 if name.startswith("."):
                     continue
-                if name in set(_LOG_FILES):
+                if name in set(_FRESHNESS_SKIP):
                     continue
                 return True
     except Exception:
@@ -588,7 +611,7 @@ def _compute_drive_rel_path(file_path: str, source_dir: str) -> Optional[str]:
     # Τα logs (το activity.log της ομάδας φτάνει εκατοντάδες MB) δεν συγχρονίζονται ως αρχεία: το
     # απομακρυσμένο activity.log συντηρείται από το drive_log_activity. Πριν ανέβαιναν κρυπτογραφημένα
     # ολόκληρα σε κάθε push και έριχναν το push της ομάδας με «The read operation timed out».
-    if fname in _LOG_FILES:
+    if fname in _LOG_FILES or is_junk_name(fname):
         return None
     if re.match(r"^epsilon_invoices\.(json|xlsx|xls)$", fname, re.IGNORECASE):
         # Legacy AFM-less epsilon files are skipped, same as firebase backend.
@@ -627,6 +650,41 @@ def _report_transfer(**info: Any) -> None:
         fn(info)
     except Exception:
         logger.debug("transfer progress sink failed", exc_info=True)
+
+
+def _merge_remote_activity_db(local_folder: str, source_dir: str, remote_meta: Dict[str, Any]) -> int:
+    """Κατεβάζει τη βάση activity του Drive, την αποκρυπτογραφεί και συγχωνεύει τις εγγραφές της στην τοπική
+    (όταν το Drive έχει νεότερη/άλλη έκδοση από αυτή που ξέρουμε). Επιστρέφει πόσες νέες εγγραφές μπήκαν."""
+    import activity_store as _astore
+    try:
+        rm = float((remote_meta.get("appProperties") or {}).get("local_mtime") or 0)
+    except Exception:
+        rm = 0.0
+    try:
+        merged = float(_astore.get_meta(source_dir, "drive_merged_remote_mtime", "0") or 0)
+    except ValueError:
+        merged = 0.0
+    if rm and abs(rm - merged) < 1.0:
+        return 0      # ήδη συγχωνευμένη (ή δική μας)
+    blob = _download_bytes(remote_meta["id"])
+    try:
+        plain = _cipher().decrypt(blob)
+    except Exception:
+        plain = blob
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="activity_remote_", suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(plain)
+        n = _astore.merge_from(source_dir, tmp)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    _astore.set_meta(source_dir, "drive_merged_remote_mtime", f"{rm:.6f}")
+    logger.info("[DRIVE] activity.db: συγχωνεύτηκαν %d εγγραφές από το Drive (%s)", n, local_folder)
+    return n
 
 
 def drive_push_group_files(
@@ -718,7 +776,21 @@ def drive_push_group_files(
                     local_mtime = time.time()
 
                 existing = index.get(rel_path)
-                if smart_sync and (not force) and existing:
+                is_activity_db = (rel_path == _ACTIVITY_DB)
+                if is_activity_db:
+                    # Βάση logs: ανεβαίνει το πολύ ανά 6 ώρες (push_due), ως συνεπές snapshot, αφού πρώτα
+                    # συγχωνευτεί ό,τι έχει το Drive (π.χ. από άλλον server) ώστε να μη χαθεί.
+                    try:
+                        import activity_store as _astore
+                        if not _astore.push_due(source_dir):
+                            continue
+                        local_mtime = _astore.last_modified(source_dir) or local_mtime
+                        if existing:
+                            _merge_remote_activity_db(local_folder, source_dir, existing)
+                    except Exception:
+                        logger.exception("[DRIVE PUSH] activity.db prepare failed")
+                        continue
+                elif smart_sync and (not force) and existing:
                     # Compare against appProperties.local_mtime (precise) or Drive modifiedTime.
                     remote_mtime = 0.0
                     try:
@@ -733,8 +805,14 @@ def drive_push_group_files(
                         continue
 
                 try:
-                    with open(file_path, "rb") as fh:
-                        raw = fh.read()
+                    if is_activity_db:
+                        import activity_store as _astore
+                        raw = _astore.snapshot_bytes(source_dir)
+                        if not raw:
+                            continue
+                    else:
+                        with open(file_path, "rb") as fh:
+                            raw = fh.read()
                     encrypted = cipher.encrypt(raw)
                 except Exception as e:
                     files_failed += 1
@@ -755,6 +833,13 @@ def drive_push_group_files(
                     )
                     files_uploaded += 1
                     bytes_uploaded += len(raw)
+                    if is_activity_db:
+                        try:
+                            import activity_store as _astore
+                            _astore.mark_pushed(source_dir)
+                            _astore.set_meta(source_dir, "drive_merged_remote_mtime", f"{local_mtime:.6f}")
+                        except Exception:
+                            pass
                     _report_transfer(phase="upload", group=group_name, files_done=files_uploaded + files_failed,
                                      files_total=planned_files, bytes_done=bytes_uploaded,
                                      bytes_total=planned_bytes, failed=files_failed, current=rel_path)
@@ -781,7 +866,7 @@ def drive_push_group_files(
         for rel_path, meta in list(index.items()):
             if rel_path in local_rel_paths:
                 continue
-            if rel_path in (*_LOG_FILES, ".sync_meta.json"):
+            if rel_path in (*_LOG_FILES, _ACTIVITY_DB, ".sync_meta.json"):
                 continue  # keep server-side logs/meta
             if dry_run:
                 delete_candidates.append(rel_path)
@@ -833,7 +918,7 @@ def drive_push_group_files(
                 file_count = 0
                 for r, _d, fs in os.walk(source_dir):
                     for n in fs:
-                        if n.startswith(".") or n in _LOG_FILES:
+                        if n.startswith(".") or n in _FRESHNESS_SKIP:
                             continue
                         try:
                             file_count += 1
@@ -1053,7 +1138,14 @@ def drive_pull_group_to_local(
             # Activity logs: append-only behavior to mirror firebase backend.
             is_log = rel_path.endswith(".log")
 
-            if smart_sync and (not force) and (not is_log) and os.path.exists(local_path):
+            if rel_path == _ACTIVITY_DB:
+                try:
+                    import activity_store as _astore
+                    if remote_mtime and abs(remote_mtime - float(_astore.get_meta(target_dir, "drive_merged_remote_mtime", "0") or 0)) < 1.0:
+                        continue      # ήδη συγχωνευμένη
+                except Exception:
+                    pass
+            elif smart_sync and (not force) and (not is_log) and os.path.exists(local_path):
                 # See push-side comment: no excel/epsilon exemption on Drive.
                 try:
                     local_mtime = os.path.getmtime(local_path)
@@ -1094,6 +1186,22 @@ def drive_pull_group_to_local(
                 plain = cipher.decrypt(blob)
             except Exception:
                 plain = blob  # historically-plaintext file (activity.log / error.log)
+            if task["rel_path"] == _ACTIVITY_DB:
+                # Βάση logs: συγχώνευση εγγραφών (INSERT OR IGNORE), ΠΟΤΕ αντικατάσταση του τοπικού αρχείου.
+                import tempfile
+                import activity_store as _astore
+                fd, tmp = tempfile.mkstemp(prefix="activity_pull_", suffix=".db")
+                try:
+                    with os.fdopen(fd, "wb") as fh:
+                        fh.write(plain)
+                    _astore.merge_from(target_dir, tmp)
+                    _astore.set_meta(target_dir, "drive_merged_remote_mtime", f"{task['remote_mtime']:.6f}")
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                return len(blob)
             mode = "ab" if task["is_log"] else "wb"
             with open(task["local_path"], mode) as fh:
                 fh.write(plain)
@@ -1162,7 +1270,7 @@ def drive_pull_group_to_local(
                 file_count = 0
                 for r, _d, fs in os.walk(target_dir):
                     for n in fs:
-                        if n.startswith(".") or n in _LOG_FILES:
+                        if n.startswith(".") or n in _FRESHNESS_SKIP:
                             continue
                         try:
                             file_count += 1
@@ -1220,8 +1328,10 @@ def drive_log_activity(user_id: str, group_name: str, action: str, details: Opti
         except Exception:
             pass
 
-        # 2) Append remotely (rewrite full content; small files, infrequent).
-        if is_drive_enabled() or init_drive():
+        # 2) Απομακρυσμένο αντίγραφο: ΔΕΝ ξαναγράφεται πια το plaintext activity.log στο Drive — η βάση activity.db
+        #    ανεβαίνει κρυπτογραφημένη με το κανονικό push (βλ. push_due). DRIVE_ACTIVITY_REMOTE_APPEND=1 επαναφέρει
+        #    την παλιά συμπεριφορά (ανεπιθύμητη: plaintext).
+        if str(os.getenv("DRIVE_ACTIVITY_REMOTE_APPEND", "0")).strip() == "1" and (is_drive_enabled() or init_drive()):
             try:
                 index = _build_group_index(folder_name)
                 meta = index.get("activity.log")
@@ -1325,7 +1435,7 @@ def drive_compare_group_payload_freshness(
                 for name in files:
                     if name.startswith("."):
                         continue
-                    if name in _LOG_FILES:
+                    if name in _FRESHNESS_SKIP:
                         continue
                     try:
                         local_count += 1
@@ -1338,6 +1448,13 @@ def drive_compare_group_payload_freshness(
         pass
 
     marker_mtime = _read_last_push_marker(target_dir)
+    try:
+        import activity_store as _astore
+        if _astore.push_due(target_dir):
+            local_latest_mtime = max(local_latest_mtime, marker_mtime + 10.0)   # αρκεί για να αποφασιστεί push
+            local_count = max(local_count, 1)
+    except Exception:
+        pass
     local_meta = {
         "exists": local_count > 0,
         "latest_mtime": local_latest_mtime,
@@ -1405,7 +1522,7 @@ def drive_group_sync_diff(group_name: str, local_group_folder: str = None) -> Di
                 except Exception:
                     local[rel] = 0.0
 
-    skip = {*_LOG_FILES, ".sync_meta.json"}
+    skip = {*_FRESHNESS_SKIP, ".sync_meta.json"}
     push: List[str] = []
     pull: List[str] = []
     tolerance = 2.0
@@ -1460,7 +1577,7 @@ def drive_ensure_group_data_local(group_folder: str, create_empty_dirs: bool = T
                     for n in files:
                         if n.startswith("."):
                             continue
-                        if n in _LOG_FILES:
+                        if n in _FRESHNESS_SKIP:
                             continue
                         return True
             except Exception:
