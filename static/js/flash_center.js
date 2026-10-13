@@ -82,16 +82,53 @@
 
       // Ένας μόνο timer ανά banner (κοινός με τα makeDismissable των base_01/base_08),
       // ώστε η ανανέωση ενός διπλότυπου να μην κόβεται από παλιό timer.
+      // Εμφανίζει μπάρα υπολειπόμενου χρόνου (CSS animation), σταματά στο hover και βγαίνει με animation.
+      function leave(el){
+        try {
+          el.classList.add('flash-leaving');
+          setTimeout(function(){ try { el.remove(); } catch (_) {} }, 190);
+        } catch (_) { try { el.remove(); } catch (__) {} }
+      }
+
+      function bindHover(el){
+        if (el.__appFlashHover) return;
+        el.__appFlashHover = true;
+        el.addEventListener('mouseenter', function(){
+          if (!el.__appFlashTimer) return;
+          try { clearTimeout(el.__appFlashTimer); } catch (_) {}
+          el.__appFlashTimer = null;
+          el.__appFlashLeft = Math.max(1500, (el.__appFlashEnd || 0) - Date.now());
+          el.classList.add('flash-paused');
+        });
+        el.addEventListener('mouseleave', function(){
+          if (el.__appFlashLeft == null) return;
+          var ms = el.__appFlashLeft;
+          el.__appFlashLeft = null;
+          el.classList.remove('flash-paused');
+          el.__appFlashEnd = Date.now() + ms;
+          el.__appFlashTimer = setTimeout(function(){ leave(el); }, ms);
+        });
+      }
+
       function armTtl(el, ttl){
         if (!el) return;
         try { if (el.__appFlashTimer) clearTimeout(el.__appFlashTimer); } catch (_) {}
         el.__appFlashTimer = null;
+        el.__appFlashLeft = null;
         var ms = Number(ttl);
         if (!(ms > 0)) ms = 0;
         el.setAttribute('data-ttl', String(ms));
         el.setAttribute('data-shown-at', String(Date.now()));
+        try { el.classList.remove('flash-timed', 'flash-paused', 'flash-leaving'); } catch (_) {}
         if (ms > 0) {
-          el.__appFlashTimer = setTimeout(function(){ try { el.remove(); } catch (_) {} }, ms);
+          try {
+            el.style.setProperty('--fb-ttl', ms + 'ms');
+            void el.offsetWidth;                      // επανεκκίνηση της CSS animation
+            el.classList.add('flash-timed');
+          } catch (_) {}
+          el.__appFlashEnd = Date.now() + ms;
+          el.__appFlashTimer = setTimeout(function(){ leave(el); }, ms);
+          bindHover(el);
         }
       }
 

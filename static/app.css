@@ -151,23 +151,63 @@
       min-width: 0;
     }
 
+    /* ---------- Flash messages (toasts) ---------- */
     .flash-banner {
-      border-radius: 10px;
-      padding: 12px 14px;
+      --fb-ttl: 6000ms;
+      border-radius: 14px;
+      padding: 13px 44px 13px 16px;
       font-weight: 500;
-      box-shadow: 0 10px 24px rgba(15,23,42,0.18);
+      font-size: 0.92rem;
+      line-height: 1.45;
+      box-shadow: 0 14px 34px rgba(15,23,42,0.18), 0 2px 6px rgba(15,23,42,0.08);
       position: relative;
       z-index: 1;
+      overflow: hidden;
       word-wrap: break-word;
       overflow-wrap: break-word;
       white-space: normal;
       max-width: 100%;
-      animation: flash-toast-enter .18s ease-out;
+      animation: flash-toast-enter .24s cubic-bezier(.2,.9,.3,1.15);
     }
-    .flash-success { background:#ecfdf5; color:#065f46; border:1px solid #bbf7d0; }
-    .flash-error   { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; }
-    .flash-warning { background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
-    .flash-info    { background:#e0f2fe; color:#075985; border:1px solid #bae6fd; }
+    .flash-success, .flash-error, .flash-warning, .flash-info {
+      background: var(--fb-bg); color: var(--fb-fg); border: 1px solid var(--fb-border);
+    }
+    .flash-success { --fb-accent:#10b981; --fb-bg:#ecfdf5; --fb-fg:#065f46; --fb-border:#a7f3d0; }
+    .flash-error   { --fb-accent:#ef4444; --fb-bg:#fef2f2; --fb-fg:#991b1b; --fb-border:#fecaca; }
+    .flash-warning { --fb-accent:#f59e0b; --fb-bg:#fffbeb; --fb-fg:#92400e; --fb-border:#fde68a; }
+    .flash-info    { --fb-accent:#3b82f6; --fb-bg:#eff6ff; --fb-fg:#1e40af; --fb-border:#bfdbfe; }
+
+    /* Εικονίδιο τύπου (μόνο στα toasts του κεντρικού container) */
+    #flashContainer .flash-banner:not([data-progress-flash]) { padding-left: 58px; min-height: 52px; }
+    #flashContainer .flash-banner:not([data-progress-flash])::before {
+      content: '\2713'; position: absolute; left: 15px; top: 12px; width: 28px; height: 28px; border-radius: 50%;
+      background: var(--fb-accent); color: #fff; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 15px; line-height: 1;
+    }
+    #flashContainer .flash-banner.flash-error:not([data-progress-flash])::before   { content: '\2715'; }
+    #flashContainer .flash-banner.flash-warning:not([data-progress-flash])::before { content: '!'; }
+    #flashContainer .flash-banner.flash-info:not([data-progress-flash])::before    { content: 'i'; font-family: Georgia, serif; font-style: italic; font-size: 17px; }
+
+    /* Μπάρα υπολειπόμενου χρόνου + παύση στο hover + έξοδος */
+    .flash-banner.flash-timed::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--fb-accent);
+      transform-origin: left center; opacity: .8; animation: flash-progress var(--fb-ttl) linear forwards;
+    }
+    .flash-banner.flash-paused::after { animation-play-state: paused; }
+    .flash-banner.flash-leaving { animation: flash-toast-leave .19s ease-in forwards; }
+    @keyframes flash-progress { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    @keyframes flash-toast-leave { to { opacity: 0; transform: translateX(24px); } }
+
+    /* Κουμπί κλεισίματος (το προσθέτει το JS με inline style) */
+    .flash-banner > button[aria-label="Close"] {
+      position: absolute !important; top: 10px !important; right: 10px !important;
+      width: 26px; height: 26px; padding: 0 !important; border: 0 !important; border-radius: 8px !important;
+      display: flex !important; align-items: center; justify-content: center;
+      font-size: 18px !important; line-height: 1 !important; opacity: .55 !important;
+      background: transparent !important; color: inherit !important; cursor: pointer;
+    }
+    .flash-banner > button[aria-label="Close"]:hover { opacity: 1 !important; background: rgba(15,23,42,.10) !important; }
+    [data-theme="dark"] .flash-banner > button[aria-label="Close"]:hover { background: rgba(255,255,255,.14) !important; }
 
     /* Global warning banners – dark-mode aware */
     .missing-customer-warning { background:#fffbeb; border-left:4px solid #f59e0b; color:#78350f; }
@@ -276,11 +316,12 @@
       color: #7dd3fc !important;
     }
     
-    /* Dark mode overrides for flash messages */
-    [data-theme="dark"] .flash-success { background:#064e3b; color:#d1fae5; border-color:#065f46; }
-    [data-theme="dark"] .flash-error   { background:#7f1d1d; color:#fecaca; border-color:#991b1b; }
-    [data-theme="dark"] .flash-warning { background:#78350f; color:#fef3c7; border-color:#92400e; }
-    [data-theme="dark"] .flash-info    { background:#78350f; color:#fef3c7; border-color:#92400e; }
+    /* Dark mode: ίδια σημασιολογία χρωμάτων (πράσινο/κόκκινο/κεχριμπαρί/μπλε) */
+    [data-theme="dark"] .flash-success { --fb-accent:#10b981; --fb-bg:#06281f; --fb-fg:#a7f3d0; --fb-border:#0f5a43; }
+    [data-theme="dark"] .flash-error   { --fb-accent:#ef4444; --fb-bg:#33100f; --fb-fg:#fecaca; --fb-border:#7f1d1d; }
+    [data-theme="dark"] .flash-warning { --fb-accent:#f59e0b; --fb-bg:#33250a; --fb-fg:#fde68a; --fb-border:#7a5410; }
+    [data-theme="dark"] .flash-info    { --fb-accent:#3b82f6; --fb-bg:#0b2240; --fb-fg:#bfdbfe; --fb-border:#1e3a8a; }
+    [data-theme="dark"] .flash-banner { box-shadow: 0 16px 38px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.3); }
     
     /* Dark mode overrides for UI elements */
     [data-theme="dark"] input,
