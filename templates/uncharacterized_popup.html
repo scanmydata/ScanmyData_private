@@ -32,8 +32,20 @@
 /* Dark mode: έντονο κίτρινο με σκούρο κείμενο — ο αριθμός ξεχωρίζει πάνω στο κεχριμπαρί κουμπί. */
 [data-theme="dark"] .unchar-launch-count { background: #fde047; color: #111827 !important; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
 .unchar-launch-count.is-zero { opacity: .75; }
-.unchar-launch-hint { font-size: 12px; color: #6b7280; }
-[data-theme="dark"] .unchar-launch-hint { color: #9ca3af; }
+/* Οδηγία χρήσης: εμφανίζεται ως tooltip όταν ο χρήστης περνά το ποντίκι (ή εστιάζει) πάνω από το κουμπί. */
+.unchar-launch-wrap { position: relative; display: inline-block; }
+.unchar-launch-tip {
+  position: absolute; left: 0; top: calc(100% + 8px); z-index: 40; width: max-content; max-width: min(380px, 86vw);
+  padding: 8px 12px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 13px; font-weight: 500; line-height: 1.4;
+  box-shadow: 0 8px 22px rgba(0,0,0,.28); pointer-events: none;
+  opacity: 0; visibility: hidden; transform: translateY(-3px); transition: opacity .12s ease, transform .12s ease, visibility .12s;
+}
+.unchar-launch-tip::before {
+  content: ''; position: absolute; left: 18px; top: -5px; width: 10px; height: 10px; background: inherit; transform: rotate(45deg);
+}
+.unchar-launch-wrap:hover .unchar-launch-tip,
+.unchar-launch-wrap:focus-within .unchar-launch-tip { opacity: 1; visibility: visible; transform: translateY(0); }
+[data-theme="dark"] .unchar-launch-tip { background: #f3f4f6; color: #111827; }
 
 .unchar-overlay {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
@@ -110,6 +122,21 @@
 #uncharTableHost .tabulator .tabulator-header .tabulator-col .tabulator-col-title {
   white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
 }
+/* Φίλτρο στήλης: αναγνωρίσιμο πάνω στο κεχριμπαρί· ενεργό = λευκό γεμάτο εικονίδιο με κουκκίδα + κίτρινη γραμμή. */
+#uncharTableHost .fbp-cf-btn { color: #fff7ed; opacity: .85; }
+#uncharTableHost .fbp-cf-btn:hover { background: rgba(255,255,255,.22); color: #fff; opacity: 1; }
+#uncharTableHost .fbp-cf-btn.is-active { background: #fff; color: #b45309; border-color: #fff; opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,.45); }
+#uncharTableHost .fbp-cf-btn.is-active::after { background: #dc2626; border-color: #fff; }
+#uncharTableHost .tabulator .tabulator-col.fbp-cf-col-active { box-shadow: inset 0 -4px 0 #fde047; }
+.unchar-colf-chip {
+  display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.unchar-colf-chip button {
+  border: 0; background: transparent !important; color: inherit !important; font-size: 12px; font-weight: 700;
+  text-decoration: underline; cursor: pointer; padding: 0;
+}
+[data-theme="dark"] .unchar-colf-chip { background: #422006; border-color: #b45309; color: #fde68a; }
 #uncharTableHost .tabulator .tabulator-row:hover { background-color: #fff7ed !important; }
 #uncharTableHost .tabulator .tabulator-row.tabulator-selected { background-color: #fef3c7 !important; }
 #uncharTableHost .tabulator .tabulator-row.unchar-row-failed { background-color: #fee2e2 !important; }
@@ -184,6 +211,10 @@
         Είδος κίνησης:
         <select id="uncharMtype"></select>
       </label>
+      <span id="uncharColFilters" class="unchar-colf-chip" hidden>
+        <span id="uncharColFiltersText"></span>
+        <button type="button" id="uncharColFiltersClear">Καθαρισμός</button>
+      </span>
       <button type="button" id="uncharZipBtn" class="unchar-btn unchar-btn-pdf" disabled
               title="Λήψη των PDF από τους παρόχους σε ένα αρχείο ZIP: των επιλεγμένων, αλλιώς όλων όσων εμφανίζονται">⬇ PDF όλων (ZIP)</button>
       <span class="unchar-spacer"></span>
@@ -244,6 +275,9 @@
     closeX: document.getElementById('uncharCloseX'),
     saveBtn: document.getElementById('uncharSaveBtn'),
     zipBtn: document.getElementById('uncharZipBtn'),
+    colChip: document.getElementById('uncharColFilters'),
+    colChipText: document.getElementById('uncharColFiltersText'),
+    colChipClear: document.getElementById('uncharColFiltersClear'),
     launchCount: document.getElementById('uncharOpenCount')
   };
 
@@ -252,7 +286,9 @@
     table: null, built: false, headerBox: null, saving: false, dirty: false, lastSavedMark: '',
     // PDF: host παρόχων που φάνηκε ότι δεν δίνουν αρχείο, εκκρεμές αίτημα συνδέσμων,
     // και «ξεκίνα ZIP μόλις φορτώσει ο πίνακας» (κουμπί PDF της Αναζήτησης).
-    pageHosts: {}, linksPromise: null, autoZip: false
+    pageHosts: {}, linksPromise: null, autoZip: false,
+    // Φίλτρα στηλών (κοινός κώδικας με τη Λίστα, fbpInstallColumnFilters): πλήθος ενεργών και ο ελεγκτής τους.
+    colFilters: null, colFilterCount: 0
   };
 
   // ---------- μικρά βοηθητικά ----------
@@ -384,6 +420,9 @@
   }
 
   function destroyTable(){
+    try { if (state.colFilters) state.colFilters.close(); } catch (_) {}
+    state.colFilters = null;
+    setColFilterChip(0);
     try { if (state.table) state.table.destroy(); } catch (_) {}
     state.table = null;
     state.built = false;
@@ -453,7 +492,7 @@
     }
     var text;
     if (selected) text = 'Επιλεγμένες: ' + selected + ' από ' + total;
-    else if (el.search.value.trim() && visible !== total) text = 'Εμφανίζονται ' + visible + ' από ' + total + ' εγγραφές';
+    else if ((el.search.value.trim() || state.colFilterCount) && visible !== total) text = 'Εμφανίζονται ' + visible + ' από ' + total + ' εγγραφές';
     else text = 'Σύνολο εγγραφών: ' + total;
     el.status.textContent = t ? text : '';
     el.saveBtn.textContent = '💾 Αποθήκευση επιλεγμένων' + (selected ? ' (' + selected + ')' : '');
@@ -604,6 +643,50 @@
     return columns;
   }
 
+  // ---------- φίλτρα στηλών ----------
+  function setColFilterChip(count){
+    state.colFilterCount = count || 0;
+    if (!el.colChip) return;
+    el.colChip.hidden = !state.colFilterCount;
+    if (state.colFilterCount) {
+      el.colChipText.textContent = '🔍 Φίλτρα στηλών ενεργά: ' + state.colFilterCount;
+    }
+  }
+
+  function numFromDisplay(s){
+    var n = parseFloat(String(s || '').replace(/\./g, '').replace(',', '.'));
+    return isFinite(n) ? n : 0;
+  }
+
+  // Η τιμή που ΒΛΕΠΕΙ ο χρήστης στο κελί (ετικέτα κατηγορίας, μορφοποιημένο ποσό) — πάνω της φιλτράρει/διαλέγει.
+  function filterValue(field, row){
+    if (field === 'category') return categoryLabel(row);
+    if (field === 'net' || field === 'vat' || field === 'total') return fmtNum(row[field]);
+    return row[field];
+  }
+
+  function filterCompare(field, a, b){
+    if (field === 'net' || field === 'vat' || field === 'total') return numFromDisplay(a) - numFromDisplay(b);
+    if (field === 'date') return dateValue(b) - dateValue(a);
+    return String(a).localeCompare(String(b), 'el', { numeric: true });
+  }
+
+  function installColumnFilters(table){
+    if (typeof window.fbpInstallColumnFilters !== 'function') return;   // η Λίστα δεν φόρτωσε τον κοινό κώδικα
+    try {
+      state.colFilters = window.fbpInstallColumnFilters(table, el.host, function(){ return 'unchar'; }, {
+        persist: false,                 // νέο άνοιγμα = καθαρός πίνακας· δεν μένουν κρυμμένα φίλτρα
+        expose: false,                  // να μην πάρει τη θέση του καθολικού φίλτρου της Λίστας
+        skip: function(field){ return field === 'pdf'; },
+        valueOf: filterValue,
+        compare: filterCompare,
+        onChange: function(count){ setColFilterChip(count); setTimeout(refreshStatus, 0); }
+      });
+    } catch (e) {
+      try { console.warn('unchar column filters failed', e); } catch (_) {}
+    }
+  }
+
   function buildTable(rows){
     destroyTable();
     if (typeof window.Tabulator === 'undefined') {
@@ -640,6 +723,7 @@
     function uncheckHeader(){ if (state.headerBox) state.headerBox.checked = false; }
     table.on('tableBuilt', function(){
       state.built = true;
+      installColumnFilters(table);
       fitHeight();
       refreshStatus();
       if (state.autoZip) { state.autoZip = false; downloadZip(); }
@@ -883,9 +967,10 @@
       state.lastSavedMark = saved[saved.length - 1].mark;
       try { await t.deleteRow(saved.map(function(r){ return r.mark; })); } catch (_) {}
       setLaunchCount(t.getDataCount());
-      // Αν το φίλτρο αναζήτησης δεν αφήνει πια καμία γραμμή, δείξε τις υπόλοιπες.
-      if (el.search.value && t.getDataCount() && !t.getDataCount('active')) {
+      // Αν τα φίλτρα (αναζήτηση / στήλες) δεν αφήνουν πια καμία γραμμή, δείξε τις υπόλοιπες.
+      if ((el.search.value || state.colFilterCount) && t.getDataCount() && !t.getDataCount('active')) {
         el.search.value = '';
+        if (state.colFilters) state.colFilters.clearAll();
         t.clearFilter();
       }
     }
@@ -1223,6 +1308,10 @@
   el.closeX.addEventListener('click', closeModal);
   el.bulkApply.addEventListener('click', applyBulkCategory);
   el.saveBtn.addEventListener('click', saveSelected);
+
+  el.colChipClear.addEventListener('click', function(){
+    if (state.colFilters) state.colFilters.clearAll();
+  });
 
   var searchTimer = null;
   el.search.addEventListener('input', function(){

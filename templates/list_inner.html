@@ -2013,7 +2013,14 @@ document.addEventListener('click', function(e){
   color: #6b7280; flex: 0 0 auto;
 }
 .fbp-cf-btn:hover { background: rgba(0,0,0,.08); color: #111827; }
-.fbp-cf-btn.is-active { color: #fff; background: #2563eb; border-color: #1d4ed8; }
+.fbp-cf-btn.is-active { color: #fff; background: #2563eb; border-color: #1d4ed8; position: relative; box-shadow: 0 0 0 2px rgba(37,99,235,.35); }
+/* Μικρή κουκκίδα πάνω στο εικονίδιο + γραμμή κάτω από την κεφαλίδα: φαίνεται αμέσως ποια στήλη φιλτράρει. */
+.fbp-cf-btn.is-active::after {
+  content: ''; position: absolute; top: -4px; right: -4px; width: 8px; height: 8px; border-radius: 50%;
+  background: #f59e0b; border: 1px solid #fff;
+}
+.tabulator .tabulator-col.fbp-cf-col-active { box-shadow: inset 0 -3px 0 #f59e0b; }
+.fbp-cf-auto { margin-top: 6px; font-size: 11px; opacity: .65; }
 [data-theme="dark"] .fbp-cf-btn { color: #cbd5e1; }
 [data-theme="dark"] .fbp-cf-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
 [data-theme="dark"] .fbp-cf-btn.is-active { color: #fff; background: #2563eb; }
@@ -2049,19 +2056,33 @@ document.addEventListener('click', function(e){
 (function(){
   // ---- Φίλτρο ανά στήλη: εικονίδιο στην κεφαλίδα κάθε στήλης → popover (αναζήτηση + λίστα τιμών). Τα φίλτρα
   // στηλών συνδυάζονται (AND) με την καθολική αναζήτηση και το φίλτρο αχαρακτήριστων, και μένουν μετά το reload.
-  function fbpInstallColumnFilters(tab, wrapper, stateKeyFn){
-    if(!tab || typeof tab.getColumns !== 'function') return;
+  // Τα φίλτρα εφαρμόζονται ΑΥΤΟΜΑΤΑ (σε κάθε αλλαγή τικ/κειμένου)· δεν υπάρχει κουμπί «Εφαρμογή». Ενεργό φίλτρο
+  // φαίνεται στην κεφαλίδα της στήλης (γεμάτο εικονίδιο + κίτρινη γραμμή) και μέσω opts.onChange(πλήθος) για ένδειξη
+  // στη γραμμή εργαλείων. Επιλογές (opts): persist (false = χωρίς αποθήκευση στο sessionStorage), expose (false =
+  // όχι καθολικό window.FBP_COLUMN_FILTERS), valueOf(field,row) (εμφανιζόμενη τιμή), skip(field), compare(field,a,b).
+  function fbpInstallColumnFilters(tab, wrapper, stateKeyFn, opts){
+    if(!tab || typeof tab.getColumns !== 'function') return null;
+    opts = opts || {};
+    var persist = opts.persist !== false;
     var storeKey = 'fbp_colfilters:' + (function(){ try{ return stateKeyFn('colfilters'); }catch(_){ return 'default'; } })();
     var state = {};   // field -> { text: '', values: [..] | null }
-    try{
-      var saved = JSON.parse(sessionStorage.getItem(storeKey) || '{}');
-      if(saved && typeof saved === 'object') state = saved;
-    }catch(_){ state = {}; }
+    if(persist){
+      try{
+        var saved = JSON.parse(sessionStorage.getItem(storeKey) || '{}');
+        if(saved && typeof saved === 'object') state = saved;
+      }catch(_){ state = {}; }
+    }
+    function cellText(field, row){
+      var raw;
+      if(typeof opts.valueOf === 'function'){ try{ raw = opts.valueOf(field, row); }catch(_){ raw = row[field]; } }
+      else raw = row[field];
+      return raw == null ? '' : String(raw).trim();
+    }
 
     function norm(v){
       return String(v == null ? '' : v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     }
-    function save(){ try{ sessionStorage.setItem(storeKey, JSON.stringify(state)); }catch(_){ } }
+    function save(){ if(!persist) return; try{ sessionStorage.setItem(storeKey, JSON.stringify(state)); }catch(_){ } }
     function isActive(f){
       var st = state[f];
       return !!(st && ((st.text && st.text.length) || (Array.isArray(st.values))));
@@ -2073,8 +2094,7 @@ document.addEventListener('click', function(e){
       for(var f in state){
         if(!isActive(f)) continue;
         var st = state[f];
-        var raw = data[f];
-        var txt = raw == null ? '' : String(raw).trim();
+        var txt = cellText(f, data);
         if(st.text && norm(txt).indexOf(norm(st.text)) === -1) return false;
         if(Array.isArray(st.values)){
           var set = valueSets[f] || (valueSets[f] = new Set(st.values));
@@ -2091,7 +2111,9 @@ document.addEventListener('click', function(e){
       try{ origRemove(predicate); }catch(_){ }
       if(anyActive()){ try{ origAdd(predicate); }catch(_){ } }
       refreshIcons();
+      if(typeof opts.onChange === 'function'){ try{ opts.onChange(activeCount(), Object.keys(state).filter(isActive)); }catch(_){ } }
     }
+    function activeCount(){ return Object.keys(state).filter(isActive).length; }
     // Οι υπόλοιπες λειτουργίες της λίστας (καθολική αναζήτηση, φίλτρο αχαρακτήριστων) καλούν setFilter/clearFilter,
     // που αντικαθιστούν ΟΛΑ τα φίλτρα — ξαναβάζουμε μετά το δικό μας.
     tab.setFilter = function(){ var r = origSet.apply(null, arguments); if(anyActive()){ try{ origAdd(predicate); }catch(_){ } } return r; };
@@ -2106,6 +2128,7 @@ document.addEventListener('click', function(e){
       cols.forEach(function(c){
         var f = ''; try{ f = c.getField(); }catch(_){ }
         if(!f) return;
+        if(typeof opts.skip === 'function' && opts.skip(f)) return;
         var el = c.getElement && c.getElement();
         if(!el) return;
         var content = el.querySelector('.tabulator-col-title') || el;
@@ -2115,31 +2138,39 @@ document.addEventListener('click', function(e){
         b.setAttribute('role', 'button');
         b.setAttribute('tabindex', '0');
         b.setAttribute('data-field', f);
-        b.title = 'Φίλτρο στήλης';
+        b.title = isActive(f) ? 'Φίλτρο στήλης — ΕΝΕΡΓΟ' : 'Φίλτρο στήλης';
         b.innerHTML = ICON;
         content.appendChild(b);
+        el.classList.toggle('fbp-cf-col-active', isActive(f));
       });
     }
     function refreshIcons(){
       wrapper.querySelectorAll('.fbp-cf-btn').forEach(function(b){
-        b.classList.toggle('is-active', isActive(b.getAttribute('data-field')));
+        var on = isActive(b.getAttribute('data-field'));
+        b.classList.toggle('is-active', on);
+        b.title = on ? 'Φίλτρο στήλης — ΕΝΕΡΓΟ' : 'Φίλτρο στήλης';
+        var colEl = b.closest ? b.closest('.tabulator-col') : null;
+        if(colEl) colEl.classList.toggle('fbp-cf-col-active', on);
       });
     }
 
     var pop = null;
     function closePop(){ if(pop){ try{ pop.remove(); }catch(_){ } pop = null; document.removeEventListener('mousedown', onDocDown, true); document.removeEventListener('keydown', onKey, true); } }
     function onDocDown(e){ if(pop && !pop.contains(e.target) && !(e.target.closest && e.target.closest('.fbp-cf-btn'))) closePop(); }
-    function onKey(e){ if(e.key === 'Escape') closePop(); }
+    function onKey(e){ if(e.key === 'Escape'){ e.stopPropagation(); closePop(); } }
 
     function distinct(field){
       var seen = new Map();
       var data = [];
       try{ data = tab.getData() || []; }catch(_){ data = []; }
       data.forEach(function(r){
-        var v = r[field] == null ? '' : String(r[field]).trim();
+        var v = cellText(field, r);
         seen.set(v, (seen.get(v) || 0) + 1);
       });
-      return Array.from(seen.entries()).sort(function(a, b){ return String(a[0]).localeCompare(String(b[0]), 'el', { numeric: true }); });
+      return Array.from(seen.entries()).sort(function(a, b){
+        if(typeof opts.compare === 'function'){ try{ return opts.compare(field, a[0], b[0]); }catch(_){ } }
+        return String(a[0]).localeCompare(String(b[0]), 'el', { numeric: true });
+      });
     }
 
     function openPop(field, anchor){
@@ -2154,7 +2185,8 @@ document.addEventListener('click', function(e){
       pop.innerHTML = '<h4></h4><input type="text" placeholder="Περιέχει… (αναζήτηση)" autocomplete="off">'
         + '<div class="fbp-cf-list"></div>'
         + '<div class="fbp-cf-actions"><button type="button" data-a="all">Όλα</button><button type="button" data-a="none">Κανένα</button>'
-        + '<button type="button" data-a="clear">Καθαρισμός</button><button type="button" data-a="apply" class="primary">Εφαρμογή</button></div>'
+        + '<button type="button" data-a="clear">Καθαρισμός</button><button type="button" data-a="close" class="primary">Κλείσιμο</button></div>'
+        + '<div class="fbp-cf-auto">Εφαρμόζεται αυτόματα</div>'
         + '<button type="button" class="fbp-cf-clear-all" data-a="clearall">Καθαρισμός όλων των φίλτρων στηλών</button>';
       pop.querySelector('h4').textContent = 'Φίλτρο: ' + title;
       var input = pop.querySelector('input');
@@ -2173,7 +2205,7 @@ document.addEventListener('click', function(e){
           var cb = document.createElement('input');
           cb.type = 'checkbox';
           cb.checked = checked.has(it[0]);
-          cb.addEventListener('change', function(){ if(cb.checked) checked.add(it[0]); else checked.delete(it[0]); });
+          cb.addEventListener('change', function(){ if(cb.checked) checked.add(it[0]); else checked.delete(it[0]); commit(); });
           var sp = document.createElement('span');
           sp.textContent = (it[0] === '' ? '(κενό)' : it[0]) + '  (' + it[1] + ')';
           lab.appendChild(cb); lab.appendChild(sp);
@@ -2186,27 +2218,29 @@ document.addEventListener('click', function(e){
           list.appendChild(more);
         }
       }
-      renderList();
-      input.addEventListener('input', renderList);
-      function apply(){
+      // Αυτόματη εφαρμογή: κάθε αλλαγή υπολογίζει το φίλτρο της στήλης και ξαναφιλτράρει τον πίνακα αμέσως.
+      function commit(){
         var all = items.map(function(i){ return i[0]; });
         var allChecked = all.every(function(v){ return checked.has(v); });
         var vals = allChecked ? null : all.filter(function(v){ return checked.has(v); });
         var text = input.value.trim();
         if(!text && vals === null){ delete state[field]; } else { state[field] = { text: text, values: vals }; }
         valueSets = {};
-        save(); reapply(); closePop();
+        save(); reapply();
       }
+      renderList();
+      var typeTO = null;
+      input.addEventListener('input', function(){ renderList(); clearTimeout(typeTO); typeTO = setTimeout(commit, 120); });
       pop.addEventListener('click', function(e){
         var a = e.target && e.target.getAttribute && e.target.getAttribute('data-a');
         if(!a) return;
-        if(a === 'apply') apply();
+        if(a === 'close') closePop();
         else if(a === 'clear'){ delete state[field]; valueSets = {}; save(); reapply(); closePop(); }
         else if(a === 'clearall'){ state = {}; valueSets = {}; save(); reapply(); closePop(); }
-        else if(a === 'all'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.add(i[0]); }); renderList(); }
-        else if(a === 'none'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.delete(i[0]); }); renderList(); }
+        else if(a === 'all'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.add(i[0]); }); renderList(); commit(); }
+        else if(a === 'none'){ items.forEach(function(i){ if(!input.value || norm(i[0]).indexOf(norm(input.value)) !== -1) checked.delete(i[0]); }); renderList(); commit(); }
       });
-      input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); apply(); } });
+      input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); clearTimeout(typeTO); commit(); closePop(); } });
       document.body.appendChild(pop);
       var r = anchor.getBoundingClientRect();
       var left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left));
@@ -2236,8 +2270,15 @@ document.addEventListener('click', function(e){
     setTimeout(injectIcons, 50);
     // Αποκατάσταση φίλτρων που ήταν ενεργά πριν το reload
     if(anyActive()) reapply();
-    window.FBP_COLUMN_FILTERS = { clearAll: function(){ state = {}; valueSets = {}; save(); reapply(); }, isActive: anyActive };
+    var api = {
+      clearAll: function(){ state = {}; valueSets = {}; save(); reapply(); closePop(); },
+      isActive: anyActive, count: activeCount, close: closePop,
+      refresh: function(){ injectIcons(); refreshIcons(); }
+    };
+    if(opts.expose !== false) window.FBP_COLUMN_FILTERS = api;
+    return api;
   }
+  try{ window.fbpInstallColumnFilters = fbpInstallColumnFilters; }catch(_){ }
 
   function buildColumnsFromThead(thead){
     const ths = Array.from(thead.querySelectorAll('th'));

@@ -116,12 +116,13 @@
     {% if vat %}
     {# Τιμολόγια της Λήψης που δεν έχουν καταχωρηθεί ακόμα: για παραστατικά χωρίς QR/MARK στο έντυπο. #}
     <div class="unchar-launch">
-        <button type="button" id="uncharOpenBtn" class="unchar-launch-btn" aria-haspopup="dialog"
-                title="Εμφάνιση των αχαρακτήριστων τιμολογίων του myDATA για καταχώρηση χωρίς QR/MARK">
-            📋 Αχαρακτήριστα τιμολόγια myDATA
-            <span id="uncharOpenCount" class="unchar-launch-count" hidden></span>
-        </button>
-        <span class="unchar-launch-hint">Για παραστατικά χωρίς QR ή MARK στο έντυπο: επίλεξε, χαρακτήρισε και αποθήκευσε στη λίστα.</span>
+        <span class="unchar-launch-wrap">
+            <button type="button" id="uncharOpenBtn" class="unchar-launch-btn" aria-haspopup="dialog" aria-describedby="uncharLaunchTip">
+                📋 Αχαρακτήριστα τιμολόγια myDATA
+                <span id="uncharOpenCount" class="unchar-launch-count" hidden></span>
+            </button>
+            <span id="uncharLaunchTip" class="unchar-launch-tip" role="tooltip">Για παραστατικά χωρίς QR ή MARK στο έντυπο: επίλεξε, χαρακτήρισε και αποθήκευσε στη λίστα.</span>
+        </span>
     </div>
     {% endif %}
 </div>
