@@ -291,7 +291,56 @@ chk("migrate trashed old JSON only after verification", set(drive.trashed) == {"
 rels = {r for r, f in drive.files.items() if not f["trashed"]}
 chk("drive now holds only the DB for invoices", rels == {"invoices.db"}, rels)
 
+
+# ================= 10. διαγραφή δεδομένων πελάτη: ταφόπλακες (δεν αναστήνονται από το Drive) =================
+drive.files = {}
+drive.trashed = []
+D._resolve_group_identity = lambda g, f=None: {"resolved": True, "group_name": "g1", "local_folder": "g1"}
+SRV, LOC = machine("tsrv"), machine("tloc")
+SRVG, LOCG = os.path.join(SRV, FOLDER), os.path.join(LOC, FOLDER)
+S.configure(SRV)
+for v in ("701", "702"):
+    S.write(os.path.join(SRVG, f"{v}_invoices.json"), [mk(1), mk(2)])
+    S.write(os.path.join(SRVG, "epsilon", f"{v}_epsilon_invoices.json"), [dict(mk(1), lines=[])])
+D.drive_push_group_files("g1", local_data_root=SRV)
+S.configure(LOC)
+D.drive_pull_group_to_local("g1", local_data_root=LOC)
+chk("tombstone setup: local has both customers", os.path.exists(os.path.join(LOCG, "701_invoices.json")) and
+    os.path.exists(os.path.join(LOCG, "epsilon", "702_epsilon_invoices.json")))
+time.sleep(0.05)
+# «διαγραφή δεδομένων πελάτη 701» όπως το delete_customer_data_files: remove + forget
+for pth in (os.path.join(LOCG, "701_invoices.json"), os.path.join(LOCG, "epsilon", "701_epsilon_invoices.json")):
+    os.remove(pth)
+    S.forget(pth)
+D.drive_push_group_files("g1", local_data_root=LOC)
+chk("tombstone: local does not resurrect deleted store on its own push", not os.path.exists(os.path.join(LOCG, "701_invoices.json")))
+S.configure(SRV)
+D.drive_pull_group_to_local("g1", local_data_root=SRV)
+chk("tombstone: server pull removes the deleted customer's files", not os.path.exists(os.path.join(SRVG, "701_invoices.json")) and
+    not os.path.exists(os.path.join(SRVG, "epsilon", "701_epsilon_invoices.json")))
+chk("tombstone: other customer untouched", os.path.exists(os.path.join(SRVG, "702_invoices.json")))
+D.drive_push_group_files("g1", local_data_root=SRV)
+S.configure(LOC)
+D.drive_pull_group_to_local("g1", local_data_root=LOC)
+chk("tombstone: stays deleted after full round trip", not os.path.exists(os.path.join(LOCG, "701_invoices.json")) and
+    S.read(os.path.join(LOCG, "701_invoices.json")) == (False, None))
+# επανα-δημιουργία μετά τη διαγραφή: κερδίζει η νεότερη εγγραφή και καθαρίζει την ταφόπλακα
+time.sleep(0.05)
+S.write(os.path.join(LOCG, "701_invoices.json"), [mk(77)])
+D.drive_push_group_files("g1", local_data_root=LOC)
+S.configure(SRV)
+D.drive_pull_group_to_local("g1", local_data_root=SRV)
+chk("tombstone: re-created store propagates", S.read(os.path.join(SRVG, "701_invoices.json")) == (True, [mk(77)]))
+# σβήσιμο αρχείου ΧΩΡΙΣ forget (π.χ. «σβήσε τα JSON για να ξανακατεβούν»): ΔΕΝ είναι διαγραφή — ξαναγράφεται από τη βάση
+time.sleep(0.05)
+os.remove(os.path.join(SRVG, "702_invoices.json"))
+D.drive_push_group_files("g1", local_data_root=SRV)
+chk("accidental file removal is restored locally", os.path.exists(os.path.join(SRVG, "702_invoices.json")))
+S.configure(LOC)
+D.drive_pull_group_to_local("g1", local_data_root=LOC)
+chk("accidental file removal does not delete data on other machines", os.path.exists(os.path.join(LOCG, "702_invoices.json")))
+
 print("\nBAD =", bad)
-for p in (SERVER, LOCAL, L2, L3, L4, L5, BK):
+for p in (SERVER, LOCAL, L2, L3, L4, L5, SRV, LOC, BK):
     shutil.rmtree(os.path.dirname(p) if os.path.basename(p) == "data" else p, ignore_errors=True)
 sys.exit(1 if bad else 0)

@@ -59,8 +59,47 @@ def _remote_counts(plain: bytes) -> dict:
             pass
 
 
+def _remote_stores(plain: bytes) -> dict:
+    """{(kind, vat): (n, updated_at)} από ένα snapshot."""
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        ist.extract_snapshot(plain, tmp)
+        c = sqlite3.connect(tmp)
+        try:
+            return {(k, v): (int(n), float(u or 0)) for k, v, n, u in
+                    c.execute("SELECT kind, vat, n, updated_at FROM stores")}
+        finally:
+            c.close()
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _local_stores(gdir: str) -> dict:
+    c = sqlite3.connect(ist.db_path(gdir))
+    try:
+        return {(k, v): (int(n), float(u or 0)) for k, v, n, u in
+                c.execute("SELECT kind, vat, n, updated_at FROM stores")}
+    finally:
+        c.close()
+
+
+def _key_of(rel: str):
+    base = os.path.basename(rel)
+    for kind, suffix in (("epsilon", "_epsilon_invoices.json"), ("summary", "_summary.json"), ("invoices", "_invoices.json")):
+        if base.endswith(suffix):
+            return kind, base[: -len(suffix)]
+    return None
+
+
 def migrate_group(g: str, data_root: str, apply: bool) -> bool:
     gdir = os.path.join(data_root, g)
+    if not ist._managed_files(gdir, data_root) and not os.path.exists(ist.db_path(gdir)):
+        print(f"[{g}] χωρίς τοπικά παραστατικά — παραλείπεται")
+        return True
     print(f"[{g}]")
     index = ds._build_group_index(g, force=True)
     remote_db = index.get("invoices.db")
@@ -108,43 +147,75 @@ def migrate_group(g: str, data_root: str, apply: bool) -> bool:
         print("  δεν υπάρχουν παραστατικά — τίποτα να ανέβει.")
         return True
 
-    # 3. upload + επαλήθευση
+    # 3. upload (μόνο αν το Drive υπολείπεται) + επαλήθευση
     fp = ist.fingerprint(gdir)
-    raw = ist.snapshot_bytes(gdir)
-    enc = ds._cipher().encrypt(raw)
-    mt = time.time()
-    parent = ds._ensure_group_folder(g)
+    local_map = _local_stores(gdir)
+    remote_map = {}
     cur = ds._build_group_index(g, force=True).get("invoices.db")
-    res = None
-    for attempt in range(1, 5):
-        try:
-            res = ds._upload_bytes(parent, "invoices.db", enc, mt, existing_id=(cur or {}).get("id"))
-            break
-        except Exception as e:  # noqa: BLE001
-            print(f"    προσπάθεια {attempt} απέτυχε: {e}")
-            time.sleep(3 * attempt)
-    if res is None:
-        print("  ΑΠΟΤΥΧΙΑ upload.")
-        return False
-    got = _remote_counts(ds._cipher().decrypt(ds._download_bytes(res["id"])))
-    want = {k: v["docs"] for k, v in local["by_kind"].items()}
-    ok = got == want
-    print(f"  ανέβηκε κρυπτογραφημένη βάση ({len(enc) // 1024} KB) — επαλήθευση {got} == {want} -> "
-          f"{'ΟΚ' if ok else 'ΑΠΟΤΥΧΙΑ'}")
+    if cur:
+        remote_map = _remote_stores(_decrypt(ds._download_bytes(cur["id"])))
+    ahead = [k for k, (n, u) in local_map.items()
+             if k not in remote_map or u > remote_map[k][1] + 1e-6 or n != remote_map[k][0]]
+    res = cur
+    mt = float((cur or {}).get("appProperties", {}).get("local_mtime") or 0) if cur else 0.0
+    if cur and not ahead:
+        print(f"  η invoices.db του Drive είναι ήδη ενημερωμένη ({len(remote_map)} store) — δεν ξαναανεβαίνει")
+    else:
+        print(f"  τοπικά μπροστά από το Drive: {len(ahead)} store -> ανέβασμα")
+        raw = ist.snapshot_bytes(gdir)
+        enc = ds._cipher().encrypt(raw)
+        mt = time.time()
+        parent = ds._ensure_group_folder(g)
+        res = None
+        for attempt in range(1, 5):
+            try:
+                res = ds._upload_bytes(parent, "invoices.db", enc, mt, existing_id=(cur or {}).get("id"))
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"    προσπάθεια {attempt} απέτυχε: {e}")
+                time.sleep(3 * attempt)
+        if res is None:
+            print("  ΑΠΟΤΥΧΙΑ upload.")
+            return False
+        ist.mark_pushed(gdir, fp, mt)
+        print(f"  ανέβηκε κρυπτογραφημένη βάση ({len(enc) // 1024} KB)")
+
+    got_plain = _decrypt(ds._download_bytes(res["id"]))
+    got = _remote_counts(got_plain)
+    remote_map = _remote_stores(got_plain)
+    want = {k: v["docs"] for k, v in ist.stats(gdir)["by_kind"].items()}
+    ok = all(got.get(k, 0) >= n for k, n in want.items())
+    print(f"  επαλήθευση Drive {got} (τοπικά {want}) -> {'ΟΚ' if ok else 'ΑΠΟΤΥΧΙΑ'}")
     if not ok:
         return False
-    ist.mark_pushed(gdir, fp, mt)
 
-    # 4. trash των παλιών JSON
-    done = 0
+    # 4. trash μόνο των JSON που καλύπτονται πλήρως από τη βάση του Drive (store υπάρχει και δεν είναι παλαιότερο)
+    done = kept = 0
     for rel, meta in sorted(managed.items()):
+        key = _key_of(rel)
+        try:
+            rm = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
+        except Exception:
+            rm = 0.0
+        covered = key in remote_map and remote_map[key][1] + 2.0 >= rm
+        if not covered:
+            kept += 1
+            print(f"    ΔΕΝ καλύπτεται από τη βάση -> μένει στο Drive: {rel}")
+            continue
         try:
             if ds._trash_file(meta["id"]):
                 done += 1
         except Exception as e:  # noqa: BLE001
             print("    ΑΠΟΤΥΧΙΑ trash:", rel, e)
-    print(f"  -> στα απορρίμματα του Drive: {done}/{len(managed)} JSON παραστατικών")
+    print(f"  -> στα απορρίμματα του Drive: {done}/{len(managed)} JSON παραστατικών (παραμένουν {kept})")
     return True
+
+
+def _decrypt(blob: bytes) -> bytes:
+    try:
+        return ds._cipher().decrypt(blob)
+    except Exception:
+        return blob
 
 
 def main() -> int:

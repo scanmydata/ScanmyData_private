@@ -165,7 +165,12 @@ chk("unchar after external change uses fresh data", len(ns["_unchar_collect"](VA
 gone = os.path.join(GROUP, "000111222_summary.json")
 invoice_store.write(gone, [{"mark": "1"}])
 os.remove(gone)
-chk("deleted file -> not found", invoice_store.read(gone) == (False, None))
+chk("file removed without forget() is restored from the DB (no silent deletion)",
+    invoice_store.read(gone) == (True, [{"mark": "1"}]) and os.path.exists(gone))
+os.remove(gone)
+invoice_store.forget(gone)
+chk("forget() after removal: store gone", invoice_store.read(gone) == (False, None) and not os.path.exists(gone))
+chk("forget() leaves a tombstone", invoice_store.fingerprint(GROUP) != "")
 
 # --- 4. epsilon
 chk("load_epsilon_cache_for_vat", len(ns["load_epsilon_cache_for_vat"](VAT)) == len(eps))

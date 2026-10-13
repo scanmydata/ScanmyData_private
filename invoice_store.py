@@ -85,6 +85,14 @@ CREATE INDEX IF NOT EXISTS idx_docs_mark ON docs(mark);
 CREATE INDEX IF NOT EXISTS idx_docs_issuer ON docs(issuer_vat, issue_iso);
 CREATE INDEX IF NOT EXISTS idx_docs_kv_class ON docs(kind, vat, class_l);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+-- «Ταφόπλακες»: σβησμένα store (π.χ. διαγραφή δεδομένων πελάτη). Ταξιδεύουν με το snapshot ώστε η συγχώνευση με το
+-- Drive να μην αναστήσει δεδομένα που σβήστηκαν εσκεμμένα.
+CREATE TABLE IF NOT EXISTS tombstones (
+    kind       TEXT NOT NULL,
+    vat        TEXT NOT NULL,
+    deleted_at REAL NOT NULL,
+    PRIMARY KEY (kind, vat)
+);
 """
 
 _ROOT: Optional[str] = None
@@ -418,6 +426,27 @@ def _store_row(conn: sqlite3.Connection, kind: str, vat: str):
         (kind, vat)).fetchone()
 
 
+TOMBSTONE_TTL = 180 * 86400
+
+
+def _drop_store(conn: sqlite3.Connection, kind: str, vat: str, when: Optional[float] = None) -> None:
+    """Σβήνει ένα store από τη βάση και γράφει ταφόπλακα (ώστε να μην αναστηθεί από συγχώνευση με το Drive)."""
+    now = float(when) if when is not None else time.time()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DELETE FROM docs WHERE kind=? AND vat=?", (kind, vat))
+        conn.execute("DELETE FROM stores WHERE kind=? AND vat=?", (kind, vat))
+        conn.execute("INSERT OR REPLACE INTO tombstones (kind, vat, deleted_at) VALUES (?,?,?)", (kind, vat, now))
+        conn.execute("DELETE FROM tombstones WHERE deleted_at < ?", (time.time() - TOMBSTONE_TTL,))
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+
+
 class ExportFailed(Exception):
     """Η εγγραφή του αρχείου-export απέτυχε (η συναλλαγή της βάσης ακυρώθηκε — δεν άλλαξε τίποτα)."""
 
@@ -463,6 +492,7 @@ def _db_save(conn: sqlite3.Connection, kind: str, vat: str, obj: Any, texts: Lis
             "INSERT OR REPLACE INTO stores (kind,vat,shape,raw,n,version,updated_at,file_mtime_ns,file_size,export_dirty) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (kind, vat, "raw" if raw is not None else "list", raw, n, version, now, fm, fs, int(dirty)))
+        conn.execute("DELETE FROM tombstones WHERE kind=? AND vat=?", (kind, vat))
         conn.execute("COMMIT")
         return version
     except Exception:
@@ -557,19 +587,14 @@ def read(path: Any) -> Tuple[bool, Any]:
                     return (True, obj) if ok else (False, None)
                 dirty = bool(row[6])
                 if sig is None:
-                    if dirty:                                     # το export δεν ολοκληρώθηκε: ξαναγράφεται από τη βάση
-                        obj = _db_load(conn, kind, vat, row)
-                        texts, raw = _serialize(obj)
-                        s2 = _write_file(p, _export_text(texts, raw))
-                        conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
-                                     (s2[0], s2[1], kind, vat))
-                        return True, obj
-                    # Το αρχείο σβήστηκε εσκεμμένα (εξωτερικά) -> όπως πριν, «δεν υπάρχουν δεδομένα».
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute("DELETE FROM docs WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("DELETE FROM stores WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("COMMIT")
-                    return False, None
+                    # Λείπει το αρχείο-export (σβήστηκε/χάθηκε ή δεν ολοκληρώθηκε το export): ξαναγράφεται από τη
+                    # βάση — ΠΟΤΕ σιωπηλή διαγραφή δεδομένων. Εσκεμμένη διαγραφή = forget() (ταφόπλακα).
+                    obj = _db_load(conn, kind, vat, row)
+                    texts, raw = _serialize(obj)
+                    s2 = _write_file(p, _export_text(texts, raw))
+                    conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
+                                 (s2[0], s2[1], kind, vat))
+                    return True, obj
                 if sig == (row[4], row[5]) and not dirty:
                     return True, _load_cached(conn, p, kind, vat, row, sig)
                 if dirty:
@@ -624,6 +649,29 @@ def write(path: Any, obj: Any) -> bool:
             return True
         finally:
             conn.close()
+
+
+def forget(path: Any) -> bool:
+    """Σβήσιμο store (μετά από ΕΣΚΕΜΜΕΝΗ διαγραφή του αρχείου, π.χ. «διαγραφή δεδομένων πελάτη»): ταφόπλακα ώστε
+    ο συγχρονισμός με το Drive να μην το αναστήσει. Δεν αγγίζει το αρχείο."""
+    info = classify(path)
+    if not info:
+        return False
+    group_dir, kind, vat = info
+    if not os.path.exists(db_path(group_dir)):
+        return False
+    try:
+        with _lock_for(group_dir):
+            conn = _connect(group_dir)
+            try:
+                _drop_store(conn, kind, vat)
+            finally:
+                conn.close()
+        _cache_drop(os.path.abspath(str(path)))
+        return True
+    except Exception:
+        log.exception("invoice_store.forget failed for %s", path)
+        return False
 
 
 def version(path: Any) -> Optional[int]:
@@ -717,20 +765,14 @@ def sync_group(group_dir: str, *, force: bool = False, min_interval: float = 2.0
             for (kind, vat), cur in known.items():
                 if (kind, vat) in seen:
                     continue
-                if cur[2]:                                         # εκκρεμές export, αρχείο λείπει -> ξαναγράφεται
-                    obj = _db_load(conn, kind, vat)
-                    texts, raw = _serialize(obj)
-                    p = file_path(group_dir, kind, vat)
-                    s2 = _write_file(p, _export_text(texts, raw))
-                    conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
-                                 (s2[0], s2[1], kind, vat))
-                    stats["exported"] += 1
-                else:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute("DELETE FROM docs WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("DELETE FROM stores WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("COMMIT")
-                    stats["removed"] += 1
+                # Το αρχείο λείπει αλλά το store υπάρχει: ξαναγράφεται από τη βάση (όχι σιωπηλή διαγραφή).
+                obj = _db_load(conn, kind, vat)
+                texts, raw = _serialize(obj)
+                p = file_path(group_dir, kind, vat)
+                s2 = _write_file(p, _export_text(texts, raw))
+                conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
+                             (s2[0], s2[1], kind, vat))
+                stats["exported"] += 1
         finally:
             conn.close()
     return stats
@@ -834,18 +876,12 @@ def ensure_fresh(group_dir: str, kind: str, vat: str) -> bool:
                     ok, _o = _import_file(conn, p, kind, vat)
                     return ok
                 if sig is None:
-                    if row[6]:
-                        obj = _db_load(conn, kind, vat, row)
-                        texts, raw = _serialize(obj)
-                        s2 = _write_file(p, _export_text(texts, raw))
-                        conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
-                                     (s2[0], s2[1], kind, vat))
-                        return True
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute("DELETE FROM docs WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("DELETE FROM stores WHERE kind=? AND vat=?", (kind, vat))
-                    conn.execute("COMMIT")
-                    return False
+                    obj = _db_load(conn, kind, vat, row)
+                    texts, raw = _serialize(obj)
+                    s2 = _write_file(p, _export_text(texts, raw))
+                    conn.execute("UPDATE stores SET file_mtime_ns=?, file_size=?, export_dirty=0 WHERE kind=? AND vat=?",
+                                 (s2[0], s2[1], kind, vat))
+                    return True
                 if sig == (row[4], row[5]) and not row[6]:
                     return True
                 if row[6]:
@@ -1080,7 +1116,10 @@ def fingerprint(group_dir: str) -> str:
         try:
             r = conn.execute("SELECT COUNT(*), COALESCE(SUM(version),0), COALESCE(MAX(updated_at),0), "
                              "COALESCE(SUM(n),0) FROM stores").fetchone()
-            return f"{r[0]}:{r[1]}:{r[2]:.6f}:{r[3]}" if r and r[0] else ""
+            t = conn.execute("SELECT COUNT(*), COALESCE(MAX(deleted_at),0) FROM tombstones").fetchone()
+            if not r or not (r[0] or (t and t[0])):
+                return ""
+            return f"{r[0]}:{r[1]}:{r[2]:.6f}:{r[3]}:{t[0]}:{t[1]:.6f}"
         finally:
             conn.close()
     except Exception:
@@ -1173,13 +1212,46 @@ def merge_from(group_dir: str, other_db: str) -> Dict[str, int]:
     try:
         remote = other.execute(
             "SELECT kind, vat, shape, raw, n, version, updated_at FROM stores").fetchall()
+        try:
+            r_tombs = {(k, v): float(d or 0) for k, v, d in other.execute("SELECT kind, vat, deleted_at FROM tombstones")}
+        except sqlite3.OperationalError:
+            r_tombs = {}              # snapshot παλαιότερης έκδοσης: χωρίς ταφόπλακες
+        st["deleted"] = 0
         with _lock_for(group_dir):
             conn = _connect(group_dir)
             try:
+                l_tombs = {(k, v): float(d or 0) for k, v, d in conn.execute("SELECT kind, vat, deleted_at FROM tombstones")}
+                # Ταφόπλακες του Drive: σβήνουν τοπικό store που δεν έχει αλλάξει μετά τη διαγραφή.
+                for (kind, vat), d in r_tombs.items():
+                    if kind not in KINDS or not re.fullmatch(r"[0-9A-Za-z\-]+", str(vat or "")):
+                        continue
+                    row = conn.execute("SELECT updated_at FROM stores WHERE kind=? AND vat=?", (kind, vat)).fetchone()
+                    try:
+                        if row is not None and float(row[0] or 0) <= d + 1e-6:
+                            fp_ = file_path(group_dir, kind, vat)
+                            _cache_drop(os.path.abspath(fp_))
+                            try:
+                                os.remove(fp_)
+                            except FileNotFoundError:
+                                pass
+                            _drop_store(conn, kind, vat, when=d)
+                            l_tombs[(kind, vat)] = d
+                            st["deleted"] += 1
+                        elif row is None and l_tombs.get((kind, vat), 0.0) < d:
+                            conn.execute("INSERT OR REPLACE INTO tombstones (kind, vat, deleted_at) VALUES (?,?,?)",
+                                         (kind, vat, d))
+                            l_tombs[(kind, vat)] = d
+                    except Exception:
+                        log.exception("invoice_store.merge_from: tombstone %s/%s failed", kind, vat)
+                        st["failed"] += 1
                 for kind, vat, shape, raw, _n, _ver, r_upd in remote:
                     if kind not in KINDS or not re.fullmatch(r"[0-9A-Za-z\-]+", str(vat or "")):
                         continue
                     st["remote"] += 1
+                    _tomb = max(l_tombs.get((kind, vat), 0.0), r_tombs.get((kind, vat), 0.0))
+                    if _tomb and _tomb >= float(r_upd or 0) - 1e-6:
+                        st["kept_local"] += 1          # σβησμένο μετά την τελευταία αλλαγή του
+                        continue
                     row = conn.execute("SELECT updated_at FROM stores WHERE kind=? AND vat=?", (kind, vat)).fetchone()
                     if row is not None and float(r_upd or 0) <= float(row[0] or 0) + 1e-6:
                         st["kept_local"] += 1

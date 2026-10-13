@@ -1908,6 +1908,10 @@ def delete_customer_data_files(vat: str) -> Dict[str, Any]:
                 os.remove(path)
                 result["count"] += 1
                 result["files"].append(path)
+                try:
+                    invoice_store.forget(path)      # ταφόπλακα: ο συγχρονισμός με το Drive δεν τα αναστήνει
+                except Exception:
+                    pass
             except FileNotFoundError:
                 continue
             except Exception as exc:  # pragma: no cover - safeguard logging
@@ -5005,7 +5009,7 @@ def _normalize_receipt_summary(summary: dict) -> dict:
         out['totalValue'] = str(total)
     out['type_name'] = (s.get('type_name') or s.get('doc_type') or 'Απόδειξη').strip()
     out['lines'] = s.get('lines') or []
-    out['_saved_at'] = datetime.utcnow().isoformat() + 'Z'
+    out['_saved_at'] = datetime.datetime.utcnow().isoformat() + 'Z'
     # keep category if any line already had it
     out['category'] = ''
     for ln in out['lines']:
@@ -11466,7 +11470,7 @@ def api_update_epsilon_characteristic():
                 # update only χαρακτηρισμός-related keys
                 epsilon_list[i]["χαρακτηρισμός"] = new_char
                 epsilon_list[i]["characteristic"] = new_char  # για συμβατότητα
-                epsilon_list[i]["_updated_at"] = datetime.utcnow().isoformat() + "Z"
+                epsilon_list[i]["_updated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
                 found = True
                 break
 
@@ -11476,7 +11480,7 @@ def api_update_epsilon_characteristic():
                 "mark": mark,
                 "χαρακτηρισμός": new_char,
                 "characteristic": new_char,
-                "_created_at": datetime.utcnow().isoformat() + "Z"
+                "_created_at": datetime.datetime.utcnow().isoformat() + "Z"
             }
             epsilon_list.append(new_item)
 
