@@ -1495,8 +1495,8 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                             folder_path = os.path.join(data_root, entry_name)
                             if not os.path.isdir(folder_path):
                                 continue
-                            if entry_name.startswith('.'):
-                                continue
+                            if entry_name.startswith(('.', '_')):
+                                continue   # κρυφοί/τεχνικοί φάκελοι (π.χ. _cache, _drive_backup_*)
                             _append_local_folder_logs(entry_name)
                 except Exception:
                     pass

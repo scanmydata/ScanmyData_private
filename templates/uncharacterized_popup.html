@@ -18,13 +18,20 @@
 .unchar-launch { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 /* Τα χρώματα των κουμπιών είναι !important: το dark theme της εφαρμογής ξαναβάφει όλα τα <button>. */
 .unchar-launch-btn {
-  display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border: 0; border-radius: 8px;
-  background: #b45309 !important; color: #fff !important; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.18);
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 0; border-radius: 6px;
+  background: #b45309 !important; color: #fff !important; font-weight: 600; font-size: 13px; line-height: 1.3;
+  cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.18);
 }
 .unchar-launch-btn:hover { background: #92400e !important; }
 .unchar-launch-btn.is-pdf { background: #1d4ed8 !important; }
 .unchar-launch-btn.is-pdf:hover { background: #1e40af !important; }
-.unchar-launch-count { background: #fff; color: #92400e; border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700; }
+.unchar-launch-count {
+  background: #fff; color: #7c2d12 !important; border-radius: 999px; padding: 0 8px; min-width: 24px; text-align: center;
+  font-size: 13px; font-weight: 800; line-height: 1.5;
+}
+/* Dark mode: έντονο κίτρινο με σκούρο κείμενο — ο αριθμός ξεχωρίζει πάνω στο κεχριμπαρί κουμπί. */
+[data-theme="dark"] .unchar-launch-count { background: #fde047; color: #111827 !important; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.unchar-launch-count.is-zero { opacity: .75; }
 .unchar-launch-hint { font-size: 12px; color: #6b7280; }
 [data-theme="dark"] .unchar-launch-hint { color: #9ca3af; }
 
@@ -698,8 +705,25 @@
   function setLaunchCount(n){
     if (!el.launchCount) return;
     el.launchCount.textContent = String(n);
+    el.launchCount.classList.toggle('is-zero', Number(n) === 0);
     el.launchCount.hidden = false;
   }
+
+  // Πλήθος αχαρακτήριστων στο κουμπί: φορτώνει μόλις ανοίξει η σελίδα (και μετά από partial navigation, αφού το
+  // script ξανατρέχει) και ανανεώνεται δυναμικά — όταν η καρτέλα ξαναγίνει ορατή/πάρει focus, μετά από αποθήκευση
+  // και περιοδικά. Το endpoint είναι φθηνό (cache βάσει αλλαγής αρχείων).
+  var countBusy = false;
+  function refreshLaunchCount(){
+    if (countBusy || !el.launchCount || !document.body.contains(el.launchCount)) return;
+    countBusy = true;
+    fetch('/api/uncharacterized_invoices/count', { credentials: 'same-origin', cache: 'no-store',
+                                                  headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' } })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if (j && j.ok && typeof j.count === 'number') setLaunchCount(j.count); })
+      .catch(function(){ /* χωρίς δίκτυο: μένει η τελευταία τιμή */ })
+      .then(function(){ countBusy = false; });
+  }
+  window.__uncharRefreshCount = refreshLaunchCount;
 
   function load(){
     setNotice('');
@@ -1187,6 +1211,7 @@
       state.dirty = false;
       reloadList(state.lastSavedMark);
     }
+    refreshLaunchCount();
   }
 
   // ---------- συνδέσεις ----------
@@ -1237,6 +1262,28 @@
   // Τα document/window listeners μένουν μετά το partial navigation: δένονται μία
   // φορά και καλούν πάντα το τρέχον instance.
   window.__uncharHandlers = { close: closeModal, fit: fitHeight, isOpen: function(){ return modal.style.display !== 'none'; } };
+
+  // Αρχική φόρτωση πλήθους + ανανέωση (ένας timer ανά σελίδα· ο παλιός καθαρίζεται στο partial navigation).
+  refreshLaunchCount();
+  try { if (window.__UNCHAR_COUNT_TIMER) clearInterval(window.__UNCHAR_COUNT_TIMER); } catch (_) {}
+  window.__UNCHAR_COUNT_TIMER = setInterval(function(){
+    if (document.hidden) return;
+    if (typeof window.__uncharRefreshCount === 'function') window.__uncharRefreshCount();
+  }, 30000);
+  if (!window.__UNCHAR_COUNT_EVENTS_BOUND) {
+    window.__UNCHAR_COUNT_EVENTS_BOUND = true;
+    var kick = function(){ if (typeof window.__uncharRefreshCount === 'function') window.__uncharRefreshCount(); };
+    window.addEventListener('focus', kick);
+    document.addEventListener('visibilitychange', function(){ if (!document.hidden) kick(); });
+    // Μετά από κάθε επιτυχή αποθήκευση παραστατικού (Αναζήτηση ή popup) το πλήθος μειώνεται.
+    document.addEventListener('submit', function(e){
+      var f = e && e.target;
+      if (f && (f.id === 'saveSummaryForm' || (f.closest && f.closest('#summaryModal')))) {
+        setTimeout(kick, 1500); setTimeout(kick, 4500);
+      }
+    }, true);
+    window.addEventListener('rc:invoice-saved', kick);
+  }
   if (!window.__UNCHAR_GLOBAL_BOUND) {
     window.__UNCHAR_GLOBAL_BOUND = true;
     document.addEventListener('keydown', function(e){

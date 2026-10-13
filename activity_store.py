@@ -111,7 +111,7 @@ def _extract_vat(obj: Dict[str, Any]) -> str:
     d1 = obj.get("details") if isinstance(obj.get("details"), dict) else {}
     d2 = d1.get("details") if isinstance(d1.get("details"), dict) else {}
     for src in (d1, d2, obj):
-        for k in ("vat", "client_vat", "πελατης", "client"):
+        for k in ("vat", "client_vat", "afm", "πελατης", "client"):
             v = src.get(k) if isinstance(src, dict) else None
             if v and re.fullmatch(r"\d{8,9}", str(v).strip()):
                 return str(v).strip()
@@ -183,7 +183,8 @@ def _meta_set(conn, k: str, v: str) -> None:
     conn.execute("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
 
 
-def import_legacy(group_dir: str, path: Optional[str] = None, progress=None, max_seconds: Optional[float] = None) -> Dict[str, Any]:
+def import_legacy(group_dir: str, path: Optional[str] = None, progress=None, max_seconds: Optional[float] = None,
+                  source_id: str = "", default_action: str = "") -> Dict[str, Any]:
     """Εισάγει (συνεχίζοντας από εκεί που έμεινε) το παλιό activity.log στη βάση. Idempotent: ξανατρέξιμο δεν
     διπλασιάζει εγγραφές (UNIQUE uid) και ξεκινά από το αποθηκευμένο offset. Επιστρέφει στατιστικά."""
     path = path or legacy_path(group_dir)
@@ -192,7 +193,10 @@ def import_legacy(group_dir: str, path: Optional[str] = None, progress=None, max
         stats["done"] = True
         return stats
     t0 = time.time()
-    key = "import_offset:" + os.path.basename(path)
+    # Το source_id επιτρέπει εισαγωγή ΞΕΝΟΥ αρχείου (π.χ. αντίγραφο από Drive) με δικό του offset, χωρίς να πειράξει
+    # το offset του τοπικού activity.log.
+    _tag = os.path.basename(path) + ((":" + source_id) if source_id else "")
+    key = "import_offset:" + _tag
     with _lock_for(db_path(group_dir)):
         conn = _connect(group_dir)
         try:
@@ -214,6 +218,8 @@ def import_legacy(group_dir: str, path: Optional[str] = None, progress=None, max
                     obj = parse_line(line)
                     if obj is None:
                         continue
+                    if default_action and not obj.get("action"):
+                        obj["action"] = default_action
                     try:
                         batch.append(_row_from_entry(obj, raw_text=line.strip()))
                     except Exception:
@@ -245,7 +251,7 @@ def import_legacy(group_dir: str, path: Optional[str] = None, progress=None, max
                     _meta_set(conn, key, str(pos))
                 stats["offset"] = pos
             stats["done"] = True
-            _meta_set(conn, "import_done:" + os.path.basename(path), str(int(time.time())))
+            _meta_set(conn, "import_done:" + _tag, str(int(time.time())))
         finally:
             conn.close()
     _READY_CACHE.pop(group_dir, None)
@@ -402,11 +408,14 @@ def migrate_all(data_root: str, progress=None, max_seconds_per_group: Optional[f
         gdir = os.path.join(data_root, name)
         if not os.path.isdir(gdir) or name.startswith((".", "_")):
             continue
-        has = os.path.exists(legacy_path(gdir)) or os.path.exists(os.path.join(gdir, "activity.log.jsonl"))
+        rl = os.path.join(gdir, "e3_brain_retrieval_log.jsonl")
+        has = os.path.exists(legacy_path(gdir)) or os.path.exists(os.path.join(gdir, "activity.log.jsonl")) or os.path.exists(rl)
         if not has:
             continue
         try:
             st = import_legacy(gdir, progress=progress, max_seconds=max_seconds_per_group)
+            if os.path.exists(rl):
+                import_legacy(gdir, path=rl, default_action="e3_brain_retrieval")
             jl = os.path.join(gdir, "activity.log.jsonl")
             if os.path.exists(jl):
                 st2 = import_legacy(gdir, path=jl, progress=progress, max_seconds=max_seconds_per_group)

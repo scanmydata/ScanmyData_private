@@ -1554,6 +1554,18 @@ def _append_retrieval_log(entry: Dict[str, Any]) -> None:
             "id": getattr(current_user, "id", None),
             "username": getattr(current_user, "username", None),
         }
+        # ΝΕΟ: στη βάση της ομάδας (activity.db, action=e3_brain_retrieval)· fallback στο αρχείο JSONL.
+        try:
+            import activity_store
+            row["action"] = "e3_brain_retrieval"
+            row["timestamp"] = datetime.utcnow().replace(tzinfo=None).isoformat(timespec="seconds") + "+00:00"
+            if activity_store.append(str(log_path.parent), row):
+                return
+            row.pop("action", None)
+            row.pop("timestamp", None)
+        except Exception:
+            row.pop("action", None)
+            row.pop("timestamp", None)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:

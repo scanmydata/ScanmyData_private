@@ -39,7 +39,7 @@ def main() -> int:
         if not os.path.exists(legacy):
             continue
         st = activity_store.import_legacy(gdir, progress=lambda s, g=g: print(f"  {g}: {s['lines']} γραμμές…", end="\r"))
-        print(f"{g}: {st['lines']} γραμμές → {st['inserted']} νέες εγγραφές · βάση {activity_store.count(gdir)} · ολοκληρώθηκε={st['done']}")
+        print(f"{g}: {st['lines']} γραμμές -> {st['inserted']} νέες εγγραφές · βάση {activity_store.count(gdir)} · ολοκληρώθηκε={st['done']}")
     return 0
 
 

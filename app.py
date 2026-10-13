@@ -1922,17 +1922,29 @@ if not log.handlers:
     sh.setFormatter(GreeceTZFormatter(fmt=fmt, datefmt=datefmt, tz=GREECE_TZ))
     log.addHandler(sh)
 
-    # Activity log (όλες οι κινήσεις)
-    ah = RotatingFileHandler(ACTIVITY_LOG, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
-    ah.setLevel(logging.INFO)
-    ah.setFormatter(GreeceTZFormatter(fmt=fmt, datefmt=datefmt, tz=GREECE_TZ))
-    log.addHandler(ah)
+    # ΝΕΟ: τα logs της εφαρμογής (όλες οι κινήσεις + προειδοποιήσεις/σφάλματα) στη βάση data/app_log.db (SQLite,
+    # ουρά + background writer, ευρετήρια, retention) αντί για τα αρχεία κειμένου data/activity.log / error.log.
+    # APP_LOG_FILES=1 κρατά ΚΑΙ τα παλιά αρχεία (παράλληλα) ως ασφάλεια.
+    try:
+        import app_log_store
+        _applog_db = app_log_store.default_db_path(DATA_DIR)
+        _sqlh = app_log_store.SQLiteLogHandler(_applog_db, level=logging.INFO, tz=GREECE_TZ)
+        log.addHandler(_sqlh)
+        _APP_LOG_DB_OK = True
+    except Exception:
+        _APP_LOG_DB_OK = False
+    if (not _APP_LOG_DB_OK) or str(os.getenv("APP_LOG_FILES", "0")).strip() == "1":
+        # Activity log (όλες οι κινήσεις)
+        ah = RotatingFileHandler(ACTIVITY_LOG, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        ah.setLevel(logging.INFO)
+        ah.setFormatter(GreeceTZFormatter(fmt=fmt, datefmt=datefmt, tz=GREECE_TZ))
+        log.addHandler(ah)
 
-    # Error log (προβλήματα/προειδοποιήσεις)
-    fh = RotatingFileHandler(ERROR_LOG, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
-    fh.setLevel(logging.WARNING)
-    fh.setFormatter(GreeceTZFormatter(fmt=fmt, datefmt=datefmt, tz=GREECE_TZ))
-    log.addHandler(fh)
+        # Error log (προβλήματα/προειδοποιήσεις)
+        fh = RotatingFileHandler(ERROR_LOG, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        fh.setLevel(logging.WARNING)
+        fh.setFormatter(GreeceTZFormatter(fmt=fmt, datefmt=datefmt, tz=GREECE_TZ))
+        log.addHandler(fh)
 
 # (προαιρετικά) συντόνισε και τον werkzeug logger να γράφει με ασφαλή formatter.
 # Σε ορισμένα περιβάλλοντα (π.χ. Python 3.14) ο default handler chain μπορεί
@@ -4525,6 +4537,38 @@ def _last_fetch_deep_scan_async(grp_base: str, act_path: str, credential_name: s
         threading.Thread(target=_run, daemon=True).start()
     except Exception:
         _LAST_FETCH_DEEP_RUNNING.discard(key)
+
+
+def _app_log_maintenance_once() -> None:
+    """Εισάγει τα παλιά αρχεία logging (data/activity.log*, data/error.log*) στη βάση app_log.db (μόνο ό,τι άλλαξε)
+    και σβήνει εγγραφές παλαιότερες από APP_LOG_RETENTION_DAYS (προεπιλογή 90)."""
+    try:
+        import app_log_store
+        dbp = app_log_store.default_db_path(DATA_DIR)
+        for base, src in (("activity.log", "app"), ("error.log", "error")):
+            paths = app_log_store.rotated_family(os.path.join(DATA_DIR, base))
+            if paths:
+                st = app_log_store.import_if_changed(dbp, paths, source=src)
+                if st.get("inserted"):
+                    log.info("app_log migration %s: %s", base, st)
+        days = int(os.getenv("APP_LOG_RETENTION_DAYS", "90") or 90)
+        n = app_log_store.purge_older_than(dbp, days)
+        if n:
+            log.info("app_log purge: %d εγγραφές παλαιότερες από %d ημέρες", n, days)
+    except Exception:
+        log.exception("app_log maintenance failed")
+
+
+def _start_app_log_maintenance() -> None:
+    def _loop():
+        _app_log_maintenance_once()
+        while True:
+            time.sleep(24 * 3600)
+            _app_log_maintenance_once()
+    try:
+        threading.Thread(target=_loop, name="app-log-maintenance", daemon=True).start()
+    except Exception:
+        pass
 
 
 def _start_activity_db_migration() -> None:
@@ -9821,6 +9865,74 @@ def _doc_identity_key(doc: dict, ignore_keys=None) -> str:
     return json.dumps(clean, sort_keys=True, ensure_ascii=False)
 
 
+# ---- Batch λήψης: ένα διάβασμα + ένα γράψιμο ανά αρχείο πελάτη (αντί για ανά παραστατικό) --------------------
+# Πριν, κάθε παραστατικό/summary της λήψης διάβαζε ΟΛΟ το {vat}_invoices.json / {vat}_summary.json, έψαχνε και το
+# ξαναέγραφε με indent+fsync — για 1000+ παραστατικά = χιλιάδες parse/dump αρχείων των MB μέσα στο GIL, και όλη η
+# εφαρμογή «κόλλαγε» μέχρι να τελειώσει η λήψη. Μέσα στο customer_file_batch() τα αρχεία φορτώνονται μία φορά στη
+# μνήμη, οι ίδιοι κανόνες merge/dedupe τρέχουν πάνω τους και γράφονται ΜΙΑ φορά στο τέλος (και σε σφάλμα).
+_FETCH_BATCH = threading.local()
+
+
+def _cf_read(path):
+    files = getattr(_FETCH_BATCH, "files", None)
+    if files is None:
+        return json_read(path)
+    if path not in files:
+        files[path] = json_read(path)
+    return files[path]
+
+
+def _cf_write(path, data):
+    files = getattr(_FETCH_BATCH, "files", None)
+    if files is None:
+        return json_write(path, data)
+    files[path] = data
+    _FETCH_BATCH.dirty.add(path)
+    return True
+
+
+def _idkey(d):
+    """_doc_identity_key με μνήμη μέσα στο batch (αποφεύγει json.dumps ανά εγγραφή για κάθε νέο παραστατικό)."""
+    memo = getattr(_FETCH_BATCH, "idkeys", None)
+    if memo is None:
+        return _doc_identity_key(d)
+    hit = memo.get(id(d))
+    if hit is not None and hit[0] is d:
+        return hit[1]
+    key = _doc_identity_key(d)
+    memo[id(d)] = (d, key)
+    return key
+
+
+class customer_file_batch:
+    """with customer_file_batch(): ... — δες το σχόλιο παραπάνω."""
+
+    def __enter__(self):
+        self._prev = (getattr(_FETCH_BATCH, "files", None), getattr(_FETCH_BATCH, "dirty", None),
+                      getattr(_FETCH_BATCH, "idkeys", None))
+        if self._prev[0] is None:
+            _FETCH_BATCH.files = {}
+            _FETCH_BATCH.dirty = set()
+            _FETCH_BATCH.idkeys = {}
+            self._owner = True
+        else:
+            self._owner = False      # ένθετο: το εξωτερικό batch κάνει το flush
+        return self
+
+    def __exit__(self, *exc):
+        if not self._owner:
+            return False
+        try:
+            for path in list(_FETCH_BATCH.dirty):
+                try:
+                    json_write(path, _FETCH_BATCH.files[path])
+                except Exception:
+                    log.exception("customer_file_batch: write failed for %s", path)
+        finally:
+            _FETCH_BATCH.files, _FETCH_BATCH.dirty, _FETCH_BATCH.idkeys = None, None, None
+        return False
+
+
 def append_doc_to_customer_file(doc, vat):
     """
     Add or update a detailed document in the per-customer JSON file.
@@ -9854,7 +9966,7 @@ def append_doc_to_customer_file(doc, vat):
         return False
 
     customer_file = get_customer_docs_file(vat)
-    cache = json_read(customer_file)
+    cache = _cf_read(customer_file)
 
     mark = str(doc.get("mark", "")).strip()
     vat_cat = str(doc.get("vatCategory", "")).strip()
@@ -9874,7 +9986,7 @@ def append_doc_to_customer_file(doc, vat):
                 if str(d) == str(doc):
                     return False
         cache.append(doc)
-        json_write(customer_file, cache)
+        _cf_write(customer_file, cache)
         return True
 
     # normal non-legacy behaviour follows
@@ -9908,7 +10020,7 @@ def append_doc_to_customer_file(doc, vat):
             if len(matching_idxs) > 1 and same_payload and old_class == new_class:
                 for j in reversed(matching_idxs[1:]):
                     cache.pop(j)
-                json_write(customer_file, cache)
+                _cf_write(customer_file, cache)
                 return True
 
             # need update if payload changed, classification changed, or
@@ -9922,7 +10034,7 @@ def append_doc_to_customer_file(doc, vat):
                 # drop any extras we found previously
                 for j in reversed(matching_idxs[1:]):
                     cache.pop(j)
-                json_write(customer_file, cache)
+                _cf_write(customer_file, cache)
                 try:
                     log.info("append_doc_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
                 except Exception:
@@ -9933,13 +10045,13 @@ def append_doc_to_customer_file(doc, vat):
     sig = _doc_identity_key(doc)
     for d in cache:
         try:
-            if _doc_identity_key(d) == sig:
+            if _idkey(d) == sig:
                 return False
         except Exception:
             if str(d) == str(doc):
                 return False
     cache.append(doc)
-    json_write(customer_file, cache)
+    _cf_write(customer_file, cache)
     return True
 
 
@@ -10056,7 +10168,7 @@ def append_summary_to_customer_file(summary, vat):
     if not vat:
         return False
     summary_file = group_path(f"{vat}_summary.json")
-    summaries = json_read(summary_file)
+    summaries = _cf_read(summary_file)
     mark = str(summary.get("mark", "")).strip()
 
     # check legacy flag from settings or environment
@@ -10072,7 +10184,7 @@ def append_summary_to_customer_file(summary, vat):
                 if str(s) == str(summary):
                     return False
         summaries.append(summary)
-        json_write(summary_file, summaries)
+        _cf_write(summary_file, summaries)
         return True
 
     def _is_receipt_summary(s: dict) -> bool:
@@ -10118,7 +10230,7 @@ def append_summary_to_customer_file(summary, vat):
             if new_class == "χαρακτηρισμενο" and old_class != new_class:
                 merged["updated_at"] = datetime.datetime.utcnow().isoformat()
             summaries[idx] = merged
-            json_write(summary_file, summaries)
+            _cf_write(summary_file, summaries)
             try:
                 log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
             except Exception:
@@ -10127,7 +10239,7 @@ def append_summary_to_customer_file(summary, vat):
 
         # no matching receipt found -> append
         summaries.append(summary)
-        json_write(summary_file, summaries)
+        _cf_write(summary_file, summaries)
         return True
 
     # invoices are deduped/merged by mark
@@ -10156,7 +10268,7 @@ def append_summary_to_customer_file(summary, vat):
         if len(matching_idxs) > 1 and same_payload and old_class == new_class:
             for j in reversed(matching_idxs[1:]):
                 summaries.pop(j)
-            json_write(summary_file, summaries)
+            _cf_write(summary_file, summaries)
             return True
 
         if not same_payload or old_class != new_class or len(matching_idxs) > 1:
@@ -10167,7 +10279,7 @@ def append_summary_to_customer_file(summary, vat):
             summaries[first_idx] = merged
             for j in reversed(matching_idxs[1:]):
                 summaries.pop(j)
-            json_write(summary_file, summaries)
+            _cf_write(summary_file, summaries)
             try:
                 log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
             except Exception:
@@ -10177,7 +10289,7 @@ def append_summary_to_customer_file(summary, vat):
 
     # no matching mark -> append normally
     summaries.append(summary)
-    json_write(summary_file, summaries)
+    _cf_write(summary_file, summaries)
     return True
 
 
@@ -10522,53 +10634,55 @@ def api_fetch_bulk_start():
                 total_rows = len(all_rows)
                 total_summaries = len(summary_list)
 
-                for r_idx, d in enumerate(all_rows, start=1):
-                    if vat:
-                        d['AFM_counterpart'] = vat
-                    mk = str(d.get('mark') or '').strip()
-                    if mk:
-                        seen_marks.add(mk)
-                    if append_doc_to_customer_file(d, vat):
-                        added_docs += 1
+                # ΝΕΟ: ένα διάβασμα + ένα γράψιμο ανά αρχείο πελάτη (customer_file_batch)
+                with customer_file_batch():
+                    for r_idx, d in enumerate(all_rows, start=1):
+                        if vat:
+                            d['AFM_counterpart'] = vat
+                        mk = str(d.get('mark') or '').strip()
+                        if mk:
+                            seen_marks.add(mk)
+                        if append_doc_to_customer_file(d, vat):
+                            added_docs += 1
 
-                    if r_idx == 1 or r_idx == total_rows or r_idx % max(1, total_rows // 10) == 0:
-                        customer_pct = min(70, int((r_idx / max(1, total_rows)) * 70))
-                        overall_pct = int((((idx - 1) + (customer_pct / 100.0)) / total) * 100)
-                        _set_bulk_fetch_progress(
-                            _job_id,
-                            'running',
-                            max(1, overall_pct),
-                            f"Πρόοδος πελάτη {name}: {customer_pct}% | Συνολική πρόοδος: {max(1, overall_pct)}%",
-                            total_customers=total,
-                            current_index=idx,
-                            current_customer=name,
-                            current_customer_progress=customer_pct,
-                            completed_customers=done,
-                            failed_customers=failed,
-                            results=results,
-                            stop_requested=_is_bulk_fetch_stop_requested(_job_id),
-                        )
+                        if r_idx == 1 or r_idx == total_rows or r_idx % max(1, total_rows // 10) == 0:
+                            customer_pct = min(70, int((r_idx / max(1, total_rows)) * 70))
+                            overall_pct = int((((idx - 1) + (customer_pct / 100.0)) / total) * 100)
+                            _set_bulk_fetch_progress(
+                                _job_id,
+                                'running',
+                                max(1, overall_pct),
+                                f"Πρόοδος πελάτη {name}: {customer_pct}% | Συνολική πρόοδος: {max(1, overall_pct)}%",
+                                total_customers=total,
+                                current_index=idx,
+                                current_customer=name,
+                                current_customer_progress=customer_pct,
+                                completed_customers=done,
+                                failed_customers=failed,
+                                results=results,
+                                stop_requested=_is_bulk_fetch_stop_requested(_job_id),
+                            )
 
-                for s_idx, s in enumerate(summary_list, start=1):
-                    if append_summary_to_customer_file(s, vat):
-                        added_summaries += 1
-                    if s_idx == 1 or s_idx == total_summaries or s_idx % max(1, total_summaries // 10) == 0:
-                        customer_pct = 70 + min(25, int((s_idx / max(1, total_summaries)) * 25))
-                        overall_pct = int((((idx - 1) + (customer_pct / 100.0)) / total) * 100)
-                        _set_bulk_fetch_progress(
-                            _job_id,
-                            'running',
-                            max(1, overall_pct),
-                            f"Πρόοδος πελάτη {name}: {customer_pct}% | Συνολική πρόοδος: {max(1, overall_pct)}%",
-                            total_customers=total,
-                            current_index=idx,
-                            current_customer=name,
-                            current_customer_progress=customer_pct,
-                            completed_customers=done,
-                            failed_customers=failed,
-                            results=results,
-                            stop_requested=_is_bulk_fetch_stop_requested(_job_id),
-                        )
+                    for s_idx, s in enumerate(summary_list, start=1):
+                        if append_summary_to_customer_file(s, vat):
+                            added_summaries += 1
+                        if s_idx == 1 or s_idx == total_summaries or s_idx % max(1, total_summaries // 10) == 0:
+                            customer_pct = 70 + min(25, int((s_idx / max(1, total_summaries)) * 25))
+                            overall_pct = int((((idx - 1) + (customer_pct / 100.0)) / total) * 100)
+                            _set_bulk_fetch_progress(
+                                _job_id,
+                                'running',
+                                max(1, overall_pct),
+                                f"Πρόοδος πελάτη {name}: {customer_pct}% | Συνολική πρόοδος: {max(1, overall_pct)}%",
+                                total_customers=total,
+                                current_index=idx,
+                                current_customer=name,
+                                current_customer_progress=customer_pct,
+                                completed_customers=done,
+                                failed_customers=failed,
+                                results=results,
+                                stop_requested=_is_bulk_fetch_stop_requested(_job_id),
+                            )
 
                 if vat and seen_marks:
                     try:
@@ -10939,26 +11053,29 @@ def fetch():
                 _set_fetch_progress_state(fetch_key, "running", 20, f"Έγινε λήψη {total_rows} παραστατικών. Επεξεργασία...")
 
                 docs_step = max(1, total_rows // 25) if total_rows else 1
-                for idx, d in enumerate(all_rows, start=1):
-                    if vat:
-                        d["AFM_counterpart"] = vat
-                    if d.get("mark"):
-                        seen_marks.add(str(d.get("mark")).strip())
-                    if append_doc_to_customer_file(d, vat):
-                        added_docs += 1
-
-                    if idx == 1 or idx == total_rows or idx % docs_step == 0:
-                        docs_progress = 20 + int((idx / max(total_rows, 1)) * 55)
-                        _set_fetch_progress_state(fetch_key, "running", docs_progress, f"Επεξεργασία παραστατικών {idx}/{total_rows}.")
-
                 sums_step = max(1, total_summaries // 20) if total_summaries else 1
-                for s_idx, s in enumerate(summary_list, start=1):
-                    if append_summary_to_customer_file(s, vat):
-                        added_summaries += 1
+                # ΝΕΟ: ένα διάβασμα + ένα γράψιμο ανά αρχείο (βλ. customer_file_batch) — η λήψη δεν «κολλά» πια την εφαρμογή.
+                with customer_file_batch():
+                    for idx, d in enumerate(all_rows, start=1):
+                        if vat:
+                            d["AFM_counterpart"] = vat
+                        if d.get("mark"):
+                            seen_marks.add(str(d.get("mark")).strip())
+                        if append_doc_to_customer_file(d, vat):
+                            added_docs += 1
 
-                    if s_idx == 1 or s_idx == total_summaries or s_idx % sums_step == 0:
-                        sum_progress = 78 + int((s_idx / max(total_summaries, 1)) * 14)
-                        _set_fetch_progress_state(fetch_key, "running", sum_progress, f"Επεξεργασία summary {s_idx}/{total_summaries}.")
+                        if idx == 1 or idx == total_rows or idx % docs_step == 0:
+                            docs_progress = 20 + int((idx / max(total_rows, 1)) * 55)
+                            _set_fetch_progress_state(fetch_key, "running", docs_progress, f"Επεξεργασία παραστατικών {idx}/{total_rows}.")
+
+                    for s_idx, s in enumerate(summary_list, start=1):
+                        if append_summary_to_customer_file(s, vat):
+                            added_summaries += 1
+
+                        if s_idx == 1 or s_idx == total_summaries or s_idx % sums_step == 0:
+                            sum_progress = 78 + int((s_idx / max(total_summaries, 1)) * 14)
+                            _set_fetch_progress_state(fetch_key, "running", sum_progress, f"Επεξεργασία summary {s_idx}/{total_summaries}.")
+                _set_fetch_progress_state(fetch_key, "running", 93, "Αποθήκευση αρχείων πελάτη...")
 
                 if vat and seen_marks:
                     try:
@@ -17817,6 +17934,48 @@ def api_uncharacterized_invoices():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+_UNCHAR_COUNT_CACHE: Dict[Any, Any] = {}
+
+
+def _file_sig(path: str):
+    try:
+        st = os.stat(path)
+        return (int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return None
+
+
+@app.route('/api/uncharacterized_invoices/count', methods=['GET'])
+def api_uncharacterized_invoices_count():
+    """Μόνο το πλήθος των αχαρακτήριστων (για το κουμπί της Αναζήτησης). Φθηνό: το αποτέλεσμα κρατιέται σε cache και
+    ξαναϋπολογίζεται μόνο όταν αλλάξει κάποιο από τα αρχεία πηγής (summary / docs / epsilon) ή η χρήση."""
+    try:
+        active = get_active_credential_from_session() or {}
+        vat = str(active.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": True, "count": 0, "vat": ""})
+        try:
+            fy = get_active_fiscal_year()
+        except Exception:
+            fy = None
+        key = (group_path(""), vat)
+        sig = (
+            _file_sig(get_customer_summary_file(vat)),
+            _file_sig(get_customer_docs_file(vat)),
+            _file_sig(os.path.join(group_path("epsilon"), f"{vat}_epsilon_invoices.json")),
+            str(fy),
+        )
+        hit = _UNCHAR_COUNT_CACHE.get(key)
+        if hit and hit[0] == sig:
+            return jsonify({"ok": True, "count": hit[1], "vat": vat, "cached": True})
+        count = len(_unchar_collect(vat).get("items") or {})
+        _UNCHAR_COUNT_CACHE[key] = (sig, count)
+        return jsonify({"ok": True, "count": count, "vat": vat})
+    except Exception as exc:
+        log.exception("api_uncharacterized_invoices_count failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route('/api/uncharacterized_invoices/prepare', methods=['POST'])
 def api_uncharacterized_invoices_prepare():
     """Ετοιμάζει τα summaries των επιλεγμένων MARK για αποστολή στο /save_summary.
@@ -24302,7 +24461,21 @@ def api_e3_brain_retrieval_log():
         group_data_dir = os.path.join(BASE_DIR, "data", str(getattr(grp, "data_folder", "") or "").strip())
         log_path = os.path.join(group_data_dir, "e3_brain_retrieval_log.jsonl")
         rows = []
-        if os.path.exists(log_path):
+        _from_db = False
+        try:
+            # ΝΕΟ: από τη βάση της ομάδας (ευρετήριο) — το παλιό JSONL εισάγεται (idempotent) μία φορά.
+            import activity_store as _astore
+            if os.path.exists(log_path):
+                _astore.import_legacy(group_data_dir, path=log_path, default_action="e3_brain_retrieval")
+            rows = _astore.recent(group_data_dir, limit, action="e3_brain_retrieval", vat=(afm_filter or None))
+            for _r in rows:
+                _r.pop("action", None)
+                _r.pop("timestamp", None)
+            _from_db = os.path.exists(_astore.db_path(group_data_dir))
+        except Exception:
+            rows = []
+            _from_db = False
+        if not _from_db and os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -24315,7 +24488,7 @@ def api_e3_brain_retrieval_log():
                     if afm_filter and str(row.get("afm") or "") != afm_filter:
                         continue
                     rows.append(row)
-        rows = rows[-limit:][::-1]  # πιο πρόσφατα πρώτα
+            rows = rows[-limit:][::-1]  # πιο πρόσφατα πρώτα
         return jsonify({"ok": True, "entries": rows, "count": len(rows)})
     except Exception as e:
         log.exception("api_e3_brain_retrieval_log failed")
@@ -26238,7 +26411,19 @@ def api_admin_firebase_usage():
 
     log_path = os.path.join(os.getcwd(), 'data', 'activity.log')
     buckets = {}
-    if os.path.exists(log_path):
+    _db_done = False
+    try:
+        # ΝΕΟ: από τη βάση app_log.db (ευρετήριο χρόνου) αντί για ανάγνωση ολόκληρου αρχείου
+        import app_log_store
+        _dbp = app_log_store.default_db_path(os.path.join(os.getcwd(), 'data'))
+        if os.path.exists(_dbp):
+            buckets = app_log_store.firebase_read_hourly(
+                _dbp, start_ts.timestamp() if start_ts else None, end_ts.timestamp() if end_ts else None)
+            _db_done = True
+    except Exception:
+        buckets = {}
+        _db_done = False
+    if (not _db_done) and os.path.exists(log_path):
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 if 'firebase.read' not in line:
@@ -26991,6 +27176,7 @@ try:
     if (not _debug_mode) or _is_reloader_main:
         _start_firebase_backup_scheduler_once()
         _start_activity_db_migration()
+        _start_app_log_maintenance()
 except Exception:
     log.exception('Failed to start firebase backup scheduler thread / activity.db migration')
 
