@@ -921,6 +921,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(ADMIN_SYSTEM_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
+# Τα παραστατικά ανά πελάτη ({ΑΦΜ}_invoices.json, {ΑΦΜ}_summary.json, epsilon/{ΑΦΜ}_epsilon_invoices.json) ζουν σε
+# SQLite (data/<ομάδα>/invoices.db)· το JSON γράφεται συγχρονα ως export (Drive/εργαλεία). Βλ. invoice_store.py.
+import invoice_store
+invoice_store.configure(DATA_DIR)
+
 CACHE_FILE = os.path.join(DATA_DIR, "invoices_cache.json")
 SUMMARY_FILE = os.path.join(DATA_DIR, "summary.json")
 CREDENTIALS_FILE = os.path.join(DATA_DIR, "credentials.json")
@@ -4636,6 +4641,40 @@ def _start_activity_db_migration() -> None:
         pass
 
 
+def _start_invoice_store_migration() -> None:
+    """Εισάγει στο background τα JSON παραστατικών κάθε ομάδας ({ΑΦΜ}_invoices/_summary/_epsilon_invoices) στη βάση
+    invoices.db της (μη καταστροφικά, idempotent — τα αρχεία δεν αλλάζουν). INVOICE_STORE_MIGRATE=0 την απενεργοποιεί.
+    Ό,τι δεν έχει εισαχθεί ακόμη εισάγεται και «τεμπέλικα» στην πρώτη ανάγνωση, άρα η μετάβαση δεν είναι προαπαιτούμενο."""
+    if str(os.getenv("INVOICE_STORE_MIGRATE", "1")).strip() == "0" or not invoice_store.is_enabled():
+        return
+    lock_dir = os.path.join(DATA_DIR, ".invoice_migrate.lock")
+    try:
+        if os.path.isdir(lock_dir) and time.time() - os.path.getmtime(lock_dir) > 3 * 3600:
+            os.rmdir(lock_dir)      # παλιό κλείδωμα (διεργασία που έσβησε)
+        os.mkdir(lock_dir)
+    except Exception:
+        return                      # άλλος worker τρέχει ήδη τη μετάβαση
+
+    def _run():
+        try:
+            t0 = time.time()
+            res = invoice_store.migrate_all(DATA_DIR)
+            log.info("invoice_store migration: %d αρχεία, %d εισήχθησαν, %d απέτυχαν (%.1fs)",
+                     res.get("files", 0), res.get("imported", 0), res.get("failed", 0), time.time() - t0)
+        except Exception:
+            log.exception("invoice_store migration failed")
+        finally:
+            try:
+                os.rmdir(lock_dir)
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_run, name="invoice-store-migration", daemon=True).start()
+    except Exception:
+        pass
+
+
 def _format_last_fetch_date_for_display(last_date: Optional[str]) -> Optional[str]:
     """Return last-fetch timestamp formatted for the UI in Europe/Athens time."""
     if not last_date:
@@ -4994,6 +5033,14 @@ def _find_afm_in_epsilon(mark: str = None, aa: str = None) -> str:
         epsilon_dir = group_path("epsilon")
         if not os.path.isdir(epsilon_dir):
             return ""
+        # ΝΕΟ (πρώτα): ευρετήριο MARK/ΑΑ στη βάση παραστατικών· αν δεν βρεθεί συνεχίζει το κλασικό σάρωμα αρχείων.
+        try:
+            if invoice_store.is_enabled() and (mark or aa):
+                hit = invoice_store.issuer_for(group_path(), mark=str(mark or ""), aa=str(aa or ""))
+                if hit:
+                    return str(hit).strip()
+        except Exception:
+            pass
         for fname in os.listdir(epsilon_dir):
             if not fname.endswith("_epsilon_invoices.json"):
                 continue
@@ -5351,6 +5398,13 @@ def json_read(path, default=None):
     if default is None:
         default = []
     try:
+        # Παραστατικά πελάτη: πρώτα η βάση (invoice_store)· αν δεν διαχειρίζεται το αρχείο συνεχίζει η ανάγνωση αρχείου.
+        _found, _obj = invoice_store.read(path)
+        if _found:
+            return _obj if _obj is not None else default
+    except Exception:
+        pass
+    try:
         if not path or not os.path.exists(path):
             return default
         with open(path, "r", encoding="utf-8") as fh:
@@ -5501,6 +5555,11 @@ def json_write(path, obj):
         dirp = os.path.dirname(path) or "."
         os.makedirs(dirp, exist_ok=True)
         _epsilon_stamp_times(path, obj)
+        # Παραστατικά πελάτη: εγγραφή στη βάση (diff) + σύγχρονο export του JSON από την ίδια τη βάση.
+        # False = δεν διαχειρίζεται το store / απέτυχε η βάση πριν γραφτεί κάτι -> κανονική εγγραφή αρχείου παρακάτω.
+        if invoice_store.write(path, obj):
+            _epsilon_stamp_commit(path, obj)
+            return True
         text = json.dumps(obj, ensure_ascii=False, indent=2)
         # write to tmp file in same dir (for atomic replace)
         fd, tmp = tempfile.mkstemp(prefix=".tmp_json_", dir=dirp)
@@ -5968,6 +6027,9 @@ def _atomic_write(path, data_text):
             except Exception: pass
 
 def _load_json(path):
+    _found, _obj = invoice_store.read(path)
+    if _found:
+        return _obj
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
@@ -5975,6 +6037,9 @@ def _load_json(path):
 
 def _save_json(path, obj):
     _epsilon_stamp_times(path, obj)
+    if invoice_store.write(path, obj):          # βάση + σύγχρονο export (βλ. json_write)
+        _epsilon_stamp_commit(path, obj)
+        return
     txt = json.dumps(obj, ensure_ascii=False, indent=2)
     _atomic_write(path, txt)
     _epsilon_stamp_commit(path, obj)
@@ -6074,14 +6139,18 @@ def load_epsilon_cache_for_vat(vat: str):
         eps_dir = group_path("epsilon")
         os.makedirs(eps_dir, exist_ok=True)
         path = os.path.join(eps_dir, f"{vat}_epsilon_invoices.json")
-        if not os.path.exists(path):
-            return []
-        with open(path, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except Exception:
-                log.exception("load_epsilon_cache_for_vat: JSON decode error -> return []")
+        _found, _stored = invoice_store.read(path)        # πρώτα η βάση (βλ. invoice_store)
+        if _found:
+            data = _stored
+        else:
+            if not os.path.exists(path):
                 return []
+            with open(path, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                except Exception:
+                    log.exception("load_epsilon_cache_for_vat: JSON decode error -> return []")
+                    return []
         if isinstance(data, list):
             return data
         # old shape dict -> convert to list of dict values
@@ -6494,6 +6563,9 @@ def _write_json_atomic(path, obj):
     dirn = os.path.dirname(path)
     os.makedirs(dirn, exist_ok=True)
     _epsilon_stamp_times(path, obj)
+    if invoice_store.write(path, obj):          # βάση + σύγχρονο export (βλ. json_write)
+        _epsilon_stamp_commit(path, obj)
+        return
     text = json.dumps(obj, ensure_ascii=False, indent=2)
     fd, tmp = tempfile.mkstemp(prefix=".tmp_json_", dir=dirn)
     try:
@@ -17146,6 +17218,8 @@ def _apply_backup_zip(zip_path: str) -> None:
                 continue
             if rel == "backup_manifest.json":
                 continue
+            if os.path.basename(rel) in {"invoices.db", "invoices.db-wal", "invoices.db-shm"}:
+                continue      # η τοπική βάση δεν επαναφέρεται από backup: ενημερώνεται από τα JSON που επαναφέρθηκαν
 
             if customer_mode and rel in {"credentials_settings.json", "fiscal_meta.json", "activity.log"}:
                 # customer restore should not overwrite group-wide shared state files
@@ -17207,6 +17281,12 @@ def _apply_backup_zip(zip_path: str) -> None:
                 json_write(cred_path, merged)
             except Exception:
                 raise ValueError("Αποτυχία συγχώνευσης credentials κατά την επαναφορά.")
+
+    # Τα JSON παραστατικών που επαναφέρθηκαν αλλάζουν «εξωτερικά»: ενημέρωση της βάσης τους.
+    try:
+        invoice_store.sync_group(base, force=True)
+    except Exception:
+        current_app.logger.warning("invoice_store sync after restore failed", exc_info=True)
 
     if not has_credentials and mode != "customer":
         raise ValueError("Το backup δεν περιέχει το αρχείο credentials.json.")
@@ -17281,7 +17361,7 @@ def data_backup_download():
 
                 for root, _, files in os.walk(base):
                     for fname in files:
-                        if fname in {'credentials.json', 'credentials_settings.json', 'activity.log', 'activity.db', 'activity.db-wal', 'activity.db-shm', 'fiscal_meta.json', 'backup_manifest.json'}:
+                        if fname in {'credentials.json', 'credentials_settings.json', 'activity.log', 'activity.db', 'activity.db-wal', 'activity.db-shm', 'invoices.db', 'invoices.db-wal', 'invoices.db-shm', 'fiscal_meta.json', 'backup_manifest.json'}:
                             continue
                         path = os.path.join(root, fname)
                         arc = os.path.relpath(path, base)
@@ -17296,6 +17376,8 @@ def data_backup_download():
                 zf.writestr("backup_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
                 for root, _, files in os.walk(base):
                     for fname in files:
+                        if fname in {'invoices.db', 'invoices.db-wal', 'invoices.db-shm'}:
+                            continue      # τοπική βάση: τα JSON export περιέχουν τα ίδια δεδομένα
                         path = os.path.join(root, fname)
                         arc = os.path.relpath(path, base)
                         zf.write(path, arc)
@@ -17711,28 +17793,78 @@ def _unchar_amounts(src_docs: List[Dict[str, Any]], negative: bool):
     return round(net, 2) + 0.0, round(vat_amt, 2) + 0.0, round(total, 2) + 0.0
 
 
+def _unchar_inputs_from_store(vat: str):
+    """Είσοδοι του _unchar_collect από τη βάση παραστατικών με ερωτήματα (μόνο οι αχαρακτήριστες εγγραφές, μόνο τα MARK
+    που χρειάζονται, μόνο τα MARK της epsilon) αντί για φόρτωση ολόκληρων αρχείων. None -> κανονική ανάγνωση."""
+    if not invoice_store.is_enabled():
+        return None
+    try:
+        gdir = group_path()
+        if os.path.normcase(os.path.dirname(os.path.abspath(gdir))) != os.path.normcase(os.path.abspath(DATA_DIR)):
+            return None
+        cand = invoice_store.docs_where(gdir, "summary", vat, classification="αχαρακτηριστο")
+        if cand is None:
+            return None if os.path.exists(get_customer_summary_file(vat)) else ([], {}, set())
+        want = set()
+        for rec in cand:
+            if isinstance(rec, dict):
+                mk = str(rec.get("mark") or rec.get("MARK") or "").strip()
+                if re.fullmatch(r"\d{15}", mk) and mk != RECEIPT_FALLBACK_MARK:
+                    want.add(mk)
+        docs_by_mark: Dict[str, List[Dict[str, Any]]] = {}
+        if want:
+            docs = invoice_store.docs_where(gdir, "invoices", vat, marks=want)
+            if docs is None:
+                if os.path.exists(get_customer_docs_file(vat)):
+                    return None
+                docs = []
+            for d in docs:
+                if isinstance(d, dict):
+                    mk = str(d.get("mark", "")).strip()
+                    if mk in want:
+                        docs_by_mark.setdefault(mk, []).append(d)
+        eps_marks = invoice_store.marks_of(gdir, "epsilon", vat)
+        if eps_marks is None:
+            if os.path.exists(os.path.join(group_path("epsilon"), f"{vat}_epsilon_invoices.json")):
+                return None
+            eps_marks = []
+        registered = set()
+        for mk in eps_marks:
+            dg = _unchar_digits(mk)
+            if dg:
+                registered.add(dg)
+        return cand, docs_by_mark, registered
+    except Exception:
+        log.exception("_unchar_inputs_from_store failed -> fallback to files")
+        return None
+
+
 def _unchar_collect(vat: str) -> Dict[str, Any]:
     """Αχαρακτήριστα, μη-καταχωρημένα τιμολόγια του πελάτη για την ενεργή χρήση.
 
     Επιστρέφει {"items": {mark: {"rec", "docs", "code"}}, "hidden_other_year": int}.
     """
-    summaries = json_read(get_customer_summary_file(vat)) or []
-    docs = json_read(get_customer_docs_file(vat)) or []
+    fast = _unchar_inputs_from_store(vat)
+    if fast is not None:
+        summaries, docs_by_mark, registered = fast
+    else:
+        summaries = json_read(get_customer_summary_file(vat)) or []
+        docs = json_read(get_customer_docs_file(vat)) or []
 
-    docs_by_mark: Dict[str, List[Dict[str, Any]]] = {}
-    for d in docs if isinstance(docs, list) else []:
-        if not isinstance(d, dict):
-            continue
-        mk = str(d.get("mark", "")).strip()
-        if mk:
-            docs_by_mark.setdefault(mk, []).append(d)
-
-    registered = set()
-    for rec in load_epsilon_cache_for_vat(vat) or []:
-        if isinstance(rec, dict):
-            mk = _unchar_digits(rec.get("mark") or rec.get("MARK"))
+        docs_by_mark: Dict[str, List[Dict[str, Any]]] = {}
+        for d in docs if isinstance(docs, list) else []:
+            if not isinstance(d, dict):
+                continue
+            mk = str(d.get("mark", "")).strip()
             if mk:
-                registered.add(mk)
+                docs_by_mark.setdefault(mk, []).append(d)
+
+        registered = set()
+        for rec in load_epsilon_cache_for_vat(vat) or []:
+            if isinstance(rec, dict):
+                mk = _unchar_digits(rec.get("mark") or rec.get("MARK"))
+                if mk:
+                    registered.add(mk)
 
     try:
         selected_year = get_active_fiscal_year()
@@ -18033,6 +18165,51 @@ def _file_sig(path: str):
         return (int(st.st_mtime_ns), int(st.st_size))
     except OSError:
         return None
+
+
+@app.route('/api/store/suppliers', methods=['GET'])
+def api_store_suppliers():
+    """Προμηθευτές του ενεργού πελάτη με πλήθος/σύνολο (από τη βάση παραστατικών). ?kind=summary|invoices|epsilon"""
+    try:
+        active = get_active_credential_from_session() or {}
+        vat = str(active.get("vat") or "").strip()
+        if not vat:
+            return jsonify({"ok": True, "suppliers": [], "vat": ""})
+        kind = str(request.args.get("kind") or "summary").strip()
+        if kind not in invoice_store.KINDS:
+            return jsonify({"ok": False, "error": "kind"}), 400
+        return jsonify({"ok": True, "vat": vat, "kind": kind,
+                        "suppliers": invoice_store.suppliers(group_path(), vat=vat, kind=kind)})
+    except Exception as exc:
+        log.exception("api_store_suppliers failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route('/api/store/supplier_docs', methods=['GET'])
+def api_store_supplier_docs():
+    """Όλα τα παραστατικά ενός προμηθευτή για τον ενεργό πελάτη (από τη βάση παραστατικών).
+    ?supplier=<ΑΦΜ εκδότη>&kind=summary|invoices|epsilon&from=YYYY-MM-DD&to=YYYY-MM-DD&limit=N"""
+    try:
+        active = get_active_credential_from_session() or {}
+        vat = str(active.get("vat") or "").strip()
+        supplier = re.sub(r"\D", "", str(request.args.get("supplier") or ""))
+        if not vat or not supplier:
+            return jsonify({"ok": True, "docs": [], "vat": vat, "supplier": supplier})
+        kind = str(request.args.get("kind") or "summary").strip()
+        if kind not in invoice_store.KINDS:
+            return jsonify({"ok": False, "error": "kind"}), 400
+        try:
+            limit = max(0, min(int(request.args.get("limit") or 0), 5000))
+        except ValueError:
+            limit = 0
+        rows = invoice_store.find_by_issuer(
+            group_path(), supplier, kind=kind, vat=vat,
+            date_from=str(request.args.get("from") or ""), date_to=str(request.args.get("to") or ""), limit=limit)
+        return jsonify({"ok": True, "vat": vat, "supplier": supplier, "kind": kind,
+                        "count": len(rows), "docs": [r["doc"] for r in rows]})
+    except Exception as exc:
+        log.exception("api_store_supplier_docs failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route('/api/uncharacterized_invoices/count', methods=['GET'])
@@ -27267,6 +27444,7 @@ try:
         _start_firebase_backup_scheduler_once()
         _start_activity_db_migration()
         _start_app_log_maintenance()
+        _start_invoice_store_migration()
 except Exception:
     log.exception('Failed to start firebase backup scheduler thread / activity.db migration')
 

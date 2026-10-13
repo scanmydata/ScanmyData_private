@@ -36,6 +36,9 @@ import math
 _firebase_pull_activity_lock = threading.Lock()
 _firebase_bootstrap_pull_lock = threading.Lock()
 _LOCAL_PAYLOAD_STATE_FILENAME = '.payload_state.json'
+# Τοπικές βάσεις SQLite (invoice_store / activity_store): δεν συγχρονίζονται ως αρχεία — τα JSON παραστατικών
+# γράφονται συγχρονα από τη βάση τους και ταξιδεύουν κανονικά.
+_LOCAL_ONLY_DB_FILES = {'invoices.db', 'invoices.db-wal', 'invoices.db-shm', 'activity.db', 'activity.db-wal', 'activity.db-shm'}
 
 
 # ============================================================================
@@ -225,7 +228,7 @@ def _local_group_has_payload(group_dir: str) -> bool:
             for name in files:
                 if name.startswith('.'):
                     continue
-                if name in {'activity.log', 'error.log'}:
+                if name in {'activity.log', 'error.log'} or name in _LOCAL_ONLY_DB_FILES:
                     continue
                 return True
     except Exception:
@@ -241,7 +244,7 @@ def _iter_local_payload_files(group_dir: str):
             for name in files:
                 if name.startswith('.'):
                     continue
-                if name in {'activity.log', 'error.log', 'files_json', 'fiscal_meta_json'}:
+                if name in {'activity.log', 'error.log', 'files_json', 'fiscal_meta_json'} or name in _LOCAL_ONLY_DB_FILES:
                     continue
                 yield os.path.join(root, name)
     except Exception:
@@ -1492,7 +1495,7 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_
                     # Allow uploading log files (activity.log / error.log) so
                     # the server copy can be the source of truth in Firebase.
                     # Keep skipping hidden files and internal state files.
-                    if fname.startswith('.') or fname in ['files_json', 'fiscal_meta_json']:
+                    if fname.startswith('.') or fname in ['files_json', 'fiscal_meta_json'] or (fname in _LOCAL_ONLY_DB_FILES or fname.startswith('invoices.db')):
                         continue
                     # Skip legacy epsilon files that don't have an AFM prefix.
                     # Valid epsilon files are named like "{afm}_epsilon_invoices.json".
@@ -2336,7 +2339,7 @@ def _scan_and_sync_data_dir(data_dir: str, group_names: List[str] = None) -> Non
 
         for fname in files:
             # skip dotfiles and internal state files
-            if fname.startswith('.') or fname == '.firebase_sync_state.json':
+            if fname.startswith('.') or fname == '.firebase_sync_state.json' or (fname in _LOCAL_ONLY_DB_FILES or fname.startswith('invoices.db')):
                 continue
             full = os.path.join(root, fname)
             try:

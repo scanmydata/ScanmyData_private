@@ -57,7 +57,10 @@ _RESUMABLE_THRESHOLD = 8 * 1024 * 1024
 _RESUMABLE_CHUNK = 8 * 1024 * 1024
 # Αρχεία log/βάσης activity που ΔΕΝ συγχρονίζονται ως αρχεία (η βάση activity.db είναι τοπική· το off-site
 # backup του activity είναι το κυλιόμενο απομακρυσμένο activity.log που γράφει το drive_log_activity).
-_LOG_FILES = ("activity.log", "error.log", "activity.db-wal", "activity.db-shm", "activity.log.migrated")
+# Τοπική βάση παραστατικών (invoice_store): ΔΕΝ ανεβαίνει ως αρχείο· στο Drive συνεχίζουν να ταξιδεύουν τα JSON
+# που γράφονται συγχρονα από τη βάση (export), ώστε pull/backup/εργαλεία να μένουν αμετάβλητα.
+_LOCAL_DB_FILES = ("invoices.db", "invoices.db-wal", "invoices.db-shm")
+_LOG_FILES = ("activity.log", "error.log", "activity.db-wal", "activity.db-shm", "activity.log.migrated") + _LOCAL_DB_FILES
 # Η βάση activity.db ΑΝΕΒΑΙΝΕΙ (κρυπτογραφημένη, ως συνεπές snapshot) αλλά δεν μετρά στον έλεγχο «άλλαξε κάτι»:
 # γράφεται σε κάθε ενέργεια και θα προκαλούσε push σε κάθε tick (το push_due την ανεβάζει το πολύ ανά 6 ώρες).
 _FRESHNESS_SKIP = _LOG_FILES + ("activity.db",)
@@ -611,8 +614,8 @@ def _compute_drive_rel_path(file_path: str, source_dir: str) -> Optional[str]:
     # Τα logs (το activity.log της ομάδας φτάνει εκατοντάδες MB) δεν συγχρονίζονται ως αρχεία: το
     # απομακρυσμένο activity.log συντηρείται από το drive_log_activity. Πριν ανέβαιναν κρυπτογραφημένα
     # ολόκληρα σε κάθε push και έριχναν το push της ομάδας με «The read operation timed out».
-    if fname in _LOG_FILES or is_junk_name(fname):
-        return None
+    if fname in _LOG_FILES or is_junk_name(fname) or fname.startswith("invoices.db"):
+        return None     # (και τα invoices.db.corrupt-* που μπαίνουν στην άκρη)
     if re.match(r"^epsilon_invoices\.(json|xlsx|xls)$", fname, re.IGNORECASE):
         # Legacy AFM-less epsilon files are skipped, same as firebase backend.
         return None
@@ -1248,6 +1251,15 @@ def drive_pull_group_to_local(
 
         # Collapse any root+imports client_db split into a single canonical root file.
         _consolidate_root_imports(target_dir)
+
+        # Τα JSON παραστατικών που κατέβηκαν αλλάζουν «εξωτερικά»: ενημέρωση της βάσης τους (invoice_store).
+        try:
+            import invoice_store as _istore
+            if files_created > 0 and _istore.is_enabled():
+                _st = _istore.sync_group(target_dir, force=True)
+                logger.info("[DRIVE PULL] invoices.db: %s", _st)
+        except Exception:
+            logger.debug("[DRIVE PULL] invoice_store sync failed", exc_info=True)
 
         # Activity log (firebase_pull action for log-viewer compatibility).
         try:
