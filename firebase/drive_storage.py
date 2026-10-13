@@ -65,6 +65,10 @@ _LOG_FILES = ("activity.log", "error.log", "activity.db-wal", "activity.db-shm",
 # γράφεται σε κάθε ενέργεια και θα προκαλούσε push σε κάθε tick (το push_due την ανεβάζει το πολύ ανά 6 ώρες).
 _FRESHNESS_SKIP = _LOG_FILES + ("activity.db",)
 _ACTIVITY_DB = "activity.db"
+# Παραστατικά πελατών: στο Drive ταξιδεύει ΜΙΑ κρυπτογραφημένη, συμπιεσμένη invoices.db ανά ομάδα (snapshot, συγχώνευση
+# ανά store με νεότερο updated_at) αντί για τα {ΑΦΜ}_invoices/_summary/_epsilon_invoices JSON. Τα JSON μένουν τοπικά ως
+# export (invoice_store). Fallback: αν η βάση δεν ανέβει/δεν κατέβει, τα JSON συνεχίζουν να συγχρονίζονται όπως πριν.
+_INVOICES_DB = "invoices.db"
 
 # «Σκουπίδια» που δημιούργησε η απολύμανση ονομάτων (ίδιο αρχείο με πολλά ονόματα και υπογράμμιση στο τέλος).
 # Ούτε ανεβαίνουν ούτε κατεβαίνουν· το push τα σβήνει από το Drive αφού δεν υπάρχουν «τοπικά».
@@ -581,6 +585,69 @@ def _delete_file(file_id: str) -> bool:
         return False
 
 
+def _trash_file(file_id: str) -> bool:
+    """Στα απορρίμματα του Drive (ανακτάται ~30 ημέρες) αντί για οριστική διαγραφή."""
+    try:
+        _call_with_retry(_service().files().update(fileId=file_id, body={"trashed": True}, fields="id").execute)
+        return True
+    except HttpError as e:
+        logger.warning("Drive trash failed for %s: %s", file_id, e)
+        return False
+
+
+def _invoice_store_mod():
+    """Το invoice_store αν η λειτουργία «invoices.db στο Drive» είναι ενεργή, αλλιώς None."""
+    try:
+        import invoice_store as _ist
+        return _ist if _ist.drive_enabled() else None
+    except Exception:
+        return None
+
+
+def _is_managed_rel(rel_path: str) -> bool:
+    ist = _invoice_store_mod()
+    return bool(ist and ist.is_managed_rel(rel_path))
+
+
+def _merge_remote_invoices_db(local_folder: str, source_dir: str, remote_meta: Dict[str, Any]) -> Dict[str, int]:
+    """Κατεβάζει την invoices.db του Drive και τη συγχωνεύει ανά store στην τοπική (κερδίζει το νεότερο updated_at).
+    Αν η απομακρυσμένη έκδοση έχει ήδη συγχωνευθεί (ή είναι δική μας) δεν κατεβάζει τίποτα."""
+    ist = _invoice_store_mod()
+    if ist is None:
+        return {}
+    try:
+        rm = float((remote_meta.get("appProperties") or {}).get("local_mtime") or 0)
+    except Exception:
+        rm = 0.0
+    try:
+        merged = float(ist.get_meta(source_dir, "drive_merged_remote_mtime", "0") or 0)
+    except ValueError:
+        merged = 0.0
+    if rm and abs(rm - merged) < 0.001:
+        return {}
+    blob = _download_bytes(remote_meta["id"])
+    try:
+        plain = _cipher().decrypt(blob)
+    except Exception:
+        plain = blob
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="invoices_remote_", suffix=".db")
+    os.close(fd)
+    try:
+        ist.extract_snapshot(plain, tmp)
+        st = ist.merge_from(source_dir, tmp)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if st.get("failed"):
+        raise RuntimeError(f"invoices.db merge: {st['failed']} store απέτυχαν")
+    ist.set_meta(source_dir, "drive_merged_remote_mtime", f"{rm:.6f}")
+    logger.info("[DRIVE] invoices.db: %s (%s)", st, local_folder)
+    return st
+
+
 # ============================================================================
 # rel-path helpers (must mirror firebase_config push routing exactly)
 # ============================================================================
@@ -732,6 +799,52 @@ def drive_push_group_files(
         delete_candidates: List[str] = []
         local_rel_paths = set()
 
+        # --- Παραστατικά: κρυπτογραφημένη invoices.db αντί για JSON (fallback: JSON όπως πριν αν αποτύχει) ---
+        skip_managed = False
+        ist = _invoice_store_mod()
+        gname_dir = os.path.basename(os.path.abspath(source_dir))
+        if ist is not None and not gname_dir.startswith((".", "_")):
+            try:
+                data_root_abs = os.path.dirname(os.path.abspath(source_dir))
+                ist.sync_group(source_dir, force=True, _root=data_root_abs)     # JSON που άλλαξαν εξωτερικά
+                remote_db = index.get(_INVOICES_DB)
+                local_db_exists = os.path.exists(ist.db_path(source_dir)) and bool(ist.fingerprint(source_dir))
+                if not local_db_exists:
+                    skip_managed = bool(remote_db) and not any(
+                        ist.is_managed_rel(os.path.relpath(os.path.join(r, n), source_dir).replace("\\", "/"))
+                        for r, _d, fs in os.walk(source_dir) for n in fs)
+                else:
+                    if remote_db and not dry_run:
+                        _merge_remote_invoices_db(local_folder, source_dir, remote_db)
+                    fp = ist.fingerprint(source_dir)
+                    if remote_db and fp == ist.get_meta(source_dir, "drive_pushed_fp", ""):
+                        skip_managed = True                                   # ήδη ενημερωμένη στο Drive
+                    elif dry_run:
+                        upload_candidates.append(_INVOICES_DB)
+                        skip_managed = True
+                    else:
+                        raw_db = ist.snapshot_bytes(source_dir)
+                        enc_db = cipher.encrypt(raw_db)
+                        mt_db = time.time()
+                        parent_db = _ensure_path(local_folder, "")
+                        res_db = _upload_bytes(parent_db, _INVOICES_DB, enc_db, mt_db,
+                                               existing_id=(remote_db or {}).get("id"))
+                        if int(res_db.get("size") or 0) != len(enc_db):
+                            raise RuntimeError(f"invoices.db upload size mismatch: {res_db.get('size')} != {len(enc_db)}")
+                        ist.mark_pushed(source_dir, fp, mt_db)
+                        index[_INVOICES_DB] = {
+                            "id": res_db.get("id"), "modifiedTime": res_db.get("modifiedTime"),
+                            "size": int(res_db.get("size") or 0), "appProperties": {"local_mtime": f"{mt_db:.6f}"},
+                        }
+                        files_uploaded += 1
+                        bytes_uploaded += len(raw_db)
+                        skip_managed = True
+                        logger.info("[DRIVE PUSH] invoices.db uploaded (%d KB, %s)", len(enc_db) // 1024, local_folder)
+            except Exception as e:
+                skip_managed = False
+                files_failed += 1
+                logger.error("[DRIVE PUSH] invoices.db failed (%s) — fallback στα JSON: %s", local_folder, e)
+
         # Προ-καταμέτρηση για ποσοστά (μόνο τοπικά stat — καμία κλήση στο Drive).
         planned_files = 0
         planned_bytes = 0
@@ -741,6 +854,8 @@ def drive_push_group_files(
                     _fp = os.path.join(_r, _n)
                     _rel = _compute_drive_rel_path(_fp, source_dir)
                     if _rel is None:
+                        continue
+                    if skip_managed and _is_managed_rel(_rel):
                         continue
                     _ex = index.get(_rel)
                     if smart_sync and (not force) and _ex:
@@ -771,6 +886,8 @@ def drive_push_group_files(
                 rel_path = _compute_drive_rel_path(file_path, source_dir)
                 if rel_path is None:
                     continue
+                if skip_managed and _is_managed_rel(rel_path):
+                    continue          # τα JSON παραστατικών ταξιδεύουν μέσα στην invoices.db
                 local_rel_paths.add(rel_path)
 
                 try:
@@ -874,7 +991,9 @@ def drive_push_group_files(
             if dry_run:
                 delete_candidates.append(rel_path)
                 continue
-            if _delete_file(meta["id"]):
+            # Τα JSON παραστατικών που αντικαταστάθηκαν από την invoices.db πάνε στα απορρίμματα (ανακτώνται).
+            _removed = _trash_file(meta["id"]) if (skip_managed and _is_managed_rel(rel_path)) else _delete_file(meta["id"])
+            if _removed:
                 files_deleted += 1
                 index.pop(rel_path, None)
 
@@ -1116,9 +1235,16 @@ def drive_pull_group_to_local(
         # front. Doing the makedirs single-threaded here avoids races during the
         # parallel download pass below.
         download_plan: List[Dict[str, Any]] = []
+        _ist_pull = _invoice_store_mod()
+        _inv_db_mode = bool(index.get(_INVOICES_DB)) and _ist_pull is not None and not os.path.basename(
+            os.path.abspath(target_dir)).startswith(".")
         for rel_path, meta in index.items():
             if rel_path == ".sync_meta.json":
                 continue
+            if rel_path == _INVOICES_DB and not _inv_db_mode:
+                continue          # (λειτουργία απενεργοποιημένη: ποτέ ως απλό αρχείο πάνω στην τοπική βάση)
+            if _inv_db_mode and rel_path != _INVOICES_DB and _ist_pull.is_managed_rel(rel_path):
+                continue          # τα JSON παραστατικών έρχονται μέσα από την invoices.db
             # Root-level Excel files are stored remotely under imports/ (see the
             # push side, _remote_key_for). Materialize them BACK in the group
             # ROOT — mirroring the RTDB pull — so the client_db keeps ONE
@@ -1141,7 +1267,14 @@ def drive_pull_group_to_local(
             # Activity logs: append-only behavior to mirror firebase backend.
             is_log = rel_path.endswith(".log")
 
-            if rel_path == _ACTIVITY_DB:
+            if rel_path == _INVOICES_DB:
+                try:
+                    if remote_mtime and abs(remote_mtime - float(
+                            _ist_pull.get_meta(target_dir, "drive_merged_remote_mtime", "0") or 0)) < 0.001:
+                        continue      # ήδη συγχωνευμένη (ή δική μας)
+                except Exception:
+                    pass
+            elif rel_path == _ACTIVITY_DB:
                 try:
                     import activity_store as _astore
                     if remote_mtime and abs(remote_mtime - float(_astore.get_meta(target_dir, "drive_merged_remote_mtime", "0") or 0)) < 1.0:
@@ -1189,6 +1322,24 @@ def drive_pull_group_to_local(
                 plain = cipher.decrypt(blob)
             except Exception:
                 plain = blob  # historically-plaintext file (activity.log / error.log)
+            if task["rel_path"] == _INVOICES_DB:
+                # Βάση παραστατικών: συγχώνευση ανά store (νεότερο updated_at) + export JSON. ΠΟΤΕ αντικατάσταση.
+                import tempfile
+                fd, tmp = tempfile.mkstemp(prefix="invoices_pull_", suffix=".db")
+                os.close(fd)
+                try:
+                    _ist_pull.extract_snapshot(plain, tmp)
+                    _st = _ist_pull.merge_from(target_dir, tmp)
+                    if _st.get("failed"):
+                        raise RuntimeError(f"invoices.db merge: {_st['failed']} store απέτυχαν")
+                    _ist_pull.set_meta(target_dir, "drive_merged_remote_mtime", f"{task['remote_mtime']:.6f}")
+                    logger.info("[DRIVE PULL] invoices.db: %s (%s)", _st, local_folder)
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                return len(blob)
             if task["rel_path"] == _ACTIVITY_DB:
                 # Βάση logs: συγχώνευση εγγραφών (INSERT OR IGNORE), ΠΟΤΕ αντικατάσταση του τοπικού αρχείου.
                 import tempfile
@@ -1255,9 +1406,10 @@ def drive_pull_group_to_local(
         # Τα JSON παραστατικών που κατέβηκαν αλλάζουν «εξωτερικά»: ενημέρωση της βάσης τους (invoice_store).
         try:
             import invoice_store as _istore
-            if files_created > 0 and _istore.is_enabled():
-                _st = _istore.sync_group(target_dir, force=True)
-                logger.info("[DRIVE PULL] invoices.db: %s", _st)
+            if files_created > 0:
+                _st = _istore.sync_group(target_dir, force=True,
+                                         _root=os.path.dirname(os.path.abspath(target_dir)))
+                logger.info("[DRIVE PULL] invoices.db sync: %s", _st)
         except Exception:
             logger.debug("[DRIVE PULL] invoice_store sync failed", exc_info=True)
 
@@ -1467,6 +1619,13 @@ def drive_compare_group_payload_freshness(
             local_count = max(local_count, 1)
     except Exception:
         pass
+    try:
+        _ist_f = _invoice_store_mod()
+        if _ist_f is not None and _ist_f.push_due(target_dir):
+            local_latest_mtime = max(local_latest_mtime, marker_mtime + 10.0)
+            local_count = max(local_count, 1)
+    except Exception:
+        pass
     local_meta = {
         "exists": local_count > 0,
         "latest_mtime": local_latest_mtime,
@@ -1538,6 +1697,23 @@ def drive_group_sync_diff(group_name: str, local_group_folder: str = None) -> Di
     push: List[str] = []
     pull: List[str] = []
     tolerance = 2.0
+
+    _ist_d = _invoice_store_mod()
+    if _ist_d is not None and index.get(_INVOICES_DB):
+        local = {k: v for k, v in local.items() if not _ist_d.is_managed_rel(k)}
+        index = {k: v for k, v in index.items() if not _ist_d.is_managed_rel(k)}
+        try:
+            _rm = float((index.get(_INVOICES_DB, {}).get("appProperties") or {}).get("local_mtime") or 0)
+        except Exception:
+            _rm = 0.0
+        try:
+            if _ist_d.push_due(source_dir):
+                push.append(_INVOICES_DB)
+            if _rm and abs(_rm - float(_ist_d.get_meta(source_dir, "drive_merged_remote_mtime", "0") or 0)) >= 0.001:
+                pull.append(_INVOICES_DB)
+        except Exception:
+            pass
+        skip = skip | {_INVOICES_DB}
 
     for rel, lmt in local.items():
         existing = index.get(rel)

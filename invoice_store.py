@@ -168,9 +168,11 @@ def db_path(group_dir: str) -> str:
     return os.path.join(group_dir, DB_NAME)
 
 
-def classify(path: Any) -> Optional[Tuple[str, str, str]]:
-    """path -> (group_dir, kind, vat) όταν το αρχείο διαχειρίζεται το store, αλλιώς None."""
-    if not is_enabled() or not path:
+def classify(path: Any, _root: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """path -> (group_dir, kind, vat) όταν το αρχείο διαχειρίζεται το store, αλλιώς None.
+    _root: ρητός φάκελος data/ (για το συγχρονισμό Drive από scripts όπου δεν έχει γίνει configure)."""
+    root = os.path.normcase(os.path.abspath(_root)) if _root else _ROOT
+    if not _ENABLED or not root or not path:
         return None
     try:
         p = os.path.abspath(str(path))
@@ -198,7 +200,7 @@ def classify(path: Any) -> Optional[Tuple[str, str, str]]:
         if m.group(1).lower() == "epsilon":      # το legacy epsilon_invoices.json (σκιά ομάδας)
             return None
         group_dir = folder
-    if os.path.normcase(os.path.dirname(group_dir)) != _ROOT:
+    if os.path.normcase(os.path.dirname(group_dir)) != root:
         return None
     gname = os.path.basename(group_dir)
     if not gname or gname.startswith((".", "_")):
@@ -421,11 +423,12 @@ class ExportFailed(Exception):
 
 
 def _db_save(conn: sqlite3.Connection, kind: str, vat: str, obj: Any, texts: List[str], raw: Optional[str],
-             *, dirty: int, sig: Optional[Tuple[int, int]] = None, export=None) -> int:
+             *, dirty: int, sig: Optional[Tuple[int, int]] = None, export=None,
+             updated_at: Optional[float] = None) -> int:
     """Αποθηκεύει (με diff) το store. dirty=1: το αρχείο πρέπει ακόμη να γραφτεί/ξαναγραφτεί από τη βάση.
     export: callable που γράφει το αρχείο ΜΕΣΑ στη συναλλαγή (κρατά το write lock της SQLite, άρα και οι άλλες
     διεργασίες περιμένουν — βάση και αρχείο δεν αποκλίνουν). Αποτυχία του -> ROLLBACK + ExportFailed."""
-    now = time.time()
+    now = float(updated_at) if updated_at is not None else time.time()
     conn.execute("BEGIN IMMEDIATE")
     try:
         if raw is not None:
@@ -520,7 +523,9 @@ def _import_file(conn: sqlite3.Connection, path: str, kind: str, vat: str) -> Tu
     if not ok or sig is None:
         return False, None
     texts, raw = _serialize(obj)
-    _db_save(conn, kind, vat, obj, texts, raw, dirty=0, sig=sig)
+    # updated_at = ώρα του ΠΕΡΙΕΧΟΜΕΝΟΥ (mtime αρχείου), όχι της εισαγωγής: στη συγχώνευση με το Drive κερδίζει
+    # η πραγματικά νεότερη έκδοση και όχι αυτή που απλώς εισήχθηκε αργότερα.
+    _db_save(conn, kind, vat, obj, texts, raw, dirty=0, sig=sig, updated_at=sig[0] / 1e9)
     return True, obj
 
 
@@ -637,14 +642,14 @@ def version(path: Any) -> Optional[int]:
 
 
 # --------------------------------------------------------------------------- group sync / migration
-def _managed_files(group_dir: str) -> List[Tuple[str, str, str]]:
+def _managed_files(group_dir: str, _root: Optional[str] = None) -> List[Tuple[str, str, str]]:
     out: List[Tuple[str, str, str]] = []
     try:
         for fn in os.listdir(group_dir):
             full = os.path.join(group_dir, fn)
             if not os.path.isfile(full):
                 continue
-            c = classify(full)
+            c = classify(full, _root)
             if c:
                 out.append((full, c[1], c[2]))
     except OSError:
@@ -655,7 +660,7 @@ def _managed_files(group_dir: str) -> List[Tuple[str, str, str]]:
             full = os.path.join(eps, fn)
             if not os.path.isfile(full):
                 continue
-            c = classify(full)
+            c = classify(full, _root)
             if c:
                 out.append((full, c[1], c[2]))
     except OSError:
@@ -663,10 +668,12 @@ def _managed_files(group_dir: str) -> List[Tuple[str, str, str]]:
     return out
 
 
-def sync_group(group_dir: str, *, force: bool = False, min_interval: float = 2.0) -> Dict[str, int]:
-    """Φέρνει τη βάση σε συμφωνία με τα αρχεία της ομάδας (νέα/αλλαγμένα/σβησμένα). Φτηνό (stat ανά αρχείο)."""
+def sync_group(group_dir: str, *, force: bool = False, min_interval: float = 2.0,
+               _root: Optional[str] = None) -> Dict[str, int]:
+    """Φέρνει τη βάση σε συμφωνία με τα αρχεία της ομάδας (νέα/αλλαγμένα/σβησμένα). Φτηνό (stat ανά αρχείο).
+    _root: ρητός φάκελος data/ όταν δεν έχει γίνει configure (scripts/Drive)."""
     stats = {"files": 0, "imported": 0, "unchanged": 0, "removed": 0, "failed": 0, "exported": 0}
-    if not is_enabled() or not os.path.isdir(group_dir):
+    if not _ENABLED or not (_root or _ROOT) or not os.path.isdir(group_dir):
         return stats
     key = os.path.normcase(os.path.abspath(group_dir))
     now = time.monotonic()
@@ -674,7 +681,7 @@ def sync_group(group_dir: str, *, force: bool = False, min_interval: float = 2.0
         return stats
     with _lock_for(group_dir):
         _SYNC_AT[key] = time.monotonic()
-        if not os.path.exists(db_path(group_dir)) and not _managed_files(group_dir):
+        if not os.path.exists(db_path(group_dir)) and not _managed_files(group_dir, _root):
             return stats          # ομάδα χωρίς παραστατικά: δεν δημιουργείται κενή βάση
         try:
             conn = _connect(group_dir)
@@ -685,7 +692,7 @@ def sync_group(group_dir: str, *, force: bool = False, min_interval: float = 2.0
             known = {(k, v): (fm, fs, d) for k, v, fm, fs, d in conn.execute(
                 "SELECT kind, vat, file_mtime_ns, file_size, export_dirty FROM stores")}
             seen = set()
-            for full, kind, vat in _managed_files(group_dir):
+            for full, kind, vat in _managed_files(group_dir, _root):
                 stats["files"] += 1
                 seen.add((kind, vat))
                 sig = _file_sig(full)
@@ -1012,3 +1019,192 @@ def suppliers(group_dir: str, vat: Optional[str] = None, kind: str = "summary") 
                 for a, b, c, d in conn.execute(sql, args)]
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- Drive: snapshot / merge
+SNAPSHOT_MAGIC = b"SMDINV1\n"
+_META_TABLE_OK = "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"
+
+
+def drive_enabled() -> bool:
+    """Το Drive κουβαλά την κρυπτογραφημένη invoices.db αντί για τα JSON (INVOICE_DRIVE_DB=0 -> όπως παλιά)."""
+    return bool(_ENABLED and os.getenv("INVOICE_DRIVE_DB", "1").strip().lower() not in {"0", "false", "no", "off"})
+
+
+def is_managed_rel(rel_path: str) -> bool:
+    """Σχετική διαδρομή μέσα στην ομάδα (Drive/zip) που αντιστοιχεί σε αρχείο παραστατικών της βάσης."""
+    rel = str(rel_path or "").replace("\\", "/")
+    m = _RE_EPS.match(os.path.basename(rel))
+    if m and rel.lower().startswith("epsilon/") and rel.count("/") == 1:
+        return True
+    if "/" in rel:
+        return False
+    base = os.path.basename(rel)
+    m = _RE_INV.match(base) or _RE_SUM.match(base)
+    return bool(m and m.group(1).lower() != "epsilon")
+
+
+def get_meta(group_dir: str, key: str, default: str = "") -> str:
+    if not os.path.exists(db_path(group_dir)):
+        return default
+    try:
+        conn = _connect(group_dir)
+        try:
+            conn.execute(_META_TABLE_OK)
+            r = conn.execute("SELECT v FROM meta WHERE k=?", (key,)).fetchone()
+            return r[0] if r else default
+        finally:
+            conn.close()
+    except Exception:
+        return default
+
+
+def set_meta(group_dir: str, key: str, value: str) -> None:
+    try:
+        conn = _connect(group_dir)
+        try:
+            conn.execute(_META_TABLE_OK)
+            conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (key, str(value)))
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("invoice_store.set_meta failed (%s)", key)
+
+
+def fingerprint(group_dir: str) -> str:
+    """Δακτυλικό αποτύπωμα του περιεχομένου (stores: πλήθος/έκδοση/ώρα) — αλλάζει με κάθε εγγραφή."""
+    if not os.path.exists(db_path(group_dir)):
+        return ""
+    try:
+        conn = _connect(group_dir)
+        try:
+            r = conn.execute("SELECT COUNT(*), COALESCE(SUM(version),0), COALESCE(MAX(updated_at),0), "
+                             "COALESCE(SUM(n),0) FROM stores").fetchone()
+            return f"{r[0]}:{r[1]}:{r[2]:.6f}:{r[3]}" if r and r[0] else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+
+
+def push_due(group_dir: str) -> bool:
+    """Υπάρχουν αλλαγές στη βάση που δεν έχουν ανέβει στο Drive;"""
+    fp = fingerprint(group_dir)
+    return bool(fp) and fp != get_meta(group_dir, "drive_pushed_fp", "")
+
+
+def mark_pushed(group_dir: str, fp: str, mtime: float) -> None:
+    set_meta(group_dir, "drive_pushed_fp", fp)
+    set_meta(group_dir, "drive_merged_remote_mtime", f"{mtime:.6f}")
+
+
+def last_modified(group_dir: str) -> float:
+    try:
+        conn = _connect(group_dir)
+        try:
+            r = conn.execute("SELECT COALESCE(MAX(updated_at),0) FROM stores").fetchone()
+            return float(r[0] or 0)
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+
+
+def snapshot_bytes(group_dir: str) -> bytes:
+    """Συνεπές snapshot της βάσης για το Drive: χωρίς ευρετήρια (ξαναφτιάχνονται από τον παραλήπτη), VACUUM και
+    συμπίεση zlib (τα JSON συμπιέζονται ~8x). Μορφή: SNAPSHOT_MAGIC + zlib(sqlite)."""
+    import zlib
+    fd, tmp = tempfile.mkstemp(prefix="invoices_snap_", suffix=".db")
+    os.close(fd)
+    try:
+        with _lock_for(group_dir):
+            src = _connect(group_dir)
+            try:
+                dst = sqlite3.connect(tmp, isolation_level=None)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+        c = sqlite3.connect(tmp, isolation_level=None)
+        try:
+            for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL").fetchall():
+                c.execute(f'DROP INDEX IF EXISTS "{name}"')
+            c.execute("DELETE FROM meta")
+            c.execute("UPDATE stores SET file_mtime_ns=0, file_size=-1, export_dirty=0")
+            c.execute("PRAGMA journal_mode=DELETE")
+            c.execute("VACUUM")
+        finally:
+            c.close()
+        with open(tmp, "rb") as fh:
+            return SNAPSHOT_MAGIC + zlib.compress(fh.read(), 6)
+    finally:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            try:
+                os.remove(tmp + suffix)
+            except OSError:
+                pass
+
+
+def extract_snapshot(blob: bytes, dest_path: str) -> None:
+    """Αντίστροφη του snapshot_bytes (δέχεται και σκέτη SQLite βάση)."""
+    import zlib
+    data = blob[len(SNAPSHOT_MAGIC):] if blob.startswith(SNAPSHOT_MAGIC) else None
+    raw = zlib.decompress(data) if data is not None else blob
+    if not raw.startswith(b"SQLite format 3"):
+        raise ValueError("invoice_store: το snapshot δεν είναι βάση SQLite")
+    with open(dest_path, "wb") as fh:
+        fh.write(raw)
+
+
+def merge_from(group_dir: str, other_db: str) -> Dict[str, int]:
+    """Συγχωνεύει απομακρυσμένη βάση (από Drive) στην τοπική ΑΝΑ STORE: κερδίζει το νεότερο `updated_at`
+    (ίδια σημασιολογία με το «τελευταίο αρχείο κερδίζει» των JSON). Τα store που αλλάζουν ξαναγράφονται και ως JSON
+    export. Δεν σβήνει ποτέ τοπικά store που λείπουν από το Drive. Επιστρέφει στατιστικά."""
+    st = {"remote": 0, "created": 0, "replaced": 0, "kept_local": 0, "failed": 0}
+    parent = os.path.dirname(os.path.abspath(group_dir))
+    # Πρώτα φέρνουμε τη βάση σε συμφωνία με τα τοπικά αρχεία (π.χ. JSON που άλλαξαν εξωτερικά).
+    try:
+        sync_group(group_dir, force=True, _root=parent)
+    except Exception:
+        log.exception("invoice_store.merge_from: pre-sync failed")
+    other = sqlite3.connect(f"file:{other_db}?mode=ro", uri=True)
+    try:
+        remote = other.execute(
+            "SELECT kind, vat, shape, raw, n, version, updated_at FROM stores").fetchall()
+        with _lock_for(group_dir):
+            conn = _connect(group_dir)
+            try:
+                for kind, vat, shape, raw, _n, _ver, r_upd in remote:
+                    if kind not in KINDS or not re.fullmatch(r"[0-9A-Za-z\-]+", str(vat or "")):
+                        continue
+                    st["remote"] += 1
+                    row = conn.execute("SELECT updated_at FROM stores WHERE kind=? AND vat=?", (kind, vat)).fetchone()
+                    if row is not None and float(r_upd or 0) <= float(row[0] or 0) + 1e-6:
+                        st["kept_local"] += 1
+                        continue
+                    try:
+                        if shape == "raw":
+                            obj = json.loads(raw) if raw is not None else None
+                            texts, raw_text = [], (raw if raw is not None else "null")
+                        else:
+                            parts = [r[0] for r in other.execute(
+                                "SELECT data FROM docs WHERE kind=? AND vat=? ORDER BY pos", (kind, vat))]
+                            texts = parts
+                            obj = [json.loads(t) for t in parts]
+                            raw_text = None
+                        path = file_path(group_dir, kind, vat)
+                        text = _export_text(texts, raw_text)
+                        _cache_drop(os.path.abspath(path))
+                        _db_save(conn, kind, vat, obj, texts, raw_text, dirty=1,
+                                 export=lambda p=path, t=text: _write_file(p, t), updated_at=float(r_upd or 0))
+                        st["replaced" if row is not None else "created"] += 1
+                    except Exception:
+                        log.exception("invoice_store.merge_from: store %s/%s failed", kind, vat)
+                        st["failed"] += 1
+            finally:
+                conn.close()
+    finally:
+        other.close()
+    return st
