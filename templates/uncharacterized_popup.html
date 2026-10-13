@@ -36,7 +36,7 @@
 .unchar-launch-wrap { position: relative; display: inline-block; }
 .unchar-launch-tip {
   position: absolute; left: 0; top: calc(100% + 8px); z-index: 40; width: max-content; max-width: min(380px, 86vw);
-  padding: 8px 12px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 13px; font-weight: 500; line-height: 1.4;
+  padding: 8px 12px; border-radius: 8px; background: #111827 !important; color: #f9fafb !important; font-size: 13px; font-weight: 500; line-height: 1.4;
   box-shadow: 0 8px 22px rgba(0,0,0,.28); pointer-events: none;
   opacity: 0; visibility: hidden; transform: translateY(-3px); transition: opacity .12s ease, transform .12s ease, visibility .12s;
 }
@@ -45,7 +45,8 @@
 }
 .unchar-launch-wrap:hover .unchar-launch-tip,
 .unchar-launch-wrap:focus-within .unchar-launch-tip { opacity: 1; visibility: visible; transform: translateY(0); }
-[data-theme="dark"] .unchar-launch-tip { background: #f3f4f6; color: #111827; }
+/* Το γενικό θέμα της εφαρμογής ορίζει χρώμα σε κάθε span (app.css)· εδώ χρειάζεται !important. */
+[data-theme="dark"] .unchar-launch-tip { background: #f3f4f6 !important; color: #111827 !important; }
 
 .unchar-overlay {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
@@ -132,6 +133,8 @@
   display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 8px;
   border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; font-size: 13px; font-weight: 600; white-space: nowrap;
 }
+.unchar-colf-chip span { color: #92400e !important; }
+[data-theme="dark"] .unchar-colf-chip span { color: #fde68a !important; }
 .unchar-colf-chip button {
   border: 0; background: transparent !important; color: inherit !important; font-size: 12px; font-weight: 700;
   text-decoration: underline; cursor: pointer; padding: 0;
@@ -678,7 +681,7 @@
         persist: false,                 // νέο άνοιγμα = καθαρός πίνακας· δεν μένουν κρυμμένα φίλτρα
         expose: false,                  // να μην πάρει τη θέση του καθολικού φίλτρου της Λίστας
         skip: function(field){ return field === 'pdf'; },
-        valueOf: filterValue,
+        cellValue: filterValue,
         compare: filterCompare,
         onChange: function(count){ setColFilterChip(count); setTimeout(refreshStatus, 0); }
       });

@@ -7187,8 +7187,55 @@ def api_repeat_entry_save():
     invoice_mtype = (data.get("invoice_mtype") or "").strip()
     receipt_mtype = (data.get("receipt_mtype") or "").strip()
 
+    # Αποθήκευση ΜΟΝΟ των MTYPE (και προαιρετικά profile_name/enabled): δεν αγγίζει την αντιστοίχιση ΦΠΑ και δεν
+    # απαιτεί να είναι πλήρης. Παλιότερα και το modal κωδικού κίνησης αποδείξεων περνούσε από τον έλεγχο πληρότητας
+    # του mapping και, με μερικώς συμπληρωμένη αντιστοίχιση, έπαιρνε 400 («αποθηκεύτηκε τοπικά αλλά όχι στο backend»).
+    if bool(data.get("mtype_only")):
+        with CREDENTIALS_RW_LOCK:
+            creds = read_credentials_list() or []
+            idx = find_active_client_index(creds, vat=vat)
+            if idx is None:
+                return jsonify(ok=False, error="Πελάτης δεν βρέθηκε."), 404
+            client = creds[idx] if isinstance(creds[idx], dict) else {}
+            repeat = dict((client.get("repeat_entry") if isinstance(client, dict) else {}) or {})
+            if "receipt_mtype" in data:
+                repeat["receipt_mtype"] = receipt_mtype
+            if "invoice_mtype" in data:
+                repeat["invoice_mtype"] = invoice_mtype
+            if "profile_name" in data:
+                repeat["profile_name"] = profile_name
+            repeat["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            client["repeat_entry"] = repeat
+            creds[idx] = client
+            write_credentials_list(creds)
+        try:
+            _sync_repeat_entry_backend(
+                vat,
+                enabled=(enabled if "enabled" in data else None),
+                invoice_mtype=(invoice_mtype if "invoice_mtype" in data else None),
+                receipt_mtype=(receipt_mtype if "receipt_mtype" in data else None),
+            )
+        except Exception:
+            log.exception("api_repeat_entry_save(mtype_only): backend sync failed for VAT=%s", vat)
+        return jsonify(ok=True, repeat_entry=_build_repeat_entry_payload(repeat),
+                       expense_tags=_list_invoice_categories(client),
+                       category_labels=_category_labels_for_client(client))
+
     # Επιτρέπουμε ΜΟΝΟ ποσοστά ΦΠΑ
     mapping = _normalize_repeat_mapping(mapping_in)
+
+    # Αν δεν στάλθηκε καθόλου αντιστοίχιση (π.χ. αλλαγή μόνο του toggle/MTYPE) κράτα την αποθηκευμένη, όταν είναι πλήρης.
+    if not any((mapping_in or {}).values() if isinstance(mapping_in, dict) else []):
+        try:
+            with CREDENTIALS_RW_LOCK:
+                _c = read_credentials_list() or []
+                _i = find_active_client_index(_c, vat=vat)
+                _stored = _normalize_repeat_mapping(
+                    ((_c[_i].get("repeat_entry") or {}).get("mapping") if _i is not None and isinstance(_c[_i], dict) else {}))
+            if _is_complete_repeat_mapping(_stored):
+                mapping = _stored
+        except Exception:
+            pass
 
     # Έλεγχος για κενές επιλογές
     missing = [k for k in VAT_KEYS if not mapping[k]]

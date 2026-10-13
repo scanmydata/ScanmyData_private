@@ -3213,28 +3213,17 @@ try {
     try {
       const vat = activeVatForRepeatMtype();
       if (vat) {
-        // Get current repeat entry
-        const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), {
-          credentials: 'same-origin'
-        });
-        const getData = await getResp.json();
-        
-        // Update with receipt_mtype
+        // Μόνο το receipt_mtype: ο server κρατά ανέγγιχτα την αντιστοίχιση ΦΠΑ, το προφίλ και το toggle.
         const saveResp = await fetch('/api/repeat_entry/save', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           credentials: 'same-origin',
-          body: JSON.stringify({
-            vat: vat,
-            enabled: getData.repeat_entry?.enabled || false,
-            mapping: getData.repeat_entry?.mapping || {},
-            profile_name: getData.repeat_entry?.profile_name || '',
-            invoice_mtype: getData.repeat_entry?.invoice_mtype || '',
-            receipt_mtype: mtype
-          })
+          body: JSON.stringify({ vat: vat, mtype_only: true, receipt_mtype: mtype })
         });
-        
-        if (saveResp.ok) {
+        let saveJson = null;
+        try { saveJson = await saveResp.clone().json(); } catch(_) {}
+
+        if (saveResp.ok && (!saveJson || saveJson.ok !== false)) {
           window.__cachedReceiptMtype = mtype;
           window.__repeat_receipt_mtype = mtype;
           if(typeof showFlash === 'function'){
@@ -13026,8 +13015,7 @@ function openReceiptClassModal(summaryObj){
               credentials: 'same-origin',
               body: JSON.stringify({
                 vat: activeVat,
-                enabled: !!rep.enabled,
-                mapping: rep.mapping || {},
+                mtype_only: true,
                 profile_name: profileNameToPersist,
                 invoice_mtype: rep.invoice_mtype || '',
                 receipt_mtype: effectiveReceiptMtype

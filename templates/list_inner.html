@@ -2008,12 +2008,18 @@ document.addEventListener('click', function(e){
 
 /* Φίλτρο ανά στήλη (εικονίδιο φίλτρου στην κεφαλίδα, όπως στο Timologio Downloader) */
 .fbp-cf-btn {
-  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px;
-  border-radius: 4px; border: 1px solid transparent; background: transparent; cursor: pointer; vertical-align: middle;
-  color: #6b7280; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  position: absolute; top: 50%; margin-top: -10px; right: 4px; z-index: 3;
+  border-radius: 4px; border: 1px solid transparent; background: transparent; cursor: pointer;
+  color: #6b7280;
 }
+/* Το εικονίδιο ΔΕΝ ζει μέσα στον τίτλο (που κόβεται όταν η στήλη είναι στενή)· κάθε στήλη κρατά δικό του χώρο. */
+.tabulator .tabulator-header .tabulator-col.fbp-cf-has .tabulator-col-content { position: relative; }
+.tabulator .tabulator-header .tabulator-col.fbp-cf-has .tabulator-col-title { padding-right: 26px !important; }
+.tabulator .tabulator-header .tabulator-col.fbp-cf-has.tabulator-sortable .tabulator-col-title { padding-right: 48px !important; }
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable .fbp-cf-btn { right: 24px; }
 .fbp-cf-btn:hover { background: rgba(0,0,0,.08); color: #111827; }
-.fbp-cf-btn.is-active { color: #fff; background: #2563eb; border-color: #1d4ed8; position: relative; box-shadow: 0 0 0 2px rgba(37,99,235,.35); }
+.fbp-cf-btn.is-active { color: #fff; background: #2563eb; border-color: #1d4ed8; box-shadow: 0 0 0 2px rgba(37,99,235,.35); }
 /* Μικρή κουκκίδα πάνω στο εικονίδιο + γραμμή κάτω από την κεφαλίδα: φαίνεται αμέσως ποια στήλη φιλτράρει. */
 .fbp-cf-btn.is-active::after {
   content: ''; position: absolute; top: -4px; right: -4px; width: 8px; height: 8px; border-radius: 50%;
@@ -2021,6 +2027,9 @@ document.addEventListener('click', function(e){
 }
 .tabulator .tabulator-col.fbp-cf-col-active { box-shadow: inset 0 -3px 0 #f59e0b; }
 .fbp-cf-auto { margin-top: 6px; font-size: 11px; opacity: .65; }
+.fbp-cf-list label.fbp-cf-month { font-weight: 700; }
+.fbp-cf-sep { height: 1px; margin: 4px 0; background: #d1d5db; }
+[data-theme="dark"] .fbp-cf-sep { background: #4b5563; }
 [data-theme="dark"] .fbp-cf-btn { color: #cbd5e1; }
 [data-theme="dark"] .fbp-cf-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
 [data-theme="dark"] .fbp-cf-btn.is-active { color: #fff; background: #2563eb; }
@@ -2059,7 +2068,7 @@ document.addEventListener('click', function(e){
   // Τα φίλτρα εφαρμόζονται ΑΥΤΟΜΑΤΑ (σε κάθε αλλαγή τικ/κειμένου)· δεν υπάρχει κουμπί «Εφαρμογή». Ενεργό φίλτρο
   // φαίνεται στην κεφαλίδα της στήλης (γεμάτο εικονίδιο + κίτρινη γραμμή) και μέσω opts.onChange(πλήθος) για ένδειξη
   // στη γραμμή εργαλείων. Επιλογές (opts): persist (false = χωρίς αποθήκευση στο sessionStorage), expose (false =
-  // όχι καθολικό window.FBP_COLUMN_FILTERS), valueOf(field,row) (εμφανιζόμενη τιμή), skip(field), compare(field,a,b).
+  // όχι καθολικό window.FBP_COLUMN_FILTERS), cellValue(field,row) (εμφανιζόμενη τιμή), skip(field), compare(field,a,b).
   function fbpInstallColumnFilters(tab, wrapper, stateKeyFn, opts){
     if(!tab || typeof tab.getColumns !== 'function') return null;
     opts = opts || {};
@@ -2074,7 +2083,7 @@ document.addEventListener('click', function(e){
     }
     function cellText(field, row){
       var raw;
-      if(typeof opts.valueOf === 'function'){ try{ raw = opts.valueOf(field, row); }catch(_){ raw = row[field]; } }
+      if(typeof opts.cellValue === 'function'){ try{ raw = opts.cellValue(field, row); }catch(_){ raw = row[field]; } }
       else raw = row[field];
       return raw == null ? '' : String(raw).trim();
     }
@@ -2131,8 +2140,9 @@ document.addEventListener('click', function(e){
         if(typeof opts.skip === 'function' && opts.skip(f)) return;
         var el = c.getElement && c.getElement();
         if(!el) return;
-        var content = el.querySelector('.tabulator-col-title') || el;
+        var content = el.querySelector('.tabulator-col-content') || el;
         if(el.querySelector('.fbp-cf-btn')) return;
+        el.classList.add('fbp-cf-has');
         var b = document.createElement('span');
         b.className = 'fbp-cf-btn' + (isActive(f) ? ' is-active' : '');
         b.setAttribute('role', 'button');
@@ -2193,9 +2203,68 @@ document.addEventListener('click', function(e){
       input.value = st.text || '';
       var list = pop.querySelector('.fbp-cf-list');
       var MAX = 400;
+      // Στήλη ημερομηνιών: πάνω-πάνω εμφανίζονται οι μήνες (π.χ. «Σεπτέμβριος 2026») και μετά οι μεμονωμένες
+      // ημερομηνίες. Τικ σε μήνα επιλέγει/αποεπιλέγει όλες τις ημερομηνίες του.
+      var MONTHS = ['Ιανουάριος','Φεβρουάριος','Μάρτιος','Απρίλιος','Μάιος','Ιούνιος','Ιούλιος','Αύγουστος','Σεπτέμβριος','Οκτώβριος','Νοέμβριος','Δεκέμβριος'];
+      function parseDateParts(v){
+        var t = String(v == null ? '' : v).trim(), m;
+        if((m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/))) return { y: +m[3], mo: +m[2], d: +m[1] };
+        if((m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return { y: +m[1], mo: +m[2], d: +m[3] };
+        return null;
+      }
+      var nonEmptyItems = items.filter(function(i){ return i[0] !== ''; });
+      var isDateField = nonEmptyItems.length > 0 && nonEmptyItems.every(function(i){
+        var p = parseDateParts(i[0]); return p && p.mo >= 1 && p.mo <= 12;
+      });
+      if(isDateField){
+        items.sort(function(a, b){
+          var pa = parseDateParts(a[0]), pb = parseDateParts(b[0]);
+          if(!pa || !pb) return pa ? -1 : (pb ? 1 : 0);          // «(κενό)» στο τέλος
+          return ((pb.y * 10000 + pb.mo * 100 + pb.d) - (pa.y * 10000 + pa.mo * 100 + pa.d));
+        });
+      }
+      function renderMonths(q){
+        var groups = {};
+        items.forEach(function(it){
+          var pp = parseDateParts(it[0]);
+          if(!pp) return;
+          if(q && norm(it[0]).indexOf(q) === -1) return;
+          var key = pp.y * 100 + pp.mo;
+          var g = groups[key] || (groups[key] = { key: key, label: MONTHS[pp.mo - 1] + ' ' + pp.y, values: [], count: 0 });
+          g.values.push(it[0]);
+          g.count += it[1];
+        });
+        var keys = Object.keys(groups).map(Number).sort(function(a, b){ return b - a; });
+        keys.forEach(function(k){
+          var g = groups[k];
+          var nChecked = g.values.filter(function(v){ return checked.has(v); }).length;
+          var lab = document.createElement('label');
+          lab.className = 'fbp-cf-month';
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = nChecked === g.values.length;
+          cb.indeterminate = nChecked > 0 && nChecked < g.values.length;
+          cb.addEventListener('change', function(){
+            g.values.forEach(function(v){ if(cb.checked) checked.add(v); else checked.delete(v); });
+            commit();
+            renderList();
+          });
+          var sp = document.createElement('span');
+          sp.textContent = g.label + '  (' + g.count + ')';
+          lab.appendChild(cb); lab.appendChild(sp);
+          list.appendChild(lab);
+        });
+        if(keys.length){
+          var sep = document.createElement('div');
+          sep.className = 'fbp-cf-sep';
+          list.appendChild(sep);
+        }
+      }
       function renderList(){
         var q = norm(input.value);
+        var keepScroll = list.scrollTop;
         list.innerHTML = '';
+        if(isDateField) renderMonths(q);
         var shown = 0;
         items.forEach(function(it){
           if(q && norm(it[0]).indexOf(q) === -1) return;
@@ -2205,7 +2274,7 @@ document.addEventListener('click', function(e){
           var cb = document.createElement('input');
           cb.type = 'checkbox';
           cb.checked = checked.has(it[0]);
-          cb.addEventListener('change', function(){ if(cb.checked) checked.add(it[0]); else checked.delete(it[0]); commit(); });
+          cb.addEventListener('change', function(){ if(cb.checked) checked.add(it[0]); else checked.delete(it[0]); commit(); if(isDateField) renderList(); });
           var sp = document.createElement('span');
           sp.textContent = (it[0] === '' ? '(κενό)' : it[0]) + '  (' + it[1] + ')';
           lab.appendChild(cb); lab.appendChild(sp);
@@ -2217,6 +2286,7 @@ document.addEventListener('click', function(e){
           more.textContent = 'Εμφανίζονται οι πρώτες ' + MAX + ' τιμές — χρησιμοποίησε την αναζήτηση.';
           list.appendChild(more);
         }
+        try{ list.scrollTop = keepScroll; }catch(_){ }
       }
       // Αυτόματη εφαρμογή: κάθε αλλαγή υπολογίζει το φίλτρο της στήλης και ξαναφιλτράρει τον πίνακα αμέσως.
       function commit(){
