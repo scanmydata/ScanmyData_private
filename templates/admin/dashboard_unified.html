@@ -2911,7 +2911,7 @@ function _fuWhen(iso){
   if (!iso) return '—';
   const d = new Date(String(iso).endsWith('Z') || /[+-]\d\d:?\d\d$/.test(String(iso)) ? iso : iso + 'Z');
   if (isNaN(d)) return _fuEsc(iso);
-  try { return d.toLocaleString('el-GR', {timeZone:'Europe/Athens', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'}); }
+  try { return d.toLocaleString('el-GR', {timeZone:'Europe/Athens', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:false}); }
   catch (e) { return d.toISOString(); }
 }
 
@@ -2997,8 +2997,8 @@ function renderFailedUrls() {
     const grp = (r.groups || []).map(g => `<span class="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-xs mr-1">${_fuEsc(g)}</span>`).join('') || '—';
     const src = r.source === 'review_queue' ? ' <span class="text-xs text-gray-400" title="Από την ουρά ελέγχου αποδείξεων της ομάδας">(ουρά ομάδας)</span>' : '';
     return `<tr class="border-t border-gray-200 align-top" data-url="${_fuEsc(r.url)}">
-      <td class="px-3 py-2 whitespace-nowrap">${_fuWhen(r.last_seen)}<div class="text-xs text-gray-500">1η: ${_fuWhen(r.first_seen)}</div></td>
-      <td class="px-3 py-2 break-all" style="max-width:420px">
+      <td class="px-3 py-2 whitespace-nowrap">${_fuWhen(r.last_seen)}<div class="text-xs text-gray-500">1η φορά: ${_fuWhen(r.first_seen)}</div></td>
+      <td class="px-3 py-2 break-all" style="min-width:300px;max-width:460px">
         <a href="${_fuEsc(r.url)}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline">${_fuEsc(r.url)}</a>
         <div class="text-xs text-gray-500">${_fuEsc(r.domain || '')} · ${_fuEsc(_fuKindLabel(_fuKind(r)))}${r.scraper_source ? ' · ' + _fuEsc(r.scraper_source) : ''}</div>
         ${err}${missing}
