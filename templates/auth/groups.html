@@ -11,7 +11,7 @@
       --gp-bg:#fff; --gp-bg-soft:#f8fafc; --gp-border:#e2e8f0; --gp-text:#0f172a; --gp-muted:#64748b;
       --gp-accent:#0284c7; --gp-accent-dark:#0369a1; --gp-accent-soft:#e0f2fe;
       --gp-ok:#059669; --gp-ok-soft:#d1fae5; --gp-warn-soft:#fef3c7; --gp-warn:#92400e;
-      max-width:1200px;margin:0 auto;padding:0 0 22px;color:var(--gp-text);
+      max-width:1240px;margin:0 auto;padding:30px 36px 56px;color:var(--gp-text);box-sizing:border-box;
     }
     [data-theme="dark"] .groups-page{
       --gp-bg:#0f172a; --gp-bg-soft:#111c33; --gp-border:#334155; --gp-text:#e2e8f0; --gp-muted:#94a3b8;
@@ -22,9 +22,9 @@
     .groups-page p,.groups-page span,.groups-page small,.groups-page label{color:inherit;}
 
     /* ---- hero ---- */
-    .gp-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:18px;}
-    .gp-hero h1{font-size:1.55rem;font-weight:800;margin:0 0 6px;}
-    .gp-hero p{margin:0;color:var(--gp-muted) !important;max-width:720px;line-height:1.5;}
+    .gp-hero{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;flex-wrap:wrap;margin-bottom:28px;}
+    .gp-hero h1{font-size:1.7rem;font-weight:800;margin:0 0 10px;}
+    .gp-hero p{margin:0;color:var(--gp-muted) !important;max-width:760px;line-height:1.65;font-size:.98rem;}
     .gp-who{display:flex;flex-direction:column;gap:6px;align-items:flex-end;font-size:.88rem;color:var(--gp-muted);}
     .gp-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-weight:700;font-size:.85rem;
       background:var(--gp-accent-soft);color:var(--gp-accent-dark) !important;border:1px solid var(--gp-accent);}
@@ -32,44 +32,46 @@
     .gp-chip.is-none{background:var(--gp-warn-soft);color:var(--gp-warn) !important;border-color:#f59e0b;}
 
     /* ---- πώς δουλεύουν οι ομάδες ---- */
-    .gp-how{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;margin-bottom:22px;overflow:hidden;}
-    .gp-how summary{cursor:pointer;list-style:none;padding:13px 16px;font-weight:700;display:flex;align-items:center;gap:8px;}
+    .gp-how{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:16px;margin-bottom:40px;overflow:hidden;}
+    .gp-how summary{cursor:pointer;list-style:none;padding:16px 22px;font-weight:700;display:flex;align-items:center;gap:8px;}
     .gp-how summary::-webkit-details-marker{display:none;}
     .gp-how summary::after{content:'▾';margin-left:auto;color:var(--gp-muted);transition:transform .15s;}
     .gp-how[open] summary::after{transform:rotate(180deg);}
-    .gp-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;padding:0 16px 14px;}
-    .gp-step{background:var(--gp-bg-soft);border:1px solid var(--gp-border);border-radius:12px;padding:12px 14px;}
+    .gp-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;padding:2px 22px 20px;}
+    .gp-step{background:var(--gp-bg-soft);border:1px solid var(--gp-border);border-radius:12px;padding:16px 18px;}
     .gp-step b{display:inline-flex;width:24px;height:24px;border-radius:50%;background:var(--gp-accent);color:#fff;
       align-items:center;justify-content:center;font-size:.82rem;margin-right:8px;}
     .gp-step strong{font-size:.95rem;}
-    .gp-step p{margin:6px 0 0;color:var(--gp-muted);font-size:.88rem;line-height:1.45;}
-    .gp-roles{padding:0 16px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
-    .gp-role{font-size:.88rem;color:var(--gp-muted);line-height:1.45;}
+    .gp-step p{margin:8px 0 0;color:var(--gp-muted);font-size:.9rem;line-height:1.6;}
+    .gp-roles{padding:0 22px 22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}
+    .gp-role{font-size:.9rem;color:var(--gp-muted);line-height:1.6;}
     .gp-role strong{color:var(--gp-text);}
 
     /* ---- τίτλοι ενοτήτων ---- */
-    .gp-section{margin:0 0 12px;}
-    .gp-section h2{font-size:1.1rem;font-weight:800;margin:0 0 3px;}
-    .gp-section p{margin:0;color:var(--gp-muted) !important;font-size:.9rem;}
+    .gp-section{margin:0 0 20px;}
+    .gp-section h2{font-size:1.2rem;font-weight:800;margin:0 0 6px;}
+    .gp-section p{margin:0;color:var(--gp-muted) !important;font-size:.93rem;line-height:1.55;}
 
-    /* ---- κουμπιά ---- */
-    .gp-btn{border:none;border-radius:10px;padding:9px 15px;font-weight:700;cursor:pointer;font-size:.9rem;
-      background:var(--gp-accent);color:#fff !important;transition:background .12s,transform .05s;}
-    .gp-btn:hover{background:var(--gp-accent-dark);}
-    .gp-btn:active{transform:translateY(1px);}
-    .gp-btn:disabled{opacity:.55;cursor:not-allowed;}
-    .gp-btn.ghost{background:transparent;color:var(--gp-text) !important;border:1px solid var(--gp-border);}
-    .gp-btn.ghost:hover{background:var(--gp-bg-soft);}
-    .gp-btn.ok{background:var(--gp-ok);}
-    .gp-btn.danger{background:transparent;color:#b91c1c !important;border:1px solid #fca5a5;}
-    .gp-btn.danger:hover{background:#fee2e2;}
-    [data-theme="dark"] .gp-btn.danger{color:#fca5a5 !important;border-color:#7f1d1d;}
-    [data-theme="dark"] .gp-btn.danger:hover{background:#450a0a;}
+    /* ---- κουμπιά ---- (όλα με !important: το γενικό θέμα της εφαρμογής ξαναβάφει κάθε <button>) */
+    .groups-page .gp-btn{border:1px solid #0284c7 !important;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:.92rem;
+      background:#0284c7 !important;color:#fff !important;transition:background .12s,transform .05s;line-height:1.3;}
+    .groups-page .gp-btn:hover{background:#0369a1 !important;border-color:#0369a1 !important;}
+    .groups-page .gp-btn:active{transform:translateY(1px);}
+    .groups-page .gp-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .groups-page .gp-btn.ok{background:#059669 !important;border-color:#059669 !important;}
+    .groups-page .gp-btn.ok:hover{background:#047857 !important;border-color:#047857 !important;}
+    .groups-page .gp-btn.ghost{background:transparent !important;color:var(--gp-text) !important;border:1px solid var(--gp-border) !important;}
+    .groups-page .gp-btn.ghost:hover{background:var(--gp-bg-soft) !important;}
+    .groups-page .gp-btn.danger{background:transparent !important;color:#b91c1c !important;border:1px solid #f87171 !important;}
+    .groups-page .gp-btn.danger:hover{background:rgba(239,68,68,.12) !important;}
+    [data-theme="dark"] .groups-page .gp-btn.danger{color:#fca5a5 !important;border-color:#b91c1c !important;}
+    [data-theme="dark"] .groups-page .gp-btn.danger:hover{background:rgba(239,68,68,.2) !important;}
+    [data-theme="dark"] .groups-page .gp-btn.ghost{color:#e2e8f0 !important;}
 
     /* ---- κάρτες ομάδων ---- */
-    .groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-bottom:26px;}
-    .group-card{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;padding:16px;
-      display:flex;flex-direction:column;gap:12px;box-shadow:0 4px 14px rgba(15,23,42,.05);}
+    .groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:22px;margin-bottom:44px;}
+    .group-card{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:16px;padding:22px 24px;
+      display:flex;flex-direction:column;gap:18px;box-shadow:0 4px 14px rgba(15,23,42,.05);}
     .group-card.selected{border-color:var(--gp-ok);box-shadow:0 0 0 2px rgba(5,150,105,.25);}
     .group-card.loading{opacity:.65;pointer-events:none;}
     .group-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
@@ -79,46 +81,47 @@
     .badge.active{background:var(--gp-ok-soft);color:var(--gp-ok) !important;border-color:var(--gp-ok);}
     .badge.role-admin{background:var(--gp-warn-soft);color:var(--gp-warn) !important;border-color:#f59e0b;}
     .badge.role-member{background:var(--gp-accent-soft);color:var(--gp-accent-dark) !important;border-color:var(--gp-accent);}
-    .group-sub{font-size:.8rem;font-weight:700;color:var(--gp-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;}
-    .members-list{display:flex;flex-wrap:wrap;gap:6px;}
+    .group-sub{font-size:.78rem;font-weight:700;color:var(--gp-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
+    .members-list{display:flex;flex-wrap:wrap;gap:8px;}
     .pill{display:inline-flex;align-items:center;gap:6px;background:var(--gp-bg-soft);border:1px solid var(--gp-border);
-      border-radius:999px;padding:4px 10px;font-size:.82rem;}
+      border-radius:999px;padding:5px 12px;font-size:.84rem;}
     .pill small{color:var(--gp-muted) !important;}
     .pill.is-admin{border-color:#f59e0b;}
     .pill.is-me{border-color:var(--gp-accent);}
     .remove-member-btn{border:none;background:#fee2e2;color:#991b1b !important;border-radius:999px;width:20px;height:20px;line-height:20px;
       padding:0;cursor:pointer;font-weight:800;font-size:.7rem;}
     .remove-member-btn:hover{background:#fecaca;}
-    .group-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:auto;padding-top:4px;}
-    .group-actions .gp-btn.select{flex:1 1 auto;}
-    .group-folder{font-size:.76rem;color:var(--gp-muted);}
+    .group-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:auto;padding-top:6px;}
+    .group-actions .gp-btn.select{flex:1 1 190px;}
+    .group-folder{font-size:.78rem;color:var(--gp-muted);margin-top:-4px;}
     .group-folder code{background:var(--gp-bg-soft);border-radius:6px;padding:1px 6px;}
 
-    .gp-empty{background:var(--gp-warn-soft);border:1px solid #f59e0b;border-radius:14px;padding:16px;margin-bottom:26px;line-height:1.55;}
+    .gp-empty{background:var(--gp-warn-soft);border:1px solid #f59e0b;border-radius:16px;padding:22px 24px;margin-bottom:40px;line-height:1.65;}
     .gp-empty strong{color:var(--gp-warn) !important;}
 
     /* ---- κάρτες ενεργειών ---- */
-    .gp-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:10px;}
-    .gp-action{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px;}
+    .gp-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:22px;margin-bottom:10px;}
+    .gp-action{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:16px;padding:24px 26px;display:flex;flex-direction:column;gap:14px;}
     .gp-action h3{margin:0;font-size:1.02rem;font-weight:800;}
-    .gp-action p{margin:0;color:var(--gp-muted) !important;font-size:.9rem;line-height:1.5;}
-    .gp-action ul{margin:0;padding-left:18px;color:var(--gp-muted);font-size:.88rem;line-height:1.55;}
-    .gp-action .gp-btn{align-self:flex-start;margin-top:auto;}
+    .gp-action p{margin:0;color:var(--gp-muted) !important;font-size:.93rem;line-height:1.6;}
+    .gp-action ul{margin:0;padding-left:20px;color:var(--gp-muted);font-size:.9rem;line-height:1.75;}
+    .gp-action .gp-btn{align-self:flex-start;margin-top:6px;}
     .gp-note{font-size:.82rem;color:var(--gp-warn) !important;background:var(--gp-warn-soft);border-radius:8px;padding:6px 10px;}
 
     /* ---- modals ---- */
     .gm-modal-backdrop{display:none;position:fixed;inset:0;background:rgba(2,6,23,.58);align-items:center;justify-content:center;z-index:80;padding:18px;}
-    .gm-modal{width:min(640px,100%);max-height:92vh;overflow:auto;background:var(--gp-bg);color:var(--gp-text);border-radius:16px;
-      border:1px solid var(--gp-border);padding:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);}
+    .gm-modal{box-sizing:border-box;width:min(640px,100%);max-height:92vh;overflow:auto;background:var(--gp-bg);color:var(--gp-text);border-radius:18px;
+      border:1px solid var(--gp-border);padding:28px 30px;box-shadow:0 24px 60px rgba(0,0,0,.35);}
     .gm-modal h3{margin:0 0 6px;font-size:1.2rem;font-weight:800;}
-    .gm-help{margin:0 0 14px;color:var(--gp-muted) !important;font-size:.9rem;line-height:1.5;}
-    .gm-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+    .gm-help{margin:0 0 20px;color:var(--gp-muted) !important;font-size:.93rem;line-height:1.6;}
+    .gm-field{display:flex;flex-direction:column;gap:8px;margin-bottom:18px;}
     .gm-field label{font-size:.86rem;font-weight:700;}
     .gm-field input,.gm-field select{padding:10px;border:1px solid var(--gp-border);border-radius:10px;background:var(--gp-bg-soft);color:var(--gp-text);}
     .gm-hint{font-size:.8rem;color:var(--gp-muted) !important;}
-    .gm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+    .gm-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:22px;}
     .user-check-result{font-size:.82rem;min-height:20px;}
     .name-check-result{font-size:.82rem;min-height:18px;}
+    @media (max-width:640px){ .groups-page{padding:18px 14px 40px;} .groups-grid,.gp-actions{grid-template-columns:1fr;} .group-card,.gp-action{padding:18px;} }
   </style>
 
   <!-- ===== Τίτλος ===== -->

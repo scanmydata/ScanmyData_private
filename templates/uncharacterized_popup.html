@@ -123,12 +123,12 @@
 #uncharTableHost .tabulator .tabulator-header .tabulator-col .tabulator-col-title {
   white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
 }
-/* Φίλτρο στήλης: αναγνωρίσιμο πάνω στο κεχριμπαρί· ενεργό = λευκό γεμάτο εικονίδιο με κουκκίδα + κίτρινη γραμμή. */
-#uncharTableHost .fbp-cf-btn { color: #fff7ed; opacity: .85; }
-#uncharTableHost .fbp-cf-btn:hover { background: rgba(255,255,255,.22); color: #fff; opacity: 1; }
-#uncharTableHost .fbp-cf-btn.is-active { background: #fff; color: #b45309; border-color: #fff; opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,.45); }
-#uncharTableHost .fbp-cf-btn.is-active::after { background: #dc2626; border-color: #fff; }
-#uncharTableHost .tabulator .tabulator-col.fbp-cf-col-active { box-shadow: inset 0 -4px 0 #fde047; }
+/* Κεφαλίδα με φίλτρο: ισχύει η κοινή διάταξη της Λίστας (.fbp-cf-*). Εδώ μόνο ο τίτλος: μία γραμμή με «…»
+   και ολόκληρος ο τίτλος στο tooltip της στήλης, ώστε να μη μπερδεύεται με τα εικονίδια. */
+#uncharTableHost .tabulator .tabulator-header .tabulator-col.fbp-cf-has .tabulator-col-title {
+  white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+}
+#uncharTableHost .tabulator .tabulator-header .fbp-cf-btn.is-active { color: #b45309 !important; }
 .unchar-colf-chip {
   display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 8px;
   border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; font-size: 13px; font-weight: 600; white-space: nowrap;
@@ -576,7 +576,7 @@
   function buildColumns(){
     function numberCol(title, field){
       return {
-        title: title, field: field, hozAlign: 'right', sorter: 'number', minWidth: 84,
+        title: title, field: field, hozAlign: 'right', sorter: 'number', minWidth: 104,
         formatter: function(cell){ return fmtNum(cell.getValue()); },
         bottomCalc: 'sum',
         bottomCalcFormatter: function(cell){ return fmtNum(cell.getValue()); }
@@ -586,16 +586,16 @@
     var columns = [
       { title: 'PDF', field: 'pdf', formatter: pdfCell, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, width: 82, minWidth: 74, cssClass: 'unchar-pdfcol' },
       { title: 'MARK', field: 'mark', formatter: 'plaintext', widthGrow: 1.5, minWidth: 140 },
-      { title: 'ΑΦΜ', field: 'afm', formatter: 'plaintext', minWidth: 92 },
+      { title: 'ΑΦΜ', field: 'afm', formatter: 'plaintext', minWidth: 108 },
       { title: 'Επωνυμία', field: 'name', formatter: 'plaintext', widthGrow: 2.6, minWidth: 140 },
-      { title: 'Σειρά', field: 'series', formatter: 'plaintext', widthGrow: 0.8, minWidth: 60 },
-      { title: 'Αριθμός', field: 'number', formatter: 'plaintext', sorter: 'alphanum', widthGrow: 1.1, minWidth: 80 },
+      { title: 'Σειρά', field: 'series', formatter: 'plaintext', widthGrow: 0.8, minWidth: 84 },
+      { title: 'Αριθμός', field: 'number', formatter: 'plaintext', sorter: 'alphanum', widthGrow: 1.1, minWidth: 104 },
       {
-        title: 'Ημερομηνία', field: 'date', formatter: 'plaintext', minWidth: 98,
+        title: 'Ημερομηνία', field: 'date', formatter: 'plaintext', minWidth: 130,
         sorter: function(a, b){ return dateValue(a) - dateValue(b); },
         bottomCalc: function(){ return 'ΣΥΝΟΛΑ'; }
       },
-      { title: 'Είδος', field: 'type', formatter: 'plaintext', widthGrow: 1.8, minWidth: 110 },
+      { title: 'Είδος', field: 'type', formatter: 'plaintext', widthGrow: 1.8, minWidth: 124 },
       {
         title: 'Κατηγορία Χαρακτηρισμού', field: 'category', formatter: categoryCell, widthGrow: 2.2, minWidth: 210,
         sorter: function(a, b, aRow, bRow){
@@ -1353,7 +1353,30 @@
 
   // Τα document/window listeners μένουν μετά το partial navigation: δένονται μία
   // φορά και καλούν πάντα το τρέχον instance.
-  window.__uncharHandlers = { close: closeModal, fit: fitHeight, isOpen: function(){ return modal.style.display !== 'none'; } };
+  // Κλείσιμο με Escape ή κλικ έξω από το παράθυρο. Αν υπάρχουν επιλεγμένες (μη αποθηκευμένες) γραμμές ζητά
+  // επιβεβαίωση, ώστε να μη χαθούν οι επιλογές/χαρακτηρισμοί από ένα τυχαίο κλικ.
+  function requestClose(){
+    if (modal.style.display === 'none' || state.saving) return;
+    var selected = 0;
+    try { selected = state.table ? state.table.getSelectedData().length : 0; } catch (_) {}
+    if (!selected) { closeModal(); return; }
+    var msg = 'Υπάρχουν ' + selected + ' επιλεγμένα παραστατικά που δεν έχουν αποθηκευτεί. Να κλείσει το παράθυρο;';
+    if (typeof window.showModalConfirm === 'function') {
+      window.showModalConfirm('Κλείσιμο χωρίς αποθήκευση;', msg, 'Κλείσιμο', 'Συνέχεια εδώ').then(function(ok){ if (ok) closeModal(); });
+    } else if (window.confirm(msg)) {
+      closeModal();
+    }
+  }
+
+  var downOnBackdrop = false;
+  modal.addEventListener('mousedown', function(e){ downOnBackdrop = (e.target === modal); });
+  modal.addEventListener('click', function(e){
+    // Μόνο όταν και το πάτημα και η αφήνοντας έγιναν στο φόντο (όχι σε σύρσιμο/αλλαγή μεγέθους στήλης που τελειώνει έξω).
+    if (e.target === modal && downOnBackdrop) requestClose();
+    downOnBackdrop = false;
+  });
+
+  window.__uncharHandlers = { close: closeModal, requestClose: requestClose, fit: fitHeight, isOpen: function(){ return modal.style.display !== 'none'; } };
 
   // Αρχική φόρτωση πλήθους + ανανέωση (ένας timer ανά σελίδα· ο παλιός καθαρίζεται στο partial navigation).
   refreshLaunchCount();
@@ -1378,10 +1401,16 @@
   }
   if (!window.__UNCHAR_GLOBAL_BOUND) {
     window.__UNCHAR_GLOBAL_BOUND = true;
+    // Capture: ένα άλλο στοιχείο της σελίδας δεν πρέπει να «καταπίνει» το Escape. Αν είναι ανοιχτό το φίλτρο στήλης,
+    // το Escape κλείνει πρώτα αυτό (το χειρίζεται ο κώδικας του φίλτρου).
     document.addEventListener('keydown', function(e){
       var h = window.__uncharHandlers;
-      if (e.key === 'Escape' && h && h.isOpen()) h.close();
-    });
+      if (e.key !== 'Escape' || !h || !h.isOpen()) return;
+      if (document.querySelector('.fbp-cf-pop')) return;
+      if (document.getElementById('summaryModal') && getComputedStyle(document.getElementById('summaryModal')).display !== 'none') return;
+      e.preventDefault();
+      h.requestClose();
+    }, true);
     window.addEventListener('resize', function(){
       var h = window.__uncharHandlers;
       if (h && h.isOpen()) h.fit();
