@@ -32,6 +32,9 @@
     <button onclick="showTab('firebase_usage')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
       ☁️ Firebase Χρήση
     </button>
+    <button onclick="showTab('failed_urls')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
+      🔗 URL χωρίς ανάγνωση <span id="failed-urls-badge" class="ml-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700" style="display:none;"></span>
+    </button>
     <button onclick="showTab('settings')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
       ⚙️ Ρυθμίσεις
     </button>
@@ -191,6 +194,61 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- ==================== FAILED URLS TAB ==================== -->
+  <div id="failed_urls" class="tab-content hidden">
+    <div class="bg-white border border-gray-200 rounded-lg p-6">
+      <div class="flex justify-between items-start mb-3 flex-wrap gap-3">
+        <div>
+          <h2 class="text-lg font-bold">🔗 URL που δεν μπόρεσαν να διαβαστούν από τους scrapers</h2>
+          <p class="text-sm text-gray-600 mt-1">
+            Κάθε URL τιμολογίου/απόδειξης που κανένας scraper δεν κατάφερε να διαβάσει (άγνωστος πάροχος, κομμένο URL,
+            κενό αποτέλεσμα, ελλιπή πεδία, σφάλμα) από <b>οποιονδήποτε χρήστη και οποιαδήποτε ομάδα</b>.
+            Είναι η λίστα για το ποιους παρόχους να προσθέσουμε στη συνέχεια.
+          </p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button onclick="loadFailedUrls()" class="px-3 py-2 bg-sky-600 text-white rounded hover:bg-sky-700 text-sm">🔄 Ανανέωση</button>
+          <a href="/admin/failed-scrape-urls?download=1" class="px-3 py-2 border border-gray-300 rounded hover:bg-gray-50 text-sm">⬇ JSON</a>
+          <button onclick="clearAllFailedUrls()" class="px-3 py-2 border border-red-300 text-red-700 rounded hover:bg-red-50 text-sm">🗑 Εκκαθάριση όλων</button>
+        </div>
+      </div>
+
+      <div id="failed-urls-summary" class="flex flex-wrap gap-2 mb-3 text-sm"></div>
+
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
+        <input id="failed-urls-q" type="search" placeholder="Αναζήτηση (URL, χρήστης, πελάτης…)" class="md:col-span-2 border border-gray-300 rounded px-3 py-2 text-sm bg-white" oninput="renderFailedUrls()">
+        <select id="failed-urls-reason" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white" onchange="renderFailedUrls()"><option value="">Όλες οι αιτίες</option></select>
+        <select id="failed-urls-group" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white" onchange="renderFailedUrls()"><option value="">Όλες οι ομάδες</option></select>
+        <select id="failed-urls-kind" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white" onchange="renderFailedUrls()">
+          <option value="">Όλοι οι τύποι</option>
+          <option value="invoice">Τιμολόγιο</option>
+          <option value="receipt">Απόδειξη</option>
+          <option value="pdf">PDF παρόχου</option>
+        </select>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="text-left px-3 py-2 font-medium">Τελευταία φορά</th>
+              <th class="text-left px-3 py-2 font-medium">URL</th>
+              <th class="text-left px-3 py-2 font-medium">Αιτία</th>
+              <th class="text-left px-3 py-2 font-medium">Ομάδα</th>
+              <th class="text-left px-3 py-2 font-medium">Χρήστης / Πελάτης</th>
+              <th class="text-right px-3 py-2 font-medium">Φορές</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody id="failed-urls-tbody">
+            <tr><td colspan="7" class="px-3 py-4 text-center text-gray-500">Φόρτωση…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="failed-urls-footer" class="text-xs text-gray-500 mt-2"></div>
     </div>
   </div>
 
@@ -604,6 +662,7 @@ function showTab(tabName) {
   else if (tabName === 'backups') loadBackups();
   else if (tabName === 'email') loadEmailUsers();
   else if (tabName === 'firebase_usage') loadFirebaseUsage();
+  else if (tabName === 'failed_urls') loadFailedUrls();
   else if (tabName === 'settings') { loadFirebaseSyncSettings(); loadStorageBackend(); loadDriveSyncStatus(); }
 }
 
@@ -2741,6 +2800,10 @@ window.addEventListener('load', function() {
   if (valueEl) valueEl.addEventListener('input', updateFirebaseSyncLabel);
   if (unitEl) unitEl.addEventListener('change', updateFirebaseSyncLabel);
   loadStats();
+  // Μόνο το πλήθος για το badge της καρτέλας «URL χωρίς ανάγνωση»
+  fetch('/admin/api/failed-scrape-urls?limit=10000', {credentials: 'same-origin'}).then(r => r.json()).then(j => {
+    if (j && j.ok) { _failedUrls = j.items || []; updateFailedUrlsBadge(); }
+  }).catch(() => {});
   loadUsers();
   loadEmailConfiguration();
   loadEmailProviderSettings();
@@ -2817,6 +2880,175 @@ async function setExportPerm(group, key, value, el) {
   } finally {
     if (el) el.disabled = false;
   }
+}
+
+// ==================== FAILED SCRAPE URLS TAB ====================
+let _failedUrls = [];
+const FAILED_REASON_LABELS = {
+  no_data: 'Κενό αποτέλεσμα',
+  incomplete: 'Ελλιπή πεδία',
+  unknown_viewer: 'Άγνωστος πάροχος',
+  truncated_url: 'Κομμένο URL (σκανάρισμα)',
+  scrape_error: 'Σφάλμα scraper',
+  no_mark: 'Δεν βρέθηκε MARK',
+  unexpected_result: 'Μη αναμενόμενο αποτέλεσμα',
+  pdf_viewer_only: 'PDF: μόνο στη σελίδα παρόχου',
+};
+function _fuEsc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _fuReason(r){
+  const k = String(r||'');
+  if (FAILED_REASON_LABELS[k]) return FAILED_REASON_LABELS[k];
+  if (k.startsWith('pdf_')) return 'PDF: ' + k.slice(4);
+  return k || '—';
+}
+function _fuKind(r){
+  if (r.kind) return r.kind;
+  if (String(r.reason||'').startsWith('pdf_')) return 'pdf';
+  return (r.source === 'review_queue' || r.reason === 'incomplete' || r.reason === 'no_data') ? 'receipt' : 'invoice';
+}
+function _fuKindLabel(k){ return ({invoice:'Τιμολόγιο', receipt:'Απόδειξη', pdf:'PDF'})[k] || k; }
+function _fuWhen(iso){
+  if (!iso) return '—';
+  const d = new Date(String(iso).endsWith('Z') || /[+-]\d\d:?\d\d$/.test(String(iso)) ? iso : iso + 'Z');
+  if (isNaN(d)) return _fuEsc(iso);
+  try { return d.toLocaleString('el-GR', {timeZone:'Europe/Athens', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'}); }
+  catch (e) { return d.toISOString(); }
+}
+
+async function loadFailedUrls() {
+  const tbody = document.getElementById('failed-urls-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-4 text-center text-gray-500">Φόρτωση…</td></tr>';
+  try {
+    const r = await fetch('/admin/api/failed-scrape-urls', {credentials: 'same-origin'});
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    _failedUrls = Array.isArray(j.items) ? j.items : [];
+    const gsel = document.getElementById('failed-urls-group');
+    if (gsel) {
+      const cur = gsel.value;
+      const groups = Array.from(new Set([].concat(j.groups || [], ..._failedUrls.map(x => x.groups || [])))).sort();
+      gsel.innerHTML = '<option value="">Όλες οι ομάδες</option>' + groups.map(g => `<option value="${_fuEsc(g)}">${_fuEsc(g)}</option>`).join('');
+      gsel.value = groups.includes(cur) ? cur : '';
+    }
+    const rsel = document.getElementById('failed-urls-reason');
+    if (rsel) {
+      const cur = rsel.value;
+      const reasons = Array.from(new Set(_failedUrls.map(x => x.reason || ''))).filter(Boolean).sort();
+      rsel.innerHTML = '<option value="">Όλες οι αιτίες</option>' + reasons.map(x => `<option value="${_fuEsc(x)}">${_fuEsc(_fuReason(x))}</option>`).join('');
+      rsel.value = reasons.includes(cur) ? cur : '';
+    }
+    updateFailedUrlsBadge();
+    renderFailedUrls();
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-4 text-center text-red-600">Σφάλμα φόρτωσης: ${_fuEsc(err.message || err)}</td></tr>`;
+  }
+}
+
+function updateFailedUrlsBadge() {
+  const b = document.getElementById('failed-urls-badge');
+  if (!b) return;
+  const n = _failedUrls.length;
+  b.textContent = n > 99 ? '99+' : String(n);
+  b.style.display = n ? '' : 'none';
+}
+
+function renderFailedUrls() {
+  const tbody = document.getElementById('failed-urls-tbody');
+  if (!tbody) return;
+  const q = (document.getElementById('failed-urls-q').value || '').trim().toLowerCase();
+  const reason = document.getElementById('failed-urls-reason').value;
+  const group = document.getElementById('failed-urls-group').value;
+  const kind = document.getElementById('failed-urls-kind').value;
+  const rows = _failedUrls.filter(r => {
+    if (reason && String(r.reason || '') !== reason) return false;
+    if (group && !(r.groups || []).includes(group)) return false;
+    if (kind && _fuKind(r) !== kind) return false;
+    if (q) {
+      const hay = [r.url, r.domain, r.reason, _fuReason(r.reason), (r.groups || []).join(' '), (r.users || []).join(' '),
+                   (r.customers || []).join(' '), r.last_error, (r.missing_fields || []).join(' ')].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // σύνοψη ανά domain (κλικ = φίλτρο αναζήτησης)
+  const byDomain = {};
+  rows.forEach(r => { const d = r.domain || '(άγνωστο)'; byDomain[d] = (byDomain[d] || 0) + 1; });
+  const top = Object.entries(byDomain).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const sum = document.getElementById('failed-urls-summary');
+  if (sum) {
+    sum.innerHTML = `<span class="px-3 py-1 rounded-full bg-gray-100 text-gray-700">Σύνολο: <b>${rows.length}</b>${rows.length !== _failedUrls.length ? ' / ' + _failedUrls.length : ''}</span>` +
+      top.map(([d, n]) => `<button type="button" class="px-3 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-100 hover:bg-sky-100" onclick="document.getElementById('failed-urls-q').value='${_fuEsc(d).replace(/'/g, '')}';renderFailedUrls();">${_fuEsc(d)} <b>${n}</b></button>`).join('');
+  }
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">Δεν υπάρχουν καταγεγραμμένα URL' + (_failedUrls.length ? ' για αυτά τα φίλτρα.' : '.') + '</td></tr>';
+    document.getElementById('failed-urls-footer').textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, i) => {
+    const missing = (r.missing_fields || []).length ? `<div class="text-xs text-gray-500">Λείπουν: ${_fuEsc((r.missing_fields || []).join(', '))}</div>` : '';
+    const err = r.last_error ? `<div class="text-xs text-red-600 break-words">${_fuEsc(r.last_error)}</div>` : '';
+    const ev = (r.events || []).slice().reverse().map(e =>
+      `<li>${_fuWhen(e.ts)} · ${_fuEsc(e.group || '—')} · ${_fuEsc(e.user || '—')}${e.customer ? ' · ' + _fuEsc(e.customer) : ''} · ${_fuEsc(_fuReason(e.reason))}${e.error ? ' · ' + _fuEsc(e.error) : ''}</li>`).join('');
+    const users = (r.users || []).map(_fuEsc).join(', ') || '—';
+    const customers = (r.customers || []).map(_fuEsc).join('<br>');
+    const grp = (r.groups || []).map(g => `<span class="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-xs mr-1">${_fuEsc(g)}</span>`).join('') || '—';
+    const src = r.source === 'review_queue' ? ' <span class="text-xs text-gray-400" title="Από την ουρά ελέγχου αποδείξεων της ομάδας">(ουρά ομάδας)</span>' : '';
+    return `<tr class="border-t border-gray-200 align-top" data-url="${_fuEsc(r.url)}">
+      <td class="px-3 py-2 whitespace-nowrap">${_fuWhen(r.last_seen)}<div class="text-xs text-gray-500">1η: ${_fuWhen(r.first_seen)}</div></td>
+      <td class="px-3 py-2 break-all" style="max-width:420px">
+        <a href="${_fuEsc(r.url)}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline">${_fuEsc(r.url)}</a>
+        <div class="text-xs text-gray-500">${_fuEsc(r.domain || '')} · ${_fuEsc(_fuKindLabel(_fuKind(r)))}${r.scraper_source ? ' · ' + _fuEsc(r.scraper_source) : ''}</div>
+        ${err}${missing}
+        ${ev ? `<details class="mt-1"><summary class="text-xs text-gray-500 cursor-pointer">Τελευταίες εμφανίσεις</summary><ul class="text-xs text-gray-600 list-disc ml-4 mt-1">${ev}</ul></details>` : ''}
+      </td>
+      <td class="px-3 py-2 whitespace-nowrap"><span class="px-2 py-0.5 rounded text-xs bg-amber-50 text-amber-800 border border-amber-100">${_fuEsc(_fuReason(r.reason))}</span>${src}</td>
+      <td class="px-3 py-2">${grp}</td>
+      <td class="px-3 py-2"><div>${users}</div><div class="text-xs text-gray-500">${customers}</div></td>
+      <td class="px-3 py-2 text-right">${_fuEsc(r.count || 1)}</td>
+      <td class="px-3 py-2 whitespace-nowrap">
+        <button type="button" class="text-sky-700 hover:underline mr-2" onclick="copyFailedUrl(${i})">Αντιγραφή</button>
+        <button type="button" class="text-red-600 hover:underline" onclick="clearFailedUrl(${i})">Διαγραφή</button>
+      </td>
+    </tr>`;
+  }).join('');
+  window._failedUrlsShown = rows;
+  document.getElementById('failed-urls-footer').textContent = `Εμφανίζονται ${rows.length} URL.`;
+}
+
+function copyFailedUrl(i) {
+  const r = (window._failedUrlsShown || [])[i];
+  if (!r) return;
+  try { navigator.clipboard.writeText(r.url); } catch (e) { window.prompt('URL:', r.url); }
+}
+
+async function clearFailedUrl(i) {
+  const r = (window._failedUrlsShown || [])[i];
+  if (!r) return;
+  if (!confirm('Να διαγραφεί το URL από τη λίστα;\n\n' + r.url)) return;
+  try {
+    const res = await fetch('/admin/failed-scrape-urls/clear', {
+      method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url: r.url})
+    });
+    const j = await res.json();
+    if (!j.ok && !r.in_review_queue) throw new Error(j.error || 'Αποτυχία');
+    _failedUrls = _failedUrls.filter(x => x.url !== r.url);
+    updateFailedUrlsBadge();
+    renderFailedUrls();
+  } catch (err) { alert('Σφάλμα: ' + (err.message || err)); }
+}
+
+async function clearAllFailedUrls() {
+  if (!confirm('Να αδειάσει ολόκληρη η λίστα καθολικών URL;\n(οι ουρές ελέγχου των ομάδων δεν επηρεάζονται)')) return;
+  try {
+    const res = await fetch('/admin/failed-scrape-urls/clear_all', {method: 'POST', credentials: 'same-origin'});
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error || 'Αποτυχία');
+    await loadFailedUrls();
+  } catch (err) { alert('Σφάλμα: ' + (err.message || err)); }
 }
 </script>
 

@@ -340,7 +340,94 @@ S.configure(LOC)
 D.drive_pull_group_to_local("g1", local_data_root=LOC)
 chk("accidental file removal does not delete data on other machines", os.path.exists(os.path.join(LOCG, "702_invoices.json")))
 
+
+# ================= 11. credentials / fiscal_meta / e3 store / support tickets / exported marks μέσα στη βάση =================
+drive.files = {}
+drive.trashed = []
+S11, L11 = machine("k11s"), machine("k11l")
+SG11, LG11 = os.path.join(S11, FOLDER), os.path.join(L11, FOLDER)
+S.configure(S11)
+files11 = {
+    "credentials.json": [{"name": "ΠΕΛΑΤΗΣ Α", "vat": "111111111", "user": "u", "key": "k", "afm_rules": {"1": {"a": 1}}}],
+    "fiscal_meta.json": {"fiscal_year": 2026},
+    "e3_company_credentials_store.json": {"companies": {"111111111": {"user": "x", "pw": "y"}}},
+    "support_tickets.json": {"tickets": [{"id": 1, "status": "open"}], "messages": [{"id": 1, "ticket_id": 1, "sender": "user", "content": "γεια"}],
+                              "next_id": 2, "next_message_id": 2},
+    "epsilon/111111111_exported_marks.json": {"marks": {"400000000000001": "2026-10-01T00:00:00Z"}, "updated_at": "2026-10-01T00:00:00Z"},
+}
+for rel, payload in files11.items():
+    S.write(os.path.join(SG11, rel.replace("/", os.sep)), payload)
+D.drive_push_group_files("g1", local_data_root=S11)
+rels11 = {r for r, f in drive.files.items() if not f["trashed"]}
+chk("new kinds: only invoices.db on drive", rels11 == {"invoices.db"}, rels11)
+S.configure(L11)
+D.drive_pull_group_to_local("g1", local_data_root=L11)
+for rel, payload in files11.items():
+    p = os.path.join(LG11, rel.replace("/", os.sep))
+    chk(f"new kinds: {rel} materialized on pull", os.path.exists(p) and json.load(open(p, encoding="utf-8")) == payload)
+# αλλαγή tickets/credentials τοπικά -> push -> server pull
+time.sleep(0.05)
+tick = dict(files11["support_tickets.json"])
+tick["messages"] = tick["messages"] + [{"id": 2, "ticket_id": 1, "sender": "support", "content": "απάντηση"}]
+S.write(os.path.join(LG11, "support_tickets.json"), tick)
+D.drive_push_group_files("g1", local_data_root=L11)
+S.configure(S11)
+D.drive_pull_group_to_local("g1", local_data_root=S11)
+chk("new kinds: support ticket reply travels via DB", len(json.load(open(os.path.join(SG11, "support_tickets.json"), encoding="utf-8"))["messages"]) == 2)
+# direct file write (όπως το credentials.json της εφαρμογής: tmp + os.replace) εντοπίζεται και ταξιδεύει
+time.sleep(0.05)
+cp = os.path.join(SG11, "credentials.json")
+newc = files11["credentials.json"] + [{"name": "ΠΕΛΑΤΗΣ Β", "vat": "222222222"}]
+with open(cp + ".tmp", "w", encoding="utf-8") as fh:
+    json.dump(newc, fh, ensure_ascii=False)
+os.replace(cp + ".tmp", cp)
+D.drive_push_group_files("g1", local_data_root=S11)
+S.configure(L11)
+D.drive_pull_group_to_local("g1", local_data_root=L11)
+chk("new kinds: direct credentials.json write travels via DB", json.load(open(os.path.join(LG11, "credentials.json"), encoding="utf-8")) == newc)
+
+
+# ================= 12. μεικτή κατάσταση: η βάση του Drive ΔΕΝ περιέχει ακόμη credentials/tickets (παλιά έκδοση) ===========
+# Το απομακρυσμένο credentials.json πρέπει να κατέβει ως JSON (δεν επιτρέπεται να «χαθεί» στο pull) και μετά να
+# ανέβει στη βάση· JSON νεότερο από το store υιοθετείται πριν το snapshot (αλλιώς θα πήγαινε στα απορρίμματα).
+drive.files = {}
+drive.trashed = []
+OLD, NEW = machine("k12old"), machine("k12new")
+OG, NG = os.path.join(OLD, FOLDER), os.path.join(NEW, FOLDER)
+S.configure(OLD)
+S.write(os.path.join(OG, "901_invoices.json"), [mk(1)])
+# «παλιά έκδοση»: μόνο τα 3 είδη παραστατικών μπαίνουν στη βάση· τα υπόλοιπα ανεβαίνουν ως αρχεία
+_orig_singletons, _orig_exm = dict(S.SINGLETON_FILES), S._RE_EXM
+S.SINGLETON_FILES.clear()                       # (παλιά έκδοση: credentials/tickets/... δεν είναι στη βάση)
+S._RE_EXM = __import__("re").compile(r"^$a")
+json.dump([{"name": "ΠΕΛΑΤΗΣ", "vat": "901"}], open(os.path.join(OG, "credentials.json"), "w", encoding="utf-8"), ensure_ascii=False)
+D.drive_push_group_files("g1", local_data_root=OLD)
+S.SINGLETON_FILES.update(_orig_singletons)
+S._RE_EXM = _orig_exm
+rels12 = {r for r, f in drive.files.items() if not f["trashed"]}
+chk("mixed: old code leaves credentials.json as a file on drive", "credentials.json" in rels12 and "invoices.db" in rels12, rels12)
+S.configure(NEW)
+D.drive_pull_group_to_local("g1", local_data_root=NEW)
+chk("mixed: credentials.json is NOT skipped by the new pull", os.path.exists(os.path.join(NG, "credentials.json")) and
+    json.load(open(os.path.join(NG, "credentials.json"), encoding="utf-8")) == [{"name": "ΠΕΛΑΤΗΣ", "vat": "901"}])
+# νέα έκδοση: push -> το credentials μπαίνει στη βάση, το παλιό JSON φεύγει ΜΕΤΑ το ανέβασμα της βάσης
+D.drive_push_group_files("g1", local_data_root=NEW)
+rels12 = {r for r, f in drive.files.items() if not f["trashed"]}
+chk("mixed: after new push only the DB remains", rels12 == {"invoices.db"}, rels12)
+S.configure(L11)
+# νεότερο JSON που ανέβασε «παλιά» μηχανή ΜΕΤΑ την τελευταία βάση: υιοθετείται, δεν χάνεται
+time.sleep(0.05)
+newer = [{"name": "ΠΕΛΑΤΗΣ", "vat": "901", "edited": "on-old-machine"}]
+drive.files["credentials.json"] = {"id": "CJ", "raw": Cipher().encrypt(json.dumps(newer).encode()),
+                                   "mtime": time.time() + 5, "trashed": False}
+S.configure(NEW)
+D.drive_push_group_files("g1", local_data_root=NEW)
+chk("mixed: newer remote JSON adopted before it is trashed",
+    json.load(open(os.path.join(NG, "credentials.json"), encoding="utf-8")) == newer, os.listdir(NG))
+chk("mixed: adopted content is in the DB snapshot",
+    S.read(os.path.join(NG, "credentials.json")) == (True, newer))
+
 print("\nBAD =", bad)
-for p in (SERVER, LOCAL, L2, L3, L4, L5, SRV, LOC, BK):
+for p in (SERVER, LOCAL, L2, L3, L4, L5, SRV, LOC, S11, L11, OLD, NEW, BK):
     shutil.rmtree(os.path.dirname(p) if os.path.basename(p) == "data" else p, ignore_errors=True)
 sys.exit(1 if bad else 0)

@@ -12055,6 +12055,26 @@ def search():
                     if scraped_marks or local_invoice_hit or modal_warning:
                         break
 
+                # Το URL δεν έδωσε MARK με κανέναν scraper -> στη λίστα «URL που δεν διαβάστηκαν» του admin.
+                if not (scraped_marks or local_invoice_hit or modal_warning):
+                    try:
+                        _known_viewers = ("wedoconnect", "etimologiera.gr", "mydatapi.aade.gr", "einvoice.s1ecos.gr",
+                                          "impact.gr", "eskap.gr", "epsilonnet.gr", "parochos.gr",
+                                          "e-invoicing.pegcloud.io", "e-invoicing.gr", "vs.gr", "megasoft", "invoicelink")
+                        _src_url = _scan_original_url or mark
+                        _dom = urlparse(_src_url).netloc.lower()
+                        if not any(k in _dom for k in _known_viewers):
+                            _why = "unknown_viewer"
+                        elif error and "ελλιπές" in str(error):
+                            _why = "truncated_url"
+                        elif error and str(error).startswith("Αποτυχία ανάγνωσης URL"):
+                            _why = "scrape_error"
+                        else:
+                            _why = "no_mark"
+                        _record_failed_scrape(_src_url, _why, error=str(error or "") or None, kind="invoice")
+                    except Exception:
+                        log.exception("search: failed to record unresolved URL")
+
                 if scraped_afm and vat and str(scraped_afm).strip() != str(vat).strip():
                     modal_warning = f"Το URL επιστρέφει ΑΦΜ {scraped_afm}, διαφορετικό από τον ενεργό πελάτη {vat}."
 
@@ -13896,6 +13916,35 @@ def api_next_receipt_mark():
         log.exception("api_next_receipt_mark: unexpected")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+def _record_failed_scrape(url: str, reason: str, *, missing_fields=None, scraper_source=None,
+                          error=None, kind=None) -> bool:
+    """Καταγράφει στη λίστα του admin ένα URL που δεν μπόρεσε να διαβαστεί (με ομάδα/χρήστη/πελάτη)."""
+    try:
+        u = str(url or "").strip()
+        if not u:
+            return False
+        import scrape_review
+        grp = str(session.get("active_group") or "") or None
+        usr = None
+        try:
+            usr = getattr(current_user, "username", None) or getattr(current_user, "email", None)
+        except Exception:
+            usr = None
+        cvat = cname = None
+        try:
+            _ac = get_active_credential_from_session() or {}
+            cvat = str(_ac.get("vat") or "").strip() or None
+            cname = str(_ac.get("name") or "").strip() or None
+        except Exception:
+            pass
+        return bool(scrape_review.record_failed_url(
+            u, reason=reason, missing_fields=missing_fields, group=grp, scraper_source=scraper_source,
+            user=str(usr) if usr else None, customer_vat=cvat, customer_name=cname, error=error, kind=kind))
+    except Exception:
+        log.exception("_record_failed_scrape failed for %s", url)
+        return False
+
+
 # --- Paste αυτό το endpoint μέσα στο app.py (δίπλα στα υπόλοιπα /api endpoints) ---
 @app.route("/api/scrape_receipt", methods=["POST"])
 def api_scrape_receipt():
@@ -13949,9 +13998,14 @@ def api_scrape_receipt():
                     log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
                     return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
 
-        scraped = detect_and_scrape(url)
+        try:
+            scraped = detect_and_scrape(url)
+        except Exception as _scrape_exc:
+            _record_failed_scrape(url, "scrape_error", error=repr(_scrape_exc), kind="receipt")
+            raise
         # normalize expected shape (best-effort)
         if not scraped or not isinstance(scraped, dict):
+            _record_failed_scrape(url, "unexpected_result", kind="receipt")
             return jsonify({"ok": False, "error": "scraper returned unexpected result"}), 500
 
         # Example fields in your scraper_receipt output: MARK, doc_type, is_invoice, issue_date, issuer_name, issuer_vat, progressive_aa, total_amount, raw
@@ -13997,15 +14051,7 @@ def api_scrape_receipt():
         if (not has_core_data) and (not receipt_analysis):
             # The URL yielded nothing — log it to the admin-only failed-URL list
             # so unsupported viewers automatically come to our attention.
-            try:
-                import scrape_review
-                scrape_review.record_failed_url(
-                    url, reason="no_data",
-                    group=str(session.get("active_group") or "") or None,
-                    scraper_source=str(scraped.get("source") or "") or None,
-                )
-            except Exception:
-                log.exception("api_scrape_receipt: failed to record no_data URL")
+            _record_failed_scrape(url, "no_data", scraper_source=str(scraped.get("source") or "") or None, kind="receipt")
             return jsonify({
                 "ok": False,
                 "error": "Δεν βρέθηκαν δεδομένα για το URL. Έλεγξε ότι είναι πλήρες και σωστό.",
@@ -14103,11 +14149,9 @@ def api_scrape_receipt():
                         "missing_fields": missing,
                         "missing_labels": [scrape_review.field_label(x) for x in missing],
                     }
-                    grp_name = str(session.get("active_group") or "") or None
-                    scrape_review.record_failed_url(
-                        url, reason="incomplete", missing_fields=missing,
-                        group=grp_name, scraper_source=str(scraped.get("source") or "") or None,
-                    )
+                    _record_failed_scrape(
+                        url, "incomplete", missing_fields=missing,
+                        scraper_source=str(scraped.get("source") or "") or None, kind="receipt")
                     try:
                         _rq_active = get_active_credential_from_session() or {}
                         scrape_review.add_to_review_queue(
@@ -16112,6 +16156,27 @@ def _support_get_my_open_ticket(data: Dict[str, Any], user_id: str) -> Optional[
     return None
 
 
+def _support_archive_entry(data: Dict[str, Any], t: Dict[str, Any]) -> Dict[str, Any]:
+    """Στοιχεία ενός κλειστού ticket για τη λίστα «Αρχείο» (ώρες, πλήθος και τελευταίο μήνυμα)."""
+    tid = int(t.get("id") or 0)
+    msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == tid]
+    msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
+    last = msgs[-1] if msgs else None
+    return {
+        "id": t.get("id"),
+        "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
+        "created_at": t.get("created_at"),
+        "closed_at": t.get("closed_at"),
+        "closed_by": t.get("closed_by"),
+        "message_count": len(msgs),
+        "last_message": ({
+            "sender": last.get("sender"),
+            "content": str(last.get("content") or "")[:160],
+            "timestamp": last.get("timestamp"),
+        } if last else None),
+    }
+
+
 def _support_slug(text: str, fallback: str = "user") -> str:
     raw = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(text or "").strip())
     raw = re.sub(r"-+", "-", raw).strip("-")
@@ -16665,12 +16730,7 @@ def api_support_my_ticket():
         for t in user_tickets:
             if str(t.get("status") or "").lower() != "closed":
                 continue
-            archived_tickets.append({
-                "id": t.get("id"),
-                "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
-                "closed_at": t.get("closed_at"),
-                "closed_by": t.get("closed_by"),
-            })
+            archived_tickets.append(_support_archive_entry(data, t))
             if len(archived_tickets) >= 20:
                 break
 
@@ -16705,6 +16765,7 @@ def api_support_my_ticket():
     typing_until_dt = _support_parse_iso_utc(ticket.get("support_typing_until"))
     now_dt = datetime.datetime.now(datetime.timezone.utc)
     support_typing = bool(typing_until_dt and typing_until_dt > now_dt)
+    typing_remaining_ms = int((typing_until_dt - now_dt).total_seconds() * 1000) if support_typing else 0
 
     if changed:
         _support_save(data)
@@ -16717,12 +16778,7 @@ def api_support_my_ticket():
         for t in user_tickets:
             if str(t.get("status") or "").lower() != "closed":
                 continue
-            archived_tickets.append({
-                "id": t.get("id"),
-                "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
-                "closed_at": t.get("closed_at"),
-                "closed_by": t.get("closed_by"),
-            })
+            archived_tickets.append(_support_archive_entry(data, t))
             if len(archived_tickets) >= 20:
                 break
     except Exception:
@@ -16735,7 +16791,8 @@ def api_support_my_ticket():
         "ok": True,
         "ticket": ticket,
         "messages": msgs[-100:],
-        "presence": {"support_typing": support_typing},
+        "presence": {"support_typing": support_typing, "typing_remaining_ms": typing_remaining_ms,
+                     "last_support_read_at": ticket.get("last_support_read_at")},
         "archived_tickets": archived_tickets,
         "closed_notice": closed_notice,
         "latest_closed_ticket": latest_closed,
@@ -16925,7 +16982,11 @@ def api_support_discord_reply():
                 m["read_by_support_at"] = now
         ticket["last_support_read_at"] = now
         _support_save(data)
-        return jsonify({"ok": True, "typing": True})
+        try:
+            _support_sse_broadcast({"type": "support_typing", "ticket_id": int(ticket.get("id") or 0), "ttl": ttl})
+        except Exception:
+            pass
+        return jsonify({"ok": True, "typing": True, "ttl_sec": ttl})
 
     if action == "typing_stop":
         ticket["support_typing_until"] = None
@@ -18180,7 +18241,7 @@ def api_store_suppliers():
         if not vat:
             return jsonify({"ok": True, "suppliers": [], "vat": ""})
         kind = str(request.args.get("kind") or "summary").strip()
-        if kind not in invoice_store.KINDS:
+        if kind not in invoice_store.DOC_KINDS:
             return jsonify({"ok": False, "error": "kind"}), 400
         return jsonify({"ok": True, "vat": vat, "kind": kind,
                         "suppliers": invoice_store.suppliers(group_path(), vat=vat, kind=kind)})
@@ -18200,7 +18261,7 @@ def api_store_supplier_docs():
         if not vat or not supplier:
             return jsonify({"ok": True, "docs": [], "vat": vat, "supplier": supplier})
         kind = str(request.args.get("kind") or "summary").strip()
-        if kind not in invoice_store.KINDS:
+        if kind not in invoice_store.DOC_KINDS:
             return jsonify({"ok": False, "error": "kind"}), 400
         try:
             limit = max(0, min(int(request.args.get("limit") or 0), 5000))
@@ -18476,6 +18537,7 @@ def api_uncharacterized_invoices_pdf():
             result = invoice_pdf.fetch_pdf(url)
         except invoice_pdf.PdfError as exc:
             status = 422 if exc.reason == "viewer_only" else 502
+            _record_failed_scrape(url, "pdf_" + str(exc.reason), error=str(exc.message_el or ""), kind="pdf")
             return jsonify({
                 "ok": False, "reason": exc.reason, "error": exc.message_el, "url": url,
                 "retryable": bool(exc.retryable),
@@ -26307,6 +26369,38 @@ def admin_failed_scrape_urls():
         return jsonify({"ok": True, "count": len(rows), "items": rows})
 
 
+@app.route("/admin/api/failed-scrape-urls", methods=["GET"])
+@login_required
+@_require_admin
+def admin_api_failed_scrape_urls():
+    """Ενιαία λίστα για το admin dashboard: καθολικό αρχείο + ουρές ελέγχου αποδείξεων ΟΛΩΝ των ομάδων."""
+    import scrape_review
+    group_dirs: Dict[str, str] = {}
+    try:
+        from models import Group as _G
+        for g in (_G.query.all() or []):
+            folder = str(getattr(g, "data_folder", "") or "").strip()
+            name = str(getattr(g, "name", "") or "").strip()
+            if folder and name:
+                group_dirs[name] = os.path.join(DATA_DIR, folder)
+    except Exception:
+        log.exception("admin_api_failed_scrape_urls: groups")
+    try:
+        limit = max(1, min(int(request.args.get("limit") or 2000), 10000))
+    except ValueError:
+        limit = 2000
+    rows = scrape_review.list_all_failed(group_dirs, limit=limit)
+    return jsonify({"ok": True, "count": len(rows), "items": rows, "groups": sorted(group_dirs)})
+
+
+@app.route("/admin/failed-scrape-urls/clear_all", methods=["POST"])
+@login_required
+@_require_admin
+def admin_failed_scrape_urls_clear_all():
+    import scrape_review
+    return jsonify({"ok": True, "cleared": scrape_review.clear_all_failed_urls()})
+
+
 @app.route("/admin/failed-scrape-urls/clear", methods=["POST"])
 @login_required
 @_require_admin
@@ -27231,6 +27325,46 @@ _shared_vat_cache_last_run = 0.0
 _shared_vat_cache_initial_pull_done = False
 
 
+_shared_failed_urls_last_run = 0.0
+_shared_failed_urls_last_sig = ""
+
+
+def _sync_shared_failed_urls(force: bool = False):
+    """Κοινό αντίγραφο της λίστας «URL που δεν διαβάστηκαν» στο Drive (_shared/): επιβιώνει σε redeploy και
+    ενώνει τις λίστες όλων των instances (ένωση ανά URL, ποτέ σβήσιμο)."""
+    global _shared_failed_urls_last_run, _shared_failed_urls_last_sig
+    try:
+        interval = int(os.getenv('SHARED_FAILED_URLS_SYNC_SECONDS', '600') or 600)
+    except Exception:
+        interval = 600
+    now_ts = time.time()
+    if (not force) and _shared_failed_urls_last_run and (now_ts - _shared_failed_urls_last_run) < interval:
+        return
+    _shared_failed_urls_last_run = now_ts
+    try:
+        if not firebase_config._drive_backend_active():
+            return
+        import scrape_review
+        from firebase import drive_storage as _ds
+        remote_name = 'failed_scrape_urls.json'
+        try:
+            raw = _ds.drive_pull_shared_file(remote_name)
+            if raw:
+                n = scrape_review.merge_failed_urls(json.loads(raw.decode('utf-8')))
+                if n:
+                    log.info('Shared failed-URL log: merged %d URLs from cloud', n)
+        except Exception:
+            log.exception('Shared failed-URL log: pull/merge failed')
+        path = scrape_review.failed_urls_path()
+        if os.path.exists(path):
+            sig = f"{os.path.getmtime(path):.3f}:{os.path.getsize(path)}"
+            if sig != _shared_failed_urls_last_sig:
+                if _ds.drive_push_shared_file(path, remote_name):
+                    _shared_failed_urls_last_sig = sig
+    except Exception:
+        log.exception('Shared failed-URL log sync failed')
+
+
 def _sync_shared_vat_cache(force: bool = False):
     """
     Back up / restore the global AFM→name cache (vat_name_cache.db) to the cloud.
@@ -27425,6 +27559,10 @@ def _firebase_backup_scheduler_loop():
                     _sync_shared_vat_cache(force=not _shared_vat_cache_initial_pull_done)
                 except Exception:
                     log.exception('Shared VAT cache scheduler step failed')
+                try:
+                    _sync_shared_failed_urls()
+                except Exception:
+                    log.exception('Shared failed-URL log scheduler step failed')
         except Exception:
             log.exception('Firebase backup scheduler loop error')
         time.sleep(30)

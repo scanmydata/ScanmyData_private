@@ -479,28 +479,82 @@ html[data-theme="dark"] .help-msg.support{background:#1f2937;color:#e5e7eb;}
 html[data-theme="dark"] .archived-ticket--user{background:rgba(37,99,235,0.10);color:#cfe8ff;border-color:rgba(255,255,255,0.03)}
 html[data-theme="dark"] .archived-ticket--support{background:#111827;color:#e5e7eb;border-color:rgba(255,255,255,0.04)}
 
-/* Archive modal report button: keep pale yellow in both light and dark themes */
-#archiveModal .archived-btn-report,
-#archivedTicketModal .archived-btn-report,
-#archiveModal [data-report-ticket],
-#archivedTicketModal [data-report-ticket] {
-  background-color: #FEF3C7; /* pale yellow */
-  color: #92400e;
-  border-color: #FDE68A;
-}
-/* Do not override delete button colors here; use .btn-danger so it matches other pages */
-#archiveModal [data-delete-ticket],
-#archivedTicketModal [data-delete-ticket] { background: transparent; border-color: transparent; }
-/* light-mode gentle colors (non-!important so theme classes still win) */
-/* subtle hover */
-#archiveModal .archived-btn-report:hover, #archivedTicketModal .archived-btn-report:hover,
-#archiveModal .archived-btn-delete:hover, #archivedTicketModal .archived-btn-delete:hover { filter: brightness(0.95); }
+/* Archive modals: τα κουμπιά (.hb-btn--warn «Αναφορά» ωχρό κίτρινο και στα δύο themes, .hb-btn--danger «Διαγραφή»)
+   ορίζονται στο νέο σύνολο .hb-* παραπάνω — δεν χρειάζονται override ανά id/attribute. */
+.hb-btn:hover{filter:brightness(.96);}
 
 html[data-theme="dark"] #helpBotForm{border-top-color:#334155;background:#0f172a;}
 html[data-theme="dark"] #helpBotInput,html[data-theme="dark"] #helpBotName{background:#1e293b;color:#e2e8f0;border-color:#475569;}
 html[data-theme="dark"] #helpBotInput::placeholder,html[data-theme="dark"] #helpBotName::placeholder{color:#94a3b8;}
 html[data-theme="dark"] #helpBotFileBtn{border-color:#475569;background:#1e293b;color:#e2e8f0;}
 html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileState{color:#94a3b8;}
+/* ---- Support chat: νέα εμφάνιση συνομιλίας / αρχείου tickets ---- */
+#helpBotMessages{scroll-behavior:auto;}
+.hb-row{display:flex;flex-direction:column;margin-bottom:6px;}
+.hb-row--user{align-items:flex-end;}
+.hb-row--support{align-items:flex-start;}
+.hb-row .help-msg{margin:0;max-width:88%;}
+.hb-who{font-size:10px;font-weight:600;color:#64748b;margin:6px 4px 2px;}
+.hb-time{font-size:10px;color:#94a3b8;margin:2px 4px 0;}
+.hb-day{display:flex;align-items:center;gap:8px;margin:12px 0 8px;color:#64748b;font-size:11px;}
+.hb-day::before,.hb-day::after{content:"";flex:1;height:1px;background:#e2e8f0;}
+.hb-day span{white-space:nowrap;}
+.hb-status{font-size:10px;margin:1px 4px 0;color:#64748b;}
+.hb-status--read{color:#16a34a;font-weight:600;}
+.hb-status--delivered{color:#64748b;}
+.hb-status--pending{color:#94a3b8;}
+.hb-status--failed{color:#dc2626;max-width:88%;text-align:right;}
+.hb-empty{padding:18px 8px;text-align:center;color:#94a3b8;font-size:12px;}
+.help-msg.hb-typing{display:inline-flex;align-items:center;gap:4px;padding:10px 12px;}
+.hb-typing span{width:6px;height:6px;border-radius:9999px;background:#64748b;display:inline-block;animation:hbDots 1.2s infinite ease-in-out;}
+.hb-typing span:nth-child(2){animation-delay:.18s;}
+.hb-typing span:nth-child(3){animation-delay:.36s;}
+@keyframes hbDots{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}
+.hb-newpill{align-self:center;margin:-34px auto 8px;position:relative;z-index:2;background:#2563eb;color:#fff;border:none;border-radius:9999px;padding:5px 12px;font-size:11px;cursor:pointer;box-shadow:0 4px 12px rgba(37,99,235,.35);}
+.hb-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:100000;padding:12px;}
+.hb-modal{background:#fff;color:#0f172a;border:1px solid #e2e8f0;border-radius:14px;width:min(94vw,560px);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.3);overflow:hidden;}
+.hb-modal-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:12px 14px;border-bottom:1px solid #e2e8f0;}
+.hb-modal-title{font-weight:700;font-size:15px;}
+.hb-modal-sub{font-size:11px;color:#64748b;margin-top:2px;line-height:1.4;}
+.hb-x{background:transparent;border:none;font-size:22px;line-height:1;color:#64748b;cursor:pointer;padding:0 4px;}
+.hb-modal-body{padding:12px 14px;overflow:auto;flex:1;background:#f8fafc;}
+.hb-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #e2e8f0;}
+.hb-modal-search{padding:8px 14px;border-bottom:1px solid #e2e8f0;}
+.hb-modal-search input{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:7px 10px;font-size:13px;background:#fff;color:#0f172a;}
+.hb-btn{border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;}
+.hb-btn--sm{padding:4px 8px;font-size:11px;}
+.hb-btn--warn{background:#fef3c7;border-color:#fde68a;color:#92400e;}
+.hb-btn--danger{background:#fee2e2;border-color:#fecaca;color:#9b1c1c;}
+.hb-ticket{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;margin-bottom:8px;border:1px solid #e2e8f0;border-left:4px solid #94a3b8;border-radius:10px;background:#fff;cursor:pointer;}
+.hb-ticket:hover,.hb-ticket:focus{border-color:#93c5fd;outline:none;box-shadow:0 0 0 2px rgba(147,197,253,.5);}
+.hb-ticket--support{border-left-color:#2563eb;}
+.hb-ticket--user{border-left-color:#94a3b8;}
+.hb-ticket-main{min-width:0;flex:1;}
+.hb-ticket-title{font-weight:600;font-size:13px;}
+.hb-ticket-sub{font-size:11px;color:#64748b;margin-top:2px;}
+.hb-ticket-prev{font-size:12px;color:#475569;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hb-ticket-actions{display:flex;gap:6px;flex-shrink:0;}
+.hb-thread .hb-row .help-msg{max-width:92%;}
+html[data-theme="dark"] .hb-who{color:#94a3b8;}
+html[data-theme="dark"] .hb-time{color:#64748b;}
+html[data-theme="dark"] .hb-day{color:#94a3b8;}
+html[data-theme="dark"] .hb-day::before,html[data-theme="dark"] .hb-day::after{background:#334155;}
+html[data-theme="dark"] .hb-status--read{color:#4ade80;}
+html[data-theme="dark"] .hb-status--delivered,html[data-theme="dark"] .hb-status--pending{color:#94a3b8;}
+html[data-theme="dark"] .hb-status--failed{color:#f87171;}
+html[data-theme="dark"] .hb-typing span{background:#94a3b8;}
+html[data-theme="dark"] .hb-modal{background:#111827;color:#e2e8f0;border-color:#334155;}
+html[data-theme="dark"] .hb-modal-head,html[data-theme="dark"] .hb-modal-foot,html[data-theme="dark"] .hb-modal-search{border-color:#334155;}
+html[data-theme="dark"] .hb-modal-body{background:#0b1220;}
+html[data-theme="dark"] .hb-modal-sub,html[data-theme="dark"] .hb-x{color:#94a3b8;}
+html[data-theme="dark"] .hb-modal-search input{background:#1e293b;color:#e2e8f0;border-color:#475569;}
+html[data-theme="dark"] .hb-btn{background:#1e293b;color:#e2e8f0;border-color:#475569;}
+html[data-theme="dark"] .hb-btn--warn{background:#fef3c7;color:#92400e;border-color:#fde68a;}
+html[data-theme="dark"] .hb-btn--danger{background:#dc2626;color:#fff1f2;border-color:#dc2626;}
+html[data-theme="dark"] .hb-ticket{background:#111827;border-color:#334155;}
+html[data-theme="dark"] .hb-ticket:hover,html[data-theme="dark"] .hb-ticket:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.35);}
+html[data-theme="dark"] .hb-ticket-sub{color:#94a3b8;}
+html[data-theme="dark"] .hb-ticket-prev{color:#cbd5e1;}
 @keyframes helpBotPulse{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 </style>
 <button id="helpBotFab" type="button" title="Help / Support">

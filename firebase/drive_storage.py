@@ -609,6 +609,46 @@ def _is_managed_rel(rel_path: str) -> bool:
     return bool(ist and ist.is_managed_rel(rel_path))
 
 
+def _adopt_newer_remote_managed(source_dir: str, index: Dict[str, Dict[str, Any]], ist) -> int:
+    """Απομακρυσμένα JSON παραστατικών/εγγράφων ΝΕΟΤΕΡΑ από τα τοπικά (π.χ. τα ανέβασε παλιά έκδοση της εφαρμογής ή
+    άλλη μηχανή πριν περάσει στη βάση) κατεβαίνουν και θα μπουν στη βάση πριν από το snapshot — αλλιώς θα
+    στέλνονταν στα απορρίμματα χωρίς να έχουν συγχωνευθεί."""
+    adopted = 0
+    for rel, meta in list(index.items()):
+        key = ist.rel_key(rel)
+        if not key:
+            continue
+        try:
+            rm = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
+        except Exception:
+            rm = 0.0
+        lp = os.path.join(source_dir, rel.replace("/", os.sep))
+        local_t = ist.store_updated_at(source_dir, key[0], key[1])
+        if not local_t and os.path.exists(lp):
+            try:
+                local_t = os.path.getmtime(lp)
+            except OSError:
+                local_t = 0.0
+        if rm and rm > local_t + 2.0:
+            blob = _download_bytes(meta["id"])
+            try:
+                plain = _cipher().decrypt(blob)
+            except Exception:
+                plain = blob
+            os.makedirs(os.path.dirname(lp), exist_ok=True)
+            tmp = lp + ".adopt.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(plain)
+            os.replace(tmp, lp)
+            try:
+                os.utime(lp, (rm, rm))
+            except Exception:
+                pass
+            adopted += 1
+            logger.info("[DRIVE] νεότερο απομακρυσμένο %s υιοθετήθηκε πριν το snapshot της βάσης", rel)
+    return adopted
+
+
 def _merge_remote_invoices_db(local_folder: str, source_dir: str, remote_meta: Dict[str, Any]) -> Dict[str, int]:
     """Κατεβάζει την invoices.db του Drive και τη συγχωνεύει ανά store στην τοπική (κερδίζει το νεότερο updated_at).
     Αν η απομακρυσμένη έκδοση έχει ήδη συγχωνευθεί (ή είναι δική μας) δεν κατεβάζει τίποτα."""
@@ -806,6 +846,11 @@ def drive_push_group_files(
         if ist is not None and not gname_dir.startswith((".", "_")):
             try:
                 data_root_abs = os.path.dirname(os.path.abspath(source_dir))
+                if not dry_run:
+                    try:
+                        _adopt_newer_remote_managed(source_dir, index, ist)
+                    except Exception:
+                        logger.exception("[DRIVE PUSH] adopt newer remote JSON failed")
                 ist.sync_group(source_dir, force=True, _root=data_root_abs)     # JSON που άλλαξαν εξωτερικά
                 remote_db = index.get(_INVOICES_DB)
                 local_db_exists = os.path.exists(ist.db_path(source_dir)) and bool(ist.fingerprint(source_dir))
@@ -1238,13 +1283,37 @@ def drive_pull_group_to_local(
         _ist_pull = _invoice_store_mod()
         _inv_db_mode = bool(index.get(_INVOICES_DB)) and _ist_pull is not None and not os.path.basename(
             os.path.abspath(target_dir)).startswith(".")
+        _inv_remote_plain = None
+        _inv_cov: Dict[Any, float] = {}
+        if _inv_db_mode:
+            # Κατεβαίνει ΜΙΑ φορά: χρειάζεται για να ξέρουμε ποια store περιέχει (και ξαναχρησιμοποιείται στη συγχώνευση).
+            try:
+                _b = _download_bytes(index[_INVOICES_DB]["id"])
+                try:
+                    _inv_remote_plain = cipher.decrypt(_b)
+                except Exception:
+                    _inv_remote_plain = _b
+                _inv_cov = _ist_pull.snapshot_store_map(_inv_remote_plain)
+            except Exception:
+                logger.exception("[DRIVE PULL] invoices.db unreadable -> fallback στα JSON")
+                _inv_db_mode = False
+                _inv_remote_plain = None
         for rel_path, meta in index.items():
             if rel_path == ".sync_meta.json":
                 continue
             if rel_path == _INVOICES_DB and not _inv_db_mode:
                 continue          # (λειτουργία απενεργοποιημένη: ποτέ ως απλό αρχείο πάνω στην τοπική βάση)
             if _inv_db_mode and rel_path != _INVOICES_DB and _ist_pull.is_managed_rel(rel_path):
-                continue          # τα JSON παραστατικών έρχονται μέσα από την invoices.db
+                # Τα JSON έρχονται μέσα από την invoices.db — ΜΟΝΟ αν η βάση περιέχει το store και δεν είναι
+                # παλαιότερο από το JSON (π.χ. credentials.json πριν ανέβει για πρώτη φορά στη βάση).
+                try:
+                    _k = _ist_pull.rel_key(rel_path)
+                    _rm0 = float((meta.get("appProperties") or {}).get("local_mtime") or 0)
+                except Exception:
+                    _k, _rm0 = None, 0.0
+                if _k is not None and _k in _inv_cov and _inv_cov[_k] + 2.0 >= _rm0:
+                    continue
+                # δεν καλύπτεται από τη βάση -> κατεβαίνει ως JSON όπως πριν (fallback)
             # Root-level Excel files are stored remotely under imports/ (see the
             # push side, _remote_key_for). Materialize them BACK in the group
             # ROOT — mirroring the RTDB pull — so the client_db keeps ONE
@@ -1317,11 +1386,14 @@ def drive_pull_group_to_local(
             shared Fernet cipher (thread-safe), and writes a unique local path,
             so no cross-task locking is needed.
             """
-            blob = _download_bytes(task["file_id"])
-            try:
-                plain = cipher.decrypt(blob)
-            except Exception:
-                plain = blob  # historically-plaintext file (activity.log / error.log)
+            if task["rel_path"] == _INVOICES_DB and _inv_remote_plain is not None:
+                blob = plain = _inv_remote_plain
+            else:
+                blob = _download_bytes(task["file_id"])
+                try:
+                    plain = cipher.decrypt(blob)
+                except Exception:
+                    plain = blob  # historically-plaintext file (activity.log / error.log)
             if task["rel_path"] == _INVOICES_DB:
                 # Βάση παραστατικών: συγχώνευση ανά store (νεότερο updated_at) + export JSON. ΠΟΤΕ αντικατάσταση.
                 import tempfile
@@ -1371,9 +1443,11 @@ def drive_pull_group_to_local(
         # mutated only here in the main thread as futures complete.
         processed = 0
         last_reported_pct = 5
+        _db_tasks = [t for t in download_plan if t["rel_path"] == _INVOICES_DB]
+        _main_tasks = [t for t in download_plan if t["rel_path"] != _INVOICES_DB]
         if download_plan:
             with ThreadPoolExecutor(max_workers=_pull_workers()) as pool:
-                futures = {pool.submit(_materialize, t): t for t in download_plan}
+                futures = {pool.submit(_materialize, t): t for t in _main_tasks}
                 for fut in as_completed(futures):
                     task = futures[fut]
                     try:
@@ -1391,6 +1465,19 @@ def drive_pull_group_to_local(
                     if pct - last_reported_pct >= 2:
                         _set_progress("syncing", pct, f"Λήψη αρχείων… ({processed}/{total_items})")
                         last_reported_pct = pct
+            # Η συγχώνευση της invoices.db γίνεται ΤΕΛΕΥΤΑΙΑ: τα JSON που κατέβηκαν ως fallback έχουν ήδη
+            # γραφτεί και εισάγονται πρώτα, άρα το νεότερο περιεχόμενο κερδίζει πάντα.
+            for task in _db_tasks:
+                try:
+                    bytes_downloaded += _materialize(task)
+                    files_created += 1
+                except Exception as e:
+                    files_failed += 1
+                    logger.error("[DRIVE PULL] Failed to materialize %s: %s", task["rel_path"], e)
+                processed += 1
+                _report_transfer(phase="download", group=group_name, files_done=processed,
+                                 files_total=len(download_plan), bytes_done=bytes_downloaded,
+                                 bytes_total=planned_bytes, failed=files_failed, current=task["rel_path"])
 
         logger.info(
             "[DRIVE PULL] group=%s created=%d failed=%d bytes=%d -> %s",

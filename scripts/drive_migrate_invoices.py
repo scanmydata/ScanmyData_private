@@ -88,11 +88,7 @@ def _local_stores(gdir: str) -> dict:
 
 
 def _key_of(rel: str):
-    base = os.path.basename(rel)
-    for kind, suffix in (("epsilon", "_epsilon_invoices.json"), ("summary", "_summary.json"), ("invoices", "_invoices.json")):
-        if base.endswith(suffix):
-            return kind, base[: -len(suffix)]
-    return None
+    return ist.rel_key(rel)
 
 
 def migrate_group(g: str, data_root: str, apply: bool) -> bool:

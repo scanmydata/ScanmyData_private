@@ -134,6 +134,15 @@ chk("classify data-root unmanaged", invoice_store.classify(os.path.join(DATA, "1
 chk("classify legacy data/epsilon unmanaged", invoice_store.classify(os.path.join(DATA, "epsilon", "1_epsilon_invoices.json")) is None)
 chk("classify _backup dir unmanaged", invoice_store.classify(os.path.join(DATA, "_x", "1_invoices.json")) is None)
 chk("classify temp filtered unmanaged", invoice_store.classify(os.path.join(TMP, "x_filtered_epsilon_invoices.json")) is None)
+for _name, _kind in (("credentials.json", "credentials"), ("fiscal_meta.json", "fiscal_meta"),
+                     ("e3_company_credentials_store.json", "e3_credentials"), ("support_tickets.json", "support_tickets")):
+    chk(f"classify {_name}", invoice_store.classify(os.path.join(GROUP, _name)) == (GROUP, _kind, "_"))
+    chk(f"{_name} not managed at data root", invoice_store.classify(os.path.join(DATA, _name)) is None)
+chk("classify exported marks", invoice_store.classify(os.path.join(GROUP, "epsilon", "123_exported_marks.json")) == (GROUP, "exported_marks", "123"))
+chk("exported marks outside epsilon/ unmanaged", invoice_store.classify(os.path.join(GROUP, "123_exported_marks.json")) is None)
+chk("credentials_settings.json stays a plain file", invoice_store.classify(os.path.join(GROUP, "credentials_settings.json")) is None)
+chk("is_managed_rel new kinds", all(invoice_store.is_managed_rel(r) for r in
+    ("credentials.json", "fiscal_meta.json", "e3_company_credentials_store.json", "support_tickets.json", "epsilon/1_exported_marks.json")))
 
 # --- 1. parity _unchar_collect: βάση (invoice_store) vs αρχεία (store ανενεργό)
 invoice_store.configure(None)

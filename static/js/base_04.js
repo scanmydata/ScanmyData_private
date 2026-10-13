@@ -1,4 +1,18 @@
 (function(){
+  // ---------------------------------------------------------------------------------------------
+  // Help / Support chat (δεξιά κάτω). Συνομιλία με το support (Discord thread) + αρχείο tickets.
+  //
+  // Σχεδιασμός (αντικαθιστά την παλιά έκδοση που ξανασχεδίαζε τα πάντα κάθε 2s):
+  //   * ΕΝΑ αίτημα refresh τη φορά (σειριοποιημένο) — τα επικαλυπτόμενα αιτήματα έφερναν παλιές απαντήσεις
+  //     και η κατάσταση «διαβάστηκε»/«πληκτρολογεί» άλλαζε πέρα-δώθε.
+  //   * Επανασχεδίαση μόνο όταν αλλάζει κάτι (υπογραφή μηνυμάτων/κατάστασης)· η θέση κύλισης διατηρείται όταν
+  //     ο χρήστης διαβάζει παλιότερα μηνύματα.
+  //   * Κατάσταση παράδοσης μόνο κάτω από το ΤΕΛΕΥΤΑΙΟ μήνυμα του χρήστη (Αποστολή… / Παραλήφθηκε /
+  //     Διαβάστηκε ΩΩ:ΛΛ), «πληκτρολογεί» ως φυσαλίδα με τελείες μέσα στη συνομιλία, με τοπική λήξη.
+  //   * Ώρες, ημερομηνίες (Σήμερα/Χθες/…) και ετικέτες αποστολέα — και στο αρχείο tickets.
+  //   * Χωρίς SSE: κάθε EventSource δέσμευε ένα thread του gunicorn (8 threads) για όσο ήταν ανοιχτή η
+  //     σελίδα. Το polling (2s ανοιχτό / 20s κλειστό / 60s κρυφή καρτέλα) είναι αρκετό και ασφαλές.
+  // ---------------------------------------------------------------------------------------------
   const fab=document.getElementById('helpBotFab');
   const panel=document.getElementById('helpBotPanel');
   const closeBtn=document.getElementById('helpBotClose');
@@ -14,291 +28,317 @@
   const nameInput=document.getElementById('helpBotName');
   const fileInput=document.getElementById('helpBotFile');
   const box=document.getElementById('helpBotMessages');
+  if(!panel || !box) return;
+
   let open=false;
-  let poller=null; // will be set to a timer that adapts depending on `open`
-  let supportSse = null;
-  let supportSseConnected = false;
-  let supportSseRetry = null;
-  let lastPresence={support_typing:false};
+  let stopped=false;
+  let poller=null;
+  let inFlight=false;
+  let pendingRefresh=false;
+  let lastPresence={support_typing:false, typing_remaining_ms:0};
+  let typingUntilLocal=0;
+  let typingTimer=null;
+  let lastRenderSig='';
+  let lastMessages=[];
+  let lastTicket=null;
+  let archivedTickets=[];
+  let firstRender=true;
+  let forceStickBottom=false;
+  let unreadWhileScrolled=0;
+  let newPill=null;
+
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
   const CLOSED_NOTICE_KEY='support_closed_notice_seen';
-  let lastTicket=null;
-  let archivedTickets=[];
+  const OPEN_POLL_MS=2000;
+  const CLOSED_POLL_MS=20000;
+  const HIDDEN_POLL_MS=60000;
+  const DELIVERY_GRACE_MS=20000;
 
-  // Track the timestamp of the last support message we’ve seen.
-  // When the panel is closed we poll slowly; if a new support message arrives,
-  // we speed up polling for a short while so the user sees new replies quickly.
-  let lastSupportMsgTs = 0;
-  let closedFastUntil = 0;
-  const CLOSED_POLL_INTERVAL = 30000; // 30s when panel closed and idle
-  const FAST_POLL_INTERVAL = 2000; // 2s when panel open or when new message arrived
-  const FAST_POLL_AFTER_NEW_MS = 30000; // keep fast polling for N seconds after new incoming message
+  // ------------------------------------------------------------------ helpers
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function parseTs(ts){ const v=Date.parse(ts||''); return Number.isFinite(v)?v:0; }
 
-  // Adjust polling interval depending on whether the panel is open (faster when open).
-  // When the panel is closed we avoid regular polling if we can get push events via SSE.
-  function _setPollIntervalForOpenState(){
-    try{ if(poller) clearInterval(poller); }catch(_e){}
-
-    const now = Date.now();
-    const shouldFastPoll = open || now < closedFastUntil;
-    if(shouldFastPoll){
-      poller = setInterval(refresh, FAST_POLL_INTERVAL);
-      return;
-    }
-
-    // If we have a working SSE connection, we can avoid polling entirely when closed.
-    if(supportSseConnected){
-      poller = null;
-      return;
-    }
-
-    poller = setInterval(refresh, CLOSED_POLL_INTERVAL);
-  }
-
-  function initSupportSse(){
-    if (!window.EventSource) return;
-    try{
-      supportSse = new EventSource('/api/support/events');
-      supportSse.addEventListener('open', () => {
-        supportSseConnected = true;
-        _setPollIntervalForOpenState();
-      });
-      supportSse.addEventListener('error', () => {
-        supportSseConnected = false;
-        // fallback to polling when SSE cannot stay open
-        _setPollIntervalForOpenState();
-      });
-      supportSse.addEventListener('message', (evt) => {
-        try{
-          const data = JSON.parse(evt.data || '{}');
-          if (data && data.type === 'support_reply') {
-            // Only refresh when new support message is available
-            if (!open) {
-              refresh();
-            }
-            closedFastUntil = Date.now() + FAST_POLL_AFTER_NEW_MS;
-            if (!open) {
-              _setPollIntervalForOpenState();
-            }
-          }
-        }catch(_){ }
-      });
-    }catch(_){ }
-  }
-
-  function updateNameFieldState(ticket){
-    if(!nameInput) return;
-    const hasLockedName = !!(ticket && (ticket.id || ticket.display_name));
-    if(hasLockedName){
-      const who = String(ticket.display_name || nameInput.value || '').trim();
-      if(who) nameInput.value = who;
-      nameInput.disabled = true;
-      nameInput.style.display = 'none';
-      if(endBtn) endBtn.style.display = '';
-    } else {
-      nameInput.disabled = false;
-      nameInput.style.display = '';
-      if(endBtn) endBtn.style.display = 'none';
-    }
-  }
-
-  function updateNameFieldState(ticket){
-    if(!nameInput) return;
-    const hasLockedName = !!(ticket && (ticket.id || ticket.display_name));
-    if(hasLockedName){
-      const who = String(ticket.display_name || nameInput.value || '').trim();
-      if(who) nameInput.value = who;
-      nameInput.disabled = true;
-      nameInput.style.display = 'none';
-    } else {
-      nameInput.disabled = false;
-      nameInput.style.display = '';
-    }
-  }
-
-  function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
-  function formatStatus(m){
-    if(m.sender!=='user') return '';
-    if(m.read_by_support_at) return 'Διαβάστηκε από support';
-    if(m.discord_delivered_at || m.discord_delivered) return 'Παραλήφθηκε από Discord';
-    return 'Σε αναμονή αποστολής στο Discord';
-  }
-  function render(messages){
-    if(!box) return;
-    box.innerHTML = (messages||[]).map(m=>{
-      const attachments = (m.attachments||[]).map(a=>{
-        const href = esc(a.url||'#');
-        const nm = esc(a.name||'attachment');
-        return `<a href="${href}" target="_blank" rel="noopener noreferrer">📎 ${nm}</a>`;
-      }).join('');
-      const meta = formatStatus(m);
-      return `<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content||'')}${attachments?`<div class="help-attachments">${attachments}</div>`:''}${meta?`<div class="help-meta">${esc(meta)}</div>`:''}</div>`;
-    }).join('');
-    box.scrollTop = box.scrollHeight;
-  }
-
-  function parseTs(ts){
-    const v = Date.parse(ts||'');
-    return Number.isFinite(v) ? v : 0;
-  }
-
-  // Format ISO timestamp into compact Greek date/time (dd/mm/YYYY HH:MM), using Europe/Athens timezone
+  const TZ='Europe/Athens';
+  let _fmtDay=null,_fmtTime=null,_fmtCompact=null,_fmtLong=null;
+  try{
+    _fmtDay=new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'});
+    _fmtTime=new Intl.DateTimeFormat('el-GR',{timeZone:TZ,hour:'2-digit',minute:'2-digit',hour12:false});
+    _fmtCompact=new Intl.DateTimeFormat('el-GR',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+    _fmtLong=new Intl.DateTimeFormat('el-GR',{timeZone:TZ,weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  }catch(_e){}
+  function dayKey(iso){ const d=new Date(iso); if(isNaN(d)) return ''; try{ return _fmtDay?_fmtDay.format(d):d.toISOString().slice(0,10);}catch(_e){return d.toISOString().slice(0,10);} }
+  function timeLabel(iso){ const d=new Date(iso); if(isNaN(d)) return ''; try{ return _fmtTime?_fmtTime.format(d):`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}catch(_e){return '';} }
   function formatGreekCompact(iso){
     if(!iso) return '';
-    try{
-      const dt = new Date(iso);
-      if (isNaN(dt)) return iso;
-      // use Intl to render in Europe/Athens consistently
-      try{
-        const fmt = new Intl.DateTimeFormat('el-GR', { timeZone: 'Europe/Athens', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
-        return fmt.format(dt).replace(',', '');
-      }catch(e){
-        const pad = n => String(n).padStart(2,'0');
-        return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-      }
-    }catch(e){ return iso; }
+    const d=new Date(iso); if(isNaN(d)) return String(iso);
+    try{ return (_fmtCompact?_fmtCompact.format(d):d.toLocaleString('el-GR')).replace(',', ''); }catch(_e){ return String(iso); }
+  }
+  function dayLabel(iso){
+    const k=dayKey(iso); if(!k) return '';
+    const today=dayKey(new Date().toISOString());
+    const yest=dayKey(new Date(Date.now()-86400000).toISOString());
+    if(k===today) return 'Σήμερα';
+    if(k===yest) return 'Χθες';
+    const d=new Date(iso);
+    try{ return _fmtLong?_fmtLong.format(d):d.toLocaleDateString('el-GR'); }catch(_e){ return k; }
+  }
+  function whoLabel(m, ticket){
+    if(m.sender==='support') return 'Support';
+    const n = String((ticket && (ticket.display_name||ticket.username)) || '').trim();
+    return n ? `${n} (εσύ)` : 'Εσύ';
   }
 
-  function updatePresence(){
-    if(!presenceEl) return;
-    if(lastPresence && lastPresence.support_typing){
-      presenceEl.textContent = 'Ο support agent πληκτρολογεί…';
-    } else {
-      presenceEl.textContent = '';
+  // ------------------------------------------------------------------ thread rendering (live + archive)
+  function attachmentsHtml(m){
+    const a=(m.attachments||[]).map(x=>{
+      const href=esc(x.url||'#'); const nm=esc(x.name||'attachment');
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">📎 ${nm}</a>`;
+    }).join('');
+    return a?`<div class="help-attachments">${a}</div>`:'';
+  }
+  function statusHtml(m){
+    if(!m || m.sender!=='user') return '';
+    if(m.read_by_support_at){
+      return `<div class="hb-status hb-status--read" title="Διαβάστηκε από το support">✓✓ Διαβάστηκε ${esc(timeLabel(m.read_by_support_at))}</div>`;
+    }
+    if(m.discord_delivered_at || m.discord_delivered){
+      return '<div class="hb-status hb-status--delivered" title="Το μήνυμα έφτασε στο support">✓ Παραλήφθηκε</div>';
+    }
+    const age = Date.now()-parseTs(m.timestamp);
+    if(age>DELIVERY_GRACE_MS){
+      return '<div class="hb-status hb-status--failed" title="Το μήνυμα αποθηκεύτηκε αλλά δεν έχει παραδοθεί στο support">⚠ Δεν παραδόθηκε — θα ξαναδοκιμάσει με το επόμενο μήνυμα</div>';
+    }
+    return '<div class="hb-status hb-status--pending">⏳ Αποστολή…</div>';
+  }
+  function buildThread(messages, ticket, opts){
+    opts=opts||{};
+    const msgs=(messages||[]).slice();
+    let html='';
+    let prevDay='', prevSender='';
+    let lastUserIdx=-1;
+    msgs.forEach((m,i)=>{ if(m.sender==='user') lastUserIdx=i; });
+    msgs.forEach((m,i)=>{
+      const dk=dayKey(m.timestamp);
+      if(dk && dk!==prevDay){
+        html+=`<div class="hb-day"><span>${esc(dayLabel(m.timestamp))}</span></div>`;
+        prevDay=dk; prevSender='';
+      }
+      const side=m.sender==='support'?'support':'user';
+      const showWho=(side!==prevSender);
+      prevSender=side;
+      html+=`<div class="hb-row hb-row--${side}">`
+        +(showWho?`<div class="hb-who">${esc(whoLabel(m,ticket))}</div>`:'')
+        +`<div class="help-msg ${side}">${esc(m.content||'')}${attachmentsHtml(m)}</div>`
+        +`<div class="hb-time">${esc(timeLabel(m.timestamp))}</div>`
+        +((!opts.archive && i===lastUserIdx)?statusHtml(m):'')
+        +`</div>`;
+    });
+    if(!msgs.length){
+      html='<div class="hb-empty">Δεν υπάρχουν μηνύματα.</div>';
+    }
+    if(!opts.archive && opts.typing){
+      html+='<div class="hb-row hb-row--support hb-row--typing"><div class="hb-who">Support</div>'
+        +'<div class="help-msg support hb-typing" aria-label="Ο support πληκτρολογεί"><span></span><span></span><span></span></div></div>';
+    }
+    return html;
+  }
+
+  function isTyping(){
+    return !!(lastTicket && String(lastTicket.status||'open').toLowerCase()==='open' && typingUntilLocal>Date.now());
+  }
+  function scheduleTypingExpiry(){
+    try{ if(typingTimer) clearTimeout(typingTimer); }catch(_e){}
+    typingTimer=null;
+    const left=typingUntilLocal-Date.now();
+    if(left>0){
+      typingTimer=setTimeout(()=>{ renderLive(); }, left+50);
     }
   }
+  function nearBottom(){
+    return (box.scrollHeight - box.scrollTop - box.clientHeight) < 70;
+  }
+  function ensureNewPill(){
+    if(newPill) return newPill;
+    newPill=document.createElement('button');
+    newPill.type='button';
+    newPill.className='hb-newpill';
+    newPill.style.display='none';
+    newPill.textContent='↓ Νέο μήνυμα';
+    newPill.addEventListener('click',()=>{ box.scrollTop=box.scrollHeight; unreadWhileScrolled=0; newPill.style.display='none'; });
+    if(box.parentNode) box.parentNode.insertBefore(newPill, box.nextSibling);
+    return newPill;
+  }
+  box.addEventListener('scroll',()=>{
+    if(newPill && nearBottom()){ unreadWhileScrolled=0; newPill.style.display='none'; }
+  });
 
+  function renderLive(){
+    const messages=lastTicket?lastMessages:[];
+    const typing=isTyping();
+    // η υπογραφή περιλαμβάνει ό,τι φαίνεται: μηνύματα, ώρες, παράδοση/ανάγνωση, πληκτρολόγηση, κατάσταση ticket
+    const lastUser=[...messages].reverse().find(m=>m.sender==='user');
+    const ageBucket=lastUser?Math.min(2,Math.floor((Date.now()-parseTs(lastUser.timestamp))/DELIVERY_GRACE_MS)):0;
+    const sig=JSON.stringify([
+      messages.map(m=>[m.id,m.timestamp,m.read_by_support_at||0,m.discord_delivered?1:0,(m.attachments||[]).length]),
+      typing?1:0, lastTicket?lastTicket.status:'', lastTicket?lastTicket.id:0, ageBucket
+    ]);
+    if(sig===lastRenderSig) return;
+    const prevCount = (()=>{ try{ return JSON.parse(lastRenderSig||'[[]]')[0].length; }catch(_e){ return 0; } })();
+    const wasNear = nearBottom() || firstRender || forceStickBottom;
+    const prevTop = box.scrollTop;
+    lastRenderSig=sig;
+    box.innerHTML=buildThread(messages,lastTicket,{typing});
+    if(wasNear){
+      box.scrollTop=box.scrollHeight;
+      unreadWhileScrolled=0;
+      if(newPill) newPill.style.display='none';
+    } else {
+      box.scrollTop=prevTop;
+      const incoming = messages.length - prevCount;
+      if(incoming>0 && messages[messages.length-1] && messages[messages.length-1].sender==='support'){
+        unreadWhileScrolled+=incoming;
+        const p=ensureNewPill(); p.textContent = unreadWhileScrolled>1?`↓ ${unreadWhileScrolled} νέα μηνύματα`:'↓ Νέο μήνυμα'; p.style.display='';
+      }
+    }
+    firstRender=false;
+    forceStickBottom=false;
+    scheduleTypingExpiry();
+  }
+
+  // ------------------------------------------------------------------ header / badge / name
+  function updateNameFieldState(ticket){
+    if(!nameInput) return;
+    const hasLockedName=!!(ticket && (ticket.id || ticket.display_name));
+    if(hasLockedName){
+      const who=String(ticket.display_name || nameInput.value || '').trim();
+      if(who) nameInput.value=who;
+      nameInput.disabled=true;
+      nameInput.style.display='none';
+    } else {
+      nameInput.disabled=false;
+      nameInput.style.display='';
+    }
+  }
+  function updateTitle(ticket){
+    if(!titleEl) return;
+    try{
+      if(endBtn){
+        endBtn.style.display = (!ticket || String(ticket.status||'').toLowerCase()!=='open') ? 'none' : '';
+      }
+    }catch(_e){}
+    if(!ticket){
+      titleEl.textContent='Νέα συνομιλία';
+      if(threadLabel) threadLabel.textContent = archivedTickets.length ? `Αρχειοθετημένα tickets: ${archivedTickets.length}` : 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
+      return;
+    }
+    const status=String(ticket.status||'open')==='closed'?'Κλειστό':'Ανοικτό';
+    titleEl.textContent=`Ticket #${ticket.id} · ${status}`;
+    if(threadLabel){
+      const who=String(ticket.display_name || ticket.username || 'Χρήστης');
+      threadLabel.textContent=`Συνομιλία: ${who}`;
+    }
+  }
   function updateBadge(messages){
     if(!badge) return;
-    const lastSeen = parseTs(localStorage.getItem(SEEN_KEY) || '');
-    const incoming = (messages||[]).filter(m => m.sender==='support' && parseTs(m.timestamp) > lastSeen).length;
-    if(incoming > 0 && !open){
+    let lastSeenRaw=''; try{ lastSeenRaw=localStorage.getItem(SEEN_KEY) || ''; }catch(_e){}
+    const lastSeen=parseTs(lastSeenRaw);
+    const incoming=(messages||[]).filter(m=>m.sender==='support' && parseTs(m.timestamp)>lastSeen).length;
+    if(incoming>0 && !open){
       badge.style.display='inline-flex';
-      badge.textContent = incoming > 99 ? '99+' : String(incoming);
+      badge.textContent=incoming>99?'99+':String(incoming);
       fab && fab.classList.add('has-unread');
       fab && fab.setAttribute('title', `Help / Support (${incoming} νέο${incoming===1?'':'α'} μήνυμα${incoming===1?'':'τα'})`);
     } else {
       badge.style.display='none';
       fab && fab.classList.remove('has-unread');
-      fab && fab.setAttribute('title', 'Help / Support');
+      fab && fab.setAttribute('title','Help / Support');
     }
   }
-
   function markSeen(messages){
-    const last = (messages||[]).slice().reverse().find(m => m.sender==='support');
+    const last=(messages||[]).slice().reverse().find(m=>m.sender==='support');
     if(last && last.timestamp){
       try{ localStorage.setItem(SEEN_KEY, String(last.timestamp)); }catch(_e){}
     }
     updateBadge(messages||[]);
   }
-
-  function updateTitle(ticket){
-    if(!titleEl) return;
-    // hide 'Λήξη' when there is no active/open ticket
-    try{
-      if(endBtn){
-        if(!ticket || String(ticket.status||'').toLowerCase() !== 'open') endBtn.style.display = 'none';
-        else endBtn.style.display = '';
-      }
-    }catch(_e){}
-
-    if(!ticket){
-      titleEl.textContent = 'Νέα συνομιλία';
-      if(threadLabel) threadLabel.textContent = archivedTickets.length ? `Αρχειοθετημένα tickets: ${archivedTickets.length}` : 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
-      return;
-    }
-    const status = String(ticket.status||'open') === 'closed' ? 'Κλειστό' : 'Ανοικτό';
-    titleEl.textContent = `Ticket #${ticket.id} · ${status}`;
-    if(threadLabel){
-      const who = String(ticket.display_name || ticket.username || 'Χρήστης');
-      threadLabel.textContent = `Συνομιλία: ${who}`;
-    }
-  }
-
   function updateSelectedFiles(){
     if(!fileStateEl) return;
-    const f = (fileInput && fileInput.files) ? Array.from(fileInput.files) : [];
-    if(!f.length){ fileStateEl.textContent=''; return; }
-    fileStateEl.textContent = `Επισυναπτόμενα: ${f.map(x=>x.name).join(', ')}`;
+    const f=(fileInput && fileInput.files)?Array.from(fileInput.files):[];
+    fileStateEl.textContent = f.length ? `Επισυναπτόμενα: ${f.map(x=>x.name).join(', ')}` : '';
   }
 
+  // ------------------------------------------------------------------ polling
+  function pollInterval(){
+    if(open) return OPEN_POLL_MS;
+    if(document.hidden) return HIDDEN_POLL_MS;
+    return CLOSED_POLL_MS;
+  }
+  function schedulePoll(){
+    try{ if(poller) clearTimeout(poller); }catch(_e){}
+    if(stopped) return;
+    poller=setTimeout(async ()=>{ await refresh(); schedulePoll(); }, pollInterval());
+  }
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ refresh(); } schedulePoll(); });
+
   async function refresh(){
+    if(inFlight){ pendingRefresh=true; return; }
+    inFlight=true;
     try{
       const r=await fetch(`/api/support/ticket/me?mark_read=${open?'1':'0'}`,{credentials:'same-origin'});
       if(r.status===401||r.status===403){
-        try{ if(poller) clearInterval(poller); }catch(_){ }
-        if(supportSse){ try{ supportSse.close(); }catch(_){ } }
-        supportSseConnected=false;
-        supportSse = null;
+        try{ if(poller) clearTimeout(poller); }catch(_){}
+        poller=null;
+        stopped=true;
         return;
       }
       if(!r.ok) return;
       const j=await r.json();
-      const prevTicket = lastTicket;                  // preserve previous state
-      lastTicket = j.ticket || null;
-      archivedTickets = Array.isArray(j.archived_tickets) ? j.archived_tickets : [];
-      lastPresence = j.presence || {support_typing:false};
+      const prevTicket=lastTicket;
+      lastTicket=j.ticket||null;
+      archivedTickets=Array.isArray(j.archived_tickets)?j.archived_tickets:[];
+      lastPresence=j.presence||{support_typing:false, typing_remaining_ms:0};
+      const rem=Number(lastPresence.typing_remaining_ms||0);
+      typingUntilLocal = (lastPresence.support_typing && rem>0) ? Date.now()+rem : 0;
+      lastMessages=lastTicket?(j.messages||[]):[];
       updateTitle(lastTicket);
       updateNameFieldState(lastTicket);
-      const messages = lastTicket ? (j.messages||[]) : [];
+      renderLive();
+      updateBadge(lastMessages);
 
-      // Detect new support messages (when panel is closed we poll slowly, but
-      // if a new message arrives we speed up polling briefly for better UX)
-      const supportMsgs = (messages||[]).filter(m => m.sender === 'support');
-      if (supportMsgs.length) {
-        const maxTs = Math.max(...supportMsgs.map(m => parseTs(m.timestamp) || 0));
-        if (maxTs > lastSupportMsgTs) {
-          lastSupportMsgTs = maxTs;
-          closedFastUntil = Date.now() + FAST_POLL_AFTER_NEW_MS;
-          // If panel is closed but we detected a new support message, refresh more often
-          if (!open) {
-            try{ _setPollIntervalForOpenState(); }catch(_e){}
-          }
-        }
-      }
+      if(!lastTicket && prevTicket && input){ input.value=''; }
 
-      render(messages);
-      updateBadge(messages);
-
-      // Only clear the input if we *had* an open ticket and it was just closed.
-      if (!lastTicket && prevTicket && input) {
-        input.value = '';
-      }
-
-      if (j.closed_notice && open) {
-        const refTicket = j.latest_closed_ticket || {};
-        const noticeKey = `${CLOSED_NOTICE_KEY}:${refTicket.id || '0'}:${refTicket.closed_at || ''}`;
-        const already = localStorage.getItem(noticeKey);
+      if(j.closed_notice && open){
+        const refTicket=j.latest_closed_ticket||{};
+        const noticeKey=`${CLOSED_NOTICE_KEY}:${refTicket.id||'0'}:${refTicket.closed_at||''}`;
+        let already=null; try{ already=localStorage.getItem(noticeKey); }catch(_e){}
         if(!already){
-          const byRaw = String(refTicket.closed_by || 'support');
-          const by = (byRaw === 'admin' || byRaw === 'admin/support') ? 'admin/support' : byRaw;
-          try { await showModalAlert('Ενημέρωση', `Το ticket έκλεισε από ${by}. Η συνομιλία αρχειοθετήθηκε και μπορείς να τη δεις από το Αρχείο.`); } catch(_) {}
-          localStorage.setItem(noticeKey, '1');
+          const byRaw=String(refTicket.closed_by||'support');
+          const by=(byRaw==='admin'||byRaw==='admin/support')?'admin/support':byRaw;
+          try{ await showModalAlert('Ενημέρωση', `Το ticket έκλεισε από ${by}. Η συνομιλία αρχειοθετήθηκε και μπορείς να τη δεις από το Αρχείο.`); }catch(_){}
+          try{ localStorage.setItem(noticeKey,'1'); }catch(_e){}
         }
       }
-      updatePresence();
-      if(open){ markSeen(messages); }
-    }catch(_e){}
+      if(open) markSeen(lastMessages);
+    }catch(_e){
+    }finally{
+      inFlight=false;
+      if(pendingRefresh){ pendingRefresh=false; setTimeout(refresh,50); }
+    }
   }
 
+  // ------------------------------------------------------------------ send / close
   async function sendMsg(msg){
     const displayName=(nameInput&&nameInput.value||'').trim();
-    const files = (fileInput && fileInput.files) ? Array.from(fileInput.files) : [];
+    const files=(fileInput && fileInput.files)?Array.from(fileInput.files):[];
     if(!displayName){ throw new Error('Δήλωσε πρώτα όνομα support.'); }
     if(!msg && !files.length){ throw new Error('Γράψε μήνυμα ή πρόσθεσε αρχείο.'); }
     try{ localStorage.setItem(NAME_KEY, displayName); }catch(_e){}
-
-    const fd = new FormData();
+    const fd=new FormData();
     fd.append('message', msg || '');
     fd.append('display_name', displayName);
-    files.forEach(f => fd.append('files', f));
-
-    const r=await fetch('/api/support/ticket/open',{
-      method:'POST',
-      credentials:'same-origin',
-      body:fd
-    });
+    files.forEach(f=>fd.append('files', f));
+    const r=await fetch('/api/support/ticket/open',{method:'POST',credentials:'same-origin',body:fd});
     const j=await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Σφάλμα αποστολής');
     if(j.discord_delivered===false){ throw new Error('Το ticket αποθηκεύτηκε αλλά απέτυχε η αποστολή στο Discord.'); }
@@ -306,179 +346,219 @@
     updateSelectedFiles();
   }
 
+  // ------------------------------------------------------------------ archive (list + single ticket)
+  function closeModal(modal){
+    try{ panel && panel.classList.remove('minimized'); }catch(_e){}
+    try{ modal.remove(); }catch(_e){}
+  }
+  function closedByLabel(by){
+    const v=String(by||'').toLowerCase();
+    if(v==='admin'||v==='support'||v==='admin/support') return 'από το support';
+    if(v==='user'||v==='') return 'από εσένα';
+    return `από ${by}`;
+  }
+  function ticketPeriod(t){
+    const a=t.created_at?formatGreekCompact(t.created_at):'';
+    const b=t.closed_at?formatGreekCompact(t.closed_at):'';
+    if(a && b) return `${a} → ${b}`;
+    return b||a||'';
+  }
+
   async function openArchivedTicket(ticketId){
-    const r = await fetch(`/api/support/ticket/history/${encodeURIComponent(ticketId)}`, { credentials:'same-origin' });
-    const j = await r.json().catch(()=>({}));
+    const r=await fetch(`/api/support/ticket/history/${encodeURIComponent(ticketId)}`,{credentials:'same-origin'});
+    const j=await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αδυναμία φόρτωσης αρχείου ticket');
-
-    // minimize the live conversation while viewing archived ticket
     try{ panel && panel.classList.add('minimized'); }catch(_e){}
-    const modal = document.createElement('div');
-    modal.id = 'archivedTicketModal';
-    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
-    const msgs = Array.isArray(j.messages) ? j.messages : [];
-    const msgHtml = msgs.map(m => `<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content||'')}</div>`).join('') || '<div class="text-sm text-gray-500">Δεν υπάρχουν μηνύματα.</div>';
-    modal.innerHTML = `
-      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-2xl max-h-[80vh] overflow-auto shadow-lg">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold">Αρχειοθετημένο Ticket #${esc(j.ticket?.id || ticketId)}${j.ticket && j.ticket.closed_at ? ` · ${esc(formatGreekCompact(j.ticket.closed_at))}` : ''}</h3>
-          <div class="flex gap-2">
-            <button class="px-2 py-1 border rounded bg-yellow-50 text-yellow-800 border-yellow-100 dark:bg-yellow-600 dark:text-yellow-50 dark:border-yellow-600 archived-btn-report" id="reportArchivedTicket">Αναφορά</button>
-            <button class="btn btn-sm btn-danger" id="deleteArchivedTicket">Διαγραφή</button>
-            <button class="px-2 py-1 border rounded bg-gray-50 border-gray-100 dark:bg-gray-800/20 dark:text-gray-200 dark:border-gray-700" id="closeArchivedTicketModal">Κλείσιμο</button>
+    const t=j.ticket||{};
+    const msgs=Array.isArray(j.messages)?j.messages:[];
+    const modal=document.createElement('div');
+    modal.id='archivedTicketModal';
+    modal.className='hb-modal-bg';
+    const meta=[
+      t.display_name ? esc(t.display_name) : '',
+      ticketPeriod(t) ? esc(ticketPeriod(t)) : '',
+      t.closed_at ? `Έκλεισε ${esc(closedByLabel(t.closed_by))}` : 'Ανοικτό',
+      `${msgs.length} μηνύματα`
+    ].filter(Boolean).join(' · ');
+    modal.innerHTML=`
+      <div class="hb-modal" role="dialog" aria-label="Ticket #${esc(t.id||ticketId)}">
+        <div class="hb-modal-head">
+          <div>
+            <div class="hb-modal-title">Ticket #${esc(t.id||ticketId)}</div>
+            <div class="hb-modal-sub">${meta}</div>
           </div>
+          <button type="button" class="hb-x" id="closeArchivedTicketModal" aria-label="Κλείσιμο">×</button>
         </div>
-        <div>${msgHtml}</div>
-      </div>
-    `;
+        <div class="hb-modal-body hb-thread">${buildThread(msgs,t,{archive:true})}</div>
+        <div class="hb-modal-foot">
+          <button type="button" class="hb-btn hb-btn--warn" id="reportArchivedTicket">Αναφορά</button>
+          <button type="button" class="hb-btn hb-btn--danger" id="deleteArchivedTicket">Διαγραφή</button>
+          <button type="button" class="hb-btn" id="closeArchivedTicketModal2">Κλείσιμο</button>
+        </div>
+      </div>`;
     document.body.appendChild(modal);
+    const body=modal.querySelector('.hb-modal-body'); if(body) body.scrollTop=body.scrollHeight;
+    modal.querySelector('#closeArchivedTicketModal')?.addEventListener('click',()=>closeModal(modal));
+    modal.querySelector('#closeArchivedTicketModal2')?.addEventListener('click',()=>closeModal(modal));
+    modal.addEventListener('click',(e)=>{ if(e.target===modal) closeModal(modal); });
 
-    modal.querySelector('#closeArchivedTicketModal')?.addEventListener('click', ()=>{ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); });
-    modal.addEventListener('click', (e)=>{ if(e.target===modal){ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); } });
-
-    // Report: prefill new message in the live support panel with archived conversation
     modal.querySelector('#reportArchivedTicket')?.addEventListener('click', async ()=>{
       try{
-        const excerpt = msgs.map(m => `${m.sender==='support' ? 'Support' : 'User'}: ${m.content || ''}`).join('\n').slice(0,1200);
-        try{ if(nameInput && (j.ticket && j.ticket.display_name)) nameInput.value = j.ticket.display_name; }catch(_e){}
-        if(input) input.value = `Αναφορά βασισμένη στο αρχειοθετημένο ticket #${ticketId}:\n\n${excerpt}`;
+        const excerpt=msgs.map(m=>`${m.sender==='support'?'Support':'Χρήστης'}: ${m.content||''}`).join('\n').slice(0,1200);
+        try{ if(nameInput && t.display_name) nameInput.value=t.display_name; }catch(_e){}
+        if(input) input.value=`Αναφορά βασισμένη στο αρχειοθετημένο ticket #${ticketId}:\n\n${excerpt}`;
         try{ setOpen(true); panel && panel.classList.remove('minimized'); }catch(_e){}
         input && input.focus();
         modal.remove();
-      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
+      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
     });
-
-    // Delete: call server API to permanently delete archived ticket
     modal.querySelector('#deleteArchivedTicket')?.addEventListener('click', async ()=>{
       try{
         if(!await showModalConfirm('Διαγραφή Ticket', `Θες σίγουρα να διαγράψεις το αρχειοθετημένο ticket #${ticketId}; Η ενέργεια δεν μπορεί να αναιρεθεί.`,'Διαγραφή','Άκυρο')) return;
-        const r = await fetch(`/api/support/ticket/delete/${encodeURIComponent(ticketId)}`, { method: 'POST', credentials: 'same-origin' });
-        const j2 = await r.json().catch(()=>({}));
-        if(!r.ok || !j2.ok) throw new Error((j2&&j2.error) || 'Αποτυχία διαγραφής');
-        archivedTickets = (archivedTickets||[]).filter(t => String(t.id) !== String(ticketId));
-        try{ await showModalAlert('Επιτυχία', 'Το ticket διαγράφηκε.'); }catch(_){}
-        try{ panel && panel.classList.remove('minimized'); }catch(_e){}
-        modal.remove();
-      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
+        const r2=await fetch(`/api/support/ticket/delete/${encodeURIComponent(ticketId)}`,{method:'POST',credentials:'same-origin'});
+        const j2=await r2.json().catch(()=>({}));
+        if(!r2.ok || !j2.ok) throw new Error((j2&&j2.error)||'Αποτυχία διαγραφής');
+        archivedTickets=(archivedTickets||[]).filter(x=>String(x.id)!==String(ticketId));
+        try{ await showModalAlert('Επιτυχία','Το ticket διαγράφηκε.'); }catch(_){}
+        closeModal(modal);
+      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
     });
   }
 
   async function openArchiveList(){
     if(!archivedTickets.length){
-      try{ await showModalAlert('Ενημέρωση', 'Δεν υπάρχουν αρχειοθετημένα tickets.'); }catch(_){}
+      try{ await showModalAlert('Ενημέρωση','Δεν υπάρχουν αρχειοθετημένα tickets.'); }catch(_){}
       return;
     }
-    // minimize the open conversation while the archive modal is visible
     try{ panel && panel.classList.add('minimized'); }catch(_e){}
-    const modal = document.createElement('div');
-    modal.id = 'archiveModal';
-    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
-    const isDarkTheme = (document.documentElement && document.documentElement.getAttribute('data-theme') === 'dark');
-    const listHtml = archivedTickets.map(t => {
-      const when = t.closed_at ? ` · ${esc(formatGreekCompact(t.closed_at))}` : '';
-      const by = String(t.closed_by || '').toLowerCase();
-      const cls = (by === 'admin' || by === 'support' || by === 'admin/support') ? 'archived-ticket archived-ticket--support' : 'archived-ticket archived-ticket--user';
-      const reportStyle = isDarkTheme ? 'background:#D97706;color:#FFF7ED;border-color:#D97706' : '';
-      const deleteStyle = isDarkTheme ? 'background:#DC2626;color:#FFF1F2;border-color:#DC2626' : '';
-      return `
-        <div class="flex items-center justify-between px-3 py-2 border rounded ${cls} hover:bg-gray-50 dark:hover:bg-gray-900/40">
-          <button data-ticket-id="${esc(t.id)}" class="text-left flex-1 text-sm" style="background:transparent;color:inherit;border:0;padding:0">Ticket #${esc(t.id)}${when}</button>
-          <div class="ml-3 flex gap-2">
-            <button data-report-ticket="${esc(t.id)}" class="px-2 py-1 text-xs border rounded archived-btn-report">Αναφορά</button>
-            <button data-delete-ticket="${esc(t.id)}" class="btn btn-sm btn-danger">Διαγραφή</button>
+    const modal=document.createElement('div');
+    modal.id='archiveModal';
+    modal.className='hb-modal-bg';
+    function rowsHtml(list){
+      return list.map(t=>{
+        const period=ticketPeriod(t);
+        const last=t.last_message||null;
+        const prev=last?`${last.sender==='support'?'Support':'Εσύ'}: ${String(last.content||'').slice(0,90)}`:'';
+        const by=String(t.closed_by||'').toLowerCase();
+        const cls=(by==='admin'||by==='support'||by==='admin/support')?'hb-ticket--support':'hb-ticket--user';
+        return `
+          <div class="hb-ticket ${cls}" data-open-ticket="${esc(t.id)}" tabindex="0" role="button">
+            <div class="hb-ticket-main">
+              <div class="hb-ticket-title">Ticket #${esc(t.id)}${t.display_name?` · ${esc(t.display_name)}`:''}</div>
+              <div class="hb-ticket-sub">${esc(period)}${period?' · ':''}Έκλεισε ${esc(closedByLabel(t.closed_by))}${t.message_count!=null?` · ${esc(t.message_count)} μηνύματα`:''}</div>
+              ${prev?`<div class="hb-ticket-prev">${esc(prev)}</div>`:''}
+            </div>
+            <div class="hb-ticket-actions">
+              <button type="button" class="hb-btn hb-btn--warn hb-btn--sm" data-report-ticket="${esc(t.id)}">Αναφορά</button>
+              <button type="button" class="hb-btn hb-btn--danger hb-btn--sm" data-delete-ticket="${esc(t.id)}">Διαγραφή</button>
+            </div>
+          </div>`;
+      }).join('') || '<div class="hb-empty">Κανένα αποτέλεσμα.</div>';
+    }
+    modal.innerHTML=`
+      <div class="hb-modal hb-modal--list" role="dialog" aria-label="Αρχειοθετημένα tickets">
+        <div class="hb-modal-head">
+          <div>
+            <div class="hb-modal-title">Αρχειοθετημένα tickets</div>
+            <div class="hb-modal-sub">${archivedTickets.length} tickets</div>
           </div>
-        </div>`;
-    }).join('');
-
-    const listContainerClass = (archivedTickets.length > 20) ? 'space-y-2 max-h-[60vh] overflow-auto' : 'space-y-2';
-
-    modal.innerHTML = `
-      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-lg shadow-lg">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold">Αρχειοθετημένα Tickets</h3>
-          <button class="px-2 py-1 border rounded" id="closeArchiveListModal">Κλείσιμο</button>
+          <button type="button" class="hb-x" id="closeArchiveListModal" aria-label="Κλείσιμο">×</button>
         </div>
-        <div class="${listContainerClass}">${listHtml}</div>
-      </div>
-    `;
+        ${archivedTickets.length>5?'<div class="hb-modal-search"><input type="search" id="hbArchiveSearch" placeholder="Αναζήτηση σε tickets…"></div>':''}
+        <div class="hb-modal-body" id="hbArchiveRows">${rowsHtml(archivedTickets)}</div>
+      </div>`;
     document.body.appendChild(modal);
-    modal.querySelector('#closeArchiveListModal')?.addEventListener('click', ()=>{ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); });
-    modal.addEventListener('click', (e)=>{ if(e.target===modal){ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); } });
-    modal.querySelectorAll('[data-ticket-id]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const tid = btn.getAttribute('data-ticket-id');
-        try { await openArchivedTicket(tid); } catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
+    const rowsEl=modal.querySelector('#hbArchiveRows');
+    modal.querySelector('#closeArchiveListModal')?.addEventListener('click',()=>closeModal(modal));
+    modal.addEventListener('click',(e)=>{ if(e.target===modal) closeModal(modal); });
+    const search=modal.querySelector('#hbArchiveSearch');
+    if(search){
+      search.addEventListener('input',()=>{
+        const q=search.value.trim().toLowerCase();
+        const list=!q?archivedTickets:archivedTickets.filter(t=>
+          `#${t.id} ${t.display_name||''} ${(t.last_message&&t.last_message.content)||''} ${ticketPeriod(t)}`.toLowerCase().includes(q));
+        rowsEl.innerHTML=rowsHtml(list);
       });
-    });
-
-    modal.querySelectorAll('[data-report-ticket]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    }
+    rowsEl.addEventListener('click', async (e)=>{
+      const del=e.target.closest('[data-delete-ticket]');
+      const rep=e.target.closest('[data-report-ticket]');
+      const row=e.target.closest('[data-open-ticket]');
+      if(del){
         e.stopPropagation();
-        const tid = btn.getAttribute('data-report-ticket');
+        const tid=del.getAttribute('data-delete-ticket');
         try{
-          const r = await fetch(`/api/support/ticket/history/${encodeURIComponent(tid)}`, { credentials:'same-origin' });
-          const j = await r.json().catch(()=>({}));
-          if(!r.ok || !j.ok) { throw new Error((j&&j.error) || 'Αδύναμη φόρτωση ticket'); }
-          const msgs = Array.isArray(j.messages) ? j.messages : [];
-          const excerpt = msgs.map(m => `${m.sender==='support' ? 'Support' : 'User'}: ${m.content || ''}`).join('\n').slice(0, 1200);
-          try{ if(nameInput && (j.ticket && j.ticket.display_name)) nameInput.value = j.ticket.display_name; }catch(_e){}
-          if(input) input.value = `Αναφορά βασισμένη στο αρχειοθετημένο ticket #${tid}:\n\n${excerpt}`;
+          const ok=await showModalConfirm('Διαγραφή Ticket', `Θες σίγουρα να διαγράψεις το αρχειοθετημένο ticket #${tid}; Η ενέργεια δεν μπορεί να αναιρεθεί.`,'Διαγραφή','Άκυρο');
+          if(!ok) return;
+          const r=await fetch(`/api/support/ticket/delete/${encodeURIComponent(tid)}`,{method:'POST',credentials:'same-origin'});
+          const j=await r.json().catch(()=>({}));
+          if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αποτυχία διαγραφής');
+          archivedTickets=(archivedTickets||[]).filter(t=>String(t.id)!==String(tid));
+          del.closest('[data-open-ticket]')?.remove();
+          try{ await showModalAlert('Επιτυχία','Το ticket διαγράφηκε.'); }catch(_){}
+        }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
+        return;
+      }
+      if(rep){
+        e.stopPropagation();
+        const tid=rep.getAttribute('data-report-ticket');
+        try{
+          const r=await fetch(`/api/support/ticket/history/${encodeURIComponent(tid)}`,{credentials:'same-origin'});
+          const j=await r.json().catch(()=>({}));
+          if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αδύναμη φόρτωση ticket');
+          const msgs=Array.isArray(j.messages)?j.messages:[];
+          const excerpt=msgs.map(m=>`${m.sender==='support'?'Support':'Χρήστης'}: ${m.content||''}`).join('\n').slice(0,1200);
+          try{ if(nameInput && (j.ticket && j.ticket.display_name)) nameInput.value=j.ticket.display_name; }catch(_e){}
+          if(input) input.value=`Αναφορά βασισμένη στο αρχειοθετημένο ticket #${tid}:\n\n${excerpt}`;
           try{ setOpen(true); panel && panel.classList.remove('minimized'); }catch(_e){}
           input && input.focus();
           modal.remove();
-        }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
-      });
-    });
-
-    modal.querySelectorAll('[data-delete-ticket]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const tid = btn.getAttribute('data-delete-ticket');
-        try{
-          const ok = await showModalConfirm('Διαγραφή Ticket', `Θες σίγουρα να διαγράψεις το αρχειοθετημένο ticket #${tid}; Η ενέργεια δεν μπορεί να αναιρεθεί.`,'Διαγραφή','Άκυρο');
-          if(!ok) return;
-          const r = await fetch(`/api/support/ticket/delete/${encodeURIComponent(tid)}`, { method:'POST', credentials:'same-origin' });
-          const j = await r.json().catch(()=>({}));
-          if(!r.ok || !j.ok) throw new Error((j&&j.error) || 'Αποτυχία διαγραφής');
-          // remove from local array + DOM
-          archivedTickets = (archivedTickets||[]).filter(t => String(t.id) !== String(tid));
-          btn.closest('div')?.remove();
-          try{ await showModalAlert('Επιτυχία', 'Το ticket διαγράφηκε.'); }catch(_){}
         }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
-      });
+        return;
+      }
+      if(row){
+        const tid=row.getAttribute('data-open-ticket');
+        try{ await openArchivedTicket(tid); }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
+      }
+    });
+    rowsEl.addEventListener('keydown',(e)=>{
+      if((e.key==='Enter'||e.key===' ') && e.target.matches && e.target.matches('[data-open-ticket]')){
+        e.preventDefault();
+        openArchivedTicket(e.target.getAttribute('data-open-ticket')).catch(()=>{});
+      }
     });
   }
 
+  // ------------------------------------------------------------------ open/close + events
   function setOpen(v){
-    open = !!v;
-    if(panel) panel.style.display = open ? 'flex' : 'none';
-    // adapt poller interval for responsiveness when the panel is open
-    try{ _setPollIntervalForOpenState(); }catch(_e){}
+    open=!!v;
+    if(panel) panel.style.display=open?'flex':'none';
     if(open){
+      firstRender=true;
+      forceStickBottom=true;
       refresh();
-      setTimeout(()=>markSeen([]), 50);
     }
+    schedulePoll();
   }
 
   fab&&fab.addEventListener('click',()=>setOpen(!open));
-  fileInput&&fileInput.addEventListener('change', updateSelectedFiles);
+  fileInput&&fileInput.addEventListener('change',updateSelectedFiles);
   try{
-    const savedName = localStorage.getItem(NAME_KEY) || '';
-    if(savedName && nameInput) nameInput.value = savedName;
+    const savedName=localStorage.getItem(NAME_KEY) || '';
+    if(savedName && nameInput) nameInput.value=savedName;
   }catch(_e){}
   updateNameFieldState(null);
   closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
-  archiveBtn&&archiveBtn.addEventListener('click', ()=>openArchiveList());
+  archiveBtn&&archiveBtn.addEventListener('click',()=>openArchiveList());
 
-  initSupportSse();
   refresh();
-  // start poller (slower when panel closed, faster while open)
-  _setPollIntervalForOpenState();
+  schedulePoll();
+
   endBtn&&endBtn.addEventListener('click', async ()=>{
-    if(!await showModalConfirm('Επιβεβαίωση', 'Να λήξει η συνομιλία;')) return;
+    if(!await showModalConfirm('Επιβεβαίωση','Να λήξει η συνομιλία;')) return;
     try{
-      const r = await fetch('/api/support/ticket/close', { method:'POST', credentials:'same-origin' });
-      const j = await r.json().catch(()=>({}));
+      const r=await fetch('/api/support/ticket/close',{method:'POST',credentials:'same-origin'});
+      const j=await r.json().catch(()=>({}));
       if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αποτυχία λήξης ticket');
       await refresh();
     }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
@@ -489,8 +569,8 @@
     try{
       await sendMsg(msg);
       if(input) input.value='';
+      forceStickBottom=true;
       await refresh();
-      markSeen([]);
     }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
   });
 })();

@@ -103,16 +103,27 @@ def _write_json_atomic(path: str, data) -> bool:
 # 1) Admin-only failed / incomplete URL log
 # ---------------------------------------------------------------------------
 
+_MAX_EVENTS = 12          # τελευταίες εμφανίσεις ανά URL (ποιος/πού/πότε)
+
+
 def record_failed_url(
     url: str,
     reason: str = "incomplete",
     missing_fields: Optional[List[str]] = None,
     group: Optional[str] = None,
     scraper_source: Optional[str] = None,
+    user: Optional[str] = None,
+    customer_vat: Optional[str] = None,
+    customer_name: Optional[str] = None,
+    error: Optional[str] = None,
+    kind: Optional[str] = None,
 ) -> bool:
     """
     Append (or refresh) a URL in the global admin log. Deduplicated by URL: a
     repeat bumps the hit count and last-seen timestamp instead of adding a row.
+
+    user / customer_* / group λένε ποιος και πού το συνάντησε (λίστες ανά URL + τελευταίες εμφανίσεις),
+    error το μήνυμα/εξαίρεση του scraper, kind: invoice | receipt | pdf.
     """
     u = str(url or "").strip()
     if not u:
@@ -141,6 +152,27 @@ def record_failed_url(
                 groups = set(row.get("groups") or [])
                 groups.add(str(group))
                 row["groups"] = sorted(groups)
+            if user:
+                users = set(row.get("users") or [])
+                users.add(str(user))
+                row["users"] = sorted(users)
+            cust_label = ""
+            if customer_vat:
+                cust_label = f"{customer_vat}" + (f" · {customer_name}" if customer_name else "")
+                customers = set(row.get("customers") or [])
+                customers.add(cust_label)
+                row["customers"] = sorted(customers)
+            if error:
+                row["last_error"] = str(error)[:400]
+            if kind:
+                row["kind"] = str(kind)
+            events = list(row.get("events") or [])
+            events.append({
+                "ts": now, "group": str(group or ""), "user": str(user or ""), "customer": cust_label,
+                "reason": str(reason or "incomplete"), "source": str(scraper_source or ""),
+                "error": (str(error)[:160] if error else ""),
+            })
+            row["events"] = events[-_MAX_EVENTS:]
             store[u] = row
             _write_json_atomic(_FAILED_URLS_PATH, store)
         return True
@@ -178,6 +210,109 @@ def clear_failed_url(url: str) -> bool:
 
 def failed_urls_path() -> str:
     return _FAILED_URLS_PATH
+
+
+def clear_all_failed_urls() -> int:
+    """Αδειάζει ολόκληρη τη λίστα (admin). Επιστρέφει πόσα URL αφαιρέθηκαν."""
+    try:
+        with _lock:
+            store = _read_json(_FAILED_URLS_PATH, {})
+            n = len(store) if isinstance(store, dict) else 0
+            _write_json_atomic(_FAILED_URLS_PATH, {})
+            return n
+    except Exception:
+        log.exception("scrape_review: clear_all_failed_urls failed")
+        return 0
+
+
+def merge_failed_urls(remote: Dict[str, Any]) -> int:
+    """
+    Συγχώνευση απομακρυσμένης λίστας (κοινό αντίγραφο στο Drive) στην τοπική — ένωση ανά URL:
+    max(count) όχι άθροισμα (το ίδιο γεγονός υπάρχει και στα δύο), min(first_seen), max(last_seen),
+    ένωση groups/users/customers/events. Δεν σβήνει ποτέ τίποτα. Επιστρέφει πόσα URL άλλαξαν/προστέθηκαν.
+    """
+    if not isinstance(remote, dict):
+        return 0
+    changed = 0
+    try:
+        with _lock:
+            store = _read_json(_FAILED_URLS_PATH, {})
+            if not isinstance(store, dict):
+                store = {}
+            for url, rr in remote.items():
+                if not isinstance(rr, dict) or not str(url or "").strip():
+                    continue
+                cur = store.get(url)
+                if not isinstance(cur, dict):
+                    store[url] = rr
+                    changed += 1
+                    continue
+                merged = dict(cur)
+                before = json.dumps(cur, sort_keys=True, ensure_ascii=False)
+                merged["count"] = max(int(cur.get("count") or 0), int(rr.get("count") or 0))
+                fs = [x for x in (cur.get("first_seen"), rr.get("first_seen")) if x]
+                ls = [x for x in (cur.get("last_seen"), rr.get("last_seen")) if x]
+                if fs:
+                    merged["first_seen"] = min(fs)
+                if ls:
+                    merged["last_seen"] = max(ls)
+                for key in ("groups", "users", "customers", "missing_fields"):
+                    u = set(cur.get(key) or []) | set(rr.get(key) or [])
+                    if u:
+                        merged[key] = sorted(str(x) for x in u)
+                ev = {}
+                for e in list(cur.get("events") or []) + list(rr.get("events") or []):
+                    if isinstance(e, dict):
+                        ev[(e.get("ts"), e.get("user"), e.get("group"), e.get("customer"))] = e
+                if ev:
+                    merged["events"] = [ev[k] for k in sorted(ev, key=lambda k: str(k[0]))][-_MAX_EVENTS:]
+                newer = rr if str(rr.get("last_seen") or "") > str(cur.get("last_seen") or "") else cur
+                for key in ("reason", "scraper_source", "last_error", "kind"):
+                    if newer.get(key):
+                        merged[key] = newer.get(key)
+                if json.dumps(merged, sort_keys=True, ensure_ascii=False) != before:
+                    store[url] = merged
+                    changed += 1
+            if changed:
+                _write_json_atomic(_FAILED_URLS_PATH, store)
+    except Exception:
+        log.exception("scrape_review: merge_failed_urls failed")
+    return changed
+
+
+def list_all_failed(group_dirs: Dict[str, str], limit: int = 2000) -> List[Dict[str, Any]]:
+    """
+    Ενιαία λίστα για τον admin: το καθολικό αρχείο + οι ουρές ελέγχου αποδείξεων όλων των ομάδων
+    (group_dirs: {όνομα ομάδας: φάκελος}). Οι ουρές επιβιώνουν σε κάθε redeploy (συγχρονίζονται με την ομάδα),
+    άρα καλύπτουν και URL που δεν υπάρχουν πια στο καθολικό αρχείο. Dedupe ανά URL.
+    """
+    rows = {r["url"]: dict(r) for r in list_failed_urls(limit=0) if isinstance(r, dict) and r.get("url")}
+    for gname, gdir in (group_dirs or {}).items():
+        try:
+            for item in list_review_queue(gdir):
+                u = str(item.get("url") or "").strip()
+                if not u:
+                    continue
+                r = rows.get(u)
+                if r is None:
+                    r = rows[u] = {
+                        "url": u, "domain": _domain_of(u), "first_seen": item.get("added_at") or "",
+                        "last_seen": item.get("updated_at") or item.get("added_at") or "", "count": 1,
+                        "reason": "incomplete", "missing_fields": item.get("missing_fields") or [],
+                        "groups": [], "source": "review_queue", "kind": "receipt",
+                    }
+                groups = set(r.get("groups") or [])
+                groups.add(gname)
+                r["groups"] = sorted(groups)
+                if item.get("customer_vat"):
+                    lab = f"{item.get('customer_vat')}" + (f" · {item.get('customer_name')}" if item.get("customer_name") else "")
+                    r["customers"] = sorted(set(r.get("customers") or []) | {lab})
+                r["in_review_queue"] = True
+        except Exception:
+            log.exception("scrape_review: list_all_failed: group %s failed", gname)
+    out = list(rows.values())
+    out.sort(key=lambda r: str(r.get("last_seen") or ""), reverse=True)
+    return out[:limit] if limit and limit > 0 else out
 
 
 # ---------------------------------------------------------------------------

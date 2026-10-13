@@ -37,12 +37,23 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 DB_NAME = "invoices.db"
-KINDS = ("invoices", "summary", "epsilon")
+# Παραστατικά πελάτη (ανά ΑΦΜ) + «έγγραφα ομάδας»: ό,τι άλλο JSON της ομάδας ταξιδεύει επίσης μέσα στη βάση.
+DOC_KINDS = ("invoices", "summary", "epsilon")
+SINGLETON_FILES = {                         # αρχείο ρίζας ομάδας -> kind (vat = "_")
+    "credentials.json": "credentials",
+    "fiscal_meta.json": "fiscal_meta",
+    "e3_company_credentials_store.json": "e3_credentials",
+    "support_tickets.json": "support_tickets",
+}
+KINDS = DOC_KINDS + ("exported_marks",) + tuple(SINGLETON_FILES.values())
+SINGLETON_VAT = "_"
 SCHEMA_VERSION = 2
 
 _RE_INV = re.compile(r"^([0-9A-Za-z\-]+)_invoices\.json$")
 _RE_SUM = re.compile(r"^([0-9A-Za-z\-]+)_summary\.json$")
 _RE_EPS = re.compile(r"^([0-9A-Za-z\-]+)_epsilon_invoices\.json$")
+_RE_EXM = re.compile(r"^([0-9A-Za-z\-]+)_exported_marks\.json$")
+_VAT_TOKEN_RE = r"[0-9A-Za-z_\-]+"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS stores (
@@ -188,32 +199,43 @@ def classify(path: Any, _root: Optional[str] = None) -> Optional[Tuple[str, str,
         return None
     base = os.path.basename(p)
     folder = os.path.dirname(p)
-    m = _RE_EPS.match(base)
     kind = ""
-    if m:
-        if os.path.basename(folder).lower() != "epsilon":
-            return None
-        kind = "epsilon"
-        group_dir = os.path.dirname(folder)
-    else:
-        m = _RE_INV.match(base)
+    token = ""
+    if os.path.basename(folder).lower() == "epsilon":
+        m = _RE_EPS.match(base)
         if m:
-            kind = "invoices"
+            kind = "epsilon"
         else:
-            m = _RE_SUM.match(base)
+            m = _RE_EXM.match(base)
             if m:
-                kind = "summary"
+                kind = "exported_marks"
         if not m:
             return None
-        if m.group(1).lower() == "epsilon":      # το legacy epsilon_invoices.json (σκιά ομάδας)
-            return None
+        token = m.group(1)
+        group_dir = os.path.dirname(folder)
+    else:
         group_dir = folder
+        if base in SINGLETON_FILES:
+            kind, token = SINGLETON_FILES[base], SINGLETON_VAT
+        else:
+            m = _RE_INV.match(base)
+            if m:
+                kind = "invoices"
+            else:
+                m = _RE_SUM.match(base)
+                if m:
+                    kind = "summary"
+            if not m:
+                return None
+            token = m.group(1)
+            if token.lower() == "epsilon":      # το legacy epsilon_invoices.json (σκιά ομάδας)
+                return None
     if os.path.normcase(os.path.dirname(group_dir)) != root:
         return None
     gname = os.path.basename(group_dir)
     if not gname or gname.startswith((".", "_")):
         return None
-    return group_dir, kind, m.group(1)
+    return group_dir, kind, token
 
 
 def is_managed(path: Any) -> bool:
@@ -221,6 +243,11 @@ def is_managed(path: Any) -> bool:
 
 
 def file_path(group_dir: str, kind: str, vat: str) -> str:
+    for fname, k in SINGLETON_FILES.items():
+        if k == kind:
+            return os.path.join(group_dir, fname)
+    if kind == "exported_marks":
+        return os.path.join(group_dir, "epsilon", f"{vat}_exported_marks.json")
     if kind == "epsilon":
         return os.path.join(group_dir, "epsilon", f"{vat}_epsilon_invoices.json")
     if kind == "summary":
@@ -808,6 +835,12 @@ def verify_group(group_dir: str) -> List[str]:
         return ["store disabled"]
     if not os.path.exists(db_path(group_dir)) and not _managed_files(group_dir):
         return problems
+    # Πρώτα εισάγονται οι αλλαγές αρχείων που έγιναν «απ' έξω» (άμεσες εγγραφές credentials.json κ.λπ.) —
+    # ο έλεγχος αφορά διαφορές που ΔΕΝ εξηγούνται από αυτές (φθορά/ελλιπής εγγραφή).
+    try:
+        sync_group(group_dir, force=True)
+    except Exception:
+        pass
     conn = _connect(group_dir)
     try:
         for full, kind, vat in _managed_files(group_dir):
@@ -1070,14 +1103,69 @@ def drive_enabled() -> bool:
 def is_managed_rel(rel_path: str) -> bool:
     """Σχετική διαδρομή μέσα στην ομάδα (Drive/zip) που αντιστοιχεί σε αρχείο παραστατικών της βάσης."""
     rel = str(rel_path or "").replace("\\", "/")
-    m = _RE_EPS.match(os.path.basename(rel))
-    if m and rel.lower().startswith("epsilon/") and rel.count("/") == 1:
-        return True
+    base = os.path.basename(rel)
+    if rel.lower().startswith("epsilon/") and rel.count("/") == 1:
+        return bool(_RE_EPS.match(base) or _RE_EXM.match(base))
     if "/" in rel:
         return False
-    base = os.path.basename(rel)
+    if base in SINGLETON_FILES:
+        return True
     m = _RE_INV.match(base) or _RE_SUM.match(base)
     return bool(m and m.group(1).lower() != "epsilon")
+
+
+def rel_key(rel_path: str) -> Optional[Tuple[str, str]]:
+    """Σχετική διαδρομή (Drive/zip) -> (kind, vat) του store, ή None αν δεν διαχειρίζεται."""
+    if not is_managed_rel(rel_path):
+        return None
+    rel = str(rel_path or "").replace("\\", "/")
+    base = os.path.basename(rel)
+    if rel.lower().startswith("epsilon/"):
+        m = _RE_EPS.match(base)
+        if m:
+            return "epsilon", m.group(1)
+        m = _RE_EXM.match(base)
+        return ("exported_marks", m.group(1)) if m else None
+    if base in SINGLETON_FILES:
+        return SINGLETON_FILES[base], SINGLETON_VAT
+    m = _RE_INV.match(base)
+    if m:
+        return "invoices", m.group(1)
+    m = _RE_SUM.match(base)
+    return ("summary", m.group(1)) if m else None
+
+
+def store_updated_at(group_dir: str, kind: str, vat: str) -> float:
+    """Ώρα του περιεχομένου ενός store της τοπικής βάσης (0 αν δεν υπάρχει)."""
+    if not os.path.exists(db_path(group_dir)):
+        return 0.0
+    try:
+        conn = _connect(group_dir)
+        try:
+            r = conn.execute("SELECT updated_at FROM stores WHERE kind=? AND vat=?", (kind, vat)).fetchone()
+            return float(r[0] or 0) if r else 0.0
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+
+
+def snapshot_store_map(blob: bytes) -> Dict[Tuple[str, str], float]:
+    """{(kind, vat): updated_at} ενός snapshot (bytes, όπως ανεβαίνει στο Drive) — τι ΠΕΡΙΕΧΕΙ η απομακρυσμένη βάση."""
+    fd, tmp = tempfile.mkstemp(prefix="invoices_map_", suffix=".db")
+    os.close(fd)
+    try:
+        extract_snapshot(blob, tmp)
+        c = sqlite3.connect(tmp)
+        try:
+            return {(k, v): float(u or 0) for k, v, u in c.execute("SELECT kind, vat, updated_at FROM stores")}
+        finally:
+            c.close()
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def get_meta(group_dir: str, key: str, default: str = "") -> str:
@@ -1223,7 +1311,7 @@ def merge_from(group_dir: str, other_db: str) -> Dict[str, int]:
                 l_tombs = {(k, v): float(d or 0) for k, v, d in conn.execute("SELECT kind, vat, deleted_at FROM tombstones")}
                 # Ταφόπλακες του Drive: σβήνουν τοπικό store που δεν έχει αλλάξει μετά τη διαγραφή.
                 for (kind, vat), d in r_tombs.items():
-                    if kind not in KINDS or not re.fullmatch(r"[0-9A-Za-z\-]+", str(vat or "")):
+                    if kind not in KINDS or not re.fullmatch(_VAT_TOKEN_RE, str(vat or "")):
                         continue
                     row = conn.execute("SELECT updated_at FROM stores WHERE kind=? AND vat=?", (kind, vat)).fetchone()
                     try:
@@ -1245,7 +1333,7 @@ def merge_from(group_dir: str, other_db: str) -> Dict[str, int]:
                         log.exception("invoice_store.merge_from: tombstone %s/%s failed", kind, vat)
                         st["failed"] += 1
                 for kind, vat, shape, raw, _n, _ver, r_upd in remote:
-                    if kind not in KINDS or not re.fullmatch(r"[0-9A-Za-z\-]+", str(vat or "")):
+                    if kind not in KINDS or not re.fullmatch(_VAT_TOKEN_RE, str(vat or "")):
                         continue
                     st["remote"] += 1
                     _tomb = max(l_tombs.get((kind, vat), 0.0), r_tombs.get((kind, vat), 0.0))

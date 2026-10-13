@@ -8,6 +8,15 @@
 | `<ομάδα>/<ΑΦΜ>_invoices.json` | `invoices` | πλήρη παραστατικά της λήψης myDATA |
 | `<ομάδα>/<ΑΦΜ>_summary.json` | `summary` | summaries λήψης / αποδείξεων |
 | `<ομάδα>/epsilon/<ΑΦΜ>_epsilon_invoices.json` | `epsilon` | καταχωρημένα στη λίστα (γραμμές, κατηγορίες) |
+| `<ομάδα>/epsilon/<ΑΦΜ>_exported_marks.json` | `exported_marks` | MARK που έχουν ήδη εξαχθεί στη γέφυρα |
+| `<ομάδα>/credentials.json` | `credentials` | credentials/κανόνες ΑΦΜ των πελατών της ομάδας |
+| `<ομάδα>/fiscal_meta.json` | `fiscal_meta` | ενεργή χρήση |
+| `<ομάδα>/e3_company_credentials_store.json` | `e3_credentials` | στοιχεία εταιρειών Ε3 |
+| `<ομάδα>/support_tickets.json` | `support_tickets` | tickets/μηνύματα support της ομάδας |
+
+Τα τελευταία τέσσερα (vat = `_`) και τα exported marks γράφονται από την εφαρμογή με άμεση εγγραφή αρχείου (tmp +
+`os.replace`)· εντοπίζονται από την υπογραφή του αρχείου και εισάγονται πριν από κάθε push/pull/ανάγνωση, άρα δεν
+χρειάστηκε να αλλάξουν οι εγγραφείς. Στο Drive ταξιδεύουν μόνο μέσα στη βάση.
 
 Δεν διαχειρίζονται (μένουν αρχεία): το legacy `epsilon_invoices.json` της ομάδας (σκιά), αρχεία στη ρίζα `data/`
 ή στο `data/epsilon/` (χωρίς ομάδα), φάκελοι `_…`/`.…`.
