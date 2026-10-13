@@ -3,111 +3,214 @@
 {% block title %}Ομάδες{% endblock %}
 
 {% block content %}
+{% set active_name = session.get('active_group') %}
+{% set role_labels = {'admin': 'Διαχειριστής', 'member': 'Μέλος'} %}
 <div class="content-wrap groups-page">
   <style>
-    .groups-page{max-width:1200px;margin:0 auto;padding:0 0 18px;}
-    .groups-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;}
-    .groups-title h1{font-size:1.5rem;font-weight:700;margin:0 0 6px;}
-    .groups-title p{margin:0;color:#475569;}
-    [data-theme="dark"] .groups-title p{color:#94a3b8;}
+    .groups-page{
+      --gp-bg:#fff; --gp-bg-soft:#f8fafc; --gp-border:#e2e8f0; --gp-text:#0f172a; --gp-muted:#64748b;
+      --gp-accent:#0284c7; --gp-accent-dark:#0369a1; --gp-accent-soft:#e0f2fe;
+      --gp-ok:#059669; --gp-ok-soft:#d1fae5; --gp-warn-soft:#fef3c7; --gp-warn:#92400e;
+      max-width:1200px;margin:0 auto;padding:0 0 22px;color:var(--gp-text);
+    }
+    [data-theme="dark"] .groups-page{
+      --gp-bg:#0f172a; --gp-bg-soft:#111c33; --gp-border:#334155; --gp-text:#e2e8f0; --gp-muted:#94a3b8;
+      --gp-accent:#0ea5e9; --gp-accent-dark:#38bdf8; --gp-accent-soft:#0c2a43;
+      --gp-ok:#34d399; --gp-ok-soft:#064e3b; --gp-warn-soft:#422006; --gp-warn:#fde68a;
+    }
+    .groups-page h1,.groups-page h2,.groups-page h3{color:var(--gp-text) !important;}
+    .groups-page p,.groups-page span,.groups-page small,.groups-page label{color:inherit;}
 
-    .groups-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:20px;}
-    .groups-action-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px;box-shadow:0 6px 18px rgba(15,23,42,.06);}
-    .groups-action-card h2{margin:0 0 8px;font-size:1rem;font-weight:700;}
-    .groups-action-card p{margin:0 0 12px;font-size:.92rem;color:#64748b;}
-    [data-theme="dark"] .groups-action-card{background:#0f172a;border-color:#334155;box-shadow:none;}
-    [data-theme="dark"] .groups-action-card p{color:#94a3b8;}
+    /* ---- hero ---- */
+    .gp-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:18px;}
+    .gp-hero h1{font-size:1.55rem;font-weight:800;margin:0 0 6px;}
+    .gp-hero p{margin:0;color:var(--gp-muted) !important;max-width:720px;line-height:1.5;}
+    .gp-who{display:flex;flex-direction:column;gap:6px;align-items:flex-end;font-size:.88rem;color:var(--gp-muted);}
+    .gp-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-weight:700;font-size:.85rem;
+      background:var(--gp-accent-soft);color:var(--gp-accent-dark) !important;border:1px solid var(--gp-accent);}
+    .gp-chip.is-active{background:var(--gp-ok-soft);color:var(--gp-ok) !important;border-color:var(--gp-ok);}
+    .gp-chip.is-none{background:var(--gp-warn-soft);color:var(--gp-warn) !important;border-color:#f59e0b;}
 
-    .btn-primary{background:#0284c7;color:#fff;border:none;border-radius:10px;padding:9px 14px;font-weight:600;cursor:pointer;}
-    .btn-primary:hover{background:#0369a1;}
-    .btn-ghost{background:#e2e8f0;color:#0f172a;border:none;border-radius:10px;padding:9px 14px;font-weight:600;cursor:pointer;}
-    [data-theme="dark"] .btn-ghost{background:#334155;color:#e2e8f0;}
+    /* ---- πώς δουλεύουν οι ομάδες ---- */
+    .gp-how{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;margin-bottom:22px;overflow:hidden;}
+    .gp-how summary{cursor:pointer;list-style:none;padding:13px 16px;font-weight:700;display:flex;align-items:center;gap:8px;}
+    .gp-how summary::-webkit-details-marker{display:none;}
+    .gp-how summary::after{content:'▾';margin-left:auto;color:var(--gp-muted);transition:transform .15s;}
+    .gp-how[open] summary::after{transform:rotate(180deg);}
+    .gp-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;padding:0 16px 14px;}
+    .gp-step{background:var(--gp-bg-soft);border:1px solid var(--gp-border);border-radius:12px;padding:12px 14px;}
+    .gp-step b{display:inline-flex;width:24px;height:24px;border-radius:50%;background:var(--gp-accent);color:#fff;
+      align-items:center;justify-content:center;font-size:.82rem;margin-right:8px;}
+    .gp-step strong{font-size:.95rem;}
+    .gp-step p{margin:6px 0 0;color:var(--gp-muted);font-size:.88rem;line-height:1.45;}
+    .gp-roles{padding:0 16px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
+    .gp-role{font-size:.88rem;color:var(--gp-muted);line-height:1.45;}
+    .gp-role strong{color:var(--gp-text);}
 
-    .groups-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;}
-    .group-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;}
-    .group-card.selected{border-color:#0891b2;box-shadow:0 0 0 2px rgba(8,145,178,.22);}
-    .group-card.loading{opacity:.68;pointer-events:none;}
-    [data-theme="dark"] .group-card{background:#0b1220;border-color:#334155;}
-    [data-theme="dark"] .group-card.selected{box-shadow:0 0 0 2px rgba(34,211,238,.24);}
+    /* ---- τίτλοι ενοτήτων ---- */
+    .gp-section{margin:0 0 12px;}
+    .gp-section h2{font-size:1.1rem;font-weight:800;margin:0 0 3px;}
+    .gp-section p{margin:0;color:var(--gp-muted) !important;font-size:.9rem;}
+
+    /* ---- κουμπιά ---- */
+    .gp-btn{border:none;border-radius:10px;padding:9px 15px;font-weight:700;cursor:pointer;font-size:.9rem;
+      background:var(--gp-accent);color:#fff !important;transition:background .12s,transform .05s;}
+    .gp-btn:hover{background:var(--gp-accent-dark);}
+    .gp-btn:active{transform:translateY(1px);}
+    .gp-btn:disabled{opacity:.55;cursor:not-allowed;}
+    .gp-btn.ghost{background:transparent;color:var(--gp-text) !important;border:1px solid var(--gp-border);}
+    .gp-btn.ghost:hover{background:var(--gp-bg-soft);}
+    .gp-btn.ok{background:var(--gp-ok);}
+    .gp-btn.danger{background:transparent;color:#b91c1c !important;border:1px solid #fca5a5;}
+    .gp-btn.danger:hover{background:#fee2e2;}
+    [data-theme="dark"] .gp-btn.danger{color:#fca5a5 !important;border-color:#7f1d1d;}
+    [data-theme="dark"] .gp-btn.danger:hover{background:#450a0a;}
+
+    /* ---- κάρτες ομάδων ---- */
+    .groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-bottom:26px;}
+    .group-card{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;padding:16px;
+      display:flex;flex-direction:column;gap:12px;box-shadow:0 4px 14px rgba(15,23,42,.05);}
+    .group-card.selected{border-color:var(--gp-ok);box-shadow:0 0 0 2px rgba(5,150,105,.25);}
+    .group-card.loading{opacity:.65;pointer-events:none;}
     .group-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
-    .group-name{font-size:1.05rem;font-weight:700;margin:0;}
-    .group-folder{font-size:.8rem;color:#64748b;word-break:break-all;}
-    [data-theme="dark"] .group-folder{color:#94a3b8;}
-    .group-badge{font-size:.72rem;background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;border-radius:999px;padding:2px 9px;}
-
-    .admin-list,.members-list{display:flex;flex-wrap:wrap;gap:6px;}
-    .pill{display:inline-flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:999px;padding:4px 10px;font-size:.82rem;}
-    .pill small{color:#64748b;}
-    [data-theme="dark"] .pill{background:#1e293b;border-color:#475569;color:#e2e8f0;}
-    [data-theme="dark"] .pill small{color:#94a3b8;}
-
-    .remove-member-btn{border:none;background:#fee2e2;color:#991b1b;border-radius:999px;padding:2px 7px;cursor:pointer;font-weight:700;}
+    .group-name{font-size:1.1rem;font-weight:800;margin:0;word-break:break-word;}
+    .group-meta{font-size:.82rem;color:var(--gp-muted);margin-top:2px;}
+    .badge{font-size:.72rem;font-weight:700;border-radius:999px;padding:3px 10px;white-space:nowrap;border:1px solid transparent;}
+    .badge.active{background:var(--gp-ok-soft);color:var(--gp-ok) !important;border-color:var(--gp-ok);}
+    .badge.role-admin{background:var(--gp-warn-soft);color:var(--gp-warn) !important;border-color:#f59e0b;}
+    .badge.role-member{background:var(--gp-accent-soft);color:var(--gp-accent-dark) !important;border-color:var(--gp-accent);}
+    .group-sub{font-size:.8rem;font-weight:700;color:var(--gp-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;}
+    .members-list{display:flex;flex-wrap:wrap;gap:6px;}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:var(--gp-bg-soft);border:1px solid var(--gp-border);
+      border-radius:999px;padding:4px 10px;font-size:.82rem;}
+    .pill small{color:var(--gp-muted) !important;}
+    .pill.is-admin{border-color:#f59e0b;}
+    .pill.is-me{border-color:var(--gp-accent);}
+    .remove-member-btn{border:none;background:#fee2e2;color:#991b1b !important;border-radius:999px;width:20px;height:20px;line-height:20px;
+      padding:0;cursor:pointer;font-weight:800;font-size:.7rem;}
     .remove-member-btn:hover{background:#fecaca;}
-    .leave-group-btn{background:#fee2e2;color:#7f1d1d;border:1px solid #fca5a5;border-radius:10px;padding:6px 10px;font-weight:600;cursor:pointer;}
-    [data-theme="dark"] .leave-group-btn{background:#7f1d1d;color:#fee2e2;border-color:#991b1b;}
+    .group-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:auto;padding-top:4px;}
+    .group-actions .gp-btn.select{flex:1 1 auto;}
+    .group-folder{font-size:.76rem;color:var(--gp-muted);}
+    .group-folder code{background:var(--gp-bg-soft);border-radius:6px;padding:1px 6px;}
 
+    .gp-empty{background:var(--gp-warn-soft);border:1px solid #f59e0b;border-radius:14px;padding:16px;margin-bottom:26px;line-height:1.55;}
+    .gp-empty strong{color:var(--gp-warn) !important;}
+
+    /* ---- κάρτες ενεργειών ---- */
+    .gp-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:10px;}
+    .gp-action{background:var(--gp-bg);border:1px solid var(--gp-border);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px;}
+    .gp-action h3{margin:0;font-size:1.02rem;font-weight:800;}
+    .gp-action p{margin:0;color:var(--gp-muted) !important;font-size:.9rem;line-height:1.5;}
+    .gp-action ul{margin:0;padding-left:18px;color:var(--gp-muted);font-size:.88rem;line-height:1.55;}
+    .gp-action .gp-btn{align-self:flex-start;margin-top:auto;}
+    .gp-note{font-size:.82rem;color:var(--gp-warn) !important;background:var(--gp-warn-soft);border-radius:8px;padding:6px 10px;}
+
+    /* ---- modals ---- */
     .gm-modal-backdrop{display:none;position:fixed;inset:0;background:rgba(2,6,23,.58);align-items:center;justify-content:center;z-index:80;padding:18px;}
-    .gm-modal{width:min(760px,100%);background:#fff;border-radius:14px;border:1px solid #dbeafe;padding:20px;}
-    [data-theme="dark"] .gm-modal{background:#0f172a;border-color:#334155;color:#e2e8f0;}
-    .gm-modal h3{margin:0 0 8px;}
-    .gm-help{margin:0 0 12px;color:#64748b;font-size:.9rem;}
-    [data-theme="dark"] .gm-help{color:#94a3b8;}
-    .gm-field{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;}
-    .gm-field label{font-size:.86rem;font-weight:600;}
-    .gm-field input,.gm-field select{padding:10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;}
-    [data-theme="dark"] .gm-field input,[data-theme="dark"] .gm-field select{background:#1e293b;border-color:#475569;color:#e2e8f0;}
-    .gm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+    .gm-modal{width:min(640px,100%);max-height:92vh;overflow:auto;background:var(--gp-bg);color:var(--gp-text);border-radius:16px;
+      border:1px solid var(--gp-border);padding:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);}
+    .gm-modal h3{margin:0 0 6px;font-size:1.2rem;font-weight:800;}
+    .gm-help{margin:0 0 14px;color:var(--gp-muted) !important;font-size:.9rem;line-height:1.5;}
+    .gm-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+    .gm-field label{font-size:.86rem;font-weight:700;}
+    .gm-field input,.gm-field select{padding:10px;border:1px solid var(--gp-border);border-radius:10px;background:var(--gp-bg-soft);color:var(--gp-text);}
+    .gm-hint{font-size:.8rem;color:var(--gp-muted) !important;}
+    .gm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
     .user-check-result{font-size:.82rem;min-height:20px;}
+    .name-check-result{font-size:.82rem;min-height:18px;}
   </style>
 
-  <div class="groups-hero">
-    <div class="groups-title">
-      <h1>Διαχείριση Ομάδων</h1>
-      <p>Συνδεδεμένος χρήστης: <strong>{{ current_user.username }}</strong> · Κλικ σε κάρτα για ενεργή ομάδα.</p>
+  <!-- ===== Τίτλος ===== -->
+  <div class="gp-hero">
+    <div>
+      <h1>Ομάδες εργασίας</h1>
+      <p>
+        Η <strong>ομάδα</strong> είναι ο κοινός χώρος δεδομένων του γραφείου σας: οι πελάτες (credentials), τα παραστατικά
+        και οι ρυθμίσεις ανήκουν σε μία ομάδα και τα βλέπουν όλα τα μέλη της. Επιλέξτε σε ποια ομάδα θέλετε να δουλέψετε τώρα.
+      </p>
+    </div>
+    <div class="gp-who">
+      <span>Συνδεδεμένος χρήστης: <strong>{{ current_user.username }}</strong></span>
+      {% if active_name %}
+        <span class="gp-chip is-active">✓ Ενεργή ομάδα: {{ active_name }}</span>
+      {% else %}
+        <span class="gp-chip is-none">Δεν έχει επιλεγεί ενεργή ομάδα</span>
+      {% endif %}
     </div>
   </div>
 
-  <div class="groups-actions">
-    <section class="groups-action-card">
-      <h2>Δημιουργία ομάδας</h2>
-      <p>Φτιάξτε νέα ομάδα με μοναδικό όνομα. Θα δημιουργηθεί ξεχωριστός φάκελος δεδομένων.</p>
-      <button id="open-create" class="btn-primary" type="button">+ Νέα ομάδα</button>
-    </section>
+  <!-- ===== Οδηγός ===== -->
+  <details class="gp-how" id="gp-how" open>
+    <summary>ℹ️ Πώς λειτουργούν οι ομάδες</summary>
+    <div class="gp-steps">
+      <div class="gp-step">
+        <strong><b>1</b>Επιλέξτε ομάδα</strong>
+        <p>Πατήστε «Επιλογή ομάδας» στην κάρτα της ομάδας. Από εκείνη τη στιγμή όλες οι σελίδες δουλεύουν με τα δεδομένα αυτής της ομάδας.</p>
+      </div>
+      <div class="gp-step">
+        <strong><b>2</b>Επιλέξτε πελάτη</strong>
+        <p>Στη συνέχεια διαλέγετε τον πελάτη (credentials) της ομάδας για τον οποίο θέλετε να κάνετε λήψη, αναζήτηση ή έλεγχο.</p>
+      </div>
+      <div class="gp-step">
+        <strong><b>3</b>Συνεργαστείτε</strong>
+        <p>Όσα καταχωρείτε στην ομάδα τα βλέπουν και οι συνάδελφοί σας. Μπορείτε να αλλάζετε ομάδα όποτε θέλετε, από εδώ ή από το μενού.</p>
+      </div>
+    </div>
+    <div class="gp-roles">
+      <div class="gp-role"><strong>Διαχειριστής:</strong> βλέπει τα δεδομένα της ομάδας, προσθέτει ή αφαιρεί μέλη και μπορεί να διαγράψει την ομάδα.</div>
+      <div class="gp-role"><strong>Μέλος:</strong> έχει πρόσβαση στα δεδομένα της ομάδας και εργάζεται κανονικά, χωρίς διαχείριση μελών. Μπορεί να αποχωρήσει όποτε θέλει.</div>
+    </div>
+  </details>
 
-    <section class="groups-action-card">
-      <h2>Ανάθεση χρήστη</h2>
-      <p>Αναζητήστε χρήστη με username/email και ορίστε ρόλο (Μέλος ή Διαχειριστής).</p>
-      <button id="open-assign" class="btn-primary" type="button">Ανάθεση χρήστη</button>
-    </section>
+  <!-- ===== 1. Οι ομάδες μου ===== -->
+  <div class="gp-section">
+    <h2>1. Οι ομάδες μου</h2>
+    <p>Επιλέξτε την ομάδα στην οποία θέλετε να εργαστείτε. Η ενεργή ομάδα εμφανίζεται πάντα πάνω στην κεφαλίδα της εφαρμογής.</p>
   </div>
+
+  {% if not groups %}
+  <div class="gp-empty">
+    <strong>Δεν ανήκετε ακόμη σε καμία ομάδα.</strong><br>
+    Έχετε δύο επιλογές: <b>δημιουργήστε</b> μια νέα ομάδα παρακάτω (θα είστε ο διαχειριστής της), ή ζητήστε από τον διαχειριστή
+    της ομάδας που θέλετε να σας προσθέσει, δίνοντάς του το username
+    <b>{{ current_user.username }}</b>{% if current_user.email %} ή το email <b>{{ current_user.email }}</b>{% endif %}.
+    Μόλις σας προσθέσει, θα δείτε ειδοποίηση στην επόμενη σελίδα που θα ανοίξετε.
+  </div>
+  {% endif %}
 
   <div class="groups-grid">
     {% for g in groups %}
-      <article class="group-card {% if session.get('active_group') == g.name %}selected{% endif %}" data-group-card="{{ g.name }}">
+      {% set my_role = current_user.role_for_group(g) %}
+      {% set is_active = (active_name == g.name) %}
+      <article class="group-card {% if is_active %}selected{% endif %}" data-group-card="{{ g.name }}">
         <div class="group-top">
           <div>
             <h3 class="group-name">{{ g.name }}</h3>
-            <div class="group-folder"><code>{{ g.data_folder }}</code></div>
+            <div class="group-meta">{{ g.user_groups|length }} {{ 'μέλος' if g.user_groups|length == 1 else 'μέλη' }}</div>
           </div>
-          {% if session.get('active_group') == g.name %}<span class="group-badge">Ενεργή</span>{% endif %}
-        </div>
-
-        <div>
-          <strong style="font-size:.85rem;">Διαχειριστές</strong>
-          <div class="admin-list">
-            {% for u in g.admins() %}<span class="pill">{{ u.username }}</span>{% else %}<span class="pill">Κανένας</span>{% endfor %}
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+            {% if is_active %}<span class="badge active">✓ Ενεργή</span>{% endif %}
+            {% if my_role %}<span class="badge role-{{ my_role }}">Ο ρόλος μου: {{ role_labels.get(my_role, my_role) }}</span>{% endif %}
           </div>
         </div>
 
         <div>
-          <strong style="font-size:.85rem;">Μέλη</strong>
+          <div class="group-sub">Διαχειριστές</div>
+          <div class="members-list">
+            {% for u in g.admins() %}<span class="pill is-admin {% if u.id == current_user.id %}is-me{% endif %}">{{ u.username }}{% if u.id == current_user.id %} <small>(εσείς)</small>{% endif %}</span>{% else %}<span class="pill">Κανένας</span>{% endfor %}
+          </div>
+        </div>
+
+        <div>
+          <div class="group-sub">Μέλη</div>
           <div class="members-list">
             {% for ug in g.user_groups %}
-              <span class="pill">
+              <span class="pill {% if ug.role == 'admin' %}is-admin{% endif %} {% if ug.user.id == current_user.id %}is-me{% endif %}">
                 <span>{{ ug.user.username }}</span>
-                <small>{{ ug.role }}</small>
-                {% if current_user.is_authenticated and current_user.role_for_group(g) == 'admin' and ug.user.id != current_user.id %}
-                  <button class="remove-member-btn" data-username="{{ ug.user.username }}" data-group="{{ g.name }}" type="button">✖</button>
+                <small>{{ role_labels.get(ug.role, ug.role) }}</small>
+                {% if current_user.is_authenticated and my_role == 'admin' and ug.user.id != current_user.id %}
+                  <button class="remove-member-btn" data-username="{{ ug.user.username }}" data-group="{{ g.name }}" type="button" title="Αφαίρεση από την ομάδα" aria-label="Αφαίρεση {{ ug.user.username }} από την ομάδα">✖</button>
                 {% endif %}
               </span>
             {% else %}
@@ -116,202 +219,289 @@
           </div>
         </div>
 
-        <div>
+        <div class="group-actions">
+          {% if is_active %}
+            <button class="gp-btn ok select" type="button" data-select-group="{{ g.name }}">Συνέχεια στους πελάτες →</button>
+          {% else %}
+            <button class="gp-btn select" type="button" data-select-group="{{ g.name }}">Επιλογή ομάδας</button>
+          {% endif %}
           {% if current_user.is_authenticated and (g in current_user.groups) %}
-            {% if current_user.role_for_group(g) == 'admin' %}
-              <button class="leave-group-btn" data-group="{{ g.name }}" data-is-admin="true" type="button">Διαγραφή ομάδας</button>
+            {% if my_role == 'admin' %}
+              <button class="gp-btn danger leave-group-btn" data-group="{{ g.name }}" data-is-admin="true" type="button">Διαγραφή ομάδας</button>
             {% else %}
-              <button class="leave-group-btn" data-group="{{ g.name }}" data-is-admin="false" type="button">Αποχώρηση</button>
+              <button class="gp-btn danger leave-group-btn" data-group="{{ g.name }}" data-is-admin="false" type="button">Αποχώρηση</button>
             {% endif %}
           {% endif %}
         </div>
+        <div class="group-folder">Φάκελος δεδομένων: <code>{{ g.data_folder }}</code></div>
       </article>
-    {% else %}
-      <article class="group-card"><p>Δεν υπάρχει καμία ομάδα ακόμη.</p></article>
     {% endfor %}
   </div>
 
+  <!-- ===== 2. Ενέργειες ===== -->
+  <div class="gp-section">
+    <h2>2. Νέα ομάδα &amp; προσθήκη συναδέλφων</h2>
+    <p>Δεν βρίσκετε την ομάδα που θέλετε; Δημιουργήστε νέα, ή προσθέστε χρήστες σε ομάδα που διαχειρίζεστε.</p>
+  </div>
+
+  <div class="gp-actions">
+    <section class="gp-action">
+      <h3>➕ Δημιουργία νέας ομάδας</h3>
+      <p>Φτιάξτε έναν <strong>νέο, ξεχωριστό χώρο δεδομένων</strong> — π.χ. για ένα άλλο γραφείο, ομάδα εργασίας ή σύνολο πελατών που δεν θέλετε να αναμειγνύονται με τα υπάρχοντα.</p>
+      <ul>
+        <li>Θα γίνετε αυτόματα <b>Διαχειριστής</b> της νέας ομάδας.</li>
+        <li>Η ομάδα ξεκινά <b>κενή</b>: δεν μεταφέρονται πελάτες ή παραστατικά από άλλες ομάδες.</li>
+        <li>Μετά τη δημιουργία μπορείτε να προσθέσετε συναδέλφους και να την επιλέξετε ως ενεργή.</li>
+      </ul>
+      <button id="open-create" class="gp-btn" type="button">+ Νέα ομάδα</button>
+    </section>
+
+    <section class="gp-action">
+      <h3>👥 Προσθήκη χρήστη σε ομάδα</h3>
+      <p>Δώστε σε έναν συνάδελφο πρόσβαση στα δεδομένα μιας ομάδας που διαχειρίζεστε.</p>
+      <ul>
+        <li>Ο χρήστης πρέπει να έχει ήδη λογαριασμό στο ScanmyData (username ή email).</li>
+        <li>Μόλις συνδεθεί ή ανοίξει μια σελίδα, θα δει <b>ειδοποίηση</b> ότι προστέθηκε και σε ποια ομάδα.</li>
+        <li>Μόνο ο διαχειριστής μιας ομάδας μπορεί να προσθέτει μέλη σε αυτήν.</li>
+      </ul>
+      {% if admin_groups %}
+        <button id="open-assign" class="gp-btn" type="button">Προσθήκη χρήστη</button>
+      {% else %}
+        <div class="gp-note">Δεν διαχειρίζεστε καμία ομάδα. Δημιουργήστε μια ομάδα (ή ζητήστε να γίνετε διαχειριστής) για να προσθέτετε χρήστες.</div>
+        <button id="open-assign" class="gp-btn" type="button" disabled>Προσθήκη χρήστη</button>
+      {% endif %}
+    </section>
+  </div>
+
+  <!-- ===== Modal: δημιουργία ===== -->
   <div id="modal-create" class="gm-modal-backdrop" aria-hidden="true">
     <div class="gm-modal" role="dialog" aria-modal="true" aria-label="Δημιουργία ομάδας">
       <h3>Δημιουργία νέας ομάδας</h3>
-      <p class="gm-help">Συμπληρώστε μοναδικό όνομα (π.χ. accounting-athens). Θα γίνει άμεση δημιουργία ομάδας.</p>
-      <form method="post" action="{{ url_for('auth.create_group') }}">
+      <p class="gm-help">
+        Δώστε ένα μοναδικό όνομα που να αναγνωρίζεται εύκολα από τους συναδέλφους σας (π.χ. <em>Γραφείο Αθήνας</em> ή <em>accounting-athens</em>).
+        Θα δημιουργηθεί ξεχωριστός χώρος δεδομένων και θα γίνετε ο διαχειριστής της.
+      </p>
+      <form method="post" action="{{ url_for('auth.create_group') }}" id="create-form">
         <div class="gm-field">
           <label for="group-name-input">Όνομα ομάδας</label>
-          <input id="group-name-input" type="text" name="name" maxlength="120" placeholder="π.χ. finance-team" required />
+          <input id="group-name-input" type="text" name="name" maxlength="120" placeholder="π.χ. Γραφείο Αθήνας" autocomplete="off" required />
+          <div id="name-check-result" class="name-check-result"></div>
+          <div class="gm-hint">Το όνομα πρέπει να είναι μοναδικό σε όλη την εφαρμογή και δεν αλλάζει εύκολα αργότερα.</div>
         </div>
         <div class="gm-actions">
-          <button type="button" id="close-create" class="btn-ghost">Άκυρο</button>
-          <button type="submit" class="btn-primary">Δημιουργία</button>
+          <button type="button" id="close-create" class="gp-btn ghost">Άκυρο</button>
+          <button type="submit" class="gp-btn">Δημιουργία ομάδας</button>
         </div>
       </form>
     </div>
   </div>
 
+  <!-- ===== Modal: ανάθεση ===== -->
   <div id="modal-assign" class="gm-modal-backdrop" aria-hidden="true">
-    <div class="gm-modal" role="dialog" aria-modal="true" aria-label="Ανάθεση χρήστη">
-      <h3>Ανάθεση χρήστη σε ομάδα</h3>
-      <p class="gm-help">Μπορείτε να αναθέσετε ρόλο μέλους ή διαχειριστή. Ο έλεγχος χρήστη γίνεται αυτόματα.</p>
+    <div class="gm-modal" role="dialog" aria-modal="true" aria-label="Προσθήκη χρήστη σε ομάδα">
+      <h3>Προσθήκη χρήστη σε ομάδα</h3>
+      <p class="gm-help">
+        Γράψτε το username ή το email ενός υπάρχοντος χρήστη και επιλέξτε την ομάδα. Ο χρήστης θα ειδοποιηθεί
+        την επόμενη φορά που θα συνδεθεί ή θα ανοίξει μια σελίδα.
+      </p>
       <form id="assign-form" method="post" action="{{ url_for('auth.assign_user_to_group') }}">
         <div class="gm-field">
           <label for="assign-username">Username ή email χρήστη</label>
-          <input id="assign-username" type="text" name="username" placeholder="π.χ. maria ή maria@company.gr" required />
+          <input id="assign-username" type="text" name="username" placeholder="π.χ. maria ή maria@company.gr" autocomplete="off" required />
           <div id="user-check-result" class="user-check-result"></div>
         </div>
         <div class="gm-field">
           <label for="assign-group">Ομάδα</label>
           <select id="assign-group" name="group" required>
             <option value="">-- Επιλέξτε ομάδα --</option>
-            {% for g in admin_groups %}<option value="{{ g.name }}">{{ g.name }}</option>{% endfor %}
+            {% for g in admin_groups %}
+              <option value="{{ g.name }}" data-has-admin="{{ '1' if (g.user_groups|selectattr('role','equalto','admin')|list|length) else '0' }}">{{ g.name }}</option>
+            {% endfor %}
           </select>
+          <div class="gm-hint">Εμφανίζονται μόνο οι ομάδες που διαχειρίζεστε.</div>
         </div>
         <div class="gm-field">
           <label for="assign-role">Ρόλος</label>
           <select id="assign-role" name="role">
-            <option value="member">Μέλος (πρόσβαση στα δεδομένα ομάδας)</option>
-            <option value="admin">Διαχειριστής (διαχείριση μελών + ομάδας)</option>
+            <option value="member">Μέλος — εργάζεται στα δεδομένα της ομάδας</option>
+            <option value="admin">Διαχειριστής — διαχειρίζεται μέλη και ομάδα</option>
           </select>
+          <div id="assign-role-note" class="gm-hint">Κάθε ομάδα έχει έναν διαχειριστή· οι υπόλοιποι προστίθενται ως μέλη.</div>
         </div>
         <div class="gm-actions">
-          <button type="button" id="close-assign" class="btn-ghost">Άκυρο</button>
-          <button type="submit" class="btn-primary">Εκτέλεση ανάθεσης</button>
+          <button type="button" id="close-assign" class="gp-btn ghost">Άκυρο</button>
+          <button type="submit" class="gp-btn">Προσθήκη στην ομάδα</button>
         </div>
       </form>
     </div>
   </div>
 
   <script>
-    let checkTimeout;
-    let groupSelectionInFlight = false;
+    (function(){
+      var KNOWN_GROUPS = {{ (groups|map(attribute='name')|list)|tojson }};
+      var checkTimeout;
+      var groupSelectionInFlight = false;
 
-    async function selectGroupFast(group, card){
-      if(!group || groupSelectionInFlight) return;
-      groupSelectionInFlight = true;
-      if(card) card.classList.add('loading');
-      try{
-        const resp = await fetch("{{ url_for('auth.select_group') }}", {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          body: JSON.stringify({ group })
-        });
-        const data = await resp.json().catch(()=>({ ok:false, error:'invalid response' }));
-        if(resp.ok && data.ok){
-          window.location.href = data.redirect_url || "{{ url_for('credentials') }}";
-          return;
-        }
-        throw new Error(data.error || 'selection failed');
-      }catch(_e){
-        // Fallback to normal form submit if JSON path fails.
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = "{{ url_for('auth.select_group') }}";
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'group';
-        input.value = group;
-        form.appendChild(input);
-        document.body.appendChild(form);
-        form.submit();
-      }finally{
-        if(card) card.classList.remove('loading');
-        groupSelectionInFlight = false;
-      }
-    }
-
-    function openModal(id){ const el=document.getElementById(id); if(el){ el.style.display='flex'; el.setAttribute('aria-hidden','false'); }}
-    function closeModal(id){ const el=document.getElementById(id); if(el){ el.style.display='none'; el.setAttribute('aria-hidden','true'); }}
-
-    document.getElementById('open-create')?.addEventListener('click', ()=> openModal('modal-create'));
-    document.getElementById('close-create')?.addEventListener('click', ()=> closeModal('modal-create'));
-    document.getElementById('open-assign')?.addEventListener('click', ()=> openModal('modal-assign'));
-    document.getElementById('close-assign')?.addEventListener('click', ()=> closeModal('modal-assign'));
-
-    document.querySelectorAll('.gm-modal-backdrop').forEach((backdrop)=>{
-      backdrop.addEventListener('click', (e)=>{ if(e.target === backdrop) backdrop.style.display='none'; });
-    });
-
-    document.getElementById('assign-username')?.addEventListener('input', function(){
-      const q = this.value.trim();
-      const out = document.getElementById('user-check-result');
-      if(checkTimeout) clearTimeout(checkTimeout);
-      if(!q){ out.textContent=''; return; }
-      out.textContent = 'Έλεγχος χρήστη...';
-      checkTimeout = setTimeout(async ()=>{
+      async function selectGroupFast(group, card){
+        if(!group || groupSelectionInFlight) return;
+        groupSelectionInFlight = true;
+        if(card) card.classList.add('loading');
         try{
-          const resp = await fetch("{{ url_for('auth.lookup_user') }}?q=" + encodeURIComponent(q));
-          const data = await resp.json();
-          out.innerHTML = (data.ok && data.found)
-            ? '<span style="color:#16a34a;">✓ Ο χρήστης βρέθηκε και μπορεί να ανατεθεί.</span>'
-            : '<span style="color:#f59e0b;">⚠ Δεν βρέθηκε χρήστης με αυτά τα στοιχεία.</span>';
-        }catch(_e){
-          out.innerHTML = '<span style="color:#ef4444;">✗ Αδυναμία ελέγχου χρήστη.</span>';
-        }
-      }, 400);
-    });
-
-    document.querySelectorAll('[data-group-card]').forEach((card)=>{
-      card.addEventListener('click', ()=>{
-        const group = card.dataset.groupCard;
-        selectGroupFast(group, card);
-      });
-      card.addEventListener('dblclick', ()=>{
-        const group = card.dataset.groupCard;
-        selectGroupFast(group, card);
-      });
-    });
-
-    document.querySelectorAll('.remove-member-btn').forEach((btn)=>{
-      btn.addEventListener('click', async (ev)=>{
-        ev.preventDefault();
-        const username = btn.dataset.username;
-        const group = btn.dataset.group;
-        const confirmed = await showModalConfirm('Επιβεβαίωση αφαίρεσης', 'Να αφαιρεθεί ο χρήστης ' + username + ' από την ομάδα ' + group + ';', 'Αφαίρεση', 'Άκυρο');
-        if(!confirmed) return;
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = "{{ url_for('auth.remove_member') }}";
-        const userInput = document.createElement('input');
-        userInput.type = 'hidden';
-        userInput.name = 'username';
-        userInput.value = username;
-        const groupInput = document.createElement('input');
-        groupInput.type = 'hidden';
-        groupInput.name = 'group';
-        groupInput.value = group;
-        form.appendChild(userInput);
-        form.appendChild(groupInput);
-        document.body.appendChild(form);
-        form.submit();
-      });
-    });
-
-    document.querySelectorAll('.leave-group-btn').forEach((btn)=>{
-      btn.addEventListener('click', async (ev)=>{
-        ev.preventDefault();
-        const group = btn.dataset.group;
-        const isAdmin = btn.dataset.isAdmin === 'true';
-        const title = isAdmin ? 'Διαγραφή ομάδας' : 'Αποχώρηση από ομάδα';
-        const message = isAdmin
-          ? 'Θέλετε να διαγράψετε την ομάδα ' + group + '; Η ενέργεια είναι οριστική.'
-          : 'Θέλετε να αποχωρήσετε από την ομάδα ' + group + ';';
-        const confirmText = isAdmin ? 'Διαγραφή' : 'Αποχώρηση';
-        const confirmed = await showModalConfirm(title, message, confirmText, 'Άκυρο');
-        if(!confirmed) return;
-        try{
-          const resp = await fetch("{{ url_for('auth.leave_group') }}", {
-            method:'POST',
-            headers:{'Content-Type':'application/x-www-form-urlencoded'},
-            body:'group='+encodeURIComponent(group)
+          const resp = await fetch("{{ url_for('auth.select_group') }}", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ group })
           });
-          const data = await resp.json();
-          if(data.ok){ window.location.reload(); }
-          else { await showModalAlert('Σφάλμα', (isAdmin ? 'Διαγραφή' : 'Αποχώρηση') + ' απέτυχε: ' + (data.error || 'άγνωστο σφάλμα')); }
-        }catch(_e){ await showModalAlert('Σφάλμα', 'Σφάλμα δικτύου'); }
+          const data = await resp.json().catch(()=>({ ok:false, error:'invalid response' }));
+          if(resp.ok && data.ok){
+            window.location.href = data.redirect_url || "{{ url_for('credentials') }}";
+            return;
+          }
+          throw new Error(data.error || 'selection failed');
+        }catch(_e){
+          // Fallback: κανονική υποβολή φόρμας.
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = "{{ url_for('auth.select_group') }}";
+          const input = document.createElement('input');
+          input.type = 'hidden'; input.name = 'group'; input.value = group;
+          form.appendChild(input);
+          document.body.appendChild(form);
+          form.submit();
+        }finally{
+          if(card) card.classList.remove('loading');
+          groupSelectionInFlight = false;
+        }
+      }
+
+      function openModal(id){ const el=document.getElementById(id); if(el){ el.style.display='flex'; el.setAttribute('aria-hidden','false'); }}
+      function closeModal(id){ const el=document.getElementById(id); if(el){ el.style.display='none'; el.setAttribute('aria-hidden','true'); }}
+
+      document.getElementById('open-create')?.addEventListener('click', ()=>{ openModal('modal-create'); setTimeout(()=>document.getElementById('group-name-input')?.focus(), 30); });
+      document.getElementById('close-create')?.addEventListener('click', ()=> closeModal('modal-create'));
+      document.getElementById('open-assign')?.addEventListener('click', ()=>{ openModal('modal-assign'); setTimeout(()=>document.getElementById('assign-username')?.focus(), 30); });
+      document.getElementById('close-assign')?.addEventListener('click', ()=> closeModal('modal-assign'));
+
+      document.querySelectorAll('.gm-modal-backdrop').forEach((backdrop)=>{
+        backdrop.addEventListener('click', (e)=>{ if(e.target === backdrop) closeModal(backdrop.id); });
       });
-    });
+      document.addEventListener('keydown', (e)=>{
+        if(e.key === 'Escape'){ closeModal('modal-create'); closeModal('modal-assign'); }
+      });
+
+      // Οδηγός: θυμάται αν τον έκλεισε ο χρήστης.
+      (function(){
+        const d = document.getElementById('gp-how');
+        if(!d) return;
+        try{ if(localStorage.getItem('groups_how_closed') === '1') d.removeAttribute('open'); }catch(_){}
+        d.addEventListener('toggle', ()=>{ try{ localStorage.setItem('groups_how_closed', d.open ? '0' : '1'); }catch(_){} });
+      })();
+
+      // Έλεγχος ονόματος νέας ομάδας (μόνο οι ομάδες του χρήστη είναι γνωστές εδώ· ο server ελέγχει όλες).
+      document.getElementById('group-name-input')?.addEventListener('input', function(){
+        const out = document.getElementById('name-check-result');
+        const q = this.value.trim().toLowerCase();
+        if(!q){ out.textContent = ''; return; }
+        const dup = KNOWN_GROUPS.some(n => String(n).toLowerCase() === q);
+        out.innerHTML = dup
+          ? '<span style="color:#f59e0b;">⚠ Ανήκετε ήδη σε ομάδα με αυτό το όνομα.</span>'
+          : '<span style="color:#16a34a;">✓ Το όνομα είναι διαθέσιμο προς το παρόν (τελικός έλεγχος κατά τη δημιουργία).</span>';
+      });
+
+      // Ρόλος διαχειριστή: αν η ομάδα έχει ήδη διαχειριστή επιτρέπονται μόνο μέλη (όπως ελέγχει και ο server).
+      function syncRoleOptions(){
+        const sel = document.getElementById('assign-group');
+        const role = document.getElementById('assign-role');
+        const note = document.getElementById('assign-role-note');
+        if(!sel || !role) return;
+        const opt = sel.options[sel.selectedIndex];
+        const hasAdmin = !!(opt && opt.dataset && opt.dataset.hasAdmin === '1');
+        const adminOpt = Array.from(role.options).find(o => o.value === 'admin');
+        if(adminOpt){
+          adminOpt.disabled = hasAdmin;
+          if(hasAdmin && role.value === 'admin') role.value = 'member';
+        }
+        if(note) note.textContent = hasAdmin
+          ? 'Η ομάδα έχει ήδη διαχειριστή — ο νέος χρήστης θα προστεθεί ως μέλος.'
+          : 'Η ομάδα δεν έχει διαχειριστή· μπορείτε να ορίσετε τον χρήστη ως διαχειριστή.';
+      }
+      document.getElementById('assign-group')?.addEventListener('change', syncRoleOptions);
+      syncRoleOptions();
+
+      document.getElementById('assign-username')?.addEventListener('input', function(){
+        const q = this.value.trim();
+        const out = document.getElementById('user-check-result');
+        if(checkTimeout) clearTimeout(checkTimeout);
+        if(!q){ out.textContent=''; return; }
+        out.textContent = 'Έλεγχος χρήστη...';
+        checkTimeout = setTimeout(async ()=>{
+          try{
+            const resp = await fetch("{{ url_for('auth.lookup_user') }}?q=" + encodeURIComponent(q));
+            const data = await resp.json();
+            out.innerHTML = (data.ok && data.found)
+              ? '<span style="color:#16a34a;">✓ Ο χρήστης βρέθηκε και μπορεί να προστεθεί.</span>'
+              : '<span style="color:#f59e0b;">⚠ Δεν βρέθηκε χρήστης με αυτά τα στοιχεία. Ο χρήστης πρέπει πρώτα να δημιουργήσει λογαριασμό.</span>';
+          }catch(_e){
+            out.innerHTML = '<span style="color:#ef4444;">✗ Αδυναμία ελέγχου χρήστη.</span>';
+          }
+        }, 400);
+      });
+
+      // Επιλογή ομάδας: ρητό κουμπί (όχι κλικ οπουδήποτε στην κάρτα, ώστε να μη γίνεται κατά λάθος).
+      document.querySelectorAll('[data-select-group]').forEach((btn)=>{
+        btn.addEventListener('click', ()=>{
+          const card = btn.closest('[data-group-card]');
+          selectGroupFast(btn.dataset.selectGroup, card);
+        });
+      });
+
+      document.querySelectorAll('.remove-member-btn').forEach((btn)=>{
+        btn.addEventListener('click', async (ev)=>{
+          ev.preventDefault();
+          ev.stopPropagation();
+          const username = btn.dataset.username;
+          const group = btn.dataset.group;
+          const confirmed = await showModalConfirm('Επιβεβαίωση αφαίρεσης', 'Να αφαιρεθεί ο χρήστης ' + username + ' από την ομάδα ' + group + '; Ο χρήστης θα ειδοποιηθεί και θα χάσει την πρόσβαση στα δεδομένα της ομάδας.', 'Αφαίρεση', 'Άκυρο');
+          if(!confirmed) return;
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = "{{ url_for('auth.remove_member') }}";
+          [['username', username], ['group', group]].forEach(([k, v])=>{
+            const i = document.createElement('input');
+            i.type = 'hidden'; i.name = k; i.value = v;
+            form.appendChild(i);
+          });
+          document.body.appendChild(form);
+          form.submit();
+        });
+      });
+
+      document.querySelectorAll('.leave-group-btn').forEach((btn)=>{
+        btn.addEventListener('click', async (ev)=>{
+          ev.preventDefault();
+          ev.stopPropagation();
+          const group = btn.dataset.group;
+          const isAdmin = btn.dataset.isAdmin === 'true';
+          const title = isAdmin ? 'Διαγραφή ομάδας' : 'Αποχώρηση από ομάδα';
+          const message = isAdmin
+            ? 'Θέλετε να διαγράψετε την ομάδα ' + group + '; Θα χαθούν τα μέλη και τα δεδομένα της ομάδας. Η ενέργεια είναι οριστική.'
+            : 'Θέλετε να αποχωρήσετε από την ομάδα ' + group + '; Θα χάσετε την πρόσβαση στα δεδομένα της, μέχρι να σας προσθέσει ξανά ο διαχειριστής.';
+          const confirmText = isAdmin ? 'Διαγραφή' : 'Αποχώρηση';
+          const confirmed = await showModalConfirm(title, message, confirmText, 'Άκυρο');
+          if(!confirmed) return;
+          try{
+            const resp = await fetch("{{ url_for('auth.leave_group') }}", {
+              method:'POST',
+              headers:{'Content-Type':'application/x-www-form-urlencoded'},
+              body:'group='+encodeURIComponent(group)
+            });
+            const data = await resp.json();
+            if(data.ok){ window.location.reload(); }
+            else { await showModalAlert('Σφάλμα', (isAdmin ? 'Διαγραφή' : 'Αποχώρηση') + ' απέτυχε: ' + (data.error || 'άγνωστο σφάλμα')); }
+          }catch(_e){ await showModalAlert('Σφάλμα', 'Σφάλμα δικτύου'); }
+        });
+      });
+    })();
   </script>
 </div>
 {% endblock %}

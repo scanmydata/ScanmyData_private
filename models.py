@@ -323,6 +323,24 @@ class Group(db.Model):
         return f"<Group {self.name} -> {self.data_folder}>"
 
 
+class GroupNotice(db.Model):
+    """Ειδοποίηση προς χρήστη για αλλαγή συμμετοχής του σε ομάδα (προσθήκη / αλλαγή ρόλου / αφαίρεση).
+
+    Δημιουργείται όταν ΑΛΛΟΣ χρήστης (διαχειριστής ομάδας) αλλάζει τη συμμετοχή του· εμφανίζεται μία φορά στον
+    παραλήπτη στην επόμενη σελίδα που θα ανοίξει (π.χ. αμέσως μετά το login) και μετά σημειώνεται ως seen.
+    Νέος πίνακας: δημιουργείται αυτόματα από db.create_all() (δεν χρειάζεται migration).
+    """
+    __tablename__ = 'group_notice'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    group_name = db.Column(db.String(150), nullable=False)
+    action = db.Column(db.String(16), nullable=False)          # 'added' | 'role' | 'removed'
+    role = db.Column(db.String(32), nullable=True)
+    actor = db.Column(db.String(150), nullable=True)           # username του διαχειριστή που έκανε την αλλαγή
+    created_at = db.Column(db.DateTime(), nullable=False, default=datetime.datetime.utcnow)
+    seen_at = db.Column(db.DateTime(), nullable=True)
+
+
 class VerificationToken(db.Model):
     __tablename__ = 'verification_token'
     id = db.Column(db.Integer, primary_key=True)

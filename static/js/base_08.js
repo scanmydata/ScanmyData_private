@@ -200,20 +200,149 @@
         }
       };
       
+      // Ενεργός σύνδεσμος μενού: ΜΟΝΟ η τρέχουσα σελίδα (ή υποσελίδα της). Το «/» (Αρχική) δεν ταιριάζει με όλα
+      // τα paths — παλιότερα το prefix-match έκανε την Αρχική να φαίνεται πάντα επιλεγμένη.
       try {
-        const anchors = Array.from(sideMenu.querySelectorAll('a'));
-        const path = window.location.pathname.replace(/\/$/, '') || '/';
+        const anchors = Array.from(sideMenu.querySelectorAll('#sideMenu a[href]'));
+        const path = window.location.pathname.replace(/\/+$/, '') || '/';
         anchors.forEach(a => {
           try {
-            const href = new URL(a.getAttribute('href') || '', window.location.origin).pathname.replace(/\/$/, '') || '/';
-            if (path === href || path.indexOf(href) === 0 || href.indexOf(path) === 0) {
-              a.classList.add('side-menu-active');
-            } else {
-              a.classList.remove('side-menu-active');
-            }
+            const href = new URL(a.getAttribute('href') || '', window.location.origin).pathname.replace(/\/+$/, '') || '/';
+            const isLink = !a.classList.contains('side-logout') && !a.classList.contains('side-manage-groups');
+            const on = isLink && (href === '/' ? path === '/' : (path === href || path.indexOf(href + '/') === 0));
+            a.classList.toggle('side-menu-active', on);
+            if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
           } catch(_){ }
         });
+        // «Διαχείριση ομάδων»: επισημαίνεται όταν είμαστε στη σελίδα ομάδων
+        const mg = sideMenu.querySelector('a.side-manage-groups');
+        if (mg) {
+          const mgHref = new URL(mg.getAttribute('href') || '', window.location.origin).pathname.replace(/\/+$/, '') || '/';
+          mg.classList.toggle('side-menu-active', path === mgHref);
+        }
       } catch (e) { console.warn('side menu highlight error', e); }
+
+      try { initGroupNotices(); } catch (e) { console.warn('group notices init failed', e); }
+    }
+
+    // ── Ειδοποιήσεις συμμετοχής σε ομάδα (προσθήκη / αλλαγή ρόλου / αφαίρεση από διαχειριστή) ──────────────
+    function initGroupNotices(){
+      if (!document.getElementById('groupsList')) return;             // μόνο για συνδεδεμένους (υπάρχει στο μενού)
+      const now = Date.now();
+      if (window.__groupNoticeBusy || (window.__groupNoticeAt && now - window.__groupNoticeAt < 15000)) return;
+      window.__groupNoticeBusy = true;
+      window.__groupNoticeAt = now;
+      fetch('/api/group_notices', {
+        credentials: 'same-origin', cache: 'no-store',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          const list = (data && Array.isArray(data.notices)) ? data.notices : [];
+          if (!list.length) return;
+          showGroupNotices(list);
+          return fetch('/api/group_notices/ack', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' },
+            body: JSON.stringify({ ids: list.map(n => n.id) })
+          });
+        })
+        .catch(() => {})
+        .then(() => { window.__groupNoticeBusy = false; });
+    }
+
+    function showGroupNotices(list){
+      const old = document.getElementById('groupNoticeModal');
+      if (old) old.remove();
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const roleLabel = r => (r === 'admin' ? 'Διαχειριστής' : 'Μέλος');
+      const wrap = document.createElement('div');
+      wrap.id = 'groupNoticeModal';
+      wrap.setAttribute('role', 'dialog');
+      wrap.setAttribute('aria-modal', 'true');
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(2,6,23,.55);display:flex;align-items:center;justify-content:center;padding:18px;';
+      const box = document.createElement('div');
+      box.style.cssText = 'box-sizing:border-box;width:min(520px,100%);max-height:90vh;overflow:auto;border-radius:16px;padding:22px;box-shadow:0 24px 60px rgba(0,0,0,.4);' +
+        'border:1px solid ' + (dark ? '#334155' : '#e2e8f0') + ';background:' + (dark ? '#0f172a' : '#fff') + ';color:' + (dark ? '#e2e8f0' : '#0f172a') + ';';
+      const h = document.createElement('h3');
+      h.style.cssText = 'margin:0 0 12px;font-size:1.15rem;font-weight:800;color:inherit;';
+      h.textContent = list.length > 1 ? 'Αλλαγές στις ομάδες σας' : 'Ειδοποίηση ομάδας';
+      box.appendChild(h);
+
+      let primary = null;
+      list.forEach(n => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:10px 12px;border-radius:10px;margin-bottom:8px;font-size:.93rem;line-height:1.5;' +
+          'background:' + (dark ? '#111c33' : '#f8fafc') + ';border:1px solid ' + (dark ? '#334155' : '#e2e8f0') + ';color:inherit;';
+        const by = n.actor ? ' από τον/την ' : '';
+        const g = document.createElement('strong');
+        g.textContent = '«' + n.group + '»';
+        const lead = document.createElement('span');
+        lead.style.color = 'inherit';
+        if (n.action === 'removed') {
+          lead.appendChild(document.createTextNode('Αφαιρεθήκατε από την ομάδα '));
+          lead.appendChild(g);
+          if (n.actor) lead.appendChild(document.createTextNode(by + n.actor));
+          lead.appendChild(document.createTextNode('. Δεν έχετε πλέον πρόσβαση στα δεδομένα της.'));
+        } else if (n.action === 'role') {
+          lead.appendChild(document.createTextNode('Ο ρόλος σας στην ομάδα '));
+          lead.appendChild(g);
+          lead.appendChild(document.createTextNode(' άλλαξε σε ' + roleLabel(n.role)));
+          if (n.actor) lead.appendChild(document.createTextNode(by + n.actor));
+          lead.appendChild(document.createTextNode('.'));
+        } else {
+          lead.appendChild(document.createTextNode('Προστεθήκατε στην ομάδα '));
+          lead.appendChild(g);
+          lead.appendChild(document.createTextNode(' ως ' + roleLabel(n.role)));
+          if (n.actor) lead.appendChild(document.createTextNode(by + n.actor));
+          lead.appendChild(document.createTextNode('. Έχετε πλέον πρόσβαση στους πελάτες και τα παραστατικά της ομάδας.'));
+          if (n.is_member && !n.is_active && !primary) primary = n;
+        }
+        item.appendChild(lead);
+        box.appendChild(item);
+      });
+
+      const hint = document.createElement('p');
+      hint.style.cssText = 'margin:8px 0 14px;font-size:.85rem;color:' + (dark ? '#94a3b8' : '#64748b') + ';';
+      hint.textContent = primary
+        ? 'Για να δουλέψετε στα δεδομένα της ομάδας, επιλέξτε την ως ενεργή ομάδα.'
+        : 'Μπορείτε να δείτε και να αλλάξετε ομάδα από τη σελίδα «Διαχείριση ομάδων» ή από το μενού.';
+      box.appendChild(hint);
+
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
+      const mkBtn = (label, filled) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.style.cssText = 'border-radius:10px;padding:9px 14px;font-weight:700;cursor:pointer;font-size:.9rem;' +
+          (filled ? 'background:#0284c7;color:#fff;border:1px solid #0284c7;'
+                  : 'background:transparent;color:inherit;border:1px solid ' + (dark ? '#475569' : '#cbd5e1') + ';');
+        return b;
+      };
+      const close = () => { try { wrap.remove(); } catch (_) {} document.removeEventListener('keydown', onKey, true); };
+      function onKey(e){ if (e.key === 'Escape') close(); }
+      const later = mkBtn(primary ? 'Αργότερα' : 'Κλείσιμο', false);
+      later.addEventListener('click', close);
+      actions.appendChild(later);
+      const manage = mkBtn('Διαχείριση ομάδων', false);
+      manage.addEventListener('click', () => { close(); window.location.href = '/groups'; });
+      actions.appendChild(manage);
+      if (primary) {
+        const go = mkBtn('Επιλογή ομάδας «' + primary.group + '»', true);
+        go.addEventListener('click', () => {
+          close();
+          if (typeof window.selectGroup === 'function') window.selectGroup(primary.group);
+          else window.location.href = '/groups';
+        });
+        actions.appendChild(go);
+      }
+      box.appendChild(actions);
+      wrap.appendChild(box);
+      wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(wrap);
+      try { (primary ? actions.lastChild : later).focus(); } catch (_) {}
     }
 
     window.__initBaseShell = initSideMenuAndShell;

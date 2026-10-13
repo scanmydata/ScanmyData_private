@@ -2612,6 +2612,11 @@ def sync_user_groups_from_firestore(user_id: int, firebase_uid: str = None) -> b
                     ug = UserGroup(user_id=user_id, group_id=grp.id, role='member')
                     db.session.add(ug)
                     logger.info('Added user %s to group %s', user_id, group_name)
+                    try:
+                        from models import GroupNotice
+                        db.session.add(GroupNotice(user_id=user_id, group_name=group_name, action='added', role='member', actor=None))
+                    except Exception:
+                        pass
             
             # Optionally: remove user from groups not in Firestore
             # (be careful here - only do if Firestore is source of truth)

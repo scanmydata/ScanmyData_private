@@ -3,7 +3,7 @@ from werkzeug.utils import secure_filename
 import os
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from firebase import firebase_config
-from models import db, User, Group, UserGroup
+from models import db, User, Group, UserGroup, GroupNotice
 import datetime
 import threading
 import time
@@ -910,45 +910,95 @@ def delete_group():
         return (jsonify(resp), 500) if request.is_json else (flash('Σφάλμα διαγραφής ομάδας.', 'danger'), redirect(url_for('auth.list_groups')))
 
 
+def _notify_group_change(user, group_name, action, role=None, actor=None):
+    """Καταχωρεί ειδοποίηση για τον χρήστη (εμφανίζεται στην επόμενη σελίδα που θα ανοίξει). Ποτέ δεν ρίχνει exception."""
+    try:
+        if not user or not group_name:
+            return
+        if actor and actor == getattr(user, 'username', None):
+            return                                    # αλλαγή από τον ίδιο: δεν χρειάζεται ειδοποίηση
+        # Παλιότερες μη διαβασμένες ειδοποιήσεις για την ίδια ομάδα αντικαθίστανται από τη νεότερη.
+        GroupNotice.query.filter_by(user_id=user.id, group_name=group_name, seen_at=None).delete()
+        db.session.add(GroupNotice(user_id=user.id, group_name=group_name, action=action, role=role, actor=actor))
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        try:
+            current_app.logger.exception('Failed to record group notice')
+        except Exception:
+            pass
+
+
+def _wants_json() -> bool:
+    return bool(request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                or 'application/json' in (request.headers.get('Accept') or ''))
+
+
 @auth_bp.route('/groups/assign-user', methods=['POST'])
 @login_required
 def assign_user_to_group():
     """Assign a user to a group by email or username (admin/group-admin only)"""
+    def _fail(message_el, message_en, status):
+        # Φόρμα σελίδας: μήνυμα flash και επιστροφή στις ομάδες (όχι «γυμνό» JSON). AJAX: JSON όπως πριν.
+        if _wants_json():
+            return jsonify({'ok': False, 'error': message_en}), status
+        flash(message_el, 'danger' if status >= 500 else 'warning')
+        return redirect(url_for('auth.list_groups'))
+
     try:
         group_name = (request.form.get('group') or '').strip()
         user_identifier = (request.form.get('username') or '').strip()  # email or username
         role = (request.form.get('role') or 'member').strip()
-        
+        if role not in ('member', 'admin'):
+            role = 'member'
+
         if not group_name or not user_identifier:
-            return jsonify({'ok': False, 'error': 'Όνομα ομάδας και χρήστης είναι απαραίτητα'}), 400
-        
+            return _fail('Συμπληρώστε χρήστη και ομάδα.', 'Όνομα ομάδας και χρήστης είναι απαραίτητα', 400)
+
         grp = Group.query.filter_by(name=group_name).first()
         if not grp:
-            return jsonify({'ok': False, 'error': 'group not found'}), 404
-        
+            return _fail('Η ομάδα δεν βρέθηκε.', 'group not found', 404)
+
         # Check if current user is admin or group admin
         from admin.admin_panel import is_admin
         if not (is_admin(current_user) or current_user.role_for_group(grp) == 'admin'):
-            return jsonify({'ok': False, 'error': 'not authorized'}), 403
-        
+            return _fail('Μόνο ο διαχειριστής της ομάδας μπορεί να προσθέτει χρήστες.', 'not authorized', 403)
+
         # Find user by email or username
         user = User.query.filter_by(username=user_identifier).first()
         if not user:
             user = User.query.filter_by(email=user_identifier).first()
-        
+
         if not user:
-            return jsonify({'ok': False, 'error': f'user not found: {user_identifier}'}), 404
-        
-        # Check if assigning admin role and group already has an admin
-        if role == 'admin':
+            return _fail(f'Δεν βρέθηκε χρήστης «{user_identifier}». Ο χρήστης πρέπει πρώτα να δημιουργήσει λογαριασμό.',
+                         f'user not found: {user_identifier}', 404)
+
+        previous_role = None
+        for _ug in grp.user_groups:
+            if _ug.user_id == user.id:
+                previous_role = _ug.role
+                break
+
+        # Check if assigning admin role and group already has an admin (άλλον από τον ίδιο τον χρήστη)
+        if role == 'admin' and previous_role != 'admin':
             existing_admins = [ug for ug in grp.user_groups if ug.role == 'admin']
             if existing_admins:
-                return jsonify({'ok': False, 'error': 'η ομάδα έχει ήδη διαχειριστή'}), 400
-        
+                return _fail('Η ομάδα έχει ήδη διαχειριστή· ο χρήστης μπορεί να προστεθεί μόνο ως μέλος.',
+                             'η ομάδα έχει ήδη διαχειριστή', 400)
+
         # Add user to group with specified role
         user.add_to_group(grp, role=role)
         db.session.commit()
-        
+
+        # Ειδοποίηση προς τον χρήστη (προσθήκη ή αλλαγή ρόλου)
+        if previous_role is None:
+            _notify_group_change(user, grp.name, 'added', role=role, actor=getattr(current_user, 'username', None))
+        elif previous_role != role:
+            _notify_group_change(user, grp.name, 'role', role=role, actor=getattr(current_user, 'username', None))
+
         # append to group activity log (structured)
         try:
             _append_group_log(grp, {
@@ -960,7 +1010,14 @@ def assign_user_to_group():
         except Exception:
             pass
 
-        flash(f'Ο χρήστης {user.username} προστέθηκε στην ομάδα {group_name} ως {role}', 'success')
+        _role_el = 'Διαχειριστής' if role == 'admin' else 'Μέλος'
+        if previous_role is None:
+            flash(f'Ο χρήστης {user.username} προστέθηκε στην ομάδα «{group_name}» ως {_role_el}. '
+                  f'Θα ειδοποιηθεί την επόμενη φορά που θα ανοίξει μια σελίδα.', 'success')
+        elif previous_role != role:
+            flash(f'Ο ρόλος του χρήστη {user.username} στην ομάδα «{group_name}» άλλαξε σε {_role_el}.', 'success')
+        else:
+            flash(f'Ο χρήστης {user.username} είναι ήδη {_role_el} στην ομάδα «{group_name}».', 'info')
         return redirect(url_for('auth.list_groups'))
     except Exception as e:
         current_app.logger.exception('Error assigning user to group')
@@ -1079,11 +1136,18 @@ def assign_user_to_group_legacy():
     # Allow users to be admin in multiple groups
     # Removed restriction: users can now be admin in multiple groups
 
-    # assign role
-    db.session.commit()
+    previous_role = None
+    for _ug in grp.user_groups:
+        if _ug.user_id == user.id:
+            previous_role = _ug.role
+            break
     # assign role
     user.add_to_group(grp, role=role)
     db.session.commit()
+    if previous_role is None:
+        _notify_group_change(user, grp.name, 'added', role=role, actor=getattr(current_user, 'username', None))
+    elif previous_role != role:
+        _notify_group_change(user, grp.name, 'role', role=role, actor=getattr(current_user, 'username', None))
 
     # log the assignment in the group's activity log (structured)
     try:
@@ -1151,6 +1215,7 @@ def remove_member():
         
         db.session.delete(ug)
         db.session.commit()
+        _notify_group_change(target, group_name, 'removed', actor=getattr(current_user, 'username', None))
         # structured log for removal
         try:
             _append_group_log(grp, {
@@ -1700,6 +1765,65 @@ def api_user():
     if getattr(current_user, 'is_authenticated', False):
         return jsonify({'authenticated': True, 'username': current_user.username, 'groups': [g.name for g in current_user.groups]})
     return jsonify({'authenticated': False})
+
+
+@auth_bp.route('/api/group_notices', methods=['GET'])
+def api_group_notices():
+    """Μη διαβασμένες ειδοποιήσεις συμμετοχής σε ομάδες για τον συνδεδεμένο χρήστη."""
+    if not getattr(current_user, 'is_authenticated', False):
+        return jsonify({'ok': True, 'notices': []})
+    try:
+        rows = (GroupNotice.query.filter_by(user_id=current_user.id, seen_at=None)
+                .order_by(GroupNotice.created_at.asc(), GroupNotice.id.asc()).limit(20).all())
+        active = session.get('active_group')
+        member_of = set()
+        try:
+            member_of = {ug.group.name for ug in current_user.user_groups if ug.group}
+        except Exception:
+            pass
+        out = []
+        for r in rows:
+            out.append({
+                'id': r.id,
+                'group': r.group_name,
+                'action': r.action,
+                'role': r.role,
+                'actor': r.actor,
+                'created_at': r.created_at.isoformat() + 'Z' if r.created_at else None,
+                # Αν η ομάδα έχει διαγραφεί / ο χρήστης δεν είναι πια μέλος, δεν προτείνεται «επιλογή ομάδας».
+                'is_member': r.group_name in member_of,
+                'is_active': (active == r.group_name),
+            })
+        return jsonify({'ok': True, 'notices': out})
+    except Exception:
+        current_app.logger.exception('api_group_notices failed')
+        return jsonify({'ok': False, 'notices': []}), 500
+
+
+@auth_bp.route('/api/group_notices/ack', methods=['POST'])
+@login_required
+def api_group_notices_ack():
+    """Σημειώνει τις ειδοποιήσεις ως διαβασμένες (ids ή όλες)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        ids = payload.get('ids')
+        q = GroupNotice.query.filter_by(user_id=current_user.id, seen_at=None)
+        if isinstance(ids, list) and ids:
+            q = q.filter(GroupNotice.id.in_([int(i) for i in ids if str(i).isdigit()]))
+        n = 0
+        now = datetime.datetime.utcnow()
+        for row in q.all():
+            row.seen_at = now
+            n += 1
+        db.session.commit()
+        return jsonify({'ok': True, 'acked': n})
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        current_app.logger.exception('api_group_notices_ack failed')
+        return jsonify({'ok': False}), 500
 
 
 @auth_bp.route('/api/user_groups', methods=['GET'])
