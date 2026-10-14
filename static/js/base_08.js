@@ -1705,8 +1705,50 @@
         }
       }
 
+      // ── Επιστροφή στη σελίδα που φορτώθηκε ΑΡΧΙΚΑ με πλήρη φόρτωση ─────────────────────────────────────────────
+      // Τα inline scripts της αρχικής φόρτωσης δηλώνουν global `let/const`. Όταν η ίδια σελίδα ξαναφορτωθεί με partial
+      // navigation, τα scripts εκτελούνται ξανά (με let/const→var) και η δήλωση συγκρούεται με το ήδη υπάρχον global
+      // lexical binding → «Identifier '…' has already been declared» και ΟΛΟΚΛΗΡΟ το script μπλοκ δεν τρέχει (μισοδεμένη
+      // σελίδα: κουμπιά/επιλογές που δεν δουλεύουν μέχρι ανανέωση). Για την αρχική σελίδα γίνεται πλήρης φόρτωση.
+      const __initialPagePath = normalizePath(window.location.pathname);
+      let __initialHasLexical = null;
+      function initialPageHasLexicalDecls() {
+        if (__initialHasLexical !== null) return __initialHasLexical;
+        let risky = false;
+        try {
+          [document.getElementById('appShell'), document.getElementById('appPageScripts')].forEach(function(host) {
+            if (!host || risky) return;
+            host.querySelectorAll('script').forEach(function(s) {
+              if (risky) return;
+              if (s.getAttribute('src')) { risky = true; return; }
+              if (/^\s*(let|const)\s/m.test(s.textContent || '')) risky = true;
+            });
+          });
+        } catch (_) { risky = true; }
+        __initialHasLexical = risky;
+        return risky;
+      }
+      // Πρέπει να υπολογιστεί όσο το DOM είναι ακόμη το αρχικό (πριν την πρώτη αλλαγή σελίδας).
+      try { window.__runOnPageReady(function() { initialPageHasLexicalDecls(); }); } catch (_) { try { initialPageHasLexicalDecls(); } catch (_e) {} }
+
+      function mustFullLoad(url) {
+        try {
+          if (normalizePath(url.pathname) !== __initialPagePath) return false;
+          return initialPageHasLexicalDecls();
+        } catch (_) { return false; }
+      }
+
+      function fullLoad(url, options) {
+        try {
+          if (String(url.href) === String(window.location.href)) { window.location.reload(); return; }
+          if (options && options.replaceState) { window.location.replace(url.toString()); return; }
+          window.location.assign(url.toString());
+        } catch (_) { window.location.href = url.toString(); }
+      }
+
       async function swapPage(url, options) {
         options = options || {};
+        if (mustFullLoad(url)) { fullLoad(url, options); return; }
         if (navInFlight) navInFlight.abort();
         navInFlight = new AbortController();
 
@@ -1840,12 +1882,26 @@
         }
 
         startPageListenerCapture();
+        let __redeclared = false;
+        const __onScriptError = function(ev) {
+          try {
+            if (/has already been declared/i.test(String((ev && ev.message) || ''))) __redeclared = true;
+          } catch (_) {}
+        };
+        window.addEventListener('error', __onScriptError, true);
         try {
           await runPageScripts(shell, nextScripts, scriptsHost);
         } catch (e) {
           console.warn('page scripts execution failed after partial swap', e);
         } finally {
+          window.removeEventListener('error', __onScriptError, true);
           stopPageListenerCaptureLater();
+        }
+        if (__redeclared) {
+          // Η σελίδα θα έμενε μισοδεμένη: ξαναφόρτωση ολόκληρης της σελίδας (το URL έχει ήδη γίνει pushState).
+          try { _navBar.done(); } catch (_) {}
+          window.location.reload();
+          return;
         }
 
         initSearchRepeatProfileHintSync(url.pathname);
@@ -1994,6 +2050,102 @@
           });
         } catch (_) {}
       }, true);
+
+      // ── Πελάτες: ορισμός ενεργού πελάτη — δίχτυ ασφαλείας ανεξάρτητο από το αν/πότε δέθηκαν τα scripts της σελίδας ──
+      // Μετά από partial navigation τα handlers της σελίδας δένονται στο ΤΕΛΟΣ της εκτέλεσης των scripts (DOMContentLoaded
+      // replay)· μέχρι τότε (ή αν κάποιο script αποτύχει) η επιλογή γραμμής / το κουμπί «Ορισμός ως ενεργό» δεν έκαναν τίποτα
+      // μέχρι reload. Οι delegated listeners στο document επιβιώνουν κάθε αλλαγής σελίδας και είναι idempotent.
+      (function(){
+        if (window.__credDelegatedBound) return;
+        window.__credDelegatedBound = true;
+
+        function credTable() { return document.getElementById('credentialsTable'); }
+        function syncBtn() {
+          try {
+            if (typeof window.__syncSetActiveBtn === 'function') { window.__syncSetActiveBtn(); return; }
+          } catch (_) {}
+          const t = credTable();
+          const btn = document.getElementById('setActiveBtn');
+          if (!t || !btn) return;
+          const sel = t.querySelector('input[name="active_name"]:checked');
+          const active = t.dataset.activeName || '';
+          btn.disabled = !sel || sel.value === active;
+          btn.textContent = !sel ? 'Ορισμός ως ενεργό' : (sel.value === active ? '✓ Ήδη ενεργός πελάτης' : 'Ορισμός «' + sel.value + '» ως ενεργό');
+        }
+        function highlight() {
+          const t = credTable();
+          if (!t) return;
+          t.querySelectorAll('tbody tr').forEach(function(tr) {
+            const r = tr.querySelector('input[name="active_name"]');
+            tr.classList.toggle('cred-selected', !!(r && r.checked));
+          });
+        }
+
+        // Κλικ σε γραμμή → επιλογή του radio (όπως στο handler της σελίδας· idempotent)
+        document.addEventListener('click', function(e) {
+          const t = credTable();
+          if (!t || !e.target || !t.contains(e.target)) return;
+          if (e.target.closest('button, input, a, label, th, select, textarea')) return;
+          const tr = e.target.closest('tbody tr');
+          if (!tr) return;
+          const radio = tr.querySelector('input[type="radio"][name="active_name"]');
+          if (radio && !radio.checked) {
+            radio.checked = true;
+            highlight();
+            syncBtn();
+          }
+        }, true);
+
+        document.addEventListener('change', function(e) {
+          if (e.target && e.target.matches && e.target.matches('#credentialsTable input[name="active_name"]')) {
+            highlight();
+            syncBtn();
+          }
+        }, true);
+
+        // Υποβολή: αν το handler της σελίδας είναι ήδη δεμένο (partialBound) δεν κάνουμε τίποτα.
+        document.addEventListener('submit', function(e) {
+          const form = e.target;
+          if (!form || form.id !== 'setActiveCredentialForm' || form.dataset.partialBound === '1') return;
+          const sel = form.querySelector('input[name="active_name"]:checked');
+          if (!sel) return;                       // το server θα απαντήσει με μήνυμα
+          e.preventDefault();
+          e.stopPropagation();
+          const name = sel.value;
+          const btn = document.getElementById('setActiveBtn');
+          if (btn) btn.disabled = true;
+          fetch(form.action, {
+            method: 'POST', body: new FormData(form), credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip', 'Accept': 'application/json' }
+          })
+            .then(function(r) { return r.json().catch(function() { return null; }).then(function(j) { return { ok: r.ok && j && j.ok === true, j: j }; }); })
+            .then(function(res) {
+              if (!res.ok) {
+                const msg = (res.j && (res.j.error || res.j.message)) || 'Αποτυχία ορισμού ενεργού πελάτη.';
+                if (typeof window.showFlash === 'function') window.showFlash(msg, 'error', 5000);
+                syncBtn();
+                return;
+              }
+              const t = credTable();
+              if (typeof window.updateActiveCredentialInDOM === 'function') {
+                try { window.updateActiveCredentialInDOM(name); } catch (_) {}
+              } else if (t) {
+                t.dataset.activeName = name;
+              }
+              try { if (res.j.vat && document.body) document.body.dataset.activeVat = String(res.j.vat); } catch (_) {}
+              const ban = document.getElementById('globalNoCredentialBanner');
+              if (ban) ban.remove();
+              highlight();
+              syncBtn();
+              if (typeof window.showFlash === 'function') window.showFlash(res.j.message || 'Ο ενεργός πελάτης ορίστηκε.', 'success', 4000);
+              try { window.dispatchEvent(new CustomEvent('app:active-customer-changed', { detail: { name: name } })); } catch (_) {}
+            })
+            .catch(function() {
+              // δίκτυο/απρόσμενη απάντηση: κλασική υποβολή (full reload) ώστε ο ορισμός να ολοκληρωθεί οπωσδήποτε
+              try { form.submit(); } catch (_) {}
+            });
+        }, true);
+      })();
 
       window.addEventListener('popstate', function(event) {
         if (!event.state || !event.state.partialNav) return;

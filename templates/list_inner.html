@@ -39,7 +39,7 @@
       </div>
       <div id="deleteSpinner" class="ml-2 hidden text-gray-700">Αποστολή…</div>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="list-pagebar">
       <span id="tabulatorStatus" class="text-sm font-medium" style="color: #4b5563;"></span>
       <label class="flex items-center gap-2 text-sm text-gray-700 font-medium">
         Εγγραφές/σελίδα:
@@ -52,6 +52,17 @@
       </label>
     </div>
     <style>
+            /* Γραμμή «Σύνολο εγγραφών / Επιλεγμένες» + «Εγγραφές/σελίδα»: κοινή κατακόρυφη στοίχιση.
+               Το global CSS έδινε στο label margin-bottom (~8px) και ανέβαζε το select σε σχέση με το κείμενο. */
+            .list-pagebar { display: flex; align-items: center; gap: 14px; margin-left: auto; flex-wrap: nowrap; justify-content: flex-end; }
+            html body .list-pagebar > *, html body .list-pagebar label { margin: 0 !important; }
+            html body .list-pagebar #tabulatorStatus {
+              display: inline-flex; align-items: center; min-height: 38px; line-height: 1.2; white-space: nowrap;
+              font-variant-numeric: tabular-nums; text-align: right;
+            }
+            html body .list-pagebar label { min-height: 38px; white-space: nowrap; }
+            html body .list-pagebar select { height: 38px; }
+
             /* Base text color for table cells in light mode */
             body .summary-table td,
             body .summary-table tbody tr td,
@@ -737,9 +748,86 @@
         renderUndoMenu();
       }
 
+      // Μετά από εξαγωγή (Excel / γέφυρα / zip / .ld) το ιστορικό αναίρεσης διαγραφής σβήνεται: ο server κρατά τη στιγμή της
+      // τελευταίας εξαγωγής ανά πελάτη· ό,τι διαγραφή έγινε πριν από αυτήν δεν επιτρέπεται να επαναφερθεί.
+      async function syncUndoWithServer(){
+        try{
+          if(!undoState.stack.length) return;
+          const q = ACTIVE_CUSTOMER_VAT ? ('?vat=' + encodeURIComponent(ACTIVE_CUSTOMER_VAT)) : '';
+          const res = await fetch('/delete/undo/state' + q, {
+            credentials: 'same-origin', cache: 'no-store',
+            headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' }
+          });
+          if(!res.ok) return;
+          const j = await res.json().catch(()=>null);
+          const ts = Number(j && j.last_export_ts) || 0;
+          if(!ts) return;
+          const before = undoState.stack.length;
+          undoState.stack = undoState.stack.filter(x => Number(x && x.created_ts || 0) > ts);
+          if(undoState.stack.length !== before){ saveUndoState(); renderUndoMenu(); }
+        }catch(_){ }
+      }
+      function clearUndoNow(){
+        try{
+          if(!undoState.stack.length) return;
+          undoState.stack = [];
+          saveUndoState();
+          renderUndoMenu();
+        }catch(_){ }
+      }
+      window.FBP_UNDO_SYNC = syncUndoWithServer;
+
+      // Λήψη Excel από το μενού της λίστας: καθαρίζει αμέσως το ιστορικό (ο server το κάνει στο ίδιο request).
+      document.addEventListener('click', function(e){
+        try{
+          const a = e.target && e.target.closest ? e.target.closest('#downloadMenu a.download-menu-item') : null;
+          if(!a) return;
+          const href = String(a.getAttribute('href') || '');
+          if(/[?&]download=1/.test(href)) clearUndoNow();
+        }catch(_){ }
+      }, true);
+
+      // Επιστροφή στην καρτέλα (π.χ. μετά από εξαγωγή γέφυρας σε άλλη σελίδα/καρτέλα): έλεγχος ιστορικού + σιωπηλή ανανέωση.
+      (function(){
+        const prev = window.__listFocusHandlers;
+        if(prev){
+          window.removeEventListener('focus', prev.kick);
+          document.removeEventListener('visibilitychange', prev.vis);
+        }
+        let last = Date.now();
+        let busy = false;
+        const quiet = function(){
+          try{
+            if(document.hidden || busy) return false;
+            if(!document.getElementById('summary-container')) return false;
+            if(Date.now() - last < 45000) return false;           // όχι πιο συχνά από ~45''
+            const q = (document.getElementById('globalSearch') || {}).value || '';
+            if(String(q).trim() !== '') return false;             // δεν διακόπτουμε ενεργή αναζήτηση
+            const tab = window.FBP_TABULATOR;
+            if(tab && typeof tab.getSelectedData === 'function' && (tab.getSelectedData() || []).length) return false;   // ούτε επιλογή γραμμών
+            const modalOpen = Array.from(document.querySelectorAll('[role="dialog"], .modal, [id$="Modal"]')).some(function(m){
+              try{ return m.offsetParent !== null && getComputedStyle(m).display !== 'none' && getComputedStyle(m).visibility !== 'hidden' && !m.classList.contains('hidden'); }catch(_){ return false; }
+            });
+            if(modalOpen) return false;
+            return true;
+          }catch(_){ return false; }
+        };
+        const kick = function(){
+          try{ syncUndoWithServer(); }catch(_){ }
+          if(!quiet()) return;
+          busy = true;
+          Promise.resolve(refreshListFragmentDeduped()).catch(function(){}).then(function(){ last = Date.now(); busy = false; });
+        };
+        const vis = function(){ if(!document.hidden) kick(); };
+        window.__listFocusHandlers = { kick: kick, vis: vis };
+        window.addEventListener('focus', kick);
+        document.addEventListener('visibilitychange', vis);
+      })();
+
       document.addEventListener('DOMContentLoaded', function(){
         loadUndoState();
         renderUndoMenu();
+        syncUndoWithServer();
         const btn = document.getElementById('deleteUndoBtn');
         const menu = document.getElementById('deleteUndoMenu');
         if(btn && !btn.dataset.boundUndo){

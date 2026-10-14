@@ -17683,6 +17683,7 @@ def list_invoices():
             except Exception as read_err:
                 current_app.logger.warning(f"Could not read Excel for row count: {read_err}")
             
+            _record_export_event((active or {}).get("vat") if isinstance(active, dict) else None, "excel")
             log_user_activity(
                 user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
                 group_name=grp.name if grp else 'unknown',
@@ -18731,6 +18732,47 @@ def _record_exported_marks(vat: str, marks) -> int:
         return 0
 
 
+def _last_export_marker_path(vat: str) -> str:
+    vat = str(vat or "").strip()
+    return os.path.join(group_path("epsilon"), f"{vat}_last_export.json")
+
+
+def _last_export_ts(vat: str) -> int:
+    """Χρονική στιγμή (unix) της τελευταίας εξαγωγής (Excel / γέφυρα / zip / .ld) του πελάτη. 0 αν δεν υπάρχει."""
+    try:
+        data = _safe_json_read(_last_export_marker_path(vat), default={})
+        return int((data or {}).get("ts") or 0) if isinstance(data, dict) else 0
+    except Exception:
+        return 0
+
+
+def _record_export_event(vat, kind: str = "") -> None:
+    """Καταγράφει ότι τα παραστατικά του πελάτη εξήχθησαν και ακυρώνει το ιστορικό «Αναίρεση διαγραφής».
+
+    Μετά από εξαγωγή δεν επιτρέπεται επαναφορά διαγραμμένων παραστατικών (θα ήταν ασυμφωνία με ό,τι έχει ήδη
+    παραδοθεί). Ο δείκτης αποθηκεύεται σε αρχείο (ισχύει σε όλους τους χρήστες/workers) και καθαρίζεται και η
+    in-memory στοίβα του server.
+    """
+    try:
+        vat = str(vat or "").strip()
+        if not vat:
+            vat = str((get_active_credential_from_session() or {}).get("vat") or "").strip()
+        if not vat:
+            return
+        path = _last_export_marker_path(vat)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"ts": int(time.time()), "kind": str(kind or "")}, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        log.exception("Failed to record export event for vat=%s", vat)
+    try:
+        _clear_delete_undo_for_vat(vat)
+    except Exception:
+        log.exception("Failed to clear delete-undo stacks after export (vat=%s)", vat)
+
+
 @app.route("/epsilon/preview")
 def epsilon_preview():
     vat = (request.args.get("vat") or (get_active_credential_from_session() or {}).get("vat") or "").strip()
@@ -18979,6 +19021,8 @@ def export_fastimport_kinitseis():
                 _record_exported_marks(vat, _exported_now)
         except Exception:
             current_app.logger.exception("Failed to record exported marks after export")
+        # Εξαγωγή = οριστικοποίηση: καθαρίζει το ιστορικό «Αναίρεση διαγραφής» του πελάτη.
+        _record_export_event(vat, "ld" if want_ld else "bridge")
 
         # --- ΝΕΟ: αν ζητήθηκε .ld, στείλε το αρχείο HyperLog αντί για xlsx/zip ---
         if want_ld:
@@ -19415,6 +19459,7 @@ def export_fastimport_backup():
             _record_exported_marks(vat, exported_now)
     except Exception:
         current_app.logger.exception("backup: failed to record exported marks")
+    _record_export_event(vat, "backup")
 
     try:
         from utils import log_user_activity
@@ -19512,6 +19557,33 @@ def _push_delete_undo_entry(entry: Dict[str, Any]):
     DELETE_UNDO_STACKS[scope_key] = stack[:DELETE_UNDO_MAX]
 
 
+def _clear_delete_undo_for_vat(vat) -> int:
+    """Αφαιρεί από τη μνήμη όλες τις στοίβες αναίρεσης (όλων των χρηστών) της ενεργής ομάδας για τον πελάτη."""
+    vat = str(vat or "").strip()
+    if not vat:
+        return 0
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        group_name = str(getattr(grp, "name", "") or "default").strip() or "default"
+    except Exception:
+        group_name = "default"
+    needle = f":{group_name}:{vat}:"
+    keys = [k for k in list(DELETE_UNDO_STACKS.keys()) if needle in k]
+    for k in keys:
+        DELETE_UNDO_STACKS.pop(k, None)
+    return len(keys)
+
+
+@app.route("/delete/undo/state", methods=["GET"])
+def delete_undo_state():
+    """Για τον client: από πότε ισχύει η αναίρεση (ό,τι δημιουργήθηκε πριν την τελευταία εξαγωγή δεν επιτρέπεται)."""
+    vat = str(request.args.get("vat") or "").strip()
+    if not vat:
+        vat = str((get_active_credential_from_session() or {}).get("vat") or "").strip()
+    return jsonify({"ok": True, "vat": vat, "last_export_ts": _last_export_ts(vat) if vat else 0})
+
+
 def _extract_mark_from_any(item: Any) -> str:
     if not isinstance(item, dict):
         return ""
@@ -19557,6 +19629,19 @@ def delete_undo():
             return jsonify({"ok": False, "error": msg}), 404
         flash(msg, "error")
         return redirect(url_for("search"))
+
+    # Αν μετά τη διαγραφή έγινε εξαγωγή (Excel/γέφυρα/zip), η επαναφορά δεν επιτρέπεται.
+    try:
+        _entry_vat = str(entry.get("customer_vat") or "").strip()
+        if _entry_vat and int(entry.get("created_ts") or 0) <= _last_export_ts(_entry_vat):
+            stack.pop(idx)
+            msg = "Η αναίρεση δεν είναι πλέον διαθέσιμη: τα παραστατικά έχουν εξαχθεί μετά τη διαγραφή."
+            if is_ajax_request:
+                return jsonify({"ok": False, "error": msg}), 410
+            flash(msg, "error")
+            return redirect(url_for("search"))
+    except Exception:
+        log.exception("delete_undo: export check failed")
 
     restored_excel = 0
     restored_epsilon = 0

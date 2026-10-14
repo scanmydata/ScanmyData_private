@@ -45,7 +45,7 @@
      to be re-sent as HTML on every page load. Keep the Jinja expressions here
      identical to the ones they replaced. #}
   <script>window.APP_CONFIG = {
-    activeYear: {{ active_year|default('null') }},
+    activeYear: {{ (active_year|tojson) if active_year is not none else 'null' }},
     activeCredentialVat: {{ (active_credential_vat or "")|tojson }}
   };</script>
   <script src="{{ url_for('static', filename='session_manager.js') }}"></script>
@@ -274,7 +274,10 @@
         </div>
       </div>
       {% if not active_group %}
-      <a href="{{ url_for('auth.list_groups') }}" class="smd-btn smd-btn-primary">Επιλογή ομάδας →</a>
+      {# ίδια συμπεριφορά με το chip «Ενεργή ομάδα» του header: ανοίγει το side menu με τις ομάδες #}
+      <a href="{{ url_for('auth.list_groups') }}" onclick="return window.openHeaderGroupSwitcher ? window.openHeaderGroupSwitcher(event) : true;" class="smd-btn smd-btn-primary">Επιλογή ομάδας →</a>
+      {% elif request.path.rstrip('/') == '/credentials' %}
+      <button type="button" class="smd-btn smd-btn-primary" onclick="var t=document.getElementById('credentialsTable')||document.getElementById('credentialSearch');if(t){t.scrollIntoView({block:'center',behavior:'smooth'});}var s=document.getElementById('credentialSearch');if(s){s.focus({preventScroll:true});}">Επιλέξτε από τη λίστα ↓</button>
       {% else %}
       <a href="{{ url_for('credentials') }}" class="smd-btn smd-btn-primary">Επιλογή πελάτη →</a>
       {% endif %}
