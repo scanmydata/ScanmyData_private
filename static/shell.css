@@ -1,0 +1,178 @@
+/* ScanmyData — κέλυφος εφαρμογής: header (πλοήγηση + πλαίσιο εργασίας) και side menu.
+   Φορτώνεται ΜΕΤΑ το app.css· τα χρώματα με !important γιατί το global theme βάφει a/span/button/select. */
+:root {
+  --sh-card: #ffffff; --sh-text: #0f172a; --sh-muted: #5b6b82; --sh-line: #e2e8f0; --sh-soft: #f1f5f9;
+  --sh-accent: #0284c7; --sh-accent-soft: #e0f2fe; --sh-emerald: #059669; --sh-emerald-soft: #d1fae5;
+  --sh-danger: #dc2626; --sh-danger-soft: #fee2e2;
+}
+:root[data-theme="dark"] {
+  --sh-card: #0f1b33; --sh-text: #e5edf9; --sh-muted: #9fb0c8; --sh-line: #243148; --sh-soft: #162544;
+  --sh-accent: #38bdf8; --sh-accent-soft: #0c2a45; --sh-emerald: #34d399; --sh-emerald-soft: #0b2f27;
+  --sh-danger: #f87171; --sh-danger-soft: #3b1418;
+}
+
+/* =====================  HEADER  ===================== */
+html body header.mb-6 {
+  background: var(--sh-card) !important;
+  border: 1px solid var(--sh-line) !important;
+  border-radius: 22px;
+  padding: 10px 20px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .08);
+}
+:root[data-theme="dark"] header.mb-6 { box-shadow: 0 14px 34px rgba(0, 0, 0, .45); }
+html body header.mb-6 .layout-header { gap: 20px; }
+html body header.mb-6 .layout-header__brand .logo-img { height: 80px; width: auto; }
+
+/* πλοήγηση: pills */
+html body header.mb-6 .layout-header__nav { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+html body header.mb-6 .layout-header__nav a {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 9999px;
+  font-size: 13.5px; font-weight: 600; line-height: 1.2; letter-spacing: 0;
+  background: transparent !important; color: var(--sh-muted) !important; border: 1px solid transparent !important;
+  box-shadow: none !important; transform: none; transition: background-color .14s ease, color .14s ease, border-color .14s ease;
+}
+html body header.mb-6 .layout-header__nav a:hover {
+  background: var(--sh-soft) !important; color: var(--sh-text) !important; border-color: var(--sh-line) !important;
+  box-shadow: none !important; transform: none; filter: none;
+}
+html body header.mb-6 .layout-header__nav a.bg-sky-600,
+html body header.mb-6 .layout-header__nav a.bg-sky-600:hover {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; border-color: transparent !important;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .3) !important;
+}
+html body header.mb-6 .layout-header__nav a.bg-red-600 {
+  background: var(--sh-danger-soft) !important; color: var(--sh-danger) !important; border-color: var(--sh-danger) !important;
+}
+html body header.mb-6 .layout-header__nav a.bg-red-600:hover { background: var(--sh-danger) !important; color: #fff !important; }
+
+/* δεξιά χειριστήρια */
+html body header.mb-6 #sideMenuToggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 9999px; font-size: 13.5px; font-weight: 700;
+  background: var(--sh-soft) !important; color: var(--sh-text) !important; border: 1px solid var(--sh-line) !important; box-shadow: none !important;
+}
+html body header.mb-6 #sideMenuToggle:hover { background: var(--sh-accent-soft) !important; border-color: var(--sh-accent) !important; }
+html body header.mb-6 a[href*="login"] {
+  padding: 8px 16px !important; border-radius: 9999px !important; font-weight: 700; font-size: 13.5px;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; box-shadow: 0 6px 16px rgba(37, 99, 235, .3);
+}
+
+/* γραμμή πλαισίου εργασίας: ενεργός πελάτης · ενεργή ομάδα · χρήση */
+html body header.mb-6 .layout-header__year-row {
+  gap: 10px; padding: 6px 8px; border-radius: 9999px; background: var(--sh-soft); border: 1px solid var(--sh-line);
+}
+html body header.mb-6 .layout-header__year-row > label,
+html body header.mb-6 .layout-header__year-row span.text-gray-500 {
+  font-size: 11px !important; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--sh-muted) !important;
+}
+html body header.mb-6 .layout-header__active-customer a,
+html body header.mb-6 .layout-header__active-group a {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px !important; border-radius: 9999px; font-size: 13px !important; font-weight: 700;
+  line-height: 1.2; text-decoration: none; box-shadow: none !important; transform: none !important;
+}
+html body header.mb-6 .layout-header__active-customer a::before,
+html body header.mb-6 .layout-header__active-group a::before {
+  content: ""; width: 8px; height: 8px; border-radius: 9999px; background: currentColor; opacity: .85; flex: none;
+}
+html body header.mb-6 .layout-header__active-customer a.bg-sky-600 {
+  background: var(--sh-accent-soft) !important; color: var(--sh-accent) !important; border: 1px solid var(--sh-accent) !important;
+}
+html body header.mb-6 .layout-header__active-group a.bg-emerald-600 {
+  background: var(--sh-emerald-soft) !important; color: var(--sh-emerald) !important; border: 1px solid var(--sh-emerald) !important;
+}
+html body header.mb-6 .layout-header__active-customer a.bg-gray-100,
+html body header.mb-6 .layout-header__active-group a.bg-gray-100 {
+  background: var(--sh-card) !important; color: var(--sh-muted) !important; border: 1px dashed var(--sh-line) !important;
+}
+html body header.mb-6 #fiscalYearSelect {
+  padding: 4px 10px; border-radius: 9999px; font-size: 13px; font-weight: 700;
+  background: var(--sh-card) !important; color: var(--sh-text) !important; border: 1px solid var(--sh-line) !important;
+}
+@media (max-width: 900px) {
+  html body header.mb-6 .layout-header__year-row { border-radius: 16px; flex-wrap: wrap; }
+}
+
+/* =====================  SIDE MENU  ===================== */
+html body #sideMenu {
+  width: 340px; max-width: 92vw; padding: 0; background: var(--sh-card) !important; border-left: 1px solid var(--sh-line) !important;
+  box-shadow: -20px 0 50px rgba(2, 6, 23, .25);
+}
+.sm2 { min-height: 100%; display: flex; flex-direction: column; padding: 18px 18px 84px; gap: 18px; }  /* κάτω περιθώριο: να μην καλύπτει το κουμπί support την «Αποσύνδεση» */
+.sm2-head { display: flex; align-items: center; justify-content: space-between; }
+html body .sm2 .sm2-brand { font-size: 20px; font-weight: 800; color: var(--sh-text) !important; }
+html body .sm2 button.sm2-close {
+  width: 36px; height: 36px; border-radius: 9999px; font-size: 16px; line-height: 1; cursor: pointer; padding: 0;
+  background: var(--sh-soft) !important; color: var(--sh-muted) !important; border: 1px solid var(--sh-line) !important; box-shadow: none !important;
+}
+html body .sm2 button.sm2-close:hover { color: var(--sh-text) !important; border-color: var(--sh-accent) !important; }
+
+.sm2-user {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 18px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, .14), rgba(124, 58, 237, .14)); border: 1px solid var(--sh-line);
+}
+.sm2-avatar {
+  width: 42px; height: 42px; border-radius: 14px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 20px;
+  background: var(--sh-card); border: 1px solid var(--sh-line);
+}
+.sm2-userinfo { flex: 1; min-width: 0; }
+html body .sm2 .sm2-user-label { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--sh-muted) !important; }
+html body .sm2 .sm2-user-name { font-size: 15px; font-weight: 800; color: var(--sh-text) !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html body .sm2 a.sm2-gear {
+  width: 38px; height: 38px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; flex: none;
+  background: var(--sh-card) !important; color: var(--sh-muted) !important; border: 1px solid var(--sh-line) !important; text-decoration: none;
+}
+html body .sm2 a.sm2-gear:hover { color: var(--sh-accent) !important; border-color: var(--sh-accent) !important; }
+
+.sm2-sec { display: flex; flex-direction: column; gap: 4px; }
+.sm2-sec-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+html body .sm2 .sm2-sec-title {
+  font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--sh-muted) !important; padding: 0 4px; margin-bottom: 4px;
+}
+.sm2-sec-head .sm2-sec-title { margin-bottom: 0; }
+html body .sm2 a.sm2-small-link {
+  font-size: 12.5px; font-weight: 700; padding: 3px 10px; border-radius: 9999px; text-decoration: none;
+  background: var(--sh-accent-soft) !important; color: var(--sh-accent) !important;
+}
+html body .sm2 a.sm2-small-link.side-menu-active { background: var(--sh-accent) !important; color: #fff !important; }
+
+.sm2-groups { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+html body .sm2 .sm2-groups button {
+  width: 100%; text-align: left; padding: 9px 12px; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+  background: var(--sh-soft) !important; color: var(--sh-text) !important; border: 1px solid var(--sh-line) !important; box-shadow: none !important;
+  transition: border-color .14s ease, background-color .14s ease;
+}
+html body .sm2 .sm2-groups button:hover { border-color: var(--sh-accent) !important; background: var(--sh-accent-soft) !important; }
+
+html body .sm2 a.sm2-item {
+  display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 14px; text-decoration: none;
+  color: var(--sh-text) !important; background: transparent !important; border: 1px solid transparent !important;
+  transform: none !important; box-shadow: none !important; transition: background-color .14s ease, border-color .14s ease;
+}
+html body .sm2 a.sm2-item:hover { background: var(--sh-soft) !important; border-color: var(--sh-line) !important; }
+html body .sm2 a.sm2-item.side-menu-active {
+  background: var(--sh-accent-soft) !important; border-color: var(--sh-accent) !important; color: var(--sh-accent) !important; box-shadow: none !important;
+}
+.sm2-ico {
+  width: 34px; height: 34px; border-radius: 11px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
+  background: var(--sh-soft); border: 1px solid var(--sh-line);
+}
+html body .sm2 a.sm2-item.side-menu-active .sm2-ico { background: var(--sh-card); border-color: var(--sh-accent); }
+html body .sm2 .sm2-lbl { font-size: 14.5px; font-weight: 600; color: inherit !important; }
+
+.sm2-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--sh-line); }
+html body .sm2 a.sm2-logout {
+  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 14px; border-radius: 14px; text-decoration: none;
+  font-weight: 700; font-size: 14.5px; background: var(--sh-danger-soft) !important; color: var(--sh-danger) !important;
+  border: 1px solid var(--sh-danger) !important;
+}
+html body .sm2 a.sm2-logout:hover { background: var(--sh-danger) !important; color: #fff !important; }
+html body .sm2 a.sm2-cta {
+  display: flex; align-items: center; justify-content: center; padding: 12px 14px; border-radius: 14px; text-decoration: none; font-weight: 800;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; margin-bottom: 8px;
+}
+
+@media (max-width: 640px) {
+  html body header.mb-6 { padding: 10px 12px; }
+  html body header.mb-6 .layout-header__nav { justify-content: flex-start; }
+  html body header.mb-6 .layout-header__nav a { padding: 6px 11px; font-size: 12.5px; }
+  html body header.mb-6 .layout-header__brand .logo-img { height: 60px; }
+}

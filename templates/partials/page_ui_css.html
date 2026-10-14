@@ -1,0 +1,90 @@
+{# Κοινό «κέλυφος» εμφάνισης για τις σελίδες Έλεγχος Ε3 και Λογιστικό Αποτέλεσμα (hero, καρτέλες, κάρτες, πεδία, κουμπιά).
+   Αγγίζει ΜΟΝΟ την εμφάνιση του περιβλήματος — όχι τους πίνακες αποτελεσμάτων/PDF. Μπαίνει στο content (partial navigation). #}
+<style id="pageUiCss">
+  .pg {
+    --pg-card: #ffffff; --pg-bg: #f4f7fb; --pg-text: #0f172a; --pg-muted: #5b6b82; --pg-line: #e2e8f0;
+    --pg-accent: #0284c7; --pg-accent-soft: #e0f2fe; --pg-input: #ffffff;
+  }
+  :root[data-theme="dark"] .pg {
+    --pg-card: #111c33; --pg-bg: #0b1324; --pg-text: #e5edf9; --pg-muted: #9fb0c8; --pg-line: #243148;
+    --pg-accent: #38bdf8; --pg-accent-soft: #0c2a45; --pg-input: #0b1324;
+  }
+
+  /* ---- Hero ---- */
+  .pg-hero {
+    display: flex; align-items: center; gap: 16px; padding: 20px 24px; margin-bottom: 18px; border-radius: 22px;
+    background: linear-gradient(135deg, #0369a1 0%, #2563eb 60%, #7c3aed 100%); box-shadow: 0 16px 36px rgba(37, 99, 235, .25);
+  }
+  .pg-hero-ico {
+    width: 52px; height: 52px; border-radius: 16px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 26px;
+    background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .3);
+  }
+  html body .pg .pg-hero h1 { color: #fff !important; font-size: 1.6rem; font-weight: 800; margin: 0; line-height: 1.2; }
+  html body .pg .pg-hero .pg-hero-sub { color: rgba(255, 255, 255, .92) !important; font-size: .95rem; line-height: 1.5; margin-top: 4px; max-width: 760px; }
+
+  /* ---- Καρτέλες (segmented pills) ---- */
+  .pg .brain-tabs, .pg > .flex.flex-wrap.gap-2, .pg .flex.flex-wrap.gap-2.mb-4 { gap: 8px; }
+  html body .pg button.brain-tab-button {
+    padding: 9px 18px; border-radius: 12px; font-weight: 700; font-size: 14px;
+    background: var(--pg-card) !important; color: var(--pg-muted) !important; border: 1px solid var(--pg-line) !important;
+    box-shadow: none !important; transition: border-color .14s ease, color .14s ease, background-color .14s ease;
+  }
+  html body .pg button.brain-tab-button:hover { border-color: var(--pg-accent) !important; color: var(--pg-text) !important; background: var(--pg-accent-soft) !important; }
+  html body .pg button.brain-tab-button.active {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; border-color: transparent !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, .28) !important;
+  }
+
+  /* ---- Κάρτες ---- */
+  html body .pg .bg-white.rounded-lg, html body .pg .bg-white.rounded, html body .pg .bg-white.border {
+    background: var(--pg-card) !important; border: 1px solid var(--pg-line) !important; border-radius: 20px !important;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, .06) !important;
+  }
+  html body .pg .bg-white h2, html body .pg .bg-white h3 { color: var(--pg-text) !important; }
+  html body .pg h2.text-lg { font-size: 1.08rem; font-weight: 800; }
+
+  /* ---- Πεδία ---- */
+  html body .pg input[type="text"], html body .pg input[type="password"], html body .pg input[type="number"],
+  html body .pg input[type="search"], html body .pg select, html body .pg textarea {
+    border-radius: 12px !important; border: 1px solid var(--pg-line) !important;
+    background-color: var(--pg-input) !important; color: var(--pg-text) !important; box-shadow: none !important;
+  }
+  html body .pg input[type="text"]:focus, html body .pg input[type="password"]:focus, html body .pg input[type="number"]:focus,
+  html body .pg select:focus, html body .pg textarea:focus {
+    border-color: var(--pg-accent) !important; box-shadow: 0 0 0 3px rgba(14, 165, 233, .22) !important; outline: none;
+  }
+  html body .pg input:disabled, html body .pg select:disabled { opacity: .7; }
+  html body .pg input::placeholder { color: var(--pg-muted) !important; opacity: .8; }
+  html body .pg label.block, html body .pg label.text-xs, html body .pg label.text-sm { color: var(--pg-text) !important; font-weight: 700; }
+  html body .pg .text-gray-600, html body .pg .text-gray-500 { color: var(--pg-muted) !important; }
+
+  /* ---- Κουμπιά ---- */
+  html body .pg button.bg-sky-600, html body .pg button.bg-sky-600:hover {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; border: 0 !important;
+    border-radius: 12px; font-weight: 700; box-shadow: 0 8px 18px rgba(37, 99, 235, .28);
+  }
+  html body .pg button.bg-sky-600:hover { filter: brightness(1.06); }
+  html body .pg button.bg-emerald-600 {
+    background: linear-gradient(135deg, #10b981, #059669) !important; color: #fff !important; border: 0 !important;
+    border-radius: 12px; font-weight: 700;
+  }
+  html body .pg button.bg-red-600, html body .pg button.bg-red-500 { border-radius: 12px; font-weight: 700; }
+  html body .pg label.bg-gray-100 {
+    background: var(--pg-card) !important; color: var(--pg-text) !important; border: 1px solid var(--pg-line) !important;
+    border-radius: 12px !important; font-weight: 700;
+  }
+  html body .pg label.bg-gray-100:hover { border-color: var(--pg-accent) !important; background: var(--pg-accent-soft) !important; }
+  html body .pg .e3-action-button {
+    border-radius: 12px; font-weight: 700; background: var(--pg-card) !important; color: var(--pg-text) !important;
+    border: 1px solid var(--pg-line) !important;
+  }
+  html body .pg .e3-action-button:hover { border-color: var(--pg-accent) !important; background: var(--pg-accent-soft) !important; }
+  html body .pg .e3-action-menu { border-radius: 14px; border: 1px solid var(--pg-line); background: var(--pg-card) !important; box-shadow: 0 16px 36px rgba(2, 6, 23, .25); }
+  html body .pg .e3-action-item { color: var(--pg-text) !important; background: transparent !important; border-radius: 10px; }
+  html body .pg .e3-action-item:hover { background: var(--pg-accent-soft) !important; }
+
+  @media (max-width: 720px) {
+    .pg-hero { padding: 16px; flex-direction: column; align-items: flex-start; }
+    html body .pg .pg-hero h1 { font-size: 1.35rem; }
+  }
+</style>

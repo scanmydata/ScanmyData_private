@@ -36,7 +36,7 @@
         title: 'Φωτεινό / σκούρο θέμα',
         body: 'Αλλάξτε εμφάνιση με έναν διακόπτη· η επιλογή σας αποθηκεύεται στη συσκευή.' },
       { sel: '#sideMenu a[href="/manual"]', place: 'left',
-        enter: function () { openSideMenu(); }, leave: function () { closeSideMenu(); },
+        menu: true, enter: function () { openSideMenu(); }, leave: function () { closeSideMenu(); },
         title: 'Μενού και Οδηγός χρήσης',
         body: 'Από το <b>☰ Μενού</b> βρίσκετε τις ομάδες, τις ρυθμίσεις λογαριασμού (2FA, κωδικός) και τον <b>Οδηγό χρήσης</b> με αναλυτικές οδηγίες και δυνατότητα να ξαναδείτε οποιαδήποτε ενότητα.' },
       { sel: '#helpBotFab', place: 'left',
@@ -71,9 +71,9 @@
     fetch: { label: 'Λήψη', path: '/fetch', steps: [
       { sel: '#fetchModeTabs', place: 'bottom', title: 'Ατομική ή μαζική λήψη',
         body: 'Η <b>Ατομική</b> κατεβάζει τα παραστατικά του ενεργού πελάτη. Η <b>Μαζική</b> (διαχειριστές) τρέχει για πολλούς πελάτες ταυτόχρονα και μπορεί να διακοπεί.' },
-      { sel: ['#date_from', '#singleFetchPanel'], place: 'bottom', title: 'Περίοδος',
+      { sel: ['#date_from', '#singleFetchPanel'], place: 'bottom', title: 'Περίοδος', enter: clickTab('#singleFetchTabBtn'),
         body: 'Ορίστε «Από – Έως». Δείχνει και πότε έγινε η τελευταία λήψη, ώστε να συνεχίσετε από εκεί που σταματήσατε.' },
-      { sel: '#fetchSubmitBtn', place: 'top', title: 'Ανάκτηση',
+      { sel: '#fetchSubmitBtn', place: 'top', title: 'Ανάκτηση', enter: clickTab('#singleFetchTabBtn'),
         body: 'Η λήψη τρέχει στο παρασκήνιο με ένδειξη προόδου· μπορείτε να συνεχίσετε να δουλεύετε και θα ειδοποιηθείτε όταν τελειώσει.' }
     ] },
 
@@ -99,18 +99,18 @@
     e3: { label: 'Έλεγχος Ε3', path: '/e3_check', steps: [
       { sel: '#quickCheckTabBtn', place: 'bottom', title: 'Γρήγορος έλεγχος',
         body: 'Ανεβάστε το <b>ισοζύγιο</b> (Excel) και συγκρίνετέ το με τα δεδομένα myDATA και τα πεδία του εντύπου Ε3, ανά κωδικό, με τη διαφορά σε κάθε γραμμή.' },
-      { sel: ['#e3Credential', '#e3CredentialLocked'], place: 'bottom', title: 'Πελάτης και περίοδος',
+      { sel: ['#e3Credential', '#e3CredentialLocked'], place: 'bottom', title: 'Πελάτης και περίοδος', enter: clickTab('#quickCheckTabBtn'),
         body: 'Ο έλεγχος δουλεύει για τον ενεργό πελάτη· ορίστε το διάστημα «Από – Έως» και φορτώστε Ε3 / myDATA / ισοζύγιο.' },
       { sel: '#analyticTabBtn', place: 'bottom', title: 'Αναλυτικός έλεγχος (E3 Brain)',
         body: 'Συνδυάζει ΑΑΔΕ/ΓΕΜΗ, <b>ΕΦΚΑ / ΤΕΚΑ</b>, <b>ΚΕΑΟ</b>, μισθωτήρια και <b>Ε9/ΕΝΦΙΑ</b>, με αποθήκευση των PDF βεβαιώσεων. Υπάρχει ατομική και μαζική εκτέλεση, αποθηκευμένα στοιχεία και log ανακτήσεων.' }
     ] },
 
     ar: { label: 'Λογιστικό Αποτέλεσμα', path: '/accounting_result', steps: [
-      { sel: '#arTabSingleBtn', place: 'bottom', title: 'Ατομικός υπολογισμός',
+      { sel: '#arTabSingleBtn', place: 'bottom', title: 'Ατομικός υπολογισμός', enter: clickTab('#arTabSingleBtn'),
         body: 'Επιλέξτε εταιρία και περίοδο και υπολογίστε το λογιστικό αποτέλεσμα από τα παραστατικά myDATA, με προαιρετικό ισοζύγιο Excel.' },
-      { sel: ['#arSingleVatForecast', '#arSingleCredential'], place: 'bottom', title: 'Εκτιμήσεις',
+      { sel: ['#arSingleVatForecast', '#arSingleCredential'], place: 'bottom', title: 'Εκτιμήσεις', enter: clickTab('#arTabSingleBtn'),
         body: 'Προσθέστε εκτίμηση ΦΠΑ και φόρου εισοδήματος. Αν χρειάζεται, θα σας ζητηθούν πρώτα έλεγχοι (απόθεμα λήξης, μηνιαία σύνολα, αποσβέσεις).' },
-      { sel: '#arSingleComputeBtn', place: 'top', title: 'Υπολογισμός και PDF',
+      { sel: '#arSingleComputeBtn', place: 'top', title: 'Υπολογισμός και PDF', enter: clickTab('#arTabSingleBtn'),
         body: 'Το αποτέλεσμα εμφανίζεται αναλυτικά, αποθηκεύεται στο <b>ιστορικό</b> και κατεβαίνει σε PDF.' },
       { sel: '#arTabBulkBtn', place: 'bottom', title: 'Μαζικός υπολογισμός',
         body: 'Υπολογίζει πολλές εταιρίες μαζί. Τρέχει στον server, οπότε <b>συνεχίζει</b> ακόμη κι αν αλλάξετε σελίδα ή αποσυνδεθείτε· ZIP με PDF ανά εταιρία ή συγκεντρωτικό PDF.' },
@@ -147,6 +147,12 @@
   }
   // Το side menu θεωρείται κλειστό όταν είναι hidden ή έχει ακόμη translate-x-full (κλείνει / δεν άνοιξε).
   function sideMenuClosed(m) { return m.classList.contains('hidden') || m.classList.contains('translate-x-full'); }
+  // Πατά (αν υπάρχει) ένα κουμπί καρτέλας ώστε το panel του στόχου να είναι ορατό. Ιδεμποτενές για tabs.
+  function clickTab(sel) {
+    return function () {
+      try { var b = document.querySelector(sel); if (b) b.click(); } catch (_) {}
+    };
+  }
   function openSideMenu() {
     var m = document.getElementById('sideMenu');
     if (m && sideMenuClosed(m)) {
@@ -444,6 +450,7 @@
       if (!alreadyTried) {
         run.navTried = run.i; saveRun();
         await navigate(step.path);
+        run.justNavigated = true;
         if (my !== token) return;
         await new Promise(function (r) { setTimeout(r, 250); });
       }
@@ -466,18 +473,20 @@
         step.enter();
         // Περιμένουμε να ολοκληρωθεί το animation του side menu (ή να περάσει ένα λογικό όριο).
         var t0 = Date.now();
-        while (Date.now() - t0 < 1800) {
+        while (step.menu && Date.now() - t0 < 1800) {
           var sm = document.getElementById('sideMenu');
           if (!sm) break;
           var rr = sm.getBoundingClientRect();
           if (!sideMenuClosed(sm) && rr.width > 100 && rr.left <= window.innerWidth - rr.width + 4) break;
           await new Promise(function (r) { setTimeout(r, 80); });
         }
-        await new Promise(function (r) { setTimeout(r, 120); });
+        await new Promise(function (r) { setTimeout(r, step.menu ? 120 : 200); });   // μικρή αναμονή για το άνοιγμα καρτέλας
         if (my !== token) return;
       }
     } catch (_) {}
-    var target = step.sel ? await waitFor(step.sel, step.enter ? 2500 : 4500) : null;
+    // Μετά από μετάβαση σελίδας περιμένουμε περισσότερο (scripts/δεδομένα)· αλλιώς το στοιχείο είτε υπάρχει είτε όχι.
+    var justNavigated = !!run.justNavigated; run.justNavigated = false;
+    var target = step.sel ? await waitFor(step.sel, justNavigated ? 4500 : 1300) : null;
     if (my !== token) return;
     var note = null;
     if (step.sel && !target) note = 'Αυτό το στοιχείο δεν είναι ορατό αυτή τη στιγμή (ίσως απαιτείται ενεργός πελάτης ή άλλη οθόνη).';
@@ -548,7 +557,7 @@
     if (!s || run) return false;
     var steps = buildSteps(s.name);
     if (!steps.length || s.i >= steps.length) { writeState(null); return false; }
-    run = { name: s.name, steps: steps, i: s.i, skip: s.skip || {}, navTried: s.i };
+    run = { name: s.name, steps: steps, i: s.i, skip: s.skip || {}, navTried: s.i, justNavigated: true };
     document.documentElement.classList.add('smdt-active');
     bindKeys();
     show();

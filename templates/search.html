@@ -5,10 +5,117 @@
 
 
 
-<div class="bg-white rounded shadow p-6">
-    <h2 class="text-lg font-semibold mb-2">Αναζήτηση MARK</h2>
+<style id="searchTopCss">
+  .sx-card {
+    --sx-card: #ffffff; --sx-soft: #f1f5f9; --sx-line: #e2e8f0; --sx-text: #0f172a; --sx-muted: #5b6b82;
+    --sx-accent: #0284c7; --sx-accent-soft: #e0f2fe;
+  }
+  :root[data-theme="dark"] .sx-card {
+    --sx-card: #111c33; --sx-soft: #0b1324; --sx-line: #243148; --sx-text: #e5edf9; --sx-muted: #9fb0c8;
+    --sx-accent: #38bdf8; --sx-accent-soft: #0c2a45;
+  }
+  html body .sx-card {
+    background: var(--sx-card) !important; border: 1px solid var(--sx-line); border-radius: 22px !important;
+    padding: 22px 24px !important; box-shadow: 0 10px 30px rgba(15, 23, 42, .07);
+  }
+  html body .sx-card .sx-title { font-size: 1.3rem; font-weight: 800; color: var(--sx-text) !important; margin: 0; }
+  html body .sx-card .sx-sub { font-size: .9rem; color: var(--sx-muted) !important; margin: 2px 0 16px; }
 
-    <form method="post" class="flex flex-wrap gap-2 items-center" id="markSearchForm">
+  #markSearchForm.sx-form { display: flex; flex-direction: column; gap: 12px; }
+  #markSearchForm .sx-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+
+  /* Γραμμή 1: auto-submit · MARK · αναζήτηση */
+  #markSearchForm .sx-row-main .mark-input-wrap { flex: 1 1 380px; width: auto; }
+  html body #markSearchForm #markInput {
+    height: 48px; border-radius: 14px; font-size: 15px; padding: 0 118px 0 16px; width: 100%;
+    background: var(--sx-card) !important; color: var(--sx-text) !important; border: 1px solid var(--sx-line) !important;
+  }
+  html body #markSearchForm #markInput:focus { border-color: var(--sx-accent) !important; box-shadow: 0 0 0 3px rgba(14, 165, 233, .22); outline: none; }
+  #markSearchForm .mark-input-wrap > div.absolute { border-left: 1px solid var(--sx-line) !important; margin: 7px 7px 7px 0; }
+  html body #markSearchForm #openQrScanner, html body #markSearchForm #qrScannerMenuToggle {
+    background: transparent !important; color: var(--sx-accent) !important; border-radius: 10px; font-size: 17px;
+  }
+  html body #markSearchForm #openQrScanner:hover, html body #markSearchForm #qrScannerMenuToggle:hover { background: var(--sx-accent-soft) !important; }
+  html body #markSearchForm #qrScannerMenu { background: var(--sx-card) !important; border: 1px solid var(--sx-line) !important; border-radius: 14px; padding: 6px; box-shadow: 0 16px 36px rgba(2, 6, 23, .25); }
+  html body #markSearchForm #qrScannerMenu button { color: var(--sx-text) !important; border-radius: 10px; background: transparent !important; }
+  html body #markSearchForm #qrScannerMenu button:hover { background: var(--sx-accent-soft) !important; }
+
+  html body #markSearchForm .search-submit-btn {
+    height: 48px; padding: 0 26px !important; border-radius: 14px !important; font-weight: 800; font-size: 15px;
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; border: 0 !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, .32);
+  }
+  html body #markSearchForm .search-submit-btn:hover { filter: brightness(1.06); }
+
+  /* Chips ελέγχων */
+  #markSearchForm .control-group {
+    margin-left: 0 !important; padding: 6px 10px; border-radius: 14px; gap: 10px;
+    background: var(--sx-soft); border: 1px solid var(--sx-line); min-height: 48px;
+  }
+  html body #markSearchForm .control-group span, html body #markSearchForm .control-group label {
+    font-size: 13.5px !important; font-weight: 700; color: var(--sx-text) !important;
+  }
+  /* auto-submit segmented */
+  #markSearchForm #autoSubmitGroup > div { border: 1px solid var(--sx-line) !important; border-radius: 10px; background: var(--sx-card); padding: 2px; gap: 2px; }
+  html body #markSearchForm #autoSubmitGroup button {
+    padding: 5px 14px; border-radius: 8px; font-weight: 800; font-size: 13px;
+    background: transparent !important; color: var(--sx-muted) !important; border: 0 !important; box-shadow: none !important;
+  }
+  html body #markSearchForm #autoSubmitGroup button.bg-sky-600 {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important;
+  }
+
+  /* διακόπτες */
+  html body #markSearchForm .toggle-switch {
+    width: 46px; height: 26px; background: #cbd5e1; border-radius: 9999px; border: 0; box-shadow: none; flex: none;
+  }
+  html body #markSearchForm .toggle-switch::after { top: 3px; left: 3px; width: 20px; height: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  html body #markSearchForm .toggle-switch:checked { background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; }
+  html body #markSearchForm .toggle-switch:checked::after { transform: translateX(20px); }
+  :root[data-theme="dark"] #markSearchForm .toggle-switch:not(:checked) { background: #334155; }
+
+  /* αποδείξεις */
+  html body #markSearchForm #receiptsSwitchOnButton {
+    padding: 6px 12px; border-radius: 10px; font-weight: 700; font-size: 13px;
+    background: var(--sx-card) !important; color: var(--sx-text) !important; border: 1px solid var(--sx-line) !important;
+  }
+  html body #markSearchForm #receiptsSwitchOnButton span { color: inherit !important; font-size: 13px !important; }
+  html body #markSearchForm #receiptsModeMenu { background: var(--sx-card) !important; border: 1px solid var(--sx-line) !important; border-radius: 14px; padding: 6px; box-shadow: 0 16px 36px rgba(2, 6, 23, .25); }
+  html body #markSearchForm #receiptsModeMenu button { color: var(--sx-text) !important; border-radius: 10px; background: transparent !important; }
+  html body #markSearchForm #receiptsModeMenu button:hover { background: var(--sx-accent-soft) !important; }
+
+  /* επαναληπτική εισαγωγή + κανόνες */
+  html body #markSearchForm #activeRepeatProfileHint {
+    order: -1; margin: 0 !important; padding: 3px 10px; border-radius: 9999px; font-size: 12px !important; font-weight: 700;
+    background: var(--sx-accent-soft) !important; color: var(--sx-accent) !important;
+  }
+  html body #markSearchForm #editRepeatMappingBtn, html body #markSearchForm #editReceiptClassBtn,
+  html body #markSearchForm #manageAfmRulesBtn, html body #markSearchForm #afmRuleModeBtn {
+    margin-left: 0 !important; padding: 6px 12px; border-radius: 10px; font-size: 13px; font-weight: 700; text-decoration: none;
+    background: var(--sx-card) !important; color: var(--sx-text) !important; border: 1px solid var(--sx-line) !important;
+  }
+  html body #markSearchForm #editRepeatMappingBtn:hover, html body #markSearchForm #editReceiptClassBtn:hover,
+  html body #markSearchForm #manageAfmRulesBtn:hover, html body #markSearchForm #afmRuleModeBtn:hover {
+    border-color: var(--sx-accent) !important; background: var(--sx-accent-soft) !important;
+  }
+  html body #markSearchForm #afmRuleModeBtn.afm-auto {
+    background: linear-gradient(135deg, #d946ef, #a21caf) !important; color: #fff !important; border-color: transparent !important;
+  }
+  html body #markSearchForm #remoteSessionIndicator { border-radius: 14px; }
+
+  @media (max-width: 768px) {
+    html body .sx-card { padding: 16px !important; }
+    #markSearchForm .sx-row { gap: 10px; }
+    #markSearchForm .sx-row-main .mark-input-wrap { flex-basis: 100%; }
+    html body #markSearchForm .search-submit-btn { width: 100%; }
+  }
+</style>
+<div class="bg-white rounded shadow p-6 sx-card">
+    <h2 class="sx-title">Αναζήτηση MARK</h2>
+    <div class="sx-sub">Βρείτε παραστατικό με MARK ή σάρωση QR, χαρακτηρίστε το και αποθηκεύστε το στη λίστα.</div>
+
+    <form method="post" class="sx-form" id="markSearchForm">
+      <div class="sx-row sx-row-main">
         <!-- Auto-submit segmented toggle (scoped to client) -->
       <div class="control-group flex items-center gap-2 md:ml-4" id="autoSubmitGroup">
             <span class="text-sm">Auto‑submit</span>
@@ -66,6 +173,9 @@
             </button>
         </div>
         <button type="submit" class="search-submit-btn bg-sky-600 text-white px-3 py-2 rounded">Αναζήτηση</button>
+      </div>
+
+      <div class="sx-row sx-row-opts">
         <div class="control-group flex items-center gap-2 md:ml-4" aria-labelledby="receiptsSwitchOff receiptsSwitchOn">
             <span id="receiptsSwitchOff" class="text-sm">Τιμολόγια</span>
             <label for="useReceiptsSwitch" class="inline-flex items-center">
@@ -110,6 +220,7 @@
         </div>
 
         <!-- Toggle switch for receipts scrape -->
+      </div>
 
     </form>
 

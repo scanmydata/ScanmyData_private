@@ -229,13 +229,19 @@
   }
   #arFlashContainer .flash-banner { pointer-events: auto; }
 </style>
-<div class="content-wrap">
-  <h1 class="text-2xl font-bold mb-2">🧮 Λογιστικό Αποτέλεσμα</h1>
-  <p class="text-sm text-gray-600 mb-4">
-    Υπολογισμός και εξαγωγή σε PDF του λογιστικού/φορολογητέου αποτελέσματος ανά εταιρία, βάσει των
-    χαρακτηρισμών myDATA (Αγορές/Δαπάνες από τους χαρακτηρισμούς, Πωλήσεις από την επίσημη ταξινόμηση Ε3,
-    αποσβέσεις από το προηγούμενο έτος, απόθεμα λήξης με χειροκίνητη ή αυτόματη συμπλήρωση).
-  </p>
+{% include 'partials/page_ui_css.html' %}
+<div class="content-wrap pg">
+  <div class="pg-hero">
+    <div class="pg-hero-ico">🧮</div>
+    <div>
+      <h1>Λογιστικό Αποτέλεσμα</h1>
+      <div class="pg-hero-sub">
+        Υπολογισμός και εξαγωγή σε PDF του λογιστικού/φορολογητέου αποτελέσματος ανά εταιρία, βάσει των
+        χαρακτηρισμών myDATA (αγορές/δαπάνες από τους χαρακτηρισμούς, πωλήσεις από την ταξινόμηση Ε3,
+        αποσβέσεις προηγούμενου έτους, απόθεμα λήξης).
+      </div>
+    </div>
+  </div>
 
   <div class="brain-tabs flex gap-2 mb-4">
     <button id="arTabSingleBtn" type="button" class="brain-tab-button active">Ατομικός</button>

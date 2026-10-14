@@ -53,6 +53,7 @@
   {# Was 7 inline <style> blocks (~66KB on every page load). Extracted to a
      cacheable file; order between dialogs.css and tailwind.css is load-bearing. #}
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='shell.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='tour.css') }}">
     
   {% block head_extra %}{% endblock %}
@@ -185,64 +186,64 @@
 
     <!-- Side Menu (toggleable) -->
     <div id="sideMenu" class="hidden fixed inset-y-0 right-0 w-72 bg-white shadow-lg z-50 overflow-y-auto transform translate-x-full transition-transform duration-300 ease-in-out">
-      <div class="p-6 space-y-6">
-        <!-- Header -->
-        <div class="flex justify-between items-center">
-          <h2 class="text-lg font-semibold text-gray-900">Μενού</h2>
-          <button id="sideMenuClose" class="text-2xl text-gray-500 hover:text-gray-700">×</button>
+      <div class="sm2">
+        <!-- Κεφαλίδα -->
+        <div class="sm2-head">
+          <div class="sm2-brand">Μενού</div>
+          <button id="sideMenuClose" class="sm2-close" type="button" aria-label="Κλείσιμο μενού">✕</button>
         </div>
 
-        <!-- User Info -->
         {% if current_user.is_authenticated %}
-        <div class="border-b pb-4">
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <div>
-              <p class="text-sm font-medium text-gray-700">Χρήστης</p>
-              <p class="text-lg font-semibold text-sky-600">{{ current_user.username }}</p>
-            </div>
-            <a href="{{ url_for('auth.account_settings') }}" class="inline-flex items-center justify-center w-9 h-9 rounded-full border border-gray-200 text-gray-500 hover:text-gray-700 hover:border-gray-300" title="Ρυθμίσεις λογαριασμού" aria-label="Ρυθμίσεις λογαριασμού">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="w-5 h-5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </a>
+        <!-- Χρήστης -->
+        <div class="sm2-user">
+          <div class="sm2-avatar" aria-hidden="true">👤</div>
+          <div class="sm2-userinfo">
+            <div class="sm2-user-label">Συνδεδεμένος χρήστης</div>
+            <div class="sm2-user-name">{{ current_user.username }}</div>
           </div>
-          <a href="{{ url_for('auth.logout') }}" class="block px-4 py-2 rounded text-sm bg-red-100 text-red-700 hover:bg-red-200 text-center side-logout">Αποσύνδεση</a>
+          <a href="{{ url_for('auth.account_settings') }}" class="sm2-gear" title="Ρυθμίσεις λογαριασμού" aria-label="Ρυθμίσεις λογαριασμού">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-5 h-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.065z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </a>
         </div>
 
-        <!-- Groups Selector -->
-        <div class="border-b pb-4">
-          <p class="text-sm font-medium text-gray-700 mb-3">Ομάδες</p>
-          <div id="groupsList" class="space-y-2 max-h-64 overflow-y-auto"></div>
-          <a href="{{ url_for('auth.list_groups') }}" class="block mt-3 px-4 py-2 rounded text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 text-center side-manage-groups">Διαχείριση ομάδων</a>
+        <!-- Ομάδες -->
+        <div class="sm2-sec">
+          <div class="sm2-sec-head">
+            <div class="sm2-sec-title">Ομάδες</div>
+            <a href="{{ url_for('auth.list_groups') }}" class="sm2-small-link side-manage-groups">Διαχείριση ομάδων</a>
+          </div>
+          <div id="groupsList" class="sm2-groups"></div>
         </div>
 
-        <!-- Quick Links -->
-        <div>
-          <p class="text-sm font-medium text-gray-700 mb-3">Σύνδεσμοι</p>
-            <div class="space-y-2">
-            <a href="{{ url_for('home') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🏠 Αρχική</a>
-            <a href="{{ url_for('fetch') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📥 Λήψη Παραστατικών</a>
-            <a href="{{ url_for('search') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🔍 Αναζήτηση</a>
-            <a href="{{ url_for('e3_check') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📋 Έλεγχος E3</a>
-            <a href="{{ url_for('accounting_result_page') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🧮 Λογιστικό Αποτέλεσμα</a>
-            <a href="{{ url_for('credentials') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">👥 Πελάτες</a>
-          </div>
-        </div>
+        <!-- Σύνδεσμοι -->
+        <nav class="sm2-sec" aria-label="Κύρια πλοήγηση">
+          <div class="sm2-sec-title">Πλοήγηση</div>
+          <a href="{{ url_for('home') }}" class="sm2-item"><span class="sm2-ico">🏠</span><span class="sm2-lbl">Αρχική</span></a>
+          <a href="{{ url_for('fetch') }}" class="sm2-item"><span class="sm2-ico">📥</span><span class="sm2-lbl">Λήψη παραστατικών</span></a>
+          <a href="{{ url_for('search') }}" class="sm2-item"><span class="sm2-ico">🔍</span><span class="sm2-lbl">Αναζήτηση MARK</span></a>
+          <a href="{{ url_for('e3_check') }}" class="sm2-item"><span class="sm2-ico">📋</span><span class="sm2-lbl">Έλεγχος Ε3</span></a>
+          <a href="{{ url_for('accounting_result_page') }}" class="sm2-item"><span class="sm2-ico">🧮</span><span class="sm2-lbl">Λογιστικό αποτέλεσμα</span></a>
+          <a href="{{ url_for('credentials') }}" class="sm2-item"><span class="sm2-ico">👥</span><span class="sm2-lbl">Πελάτες</span></a>
+        </nav>
 
         <!-- Βοήθεια -->
-        <div>
-          <p class="text-sm font-medium text-gray-700 mb-3">Βοήθεια</p>
-          <div class="space-y-2">
-            <a href="{{ url_for('manual_page') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📖 Οδηγός χρήσης</a>
-            <a href="{{ url_for('manual_page') }}" data-tour-start="full" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🧭 Ξενάγηση στην εφαρμογή</a>
-          </div>
+        <div class="sm2-sec">
+          <div class="sm2-sec-title">Βοήθεια</div>
+          <a href="{{ url_for('manual_page') }}" class="sm2-item"><span class="sm2-ico">📖</span><span class="sm2-lbl">Οδηγός χρήσης</span></a>
+          <a href="{{ url_for('manual_page') }}" data-tour-start="full" class="sm2-item"><span class="sm2-ico">🧭</span><span class="sm2-lbl">Ξενάγηση στην εφαρμογή</span></a>
+        </div>
+
+        <div class="sm2-foot">
+          <a href="{{ url_for('auth.logout') }}" class="sm2-logout side-logout">⎋ Αποσύνδεση</a>
         </div>
         {% else %}
-        <div class="space-y-2">
-          <a href="{{ url_for('auth.login') }}" class="block px-4 py-2 rounded-md text-sm text-white text-center font-medium shadow-sm">Σύνδεση</a>
-          <a href="{{ url_for('auth.signup') }}" class="block px-4 py-2 rounded text-sm bg-gray-200 text-gray-700 hover:bg-gray-300 text-center">Δημιουργία λογαριασμού</a>
-          <a href="{{ url_for('manual_page') }}" class="block px-4 py-2 rounded text-sm hover:bg-gray-100 text-gray-700 text-center">📖 Οδηγός χρήσης</a>
+        <div class="sm2-sec">
+          <a href="{{ url_for('auth.login') }}" class="sm2-cta">🔐 Σύνδεση</a>
+          <a href="{{ url_for('auth.signup') }}" class="sm2-item"><span class="sm2-ico">🚀</span><span class="sm2-lbl">Δημιουργία λογαριασμού</span></a>
+          <a href="{{ url_for('manual_page') }}" class="sm2-item"><span class="sm2-ico">📖</span><span class="sm2-lbl">Οδηγός χρήσης</span></a>
         </div>
         {% endif %}
       </div>
