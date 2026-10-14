@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Οδηγός χρήσης - ScanmyData{% endblock %}
 
-{% block head_extra %}
+
+
+{% block content %}
+{% set logged = current_user.is_authenticated %}
 <style>
   .mn {
     --mn-bg: #f4f7fb; --mn-card: #ffffff; --mn-text: #0f172a; --mn-muted: #475569; --mn-line: #e2e8f0;
@@ -107,10 +110,6 @@
     .mn-sec { padding: 18px 16px; }
   }
 </style>
-{% endblock %}
-
-{% block content %}
-{% set logged = current_user.is_authenticated %}
 <div class="mn">
 
   <!-- ===== Hero ===== -->

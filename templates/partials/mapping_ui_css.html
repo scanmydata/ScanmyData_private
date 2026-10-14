@@ -1,0 +1,224 @@
+{# Κοινό UI για: Κανόνες ΑΦΜ, Προφίλ χαρακτηρισμών και τα modal επαναληπτικής αντιστοίχισης (Β΄/Γ΄ κατηγορίας).
+   Μπαίνει ΜΕΣΑ στο content (όχι στο <head>) ώστε να επιβιώνει του partial navigation.
+   Όλα τα χρώματα με !important: το global theme (app.css) βάφει span/p/label/button/select/input. #}
+<style id="mappingUiCss">
+  .mp, .rm-dialog {
+    --mp-card: #ffffff; --mp-bg: #f4f7fb; --mp-text: #0f172a; --mp-muted: #5b6b82; --mp-line: #e2e8f0;
+    --mp-accent: #0284c7; --mp-accent-2: #2563eb; --mp-accent-soft: #e0f2fe; --mp-input: #ffffff;
+    --mp-ok: #059669; --mp-ok-soft: #d1fae5; --mp-warn: #b45309; --mp-warn-soft: #fef3c7; --mp-danger: #dc2626; --mp-danger-soft: #fee2e2;
+    --mp-shadow: 0 10px 30px rgba(15, 23, 42, .08);
+  }
+  :root[data-theme="dark"] .mp, :root[data-theme="dark"] .rm-dialog {
+    --mp-card: #111c33; --mp-bg: #0b1324; --mp-text: #e5edf9; --mp-muted: #9fb0c8; --mp-line: #243148;
+    --mp-accent: #38bdf8; --mp-accent-2: #3b82f6; --mp-accent-soft: #0c2a45; --mp-input: #0b1324;
+    --mp-ok: #34d399; --mp-ok-soft: #0b2f27; --mp-warn: #fbbf24; --mp-warn-soft: #3a2f0b; --mp-danger: #f87171; --mp-danger-soft: #3b1418;
+    --mp-shadow: 0 14px 34px rgba(0, 0, 0, .4);
+  }
+
+  /* ---------- Κείμενα ---------- */
+  html body .mp .mp-title, html body .rm-dialog .rm-title { color: var(--mp-text) !important; background: transparent !important; margin: 0; }
+  html body .mp .mp-sub, html body .rm-dialog .rm-sub, html body .mp .mp-muted, html body .rm-dialog .rm-muted { color: var(--mp-muted) !important; }
+  html body .mp .mp-title span, html body .rm-dialog .rm-title span { color: inherit !important; }
+  html body .mp .mp-text, html body .rm-dialog .rm-text { color: var(--mp-text) !important; }
+  html body .mp .mp-label, html body .rm-dialog .rm-label {
+    display: block; font-size: 13px; font-weight: 700; margin: 0 0 6px; color: var(--mp-text) !important;
+  }
+  html body .mp .mp-help, html body .rm-dialog .rm-help { font-size: 12.5px; line-height: 1.5; color: var(--mp-muted) !important; margin-top: 6px; }
+
+  /* ---------- Σελίδες (Κανόνες ΑΦΜ / Προφίλ) ---------- */
+  .mp { max-width: 1180px; margin: 0 auto; padding: 4px 4px 36px; }
+  .mp-hero {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding: 22px 26px; border-radius: 22px; margin-bottom: 18px;
+    background: linear-gradient(135deg, #0369a1 0%, #2563eb 60%, #7c3aed 100%); box-shadow: 0 16px 36px rgba(37, 99, 235, .25);
+  }
+  html body .mp .mp-hero .mp-title { color: #fff !important; font-size: 24px; font-weight: 800; }
+  html body .mp .mp-hero .mp-sub { color: rgba(255, 255, 255, .9) !important; font-size: 14.5px; margin-top: 4px; max-width: 640px; line-height: 1.5; }
+  .mp-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  html body .mp a.mp-back {
+    display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 12px; font-size: 14px; font-weight: 700;
+    background: rgba(255, 255, 255, .16) !important; color: #fff !important; border: 1px solid rgba(255, 255, 255, .4); text-decoration: none;
+  }
+  html body .mp a.mp-back:hover { background: rgba(255, 255, 255, .28) !important; }
+  html body .mp .mp-vat-pill {
+    padding: 7px 12px; border-radius: 9999px; font-size: 13px; font-weight: 700;
+    background: rgba(255, 255, 255, .16) !important; color: #fff !important; border: 1px solid rgba(255, 255, 255, .35);
+  }
+
+  .mp-seg { display: inline-flex; padding: 4px; border-radius: 14px; background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .3); }
+  html body .mp .mp-seg a {
+    padding: 7px 14px; border-radius: 10px; font-size: 14px; font-weight: 700; text-decoration: none; color: #fff !important; background: transparent;
+  }
+  html body .mp .mp-seg a.on { background: #fff !important; color: #0369a1 !important; }
+
+  .mp-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 18px; align-items: start; }
+  .mp-card { background: var(--mp-card); border: 1px solid var(--mp-line); border-radius: 20px; padding: 22px 24px; box-shadow: var(--mp-shadow); }
+  .mp-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .mp-card-head h3 { font-size: 17px; font-weight: 800; margin: 0; color: var(--mp-text) !important; }
+  .mp-step { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; }
+  .mp-step:first-of-type { margin-top: 0; }
+  .mp-step-n {
+    width: 26px; height: 26px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; background: var(--mp-accent-soft) !important; color: var(--mp-accent) !important;
+  }
+  .mp-step-t { font-size: 14.5px; font-weight: 800; color: var(--mp-text) !important; }
+
+  /* Πεδία */
+  html body .mp input[type="text"], html body .mp input[type="search"], html body .mp input:not([type]), html body .mp select,
+  html body .rm-dialog select, html body .rm-dialog input[type="text"] {
+    width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.3;
+    background: var(--mp-input) !important; color: var(--mp-text) !important; border: 1px solid var(--mp-line) !important;
+    outline: none; box-shadow: none !important; height: auto;
+  }
+  html body .mp input:focus, html body .mp select:focus, html body .rm-dialog select:focus, html body .rm-dialog input:focus {
+    border-color: var(--mp-accent) !important; box-shadow: 0 0 0 3px rgba(14, 165, 233, .22) !important;
+  }
+  html body .mp input::placeholder { color: var(--mp-muted) !important; opacity: .8; }
+  .mp-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .mp-inline { display: flex; gap: 8px; }
+  .mp-inline > input { flex: 1; min-width: 0; }
+  .mp-status { font-size: 13px; margin-top: 6px; min-height: 18px; color: var(--mp-muted) !important; }
+  html body .mp .mp-status.text-green-600, html body .mp .mp-status.text-green-700 { color: var(--mp-ok) !important; }
+  html body .mp .mp-status.text-red-600 { color: var(--mp-danger) !important; }
+  html body .mp .mp-status.text-amber-600 { color: var(--mp-warn) !important; }
+  html body .mp .mp-status.text-blue-600 { color: var(--mp-accent) !important; }
+  html body .mp #ruleMsg, html body .mp #profMsg { font-size: 13.5px; font-weight: 600; margin-top: 12px; }
+  html body .mp #ruleMsg.text-red-600, html body .mp #profMsg.text-red-600 { color: var(--mp-danger) !important; }
+
+  /* Αντιστοίχιση ανά ΦΠΑ — σειρές */
+  .mp-vatrow, .rm-vatrow { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 12px; align-items: center; }
+  .mp-vatrow { padding: 8px 10px; border: 1px solid var(--mp-line); border-radius: 14px; background: var(--mp-bg); margin-bottom: 8px; }
+  .mp-pct, .rm-pct {
+    display: inline-flex; align-items: center; justify-content: center; padding: 7px 0; border-radius: 10px; font-weight: 800; font-size: 14px;
+    background: var(--mp-accent-soft) !important; color: var(--mp-accent) !important; text-align: center;
+  }
+
+  /* Κουμπιά */
+  html body .mp button.mp-btn, html body .rm-dialog button.rm-btn, html body .rm-dialog a.rm-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 16px; border-radius: 12px;
+    font-size: 14px; font-weight: 700; cursor: pointer; text-decoration: none; line-height: 1.2;
+    background: var(--mp-bg) !important; color: var(--mp-text) !important; border: 1px solid var(--mp-line) !important; box-shadow: none !important;
+    transition: transform .12s ease, filter .12s ease;
+  }
+  html body .mp button.mp-btn:hover, html body .rm-dialog button.rm-btn:hover { filter: brightness(.96); transform: translateY(-1px); }
+  html body .mp button.mp-btn[disabled] { opacity: .55; cursor: default; transform: none; }
+  html body .mp button.mp-btn-primary, html body .rm-dialog button.rm-btn-primary {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important; border-color: transparent !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, .28) !important;
+  }
+  html body .mp button.mp-btn-ok { background: linear-gradient(135deg, #10b981, #059669) !important; color: #fff !important; border-color: transparent !important; }
+  html body .mp .mp-link {
+    background: transparent !important; border: 0 !important; color: var(--mp-accent) !important; font-size: 13px; font-weight: 700; cursor: pointer; padding: 4px 6px;
+  }
+  .mp-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+
+  /* Λίστα */
+  .mp-search { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .mp-count { font-size: 12.5px; white-space: nowrap; color: var(--mp-muted) !important; }
+  .mp-list { display: flex; flex-direction: column; gap: 10px; max-height: 560px; overflow-y: auto; padding-right: 4px; }
+  .mp-empty { text-align: center; padding: 28px 10px; font-size: 14px; color: var(--mp-muted) !important; }
+  .mp-empty.hidden { display: none; }
+  .mp-row {
+    position: relative; display: block; padding: 14px 16px; border-radius: 16px; cursor: pointer;
+    background: var(--mp-card) !important; border: 1px solid var(--mp-line) !important; transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+  .mp-row:hover { border-color: var(--mp-accent) !important; box-shadow: var(--mp-shadow); transform: translateY(-1px); }
+  .mp-row.selected { background: var(--mp-accent-soft) !important; border-color: var(--mp-accent) !important; box-shadow: 0 0 0 3px rgba(14, 165, 233, .22) !important; }
+  .mp-row.hidden { display: none; }
+  .mp-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-right: 34px; }
+  .mp-row-name { font-weight: 800; font-size: 15px; color: var(--mp-text) !important; }
+  .mp-afm {
+    padding: 2px 10px; border-radius: 9999px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: var(--mp-bg) !important; color: var(--mp-muted) !important; border: 1px solid var(--mp-line);
+  }
+  .mp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .mp-chip {
+    display: inline-flex; gap: 6px; align-items: baseline; padding: 4px 10px; border-radius: 10px; font-size: 12.5px;
+    background: var(--mp-bg) !important; border: 1px solid var(--mp-line); color: var(--mp-text) !important;
+  }
+  .mp-chip b { color: var(--mp-accent) !important; font-weight: 800; }
+  .mp-chip.empty { opacity: .6; }
+  .mp-mtype { margin-top: 8px; font-size: 12.5px; color: var(--mp-muted) !important; }
+  .mp-mtype b { color: var(--mp-text) !important; }
+  html body .mp button.mp-del {
+    position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 9999px; padding: 0; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1;
+    background: transparent !important; color: var(--mp-muted) !important; border: 1px solid transparent !important; box-shadow: none !important;
+  }
+  html body .mp .mp-row:hover button.mp-del, html body .mp .mp-row.selected button.mp-del, html body .mp button.mp-del:focus {
+    background: var(--mp-danger-soft) !important; color: var(--mp-danger) !important; border-color: var(--mp-danger) !important;
+  }
+  html body .mp button.mp-del:hover { background: var(--mp-danger) !important; color: #fff !important; }
+
+  .mp-mtype-box { border: 1px dashed var(--mp-accent); border-radius: 14px; padding: 12px 14px; background: var(--mp-accent-soft); margin-top: 8px; }
+  .mp-mtype-box.hidden { display: none; }
+
+  /* ---------- Modal επαναληπτικής αντιστοίχισης / χαρακτηρισμού αποδείξεων ---------- */
+  .rm-dialog {
+    width: 100%; max-width: 640px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden;
+    background: var(--mp-card) !important; color: var(--mp-text) !important; border: 1px solid var(--mp-line) !important;
+    border-radius: 22px; box-shadow: 0 30px 70px rgba(2, 6, 23, .45); padding: 0 !important;
+  }
+  .rm-head { display: flex; align-items: flex-start; gap: 14px; padding: 18px 22px 14px; border-bottom: 1px solid var(--mp-line); }
+  .rm-ico {
+    width: 44px; height: 44px; border-radius: 14px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 22px;
+    background: var(--mp-accent-soft) !important;
+  }
+  .rm-headtext { flex: 1; min-width: 0; }
+  .rm-title { font-size: 18px; font-weight: 800; line-height: 1.25; }
+  .rm-sub { font-size: 13.5px; margin-top: 3px; line-height: 1.45; }
+  html body .rm-dialog button.rm-x {
+    width: 34px; height: 34px; border-radius: 9999px; flex: none; padding: 0; cursor: pointer; font-size: 16px; line-height: 1;
+    background: transparent !important; color: var(--mp-muted) !important; border: 0 !important; box-shadow: none !important; font-weight: 700;
+  }
+  html body .rm-dialog button.rm-x:hover { background: var(--mp-bg) !important; color: var(--mp-text) !important; }
+  .rm-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
+  .rm-foot {
+    display: flex; justify-content: flex-end; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--mp-line); background: var(--mp-card);
+  }
+  .rm-section-t { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; margin: 16px 0 8px; color: var(--mp-muted) !important; }
+  .rm-profile { display: flex; gap: 8px; align-items: center; }
+  .rm-profile select { flex: 1; min-width: 0; }
+  html body .rm-dialog a.rm-plus {
+    width: 42px; height: 42px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700;
+    border-radius: 12px; text-decoration: none; background: var(--mp-accent-soft) !important; color: var(--mp-accent) !important;
+    border: 1px solid var(--mp-accent) !important;
+  }
+  html body .rm-dialog .rm-hint-err { margin-top: 10px; padding: 9px 12px; border-radius: 12px; font-size: 13px; background: var(--mp-danger-soft) !important; color: var(--mp-danger) !important; }
+  html body .rm-dialog .rm-note { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.5; background: var(--mp-bg) !important; color: var(--mp-muted) !important; border: 1px solid var(--mp-line); }
+
+  /* Οι σειρές ΦΠΑ που φτιάχνει η JS (div.flex > div.w-20 + select) */
+  #repeatMappingList, #receiptClassList, #receiptRepeatMappingList { display: grid !important; gap: 8px; margin-top: 4px; }
+  #repeatMappingList > div, #receiptClassList > div, #receiptRepeatMappingList > div {
+    display: grid !important; grid-template-columns: 78px minmax(0, 1fr); gap: 12px !important; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--mp-line); border-radius: 14px; background: var(--mp-bg);
+    margin: 0 !important;
+  }
+  #repeatMappingList > div > div:first-child, #receiptClassList > div > div:first-child, #receiptRepeatMappingList > div > div:first-child {
+    width: auto !important; display: inline-flex; align-items: center; justify-content: center; padding: 7px 0; border-radius: 10px;
+    font-weight: 800; font-size: 14px; background: var(--mp-accent-soft) !important; color: var(--mp-accent) !important; text-align: center;
+  }
+  #repeatMappingList > div > select, #receiptClassList > div > select, #receiptRepeatMappingList > div > select { flex: none; width: 100% !important; }
+  html body .rm-dialog #repeatMtypeContainer, html body .rm-dialog #repeatReceiptMtypeContainer, html body .rm-dialog #receiptClassMtypeWrap {
+    margin-top: 16px !important; padding: 12px 14px; border: 1px dashed var(--mp-accent); border-radius: 14px; background: var(--mp-accent-soft) !important;
+  }
+  html body .rm-dialog #repeatMtypeContainer label, html body .rm-dialog #repeatReceiptMtypeContainer label, html body .rm-dialog #receiptClassMtypeWrap label {
+    display: block; margin-bottom: 6px; font-size: 13px; font-weight: 700; color: var(--mp-text) !important;
+  }
+  html body .rm-dialog #repeatMtypeContainer label span, html body .rm-dialog #repeatReceiptMtypeContainer label span,
+  html body .rm-dialog #receiptClassMtypeWrap label span { color: var(--mp-danger) !important; }
+
+  /* Επικάλυψη: τα global dark rules δίνουν #374151 στο πρώτο div του modal */
+  :root[data-theme="dark"] #repeatMappingModal > .rm-dialog, :root[data-theme="dark"] #receiptRepeatMappingModal > .rm-dialog,
+  :root[data-theme="dark"] #receiptClassModal > .rm-dialog, :root[data-theme="dark"] #receiptMtypeModal > .rm-dialog {
+    background-color: #111c33 !important; color: #e5edf9 !important; border: 1px solid #243148 !important;
+  }
+
+  @media (max-width: 860px) {
+    .mp-grid { grid-template-columns: minmax(0, 1fr); }
+    .mp-two { grid-template-columns: minmax(0, 1fr); }
+    .mp-hero { padding: 18px 18px; }
+    .mp-card { padding: 18px 16px; }
+    .rm-body { padding: 16px; } .rm-head { padding: 16px; } .rm-foot { padding: 12px 16px; }
+  }
+</style>

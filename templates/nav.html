@@ -1,9 +1,31 @@
 {% extends "base.html" %}
 {% block title %}ScanmyData - Διαχείριση myDATA{% endblock %}
 
-{% block head_extra %}
-{% if not current_user.is_authenticated %}
-<style>
+
+
+{% block content %}
+
+{% if current_user.is_authenticated %}
+  <!-- Logged in users - show menu -->
+  <div class="content-wrap">
+    <h1 class="text-3xl font-bold mb-4">ScanmyData - Κεντρικό Μενού</h1>
+    <p class="mb-6">Επέλεξε λειτουργία:</p>
+    <div class="flex flex-wrap gap-3">
+      <a class="px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('fetch') }}">📥 Λήψη Παραστατικών</a>
+      <a class="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('search') }}">🔍 Αναζήτηση MARK</a>
+      <a class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('e3_check') }}">📋 Έλεγχος E3</a>
+      <a class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('accounting_result_page') }}">🧮 Λογιστικό Αποτέλεσμα</a>
+
+      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('credentials') }}">👥 Πελάτες</a>
+      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}">📖 Οδηγός χρήσης</a>
+      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}" data-tour-start="full">🧭 Ξενάγηση</a>
+    </div>
+  </div>
+
+{% else %}
+  <!-- ===== Landing page (πριν το login) ===== -->
+  {# Τα στυλ μένουν ΜΕΣΑ στο content: με partial navigation (κλικ στο λογότυπο) αντικαθίσταται μόνο το #appShell, όχι το <head>. #}
+  <style>
   .lp {
     --lp-bg: #f4f7fb; --lp-card: #ffffff; --lp-text: #0f172a; --lp-muted: #475569; --lp-line: #e2e8f0;
     --lp-accent: #0284c7; --lp-accent-soft: #e0f2fe; --lp-ok: #059669; --lp-ok-soft: #d1fae5; --lp-warn: #b45309; --lp-warn-soft: #fef3c7;
@@ -144,30 +166,6 @@
     .lp-card, .lp-mini, html body .lp a.lp-btn { transition: none; }
   }
 </style>
-{% endif %}
-{% endblock %}
-
-{% block content %}
-
-{% if current_user.is_authenticated %}
-  <!-- Logged in users - show menu -->
-  <div class="content-wrap">
-    <h1 class="text-3xl font-bold mb-4">ScanmyData - Κεντρικό Μενού</h1>
-    <p class="mb-6">Επέλεξε λειτουργία:</p>
-    <div class="flex flex-wrap gap-3">
-      <a class="px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('fetch') }}">📥 Λήψη Παραστατικών</a>
-      <a class="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('search') }}">🔍 Αναζήτηση MARK</a>
-      <a class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('e3_check') }}">📋 Έλεγχος E3</a>
-      <a class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('accounting_result_page') }}">🧮 Λογιστικό Αποτέλεσμα</a>
-
-      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('credentials') }}">👥 Πελάτες</a>
-      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}">📖 Οδηγός χρήσης</a>
-      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}" data-tour-start="full">🧭 Ξενάγηση</a>
-    </div>
-  </div>
-
-{% else %}
-  <!-- ===== Landing page (πριν το login) ===== -->
   <div class="lp">
 
     <!-- Hero -->

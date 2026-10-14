@@ -92,7 +92,7 @@
         body: 'Λίστα τιμολογίων που δεν έχουν χαρακτηριστεί. Επιλέξτε, χαρακτηρίστε μαζικά και αποθηκεύστε στη λίστα· μπορείτε και να κατεβάσετε τα PDF σε ZIP.' },
       { sel: '#summary-container', place: 'top', title: 'Η λίστα παραστατικών',
         body: 'Όλα τα καταχωρημένα παραστατικά με <b>φίλτρα ανά στήλη</b>, ταξινόμηση και αναζήτηση. Μαζικός χαρακτηρισμός, διαγραφή με δυνατότητα <b>αναίρεσης</b>.' },
-      { sel: ['#listDownloadControls', '#downloadToggle'], place: 'bottom', title: 'Εξαγωγές',
+      { sel: ['#listDownloadControls', '#downloadToggle', '#summary-container'], place: 'bottom', title: 'Εξαγωγές',
         body: 'Λήψη σε <b>Excel</b> και <b>γέφυρα Epsilon</b> (προεπισκόπηση, XLSX, αρχείο HyperLog .ld, ενημέρωση backup Epsilon) χωρίς διπλοεξαγωγή ήδη εξαγμένων.' }
     ] },
 

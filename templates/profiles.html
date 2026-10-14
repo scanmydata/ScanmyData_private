@@ -3,127 +3,80 @@
 
 {% block content %}
 <div id="flashBanners" class="max-w-6xl mx-auto mt-4 px-4"></div>
-<style>
-/* Τα flash μηνύματα ορίζονται κεντρικά στο app.css */
-.flash-close { margin-left:auto; background:transparent; border:none; cursor:pointer; font-weight:700; font-size:16px; line-height:1; color:inherit; padding:0 6px; }
-</style>
+{% include 'partials/mapping_ui_css.html' %}
 
-<style>
-/* Highlight selected profile rows (light & dark) */
-.profile-row.selected {
-  background-color: #e6f7ff !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 0 0 2px rgba(14,165,233,0.18);
-}
-
-[data-theme="dark"] .profile-row.selected {
-  background-color: rgba(14,165,233,0.14) !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 0 0 2px rgba(14,165,233,0.28) !important;
-}
-
-/* Ensure profile title is readable in dark mode */
-[data-theme="dark"] #profList .profile-row .text-gray-800 {
-  color: #ffffff !important;
-}
-
-/* Subtext visibility in dark mode */
-[data-theme="dark"] #profList .profile-row .text-gray-600,
-[data-theme="dark"] #profList .profile-row .text-gray-700 {
-  color: var(--text-secondary) !important;
-}
-</style>
-
-<div class="bg-white rounded shadow p-6">
-  <h2 class="text-lg font-semibold mb-2">Προφίλ Χαρακτηρισμών
-    (<span id="modeHeadline">{{ 'Αποδείξεις' if mode=='receipts' else 'Τιμολόγια' }}</span>)
-  </h2>
-  <div class="mb-4">
-    <a href="{{ url_for('profiles_page', vat=vat, mode='invoices') }}" class="text-sm mr-4 font-medium {{ '' if mode!='invoices' else 'underline' }}">Τιμολόγια</a>
-    <a href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="text-sm font-medium {{ '' if mode!='receipts' else 'underline' }}">Αποδείξεις</a>
+<div class="mp">
+  <!-- Κεφαλίδα -->
+  <div class="mp-hero">
+    <div>
+      <h2 class="mp-title">🏷️ Προφίλ χαρακτηρισμών
+        (<span id="modeHeadline">{{ 'Αποδείξεις' if mode=='receipts' else 'Τιμολόγια' }}</span>)
+      </h2>
+      <div class="mp-sub">Ονομασμένα σετ αντιστοιχίσεων «συντελεστής ΦΠΑ → κατηγορία». Επιλέγονται στην επαναληπτική εισαγωγή ώστε ο χαρακτηρισμός να γίνεται με ένα κλικ.</div>
+    </div>
+    <div class="mp-hero-actions">
+      <div class="mp-seg" role="tablist" aria-label="Τύπος παραστατικών">
+        <a href="{{ url_for('profiles_page', vat=vat, mode='invoices') }}" class="{{ 'on' if mode=='invoices' else '' }}">Τιμολόγια</a>
+        <a href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="{{ 'on' if mode=='receipts' else '' }}">Αποδείξεις</a>
+      </div>
+      <a id="backToRepeat"
+         href="{{ url_for('search', vat=vat, open_receipt_class='1', use_receipts='1', repeat_mode='receipts') if mode=='receipts' else url_for('search', vat=vat, open_repeat='1', use_receipts='0', repeat_mode=mode) }}"
+         class="mp-back">← Επιστροφή</a>
+    </div>
   </div>
 
-  <div class="grid md:grid-cols-2 gap-6">
-    <!-- Αριστερή στήλη: Δημιουργία/Ενημέρωση -->
-    <div>
-      <h3 class="font-medium mb-2">Δημιουργία / Ενημέρωση</h3>
-      <div class="space-y-3">
-        <div>
-          <div class="flex items-center justify-between mb-1">
-            <label class="block text-sm font-medium">Όνομα προφίλ</label>
-            <button id="loadGeneralProfileBtn" type="button" class="text-xs text-sky-600 hover:text-sky-800 hidden">Φόρτωση Γενικού</button>
-          </div>
-          <input id="profName" class="border rounded px-3 py-2 w-full" placeholder="π.χ. Υλικά κατασκευής">
+  <div class="mp-grid">
+    <!-- Φόρμα -->
+    <div class="mp-card">
+      <div class="mp-card-head"><h3>Δημιουργία / ενημέρωση προφίλ</h3></div>
+
+      <div class="mp-step"><div class="mp-step-n">1</div><div class="mp-step-t">Όνομα προφίλ</div></div>
+      <div>
+        <div class="mp-card-head" style="margin-bottom:6px;">
+          <label for="profName" class="mp-label" style="margin:0;">Όνομα</label>
+          <button id="loadGeneralProfileBtn" type="button" class="mp-link hidden">Φόρτωση «Γενικού»</button>
         </div>
+        <input id="profName" type="text" placeholder="π.χ. Υλικά κατασκευής">
+      </div>
 
-        <div class="grid grid-cols-1 gap-2">
-          <label class="text-sm font-medium">Αντιστοίχιση κατηγοριών</label>
-          {% if mode == 'receipts' %}
-          <div class="text-xs text-gray-600">Επιλέξτε για κάθε ποσοστό ΦΠΑ την κατηγορία που θα χρησιμοποιηθεί σε αποδείξεις.</div>
-          {% endif %}
+      <div class="mp-step"><div class="mp-step-n">2</div><div class="mp-step-t">Κατηγορία χαρακτηρισμού ανά ΦΠΑ</div></div>
+      {% if mode == 'receipts' %}
+      <div class="mp-help" style="margin:-4px 0 10px;">Επιλέξτε για κάθε ποσοστό ΦΠΑ την κατηγορία που θα χρησιμοποιείται στις αποδείξεις.</div>
+      {% endif %}
+      <div>
+        <div class="mp-vatrow"><div class="mp-pct">0%</div><select id="kat_fpa_a" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">6%</div><select id="kat_fpa_b" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">13%</div><select id="kat_fpa_g" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">17%</div><select id="kat_fpa_d" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">24%</div><select id="kat_fpa_e" required></select></div>
+      </div>
 
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">0%</div>
-            <select id="kat_fpa_a" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">6%</div>
-            <select id="kat_fpa_b" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">13%</div>
-            <select id="kat_fpa_g" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">17%</div>
-            <select id="kat_fpa_d" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">24%</div>
-            <select id="kat_fpa_e" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-        </div>
-
-        <div id="profileMtypeSection" class="space-y-2 mt-4 hidden">
-          <label id="profileMtypeLabel" class="text-sm font-medium">Είδος κίνησης</label>
-          <select id="profileInvoiceMtype" class="border rounded px-2 py-1 w-full hidden">
+      <div id="profileMtypeSection" class="hidden">
+        <div class="mp-step"><div class="mp-step-n">3</div><div class="mp-step-t">Είδος κίνησης (Γ΄ κατηγορία)</div></div>
+        <div class="mp-mtype-box">
+          <label id="profileMtypeLabel" class="mp-label">Είδος κίνησης</label>
+          <select id="profileInvoiceMtype" class="hidden">
             <option value="">-- επιλέξτε για τιμολόγια --</option>
           </select>
-          <select id="profileReceiptMtype" class="border rounded px-2 py-1 w-full hidden">
+          <select id="profileReceiptMtype" class="hidden">
             <option value="">-- επιλέξτε για αποδείξεις --</option>
           </select>
-          <p class="text-xs text-gray-500">Οι επιλογές εμφανίζονται μόνο όταν υπάρχουν διαθέσιμοι κωδικοί Γ κατηγορίας.</p>
+          <div class="mp-help">Οι επιλογές εμφανίζονται μόνο όταν υπάρχουν διαθέσιμοι κωδικοί Γ΄ κατηγορίας.</div>
         </div>
+      </div>
 
-        <div id="profMsg" class="text-sm"></div>
+      <div id="profMsg"></div>
 
-        <div class="flex gap-2">
-          <button id="btnSaveProf" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 rounded" type="button">Αποθήκευση</button>
-          <!-- (Μεταφέρθηκε το Επιστροφή πάνω-δεξιά στη λίστα) -->
-        </div>
+      <div class="mp-actions">
+        <button id="btnSaveProf" class="mp-btn mp-btn-primary" type="button">Αποθήκευση</button>
       </div>
     </div>
 
-    <!-- Δεξιά στήλη: Λίστα Προφίλ -->
-    <div class="space-y-4">
-      <div class="flex items-center justify-between">
-        <h3 class="font-medium">Αποθηκευμένα Προφίλ</h3>
-
-        <!-- ΕΠΙΣΤΡΟΦΗ: πάνω-δεξιά, ανοίγει το modal στο /search -->
-        <a id="backToRepeat"
-          href="{{ url_for('search', vat=vat, open_receipt_class='1', use_receipts='1', repeat_mode='receipts') if mode=='receipts' else url_for('search', vat=vat, open_repeat='1', use_receipts='0', repeat_mode=mode) }}"
-           class="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded-md border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition">
-          <!-- βελάκι -->
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-            <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414l4-4A1 1 0 1110.707 6.707L8.414 9H16a1 1 0 110 2H8.414l2.293 2.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
-          </svg>
-          Επιστροφή
-        </a>
-      </div>
-
-      <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-4">
-        <div id="profList" class="space-y-3 max-h-80 overflow-y-auto pr-1"></div>
-      </div>
+    <!-- Λίστα προφίλ -->
+    <div class="mp-card">
+      <div class="mp-card-head"><h3>Αποθηκευμένα προφίλ</h3></div>
+      <div id="profList" class="mp-list"></div>
+      <div class="mp-help" style="margin-top:12px;">Κλικ σε προφίλ για επεξεργασία · διπλό κλικ για εκκαθάριση της φόρμας.</div>
     </div>
   </div>
 </div>
@@ -367,15 +320,7 @@ if (typeof window !== 'undefined') {
   function updateSaveButton(){
     const btn = document.getElementById('btnSaveProf');
     if(!btn) return;
-    if(currentSelectedId){
-      btn.textContent = 'Ενημέρωση';
-      // Match active group header button color (sky)
-      btn.classList.remove('bg-green-600');
-      btn.classList.add('bg-sky-600');
-    }else{
-      btn.textContent = 'Αποθήκευση';
-      btn.classList.remove('bg-green-600'); btn.classList.add('bg-sky-600');
-    }
+    btn.textContent = currentSelectedId ? 'Ενημέρωση' : 'Αποθήκευση';
   }
 
   function setSelection(name, id){
@@ -547,7 +492,7 @@ if (typeof window !== 'undefined') {
     listEl.innerHTML='';
     renderedProfiles.forEach(p=>{
       const row = document.createElement('div');
-      row.className = "group profile-row relative border border-gray-200 rounded-md bg-white p-4 pr-12 hover:border-sky-400 hover:shadow-sm transition cursor-pointer focus-within:ring-2 focus-within:ring-sky-200";
+      row.className = 'profile-row mp-row';
       row.dataset.name = p.name;
       row.dataset.id   = p.id || '';
       row.tabIndex = 0;
@@ -558,25 +503,20 @@ if (typeof window !== 'undefined') {
       row.dataset.invoiceMtype = invoiceMtype;
       row.dataset.receiptMtype = receiptMtype;
       const mtypeBits = [];
-      if(invoiceMtype) mtypeBits.push(`<span class="font-semibold text-gray-700">Τιμολόγια</span>: ${escapeHtml(invoiceMtype)}`);
-      if(receiptMtype) mtypeBits.push(`<span class="font-semibold text-gray-700">Αποδείξεις</span>: ${escapeHtml(receiptMtype)}`);
-      const mtypeHtml = mtypeBits.length ? `<div class="text-xs text-gray-500 pt-1">${mtypeBits.join('<br>')}</div>` : '';
+      if(invoiceMtype) mtypeBits.push(`<b>Τιμολόγια:</b> ${escapeHtml(invoiceMtype)}`);
+      if(receiptMtype) mtypeBits.push(`<b>Αποδείξεις:</b> ${escapeHtml(receiptMtype)}`);
+      const mtypeHtml = mtypeBits.length ? `<div class="mp-mtype">${mtypeBits.join(' · ')}</div>` : '';
+      const chip = (pct, key) => {
+        const lbl = labelForCategory(mapping[key]);
+        return `<div class="mp-chip${lbl ? '' : ' empty'}"><b>${pct}</b><div>${escapeHtml(lbl || '—')}</div></div>`;
+      };
       row.innerHTML = `
-        <div class="flex flex-col gap-2">
-          <div class="font-semibold text-gray-800 truncate">${escapeHtml(p.name || '')}</div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
-            <div><span class="font-semibold text-gray-700">0%</span>: ${showMappingLabel(mapping.kat_fpa_a)}</div>
-            <div><span class="font-semibold text-gray-700">6%</span>: ${showMappingLabel(mapping.kat_fpa_b)}</div>
-            <div><span class="font-semibold text-gray-700">13%</span>: ${showMappingLabel(mapping.kat_fpa_g)}</div>
-            <div><span class="font-semibold text-gray-700">17%</span>: ${showMappingLabel(mapping.kat_fpa_d)}</div>
-            <div class="sm:col-span-2"><span class="font-semibold text-gray-700">24%</span>: ${showMappingLabel(mapping.kat_fpa_e)}</div>
-          </div>
-          ${mtypeHtml}
+        <div class="mp-row-top"><div class="mp-row-name">${escapeHtml(p.name || '')}</div></div>
+        <div class="mp-chips">
+          ${chip('0%', 'kat_fpa_a')}${chip('6%', 'kat_fpa_b')}${chip('13%', 'kat_fpa_g')}${chip('17%', 'kat_fpa_d')}${chip('24%', 'kat_fpa_e')}
         </div>
-        <button class="deleteProfileBtn absolute top-3 right-3 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto inline-flex items-center gap-1 px-2 py-1 rounded-md border border-red-200 bg-red-50 text-xs font-semibold text-red-700 transition hover:bg-red-600 hover:text-white hover:border-red-600"
-          data-act="del" data-name="${escapeHtml(p.name || '')}" title="Διαγραφή">
-          ✖
-        </button>
+        ${mtypeHtml}
+        <button class="mp-del deleteProfileBtn" type="button" data-act="del" data-name="${escapeHtml(p.name || '')}" title="Διαγραφή προφίλ" aria-label="Διαγραφή προφίλ">✕</button>
       `;
       listEl.appendChild(row);
     });
@@ -667,7 +607,7 @@ if (typeof window !== 'undefined') {
       kat_fpa_d: document.getElementById('kat_fpa_d').value,
     };
     if(!name || !mapping.kat_fpa_a || !mapping.kat_fpa_b || !mapping.kat_fpa_g || !mapping.kat_fpa_e || !mapping.kat_fpa_d){
-      msgEl.className="text-sm text-red-600"; msgEl.textContent="Συμπλήρωσε όνομα και όλες τις τιμές ΦΠΑ."; return;
+      msgEl.className="text-red-600"; msgEl.textContent="Συμπλήρωσε όνομα και όλες τις τιμές ΦΠΑ."; return;
     }
     const mapByVat = {
       '0%': mapping.kat_fpa_a,
@@ -683,7 +623,7 @@ if (typeof window !== 'undefined') {
       }
     });
     if(invalid.length){
-      msgEl.className="text-sm text-red-600";
+      msgEl.className="text-red-600";
       msgEl.textContent = `Μη έγκυρες αντιστοιχίσεις: ${invalid.join(', ')}.`;
       return;
     }

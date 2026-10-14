@@ -150,47 +150,49 @@
 
 {% include 'receipt_summary_modal.html' %}
 
+{% include 'partials/mapping_ui_css.html' %}
 {# --- Repeat mapping modal (dynamic, populated by JS) --- #}
 <!-- REPEAT MAPPING MODAL (CLEAN) -->
 <div id="repeatMappingModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 p-4" style="display:none;">
 {% include 'receipt_modals.html' %}
-  <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
-    <div class="flex justify-between items-center mb-3">
-      <h3 class="text-lg font-semibold">Επαναληπτική αντιστοίχιση κατηγοριών</h3>
-      <button id="repeatModalCloseX" class="text-gray-500 text-xl font-bold">✕</button>
+  <div class="rm-dialog" role="dialog" aria-modal="true" aria-labelledby="repeatModalTitle">
+    <div class="rm-head">
+      <div class="rm-ico">🔁</div>
+      <div class="rm-headtext">
+        <h3 id="repeatModalTitle" class="rm-title">Επαναληπτική αντιστοίχιση κατηγοριών</h3>
+        <div class="rm-sub">Επιλέξτε για κάθε συντελεστή ΦΠΑ την κατηγορία χαρακτηρισμού που θα εφαρμόζεται αυτόματα στα επόμενα παραστατικά.</div>
+      </div>
+      <button id="repeatModalCloseX" class="rm-x" type="button" aria-label="Κλείσιμο">✕</button>
     </div>
 
-    <div class="space-y-3">
-      <div class="text-sm text-gray-600">
-        Επίλεξε για κάθε ΦΠΑ-κατηγορία ποια κατηγορία εξόδου θέλεις να χρησιμοποιείται επαναληπτικά. Μπορείς επίσης να ορίσεις <em>προεπιλογή</em>.
-      </div>
-
+    <div class="rm-body">
       <!-- Επιλογή Προφίλ -->
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium">Προφίλ</label>
-        <select id="charProfileSelect" class="border rounded px-2 py-1"></select>
+      <div class="rm-section-t" style="margin-top:0;">Προφίλ</div>
+      <div class="rm-profile">
+        <select id="charProfileSelect" aria-label="Προφίλ χαρακτηρισμών"></select>
         <!-- redirect, όχι νέο tab -->
-        <a id="addProfileLink" data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat) }}" class="px-2 py-1 border rounded">+</a>
+        <a id="addProfileLink" data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat) }}" class="rm-plus" title="Δημιουργία / διαχείριση προφίλ" aria-label="Δημιουργία / διαχείριση προφίλ">+</a>
       </div>
 
       <!-- Hint λαθών -->
-      <div id="charMissingHint" class="text-sm text-red-600" style="display:none"></div>
+      <div id="charMissingHint" class="rm-hint-err" style="display:none"></div>
 
       <!-- Εδώ αποδίδονται ΜΟΝΟ τα 5 dropdowns με JS -->
-      <div id="repeatMappingList" class="space-y-2"></div>
+      <div class="rm-section-t">Κατηγορία ανά ΦΠΑ</div>
+      <div id="repeatMappingList"></div>
 
       <!-- MTYPE dropdown (για Γ Κατηγορία) - invoice-level REQUIRED -->
-      <div id="repeatMtypeContainer" class="mt-4" style="display:none;">
-        <label class="text-sm font-medium">Είδος Κίνησης για Τιμολόγια (Γ Κατηγορία) <span class="text-red-600">*</span></label>
-        <select id="repeatMtypeSelect" class="border rounded px-2 py-1 w-full mt-1" required>
+      <div id="repeatMtypeContainer" style="display:none;">
+        <label for="repeatMtypeSelect">Είδος Κίνησης για Τιμολόγια (Γ Κατηγορία) <span>*</span></label>
+        <select id="repeatMtypeSelect" required>
           <option value="">-- επιλέξτε είδος κίνησης --</option>
         </select>
       </div>
     </div>
 
-    <div class="mt-4 flex justify-end gap-2">
-      <button id="repeatModalCancel" class="px-3 py-2 border rounded">Άκυρο</button>
-      <button id="repeatModalSave" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση</button>
+    <div class="rm-foot">
+      <button id="repeatModalCancel" class="rm-btn" type="button">Άκυρο</button>
+      <button id="repeatModalSave" class="rm-btn rm-btn-primary" type="button">Αποθήκευση</button>
     </div>
   </div>
 </div>
@@ -198,28 +200,24 @@
 
 <!-- RECEIPT MTYPE MODAL (για επαναληπτική εισαγωγή αποδείξεων) -->
 <div id="receiptMtypeModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 p-4" style="display:none;">
-  <div class="bg-white rounded-lg shadow-lg w-full max-w-md p-6">
-    <div class="flex justify-between items-center mb-4">
-      <h3 class="text-lg font-semibold">Κωδικός Κίνησης Αποδείξεων</h3>
-      <button id="receiptMtypeCloseX" class="text-gray-500 text-xl font-bold">✕</button>
-    </div>
-
-    <div class="space-y-4">
-      <div class="text-sm text-gray-600">
-        Επίλεξε τον κωδικό κίνησης που θα χρησιμοποιείται για τις αποδείξεις σε επαναληπτική εισαγωγή.
+  <div class="rm-dialog" style="max-width:480px;" role="dialog" aria-modal="true" aria-labelledby="receiptMtypeTitle">
+    <div class="rm-head">
+      <div class="rm-ico">🧾</div>
+      <div class="rm-headtext">
+        <h3 id="receiptMtypeTitle" class="rm-title">Κωδικός κίνησης αποδείξεων</h3>
+        <div class="rm-sub">Ο κωδικός που θα χρησιμοποιείται για τις αποδείξεις στην επαναληπτική εισαγωγή.</div>
       </div>
-
-      <div>
-        <label class="text-sm font-medium">Είδος Κίνησης</label>
-        <select id="receiptMtypeSelect" class="border rounded px-3 py-2 w-full mt-1">
-          <option value="">-- επιλέξτε είδος κίνησης --</option>
-        </select>
-      </div>
+      <button id="receiptMtypeCloseX" class="rm-x" type="button" aria-label="Κλείσιμο">✕</button>
     </div>
-
-    <div class="mt-6 flex justify-end gap-2">
-      <button id="receiptMtypeCancel" class="px-4 py-2 border rounded">Άκυρο</button>
-      <button id="receiptMtypeSave" class="bg-sky-600 text-white px-4 py-2 rounded">Αποθήκευση</button>
+    <div class="rm-body">
+      <label for="receiptMtypeSelect" class="rm-label">Είδος κίνησης</label>
+      <select id="receiptMtypeSelect">
+        <option value="">-- επιλέξτε είδος κίνησης --</option>
+      </select>
+    </div>
+    <div class="rm-foot">
+      <button id="receiptMtypeCancel" class="rm-btn" type="button">Άκυρο</button>
+      <button id="receiptMtypeSave" class="rm-btn rm-btn-primary" type="button">Αποθήκευση</button>
     </div>
   </div>
 </div>
@@ -12765,10 +12763,10 @@ function openReceiptClassModal(summaryObj){
     if (!mtypeWrap && list && list.parentElement) {
       mtypeWrap = document.createElement('div');
       mtypeWrap.id = 'receiptClassMtypeWrap';
-      mtypeWrap.className = 'mt-4';
+      mtypeWrap.className = '';
       mtypeWrap.innerHTML =
-        '<label class="text-sm font-medium">Κωδικός Κίνησης Αποδείξεων (Γ Κατηγορία) <span class="text-red-600">*</span></label>' +
-        '<select id="receiptClassMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">' +
+        '<label for="receiptClassMtypeSelect">Κωδικός Κίνησης Αποδείξεων (Γ Κατηγορία) <span>*</span></label>' +
+        '<select id="receiptClassMtypeSelect">' +
           '<option value="">-- επιλέξτε είδος κίνησης --</option>' +
         '</select>';
       list.parentElement.appendChild(mtypeWrap);

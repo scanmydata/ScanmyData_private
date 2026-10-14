@@ -3,144 +3,87 @@
 
 {% block content %}
 <div id="flashBanners" class="max-w-6xl mx-auto mt-4 px-4"></div>
+{% include 'partials/mapping_ui_css.html' %}
 
-<style>
-.afm-rule-row.selected {
-  background-color: #e6f7ff !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 0 0 2px rgba(14,165,233,0.18);
-}
-
-[data-theme="dark"] .afm-rule-row.selected {
-  background-color: rgba(14,165,233,0.14) !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 0 0 2px rgba(14,165,233,0.28) !important;
-}
-
-/* Dark mode: the rule cards are built with hardcoded light Tailwind classes
-   (bg-white / text-gray-*), so the supplier name (text-gray-800) rendered
-   dark-on-dark and disappeared. Re-map the card surface and text colours. */
-[data-theme="dark"] .afm-rule-row {
-  background-color: var(--bg-secondary, #1e293b) !important;
-  border-color: rgba(148,163,184,0.28) !important;
-  color: var(--text-primary, #e2e8f0);
-}
-[data-theme="dark"] .afm-rule-row:hover {
-  border-color: #38bdf8 !important;
-}
-[data-theme="dark"] .afm-rule-row .text-gray-800,
-[data-theme="dark"] .afm-rule-row .text-gray-700,
-[data-theme="dark"] .afm-rule-row .text-gray-600 {
-  color: var(--text-primary, #e2e8f0) !important;
-}
-[data-theme="dark"] .afm-rule-row .text-gray-500 {
-  color: var(--text-secondary, #94a3b8) !important;
-}
-[data-theme="dark"] .afm-rule-row .bg-slate-100 {
-  background-color: rgba(148,163,184,0.20) !important;
-}
-[data-theme="dark"] .afm-rule-row .text-slate-600 {
-  color: var(--text-primary, #e2e8f0) !important;
-}
-@media (max-width: 768px) {
-  .afm-rules-grid {
-    grid-template-columns: 1fr;
-  }
-}
-</style>
-
-<div class="bg-white rounded shadow p-6">
-  <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+<div class="mp">
+  <!-- Κεφαλίδα -->
+  <div class="mp-hero">
     <div>
-      <h2 class="text-lg font-semibold">Κανόνες χαρακτηρισμών ανά ΑΦΜ</h2>
-      <p class="text-sm text-gray-600 mt-1">Ορίζεις για τον ενεργό πελάτη ποιος χαρακτηρισμός ανά ΦΠΑ πρέπει να ισχύει για συγκεκριμένο προμηθευτή.</p>
+      <h2 class="mp-title">🧾 Κανόνες χαρακτηρισμών ανά ΑΦΜ</h2>
+      <div class="mp-sub">Ορίστε για τον ενεργό πελάτη ποιος χαρακτηρισμός ανά ΦΠΑ ισχύει για έναν συγκεκριμένο προμηθευτή. Κάθε νέο παραστατικό του προμηθευτή χαρακτηρίζεται αυτόματα.</div>
     </div>
-    <a href="{{ url_for('search', vat=vat) }}" class="inline-flex items-center justify-center gap-1 text-sm px-3 py-2 rounded-md border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition">
-      Επιστροφή στην αναζήτηση
-    </a>
+    <div class="mp-hero-actions">
+      <div class="mp-vat-pill">Ενεργός πελάτης: {{ vat or '—' }}</div>
+      <a href="{{ url_for('search', vat=vat) }}" class="mp-back">← Επιστροφή στην αναζήτηση</a>
+    </div>
   </div>
 
-  <div class="afm-rules-grid grid md:grid-cols-2 gap-6">
-    <div>
-      <h3 class="font-medium mb-2">Δημιουργία / Ενημέρωση</h3>
-      <div class="space-y-3">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label for="ruleSupplierAfm" class="block text-sm font-medium mb-1">ΑΦΜ προμηθευτή</label>
-            <input id="ruleSupplierAfm" class="border rounded px-3 py-2 w-full" placeholder="9 ψηφία" inputmode="numeric" maxlength="15">
-            <div id="ruleSupplierAfmStatus" class="vat-status text-sm mt-1"></div>
-          </div>
-          <div>
-            <label for="ruleSupplierName" class="block text-sm font-medium mb-1">Επωνυμία</label>
-            <input id="ruleSupplierName" class="border rounded px-3 py-2 w-full" placeholder="Προαιρετικό βοηθητικό όνομα">
-          </div>
-        </div>
+  <div class="mp-grid afm-rules-grid">
+    <!-- Φόρμα -->
+    <div class="mp-card">
+      <div class="mp-card-head"><h3>Δημιουργία / ενημέρωση κανόνα</h3></div>
 
+      <div class="mp-step"><div class="mp-step-n">1</div><div class="mp-step-t">Προμηθευτής</div></div>
+      <div class="mp-two">
         <div>
-          <label for="ruleScanInput" class="block text-sm font-medium mb-1">Ή σκάναρε παραστατικό για αυτόματη συμπλήρωση ΑΦΜ προμηθευτή</label>
-          <div class="flex gap-2">
-            <input id="ruleScanInput" class="border rounded px-3 py-2 flex-1" placeholder="Επικόλλησε ή σκάναρε URL/QR παραστατικού" inputmode="text" autocomplete="off">
-            <button id="btnScanRule" type="button" class="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">Αναζήτηση</button>
-          </div>
-          <div id="ruleScanStatus" class="text-sm mt-1"></div>
+          <label for="ruleSupplierAfm" class="mp-label">ΑΦΜ προμηθευτή</label>
+          <input id="ruleSupplierAfm" type="text" placeholder="9 ψηφία" inputmode="numeric" maxlength="15">
+          <div id="ruleSupplierAfmStatus" class="vat-status mp-status"></div>
         </div>
-
-        <div class="grid grid-cols-1 gap-2">
-          <label class="text-sm font-medium">Αντιστοίχιση κατηγοριών</label>
-
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">0%</div>
-            <select id="kat_fpa_a" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">6%</div>
-            <select id="kat_fpa_b" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">13%</div>
-            <select id="kat_fpa_g" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">17%</div>
-            <select id="kat_fpa_d" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="w-24 text-sm font-medium">24%</div>
-            <select id="kat_fpa_e" class="border rounded px-2 py-1 flex-1" required></select>
-          </div>
+        <div>
+          <label for="ruleSupplierName" class="mp-label">Επωνυμία</label>
+          <input id="ruleSupplierName" type="text" placeholder="Συμπληρώνεται αυτόματα από το ΑΦΜ">
         </div>
+      </div>
 
-        <div id="ruleMtypeSection" class="space-y-2 mt-4 hidden">
-          <label class="text-sm font-medium">Προαιρετικό MTYPE ελέγχου</label>
-          <select id="ruleInvoiceMtype" class="border rounded px-2 py-1 w-full hidden">
+      <div style="margin-top:12px;">
+        <label for="ruleScanInput" class="mp-label">Ή σκανάρετε παραστατικό για αυτόματη συμπλήρωση του ΑΦΜ</label>
+        <div class="mp-inline">
+          <input id="ruleScanInput" type="text" placeholder="Επικόλληση ή σάρωση URL/QR παραστατικού" inputmode="text" autocomplete="off">
+          <button id="btnScanRule" type="button" class="mp-btn mp-btn-ok" style="white-space:nowrap;">🔍 Αναζήτηση</button>
+        </div>
+        <div id="ruleScanStatus" class="mp-status"></div>
+      </div>
+
+      <div class="mp-step"><div class="mp-step-n">2</div><div class="mp-step-t">Κατηγορία χαρακτηρισμού ανά ΦΠΑ</div></div>
+      <div>
+        <div class="mp-vatrow"><div class="mp-pct">0%</div><select id="kat_fpa_a" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">6%</div><select id="kat_fpa_b" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">13%</div><select id="kat_fpa_g" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">17%</div><select id="kat_fpa_d" required></select></div>
+        <div class="mp-vatrow"><div class="mp-pct">24%</div><select id="kat_fpa_e" required></select></div>
+      </div>
+
+      <div id="ruleMtypeSection" class="hidden">
+        <div class="mp-step"><div class="mp-step-n">3</div><div class="mp-step-t">Είδος κίνησης (Γ΄ κατηγορία)</div></div>
+        <div class="mp-mtype-box">
+          <label class="mp-label">Προαιρετικό MTYPE ελέγχου</label>
+          <select id="ruleInvoiceMtype" class="hidden">
             <option value="">-- επιλέξτε για τιμολόγια --</option>
           </select>
-          <p class="text-xs text-gray-500">Για πελάτες Γ κατηγορίας μπορείς να προσθέσεις αναμενόμενο MTYPE μόνο για το flow τιμολογίων.</p>
+          <div class="mp-help">Για πελάτες Γ΄ κατηγορίας μπορείτε να ορίσετε αναμενόμενο MTYPE, μόνο για τη ροή των τιμολογίων.</div>
         </div>
+      </div>
 
-        <div id="ruleMsg" class="text-sm"></div>
+      <div id="ruleMsg"></div>
 
-        <div class="flex flex-wrap gap-2">
-          <button id="btnSaveRule" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 rounded" type="button">Αποθήκευση</button>
-          <button id="btnNewRule" class="px-3 py-2 rounded border" type="button">Νέος κανόνας</button>
-        </div>
+      <div class="mp-actions">
+        <button id="btnSaveRule" class="mp-btn mp-btn-primary" type="button">Αποθήκευση</button>
+        <button id="btnNewRule" class="mp-btn" type="button">Νέος κανόνας</button>
       </div>
     </div>
 
-    <div class="space-y-4">
-      <div class="flex items-center justify-between gap-3">
-        <h3 class="font-medium">Αποθηκευμένοι κανόνες</h3>
-        <div class="text-xs text-gray-500">Ενεργός πελάτης: {{ vat }}</div>
+    <!-- Λίστα -->
+    <div class="mp-card">
+      <div class="mp-card-head">
+        <h3>Αποθηκευμένοι κανόνες</h3>
+        <div id="ruleCount" class="mp-count"></div>
       </div>
-
-      <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-4 afm-rules-list-box">
-        <div class="flex items-center gap-2 mb-3">
-          <input id="ruleSearch" type="search" class="border rounded px-3 py-2 flex-1 text-sm" placeholder="Αναζήτηση επωνυμίας ή ΑΦΜ…" autocomplete="off" aria-label="Αναζήτηση κανόνων">
-          <span id="ruleCount" class="text-xs text-gray-500 whitespace-nowrap"></span>
-        </div>
-        <div id="ruleList" class="space-y-3 max-h-96 overflow-y-auto pr-1"></div>
-        <div id="ruleEmpty" class="hidden text-sm text-gray-500 py-4 text-center"></div>
+      <div class="mp-search">
+        <input id="ruleSearch" type="search" placeholder="🔎 Αναζήτηση επωνυμίας ή ΑΦΜ…" autocomplete="off" aria-label="Αναζήτηση κανόνων">
       </div>
+      <div id="ruleList" class="mp-list"></div>
+      <div id="ruleEmpty" class="hidden mp-empty"></div>
     </div>
   </div>
 </div>
@@ -261,7 +204,7 @@ const G_CATEGORY_DATA = (function(){
     const statusIndicator = document.getElementById('ruleSupplierAfmStatus');
     if (!statusIndicator) return;
     statusIndicator.textContent = '';
-    statusIndicator.className = 'vat-status text-sm mt-1';
+    statusIndicator.className = 'vat-status mp-status';
     statusIndicator.style.color = '';
   }
 
@@ -271,7 +214,7 @@ const G_CATEGORY_DATA = (function(){
         return;
       }
       statusIndicator.textContent = '🔄 Έλεγχος ΑΦΜ...';
-      statusIndicator.className = 'vat-status text-sm mt-1 text-blue-600';
+      statusIndicator.className = 'vat-status mp-status text-blue-600';
 
       const response = await fetch('/api/validate_vat', {
         method: 'POST',
@@ -292,10 +235,10 @@ const G_CATEGORY_DATA = (function(){
         lastSuccessfulVAT = vat;
 
         statusIndicator.textContent = `✓ Έγκυρο ΑΦΜ: ${result.name}`;
-        statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+        statusIndicator.className = 'vat-status mp-status text-green-600';
         statusIndicator.style.color = '';
         if (document.documentElement.getAttribute('data-theme') === 'dark') {
-          statusIndicator.style.color = '#d1fae5';
+          statusIndicator.style.color = '';
         }
 
         setTimeout(() => {
@@ -304,32 +247,32 @@ const G_CATEGORY_DATA = (function(){
       } else if (result.error) {
         if (vat === lastSuccessfulVAT && String(nameInput.value || '').trim()) {
           statusIndicator.textContent = `✓ Έγκυρο ΑΦΜ: ${nameInput.value}`;
-          statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+          statusIndicator.className = 'vat-status mp-status text-green-600';
           statusIndicator.style.color = '';
           if (document.documentElement.getAttribute('data-theme') === 'dark') {
-            statusIndicator.style.color = '#d1fae5';
+            statusIndicator.style.color = '';
           }
           return;
         }
         statusIndicator.textContent = `⚠ ${result.error}`;
-        statusIndicator.className = 'vat-status text-sm mt-1 text-amber-600';
+        statusIndicator.className = 'vat-status mp-status text-amber-600';
       } else {
         if (vat === lastSuccessfulVAT && String(nameInput.value || '').trim()) {
           statusIndicator.textContent = `✓ Έγκυρο ΑΦΜ: ${nameInput.value}`;
-          statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+          statusIndicator.className = 'vat-status mp-status text-green-600';
           statusIndicator.style.color = '';
           if (document.documentElement.getAttribute('data-theme') === 'dark') {
-            statusIndicator.style.color = '#d1fae5';
+            statusIndicator.style.color = '';
           }
           return;
         }
         statusIndicator.textContent = '✗ ΑΦΜ δεν βρέθηκε στη βάση VIES';
-        statusIndicator.className = 'vat-status text-sm mt-1 text-gray-500';
+        statusIndicator.className = 'vat-status mp-status';
       }
     } catch (error) {
       console.error('VAT validation error:', error);
       statusIndicator.textContent = '⚠ Σφάλμα επικοινωνίας με την υπηρεσία';
-      statusIndicator.className = 'vat-status text-sm mt-1 text-red-600';
+      statusIndicator.className = 'vat-status mp-status text-red-600';
     }
   }
 
@@ -349,7 +292,7 @@ const G_CATEGORY_DATA = (function(){
         lastSuccessfulVAT = '';
       }
       statusIndicator.textContent = '';
-      statusIndicator.className = 'vat-status text-sm mt-1';
+      statusIndicator.className = 'vat-status mp-status';
       statusIndicator.style.color = '';
 
       if (!vat || vat.length < 9) { lastAppliedRuleAfm = ''; return; }
@@ -368,10 +311,10 @@ const G_CATEGORY_DATA = (function(){
       if (vat === lastValidatedVAT) return;
       if (vat === lastSuccessfulVAT && String(nameInput.value || '').trim()) {
         statusIndicator.textContent = `✓ Έγκυρο ΑΦΜ: ${nameInput.value}`;
-        statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+        statusIndicator.className = 'vat-status mp-status text-green-600';
         statusIndicator.style.color = '';
         if (document.documentElement.getAttribute('data-theme') === 'dark') {
-          statusIndicator.style.color = '#d1fae5';
+          statusIndicator.style.color = '';
         }
         return;
       }
@@ -470,29 +413,27 @@ const G_CATEGORY_DATA = (function(){
     rules.forEach(rule => {
       const mapping = rule.mapping || {};
       const row = document.createElement('div');
-      row.className = 'group afm-rule-row relative border border-gray-200 rounded-md bg-white p-4 pr-12 hover:border-sky-400 hover:shadow-sm transition cursor-pointer';
+      row.className = 'afm-rule-row mp-row';
       row.dataset.afm = rule.supplier_afm || '';
       row.dataset.name = rule.supplier_name || '';
       row.dataset.mapping = JSON.stringify(mapping);
       row.dataset.invoiceMtype = rule.invoice_mtype || '';
-      const mtypeParts = [];
-      if (rule.invoice_mtype) mtypeParts.push(`<span class="font-semibold text-gray-700">Τιμολόγια</span>: ${escapeHtml(rule.invoice_mtype)}`);
+      const chip = (pct, key) => {
+        const lbl = labelForCategory(mapping[key]);
+        return `<div class="mp-chip${lbl ? '' : ' empty'}"><b>${pct}</b><div>${escapeHtml(lbl || '—')}</div></div>`;
+      };
+      const mtypeHtml = rule.invoice_mtype
+        ? `<div class="mp-mtype"><b>MTYPE τιμολογίων:</b> ${escapeHtml(rule.invoice_mtype)}</div>` : '';
       row.innerHTML = `
-        <div class="flex flex-col gap-2">
-          <div class="flex flex-wrap items-center gap-2">
-            <div class="font-semibold text-gray-800">${escapeHtml(rule.supplier_name || 'Χωρίς επωνυμία')}</div>
-            <div class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">${escapeHtml(rule.supplier_afm || '')}</div>
-          </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
-            <div><span class="font-semibold text-gray-700">0%</span>: ${escapeHtml(labelForCategory(mapping.kat_fpa_a) || '-')}</div>
-            <div><span class="font-semibold text-gray-700">6%</span>: ${escapeHtml(labelForCategory(mapping.kat_fpa_b) || '-')}</div>
-            <div><span class="font-semibold text-gray-700">13%</span>: ${escapeHtml(labelForCategory(mapping.kat_fpa_g) || '-')}</div>
-            <div><span class="font-semibold text-gray-700">17%</span>: ${escapeHtml(labelForCategory(mapping.kat_fpa_d) || '-')}</div>
-            <div class="sm:col-span-2"><span class="font-semibold text-gray-700">24%</span>: ${escapeHtml(labelForCategory(mapping.kat_fpa_e) || '-')}</div>
-          </div>
-          ${mtypeParts.length ? `<div class="text-xs text-gray-500 pt-1">${mtypeParts.join('<br>')}</div>` : ''}
+        <div class="mp-row-top">
+          <div class="mp-row-name">${escapeHtml(rule.supplier_name || 'Χωρίς επωνυμία')}</div>
+          <div class="mp-afm">${escapeHtml(rule.supplier_afm || '')}</div>
         </div>
-        <button class="deleteRuleBtn absolute top-3 right-3 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto inline-flex items-center gap-1 px-2 py-1 rounded-md border border-red-200 bg-red-50 text-xs font-semibold text-red-700 transition hover:bg-red-600 hover:text-white hover:border-red-600" data-act="del" data-afm="${escapeHtml(rule.supplier_afm || '')}" title="Διαγραφή">✖</button>
+        <div class="mp-chips">
+          ${chip('0%', 'kat_fpa_a')}${chip('6%', 'kat_fpa_b')}${chip('13%', 'kat_fpa_g')}${chip('17%', 'kat_fpa_d')}${chip('24%', 'kat_fpa_e')}
+        </div>
+        ${mtypeHtml}
+        <button class="mp-del deleteRuleBtn" type="button" data-act="del" data-afm="${escapeHtml(rule.supplier_afm || '')}" title="Διαγραφή κανόνα" aria-label="Διαγραφή κανόνα">✕</button>
       `;
       row.dataset.search = foldSearch((rule.supplier_name || '') + ' ' + (rule.supplier_afm || ''));
       listEl.appendChild(row);
@@ -578,7 +519,7 @@ const G_CATEGORY_DATA = (function(){
     const statusIndicator = document.getElementById('ruleSupplierAfmStatus');
     if (statusIndicator) {
       statusIndicator.textContent = '✓ Φορτώθηκε αποθηκευμένος κανόνας για ' + (row.dataset.name || row.dataset.afm || 'το ΑΦΜ');
-      statusIndicator.className = 'vat-status text-sm mt-1 text-green-600 font-medium';
+      statusIndicator.className = 'vat-status mp-status text-green-600';
       statusIndicator.style.color = '';
     }
     return true;
@@ -647,12 +588,12 @@ const G_CATEGORY_DATA = (function(){
     const supplierName = String(document.getElementById('ruleSupplierName').value || '').trim();
     const mapping = buildMapping();
     if (!supplierAfm || supplierAfm.length !== 9) {
-      msgEl.className = 'text-sm text-red-600';
+      msgEl.className = 'text-red-600';
       msgEl.textContent = 'Συμπλήρωσε έγκυρο 9ψήφιο ΑΦΜ.';
       return;
     }
     if (!mapping.kat_fpa_a || !mapping.kat_fpa_b || !mapping.kat_fpa_g || !mapping.kat_fpa_d || !mapping.kat_fpa_e) {
-      msgEl.className = 'text-sm text-red-600';
+      msgEl.className = 'text-red-600';
       msgEl.textContent = 'Συμπλήρωσε όλες τις αντιστοιχίσεις ΦΠΑ.';
       return;
     }
@@ -667,7 +608,7 @@ const G_CATEGORY_DATA = (function(){
       if (cat && !allowedForVat(cat, vatKey)) invalid.push(`${labelForCategory(cat)} → ${vatKey}`);
     });
     if (invalid.length) {
-      msgEl.className = 'text-sm text-red-600';
+      msgEl.className = 'text-red-600';
       msgEl.textContent = 'Μη έγκυρες αντιστοιχίσεις: ' + invalid.join(', ');
       return;
     }
@@ -709,14 +650,14 @@ const G_CATEGORY_DATA = (function(){
       const value = String(input.value || '').trim();
       if (!value){
         status.textContent = 'Δώσε URL ή MARK παραστατικού.';
-        status.className = 'text-sm mt-1 text-red-600';
+        status.className = 'mp-status text-red-600';
         return;
       }
       btn.disabled = true;
       const prev = btn.textContent;
       btn.textContent = 'Σκανάρισμα...';
       status.textContent = '🔄 Ανάγνωση παραστατικού...';
-      status.className = 'text-sm mt-1 text-blue-600';
+      status.className = 'mp-status text-blue-600';
       try {
         const res = await fetch('/api/afm_rules/scan', {
           method: 'POST',
@@ -727,7 +668,7 @@ const G_CATEGORY_DATA = (function(){
         const data = await res.json().catch(() => null);
         if (!data || !data.ok){
           status.textContent = '⚠ ' + ((data && data.error) || 'Αποτυχία ανάγνωσης.');
-          status.className = 'text-sm mt-1 text-red-600';
+          status.className = 'mp-status text-red-600';
           return;
         }
         afmInput.value = normalizeAfm(data.supplier_afm);
@@ -737,11 +678,11 @@ const G_CATEGORY_DATA = (function(){
         // Reuse the existing VAT validation to confirm and fill the official name.
         afmInput.dispatchEvent(new Event('input', { bubbles: true }));
         status.textContent = `✓ ΑΦΜ προμηθευτή: ${afmInput.value}` + (data.mark ? ` (MARK ${data.mark})` : '');
-        status.className = 'text-sm mt-1 text-green-600 font-medium';
+        status.className = 'mp-status text-green-600';
         input.value = '';
       } catch (err){
         status.textContent = '⚠ Σφάλμα επικοινωνίας.';
-        status.className = 'text-sm mt-1 text-red-600';
+        status.className = 'mp-status text-red-600';
       } finally {
         btn.disabled = false;
         btn.textContent = prev;
