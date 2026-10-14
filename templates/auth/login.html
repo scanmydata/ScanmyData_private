@@ -3,70 +3,73 @@
 {% block title %}Σύνδεση - Scanmydata{% endblock %}
 
 {% block content %}
-  <div class="content-wrap">
-    <div class="max-w-md">
-      <h1 class="text-2xl font-bold mb-2">🔐 Σύνδεση</h1>
-      <p class="mb-6">Συνδεθείτε στον λογαριασμό σας <span class="font-semibold text-sky-600">Scanmydata</span></p>
+{% include 'partials/auth_ui_css.html' %}
+<div class="au">
+  {% include 'partials/auth_aside.html' %}
 
-      {# Flash messages are rendered globally in base.html -> #flashContainer; avoid duplicate rendering here #}
+  <section class="au-card">
+    <div class="au-head">
+      <div class="au-ico-lg">🔐</div>
+      <h1 class="au-title">Καλώς ήρθατε ξανά</h1>
+      <div class="au-lead">Συνδεθείτε στον λογαριασμό σας <b>ScanmyData</b>.</div>
+    </div>
 
-      {% if login_error %}
-      <div class="mb-4 px-4 py-3 rounded-lg border border-red-400 bg-red-50 text-red-800 text-sm flex items-start gap-3 shadow-sm" role="alert" aria-live="assertive">
-        <span class="text-xl leading-none">⛔</span>
-        <div>
-          <div class="font-semibold mb-0.5">Αποτυχία σύνδεσης</div>
-          <div>{{ login_error }}</div>
+    {# Τα flash messages εμφανίζονται κεντρικά (base.html → #flashContainer) #}
+    {% if login_error %}
+    <div class="au-alert err" role="alert" aria-live="assertive">
+      <div class="au-alert-ico">⛔</div>
+      <div><b>Αποτυχία σύνδεσης</b>{{ login_error }}</div>
+    </div>
+    {% endif %}
+
+    {% if session_expired %}
+    <div class="au-alert warn" role="status">
+      <div class="au-alert-ico">⏱️</div>
+      <div>Η συνεδρία σας έληξε λόγω αδράνειας. Παρακαλώ συνδεθείτε ξανά.</div>
+    </div>
+    {% elif session_conflict %}
+    <div class="au-alert err" role="alert">
+      <div class="au-alert-ico">⚠️</div>
+      <div>Εντοπίστηκε σύνδεση από άλλη συσκευή. Παρακαλώ συνδεθείτε ξανά.</div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/firebase-auth/login" class="au-form" id="loginForm">
+      <div>
+        <label class="au-label" for="loginEmail">Email</label>
+        <div class="au-input-wrap">
+          <span class="au-input-ico" aria-hidden="true">✉️</span>
+          <input id="loginEmail" class="au-input" type="email" name="email" value="{{ login_email or '' }}" required
+                 placeholder="your@email.com" autocomplete="username" autofocus>
         </div>
       </div>
-      {% endif %}
 
-      {% if session_expired %}
-      <div class="mb-4 px-4 py-3 rounded border border-yellow-400 bg-yellow-50 text-yellow-800 text-sm">
-        ⚠️ Η συνεδρία σας έληξε λόγω αδράνειας. Παρακαλώ συνδεθείτε ξανά.
+      <div>
+        <label class="au-label" for="loginPassword">Κωδικός</label>
+        <div class="au-input-wrap has-eye">
+          <span class="au-input-ico" aria-hidden="true">🔑</span>
+          <input id="loginPassword" class="au-input" type="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+          <button type="button" class="au-eye" data-toggle-password="loginPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+            <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+          </button>
+        </div>
+        <div class="au-help" id="capsHint" style="display:none;">⚠️ Το Caps Lock είναι ενεργό.</div>
       </div>
-      {% elif session_conflict %}
-      <div class="mb-4 px-4 py-3 rounded border border-red-400 bg-red-50 text-red-800 text-sm">
-        ⚠️ Εντοπίστηκε σύνδεση από άλλη συσκευή. Παρακαλώ συνδεθείτε ξανά.
+
+      <div class="au-link-row">
+        <span></span>
+        <a class="au-link" href="/forgot-password">Ξεχάσατε τον κωδικό;</a>
       </div>
-      {% endif %}
 
-      <form method="post" action="/firebase-auth/login" class="grid gap-4">
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Email</span>
-          <input type="email" name="email" value="{{ login_email or '' }}" required class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" placeholder="your@email.com" />
-        </label>
-        
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Κωδικός</span>
-          <div class="mt-1 relative">
-            <input id="loginPassword" type="password" name="password" required class="px-3 py-2 border rounded w-full pr-10 focus:outline-none focus:ring-2 focus:ring-sky-600" autocomplete="current-password" />
-            <button type="button" class="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700" data-toggle-password="loginPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
-              <span data-eye-show class="block">👁</span>
-              <span data-eye-hide class="hidden">🙈</span>
-            </button>
-          </div>
-        </label>
+      <button type="submit" class="au-submit" id="loginSubmit">Σύνδεση →</button>
+    </form>
 
-        <button type="submit" class="px-4 py-3 rounded bg-sky-600 hover:bg-sky-700 text-white font-medium transition">
-          ✓ Σύνδεση
-        </button>
-      </form>
-
-      <div class="mt-6 pt-6 border-t space-y-3">
-        <p class="text-center text-sm text-gray-700 dark:text-gray-300">
-          Δεν έχετε λογαριασμό;
-          <a href="/firebase-auth/signup" style="color: #ffffff !important; background-color: #0369a1 !important; padding: 4px 12px; border-radius: 4px; font-weight: 600; text-decoration: none; display: inline-block;">
-            Δημιουργία λογαριασμού
-          </a>
-        </p>
-        <p class="text-center text-sm text-gray-700 dark:text-gray-300">
-          <a href="/forgot-password" style="color: #ffffff !important; background-color: #0369a1 !important; padding: 4px 12px; border-radius: 4px; font-weight: 600; text-decoration: none; display: inline-block;">
-            Ξεχάσατε τον κωδικό;
-          </a>
-        </p>
-      </div>
+    <div class="au-sep"></div>
+    <div class="au-alt">Δεν έχετε λογαριασμό;
+      <a class="au-alt-btn" href="/firebase-auth/signup">Δημιουργία λογαριασμού</a>
     </div>
-  </div>
+  </section>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -74,16 +77,31 @@
 (function(){
   document.querySelectorAll('[data-toggle-password]').forEach(function(btn){
     btn.addEventListener('click', function(){
-      const targetId = btn.getAttribute('data-toggle-password');
-      const input = targetId ? document.getElementById(targetId) : null;
+      var input = document.getElementById(btn.getAttribute('data-toggle-password'));
       if(!input) return;
-      const showing = input.type === 'text';
+      var showing = input.type === 'text';
       input.type = showing ? 'password' : 'text';
       btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
-      btn.querySelectorAll('[data-eye-show]').forEach(function(el){ el.classList.toggle('hidden', !showing); });
-      btn.querySelectorAll('[data-eye-hide]').forEach(function(el){ el.classList.toggle('hidden', showing); });
+      var s = btn.querySelector('[data-eye-show]'), h = btn.querySelector('[data-eye-hide]');
+      if(s) s.style.display = showing ? '' : 'none';
+      if(h) h.style.display = showing ? 'none' : '';
     });
   });
+  var pw = document.getElementById('loginPassword'), hint = document.getElementById('capsHint');
+  if(pw && hint){
+    ['keydown','keyup'].forEach(function(ev){
+      pw.addEventListener(ev, function(e){
+        try { hint.style.display = (e.getModifierState && e.getModifierState('CapsLock')) ? '' : 'none'; } catch(_) {}
+      });
+    });
+    pw.addEventListener('blur', function(){ hint.style.display = 'none'; });
+  }
+  var form = document.getElementById('loginForm'), btn = document.getElementById('loginSubmit');
+  if(form && btn){
+    form.addEventListener('submit', function(){
+      if(!form.checkValidity || form.checkValidity()){ btn.disabled = true; btn.textContent = 'Σύνδεση…'; }
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -1,0 +1,129 @@
+{# Κοινό UI για τις σελίδες σύνδεσης/εγγραφής/επαναφοράς/2FA. Μπαίνει μέσα στο content. #}
+<style id="authUiCss">
+  .au {
+    --au-card: #ffffff; --au-text: #0f172a; --au-muted: #5b6b82; --au-line: #dbe3ee; --au-soft: #f1f5f9;
+    --au-accent: #0284c7; --au-accent-soft: #e0f2fe; --au-input: #ffffff;
+    --au-danger: #b91c1c; --au-danger-soft: #fee2e2; --au-warn: #92400e; --au-warn-soft: #fef3c7;
+    --au-ok: #047857; --au-ok-soft: #d1fae5;
+    max-width: 1020px; margin: 8px auto 40px; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 22px; align-items: stretch;
+  }
+  :root[data-theme="dark"] .au {
+    --au-card: #111c33; --au-text: #e5edf9; --au-muted: #9fb0c8; --au-line: #243148; --au-soft: #0b1324;
+    --au-accent: #38bdf8; --au-accent-soft: #0c2a45; --au-input: #0b1324;
+    --au-danger: #fca5a5; --au-danger-soft: #3b1418; --au-warn: #fde68a; --au-warn-soft: #3a2f0b;
+    --au-ok: #6ee7b7; --au-ok-soft: #0b2f27;
+  }
+  .au.au-narrow { grid-template-columns: minmax(0, 560px); justify-content: center; }
+  .au.au-narrow .au-aside { display: none; }
+
+  /* ---- Πλαϊνό πάνελ ---- */
+  .au-aside {
+    position: relative; overflow: hidden; border-radius: 28px; padding: 34px 30px; display: flex; flex-direction: column; justify-content: flex-start; gap: 28px;
+    background: linear-gradient(145deg, #0369a1 0%, #2563eb 55%, #7c3aed 100%); box-shadow: 0 22px 50px rgba(37, 99, 235, .28);
+  }
+  .au-aside::after {
+    content: ""; position: absolute; right: -80px; bottom: -80px; width: 260px; height: 260px; border-radius: 9999px;
+    background: radial-gradient(circle, rgba(255, 255, 255, .22), transparent 70%);
+  }
+  html body .au .au-aside, html body .au .au-aside * { color: #fff !important; }
+  .au-aside-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; opacity: .85; }
+  .au-aside h2 { font-size: 1.75rem; line-height: 1.2; font-weight: 800; margin: 8px 0 10px; letter-spacing: -.01em; }
+  .au-aside-sub { font-size: .97rem; line-height: 1.55; opacity: .92; }
+  .au-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; position: relative; z-index: 1; }
+  .au-points li { display: flex; gap: 12px; align-items: flex-start; }
+  .au-point-ico {
+    width: 36px; height: 36px; border-radius: 12px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 18px;
+    background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .28);
+  }
+  .au-points b { display: block; font-size: .97rem; }
+  .au-points small { display: block; opacity: .88; font-size: .85rem; line-height: 1.4; }
+  .au-aside-links { font-size: .85rem; opacity: .9; position: relative; z-index: 1; margin-top: auto; }
+  html body .au .au-aside a { text-decoration: underline; }
+
+  /* ---- Κάρτα φόρμας ---- */
+  .au-card {
+    background: var(--au-card); border: 1px solid var(--au-line); border-radius: 28px; padding: 34px 34px 28px;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, .09);
+  }
+  .au-head { margin-bottom: 20px; }
+  .au-ico-lg {
+    width: 52px; height: 52px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 26px; margin-bottom: 14px;
+    background: var(--au-accent-soft);
+  }
+  html body .au .au-title { font-size: 1.65rem; font-weight: 800; margin: 0 0 6px; color: var(--au-text) !important; letter-spacing: -.01em; }
+  html body .au .au-lead { font-size: .97rem; line-height: 1.5; color: var(--au-muted) !important; }
+  html body .au .au-lead b { color: var(--au-accent) !important; }
+
+  .au-form { display: grid; gap: 16px; }
+  html body .au .au-label { display: block; font-size: .85rem; font-weight: 700; margin: 0 0 6px; color: var(--au-text) !important; }
+  html body .au .au-opt { font-weight: 600; color: var(--au-muted) !important; }
+  .au-input-wrap { position: relative; }
+  html body .au .au-input {
+    width: 100%; box-sizing: border-box; height: 48px; padding: 0 14px 0 44px; border-radius: 14px; font-size: 15px;
+    background: var(--au-input) !important; color: var(--au-text) !important; border: 1px solid var(--au-line) !important;
+    box-shadow: none !important; outline: none; transition: border-color .14s ease, box-shadow .14s ease;
+  }
+  html body .au .au-input:focus { border-color: var(--au-accent) !important; box-shadow: 0 0 0 4px rgba(14, 165, 233, .18) !important; }
+  html body .au .au-input::placeholder { color: var(--au-muted) !important; opacity: .75; }
+  html body .au .au-input.au-code { text-align: center; letter-spacing: .5em; font-size: 22px; font-weight: 800; padding: 0 14px; }
+  .au-input-ico {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 17px; pointer-events: none; opacity: .8;
+  }
+  html body .au button.au-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px; border-radius: 10px; cursor: pointer;
+    background: transparent !important; border: 0 !important; color: var(--au-muted) !important; font-size: 16px; padding: 0; box-shadow: none !important;
+  }
+  html body .au button.au-eye:hover { background: var(--au-soft) !important; }
+  .au-input-wrap.has-eye .au-input { padding-right: 48px; }
+  .au-help { font-size: .8rem; line-height: 1.45; margin-top: 6px; }
+  html body .au .au-help { color: var(--au-muted) !important; }
+
+  html body .au button.au-submit, html body .au a.au-submit {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 52px; border-radius: 14px; border: 0 !important;
+    font-size: 16px; font-weight: 800; cursor: pointer; text-decoration: none;
+    background: linear-gradient(135deg, #0ea5e9, #2563eb 60%, #7c3aed) !important; color: #fff !important;
+    box-shadow: 0 12px 26px rgba(37, 99, 235, .32); transition: transform .14s ease, filter .14s ease;
+  }
+  html body .au button.au-submit:hover { transform: translateY(-1px); filter: brightness(1.05); }
+  html body .au button.au-submit[disabled] { opacity: .65; cursor: default; transform: none; }
+  html body .au .au-link-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: .88rem; }
+  html body .au a.au-link { color: var(--au-accent) !important; font-weight: 700; text-decoration: none; }
+  html body .au a.au-link:hover { text-decoration: underline; }
+  .au-sep { height: 1px; background: var(--au-line); margin: 22px 0 18px; }
+  html body .au .au-alt { text-align: center; font-size: .93rem; color: var(--au-muted) !important; }
+  html body .au a.au-alt-btn {
+    display: inline-block; margin-left: 6px; padding: 7px 14px; border-radius: 12px; font-weight: 800; text-decoration: none;
+    background: var(--au-accent-soft) !important; color: var(--au-accent) !important; border: 1px solid var(--au-accent);
+  }
+
+  /* ---- Μηνύματα ---- */
+  .au-alert { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; margin-bottom: 16px; font-size: .9rem; line-height: 1.45; }
+  .au-alert .au-alert-ico { font-size: 20px; line-height: 1; flex: none; }
+  .au-alert.err { background: var(--au-danger-soft); border: 1px solid var(--au-danger); }
+  .au-alert.warn { background: var(--au-warn-soft); border: 1px solid var(--au-warn); }
+  .au-alert.info { background: var(--au-accent-soft); border: 1px solid var(--au-accent); }
+  html body .au .au-alert.err, html body .au .au-alert.err * { color: var(--au-danger) !important; }
+  html body .au .au-alert.warn, html body .au .au-alert.warn * { color: var(--au-warn) !important; }
+  html body .au .au-alert.info, html body .au .au-alert.info * { color: var(--au-text) !important; }
+  html body .au .au-alert b:first-child { display: block; margin-bottom: 2px; }
+
+  /* ---- Δείκτης ισχύος κωδικού ---- */
+  .au-meter { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+  html body .au .au-meter i { height: 6px; border-radius: 9999px; background: var(--au-line) !important; display: block; transition: background-color .15s ease; }
+  html body .au .au-meter[data-s="1"] i:nth-child(-n+1) { background: #ef4444 !important; }
+  html body .au .au-meter[data-s="2"] i:nth-child(-n+2) { background: #f59e0b !important; }
+  html body .au .au-meter[data-s="3"] i:nth-child(-n+3) { background: #22c55e !important; }
+  html body .au .au-meter[data-s="4"] i { background: #059669 !important; }
+  html body .au .au-match.ok { color: var(--au-ok) !important; font-weight: 700; }
+  html body .au .au-match.bad { color: var(--au-danger) !important; font-weight: 700; }
+
+  .au-group-box { padding: 14px 16px; border-radius: 16px; background: var(--au-soft); border: 1px dashed var(--au-line); }
+
+  @media (max-width: 860px) {
+    .au { grid-template-columns: minmax(0, 1fr); }
+    .au-aside { padding: 24px 22px; }
+    .au-aside .au-points { display: none; }
+    .au-aside h2 { font-size: 1.35rem; }
+    .au-card { padding: 24px 20px; border-radius: 22px; }
+  }
+</style>

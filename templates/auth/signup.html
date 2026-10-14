@@ -1,76 +1,130 @@
 {% extends 'base.html' %}
 
-{% block title %}Δημιουργία λογαριασμού - Firebed Private{% endblock %}
+{% block title %}Δημιουργία λογαριασμού - ScanmyData{% endblock %}
 
 {% block content %}
-  <div class="content-wrap">
-    <div class="max-w-md">
-      <h1 class="text-2xl font-bold mb-2">🆕 Δημιουργία λογαριασμού</h1>
-      <p class="mb-6">Εγγραφείτε στο Firebed Private με Firebase</p>
-      
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <div class="space-y-3 mb-4">
-            {% for category, msg in messages %}
-              {% if category in ['danger', 'error'] %}
-                <div class="p-3 rounded border border-red-200 bg-red-50 text-red-800">{{ msg|safe }}</div>
-              {% elif category == 'success' %}
-                <div class="p-3 rounded border border-green-200 bg-green-50 text-green-800">{{ msg|safe }}</div>
-              {% elif category == 'warning' %}
-                <div class="p-3 rounded border border-yellow-200 bg-yellow-50 text-yellow-800">{{ msg|safe }}</div>
-              {% elif category == 'info' %}
-                <div class="p-3 rounded border border-sky-200 bg-sky-50 text-sky-800">{{ msg|safe }}</div>
-              {% else %}
-                <div class="p-3 rounded border border-gray-200 bg-gray-50 text-gray-800">{{ msg|safe }}</div>
-              {% endif %}
-            {% endfor %}
-          </div>
-        {% endif %}
-      {% endwith %}
+{% include 'partials/auth_ui_css.html' %}
+<div class="au">
+  {% include 'partials/auth_aside.html' %}
 
-      <form method="post" action="/firebase-auth/signup" class="grid gap-4">
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Email</span>
-          <input type="email" name="email" required class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" placeholder="your@email.com" />
-        </label>
-
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Όνομα χρήστη (προαιρετικό)</span>
-          <input type="text" name="display_name" class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" placeholder="Όνομα εμφάνισης" />
-        </label>
-
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Κωδικός (ελάχιστο 6 χαρακτήρες)</span>
-          <input id="signupPassword" type="password" name="password" required minlength="6" class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" />
-        </label>
-
-        <label class="block">
-          <span class="text-sm font-medium mb-1 block">Επιβεβαίωση κωδικού</span>
-          <input id="signupPasswordConfirm" type="password" name="password_confirm" required minlength="6" class="mt-1 px-3 py-2 border rounded w-full focus:outline-none focus:ring-2 focus:ring-sky-600" />
-          <small class="mt-1 block">Πρέπει να ταιριάζουν</small>
-        </label>
-
-        <div class="p-4 bg-blue-50 border border-blue-200 rounded">
-          <p class="text-sm mb-3">
-            <strong>Ένταξη σε ομάδα (προαιρετικό):</strong>
-          </p>
-          <input type="text" name="group" placeholder="Εισάγετε κωδικό ομάδας για ένταξη" class="px-3 py-2 border rounded w-full text-sm" />
-          <small class="mt-1 block">Ζητήστε από τον διαχειριστή τον κωδικό της ομάδας</small>
-        </div>
-
-        <button type="submit" class="px-4 py-3 rounded bg-sky-600 hover:bg-sky-700 text-white font-medium transition">
-          ✓ Δημιουργία λογαριασμού
-        </button>
-      </form>
-
-      <div class="mt-6 pt-6 border-t">
-        <p class="text-center text-sm text-gray-700 dark:text-gray-300">
-          Έχετε ήδη λογαριασμό;
-          <a href="/firebase-auth/login" style="color: #ffffff !important; background-color: #0369a1 !important; padding: 4px 12px; border-radius: 4px; font-weight: 600; text-decoration: none; display: inline-block;">
-            Συνδεθείτε εδώ
-          </a>
-        </p>
-      </div>
+  <section class="au-card">
+    <div class="au-head">
+      <div class="au-ico-lg">🚀</div>
+      <h1 class="au-title">Δημιουργία λογαριασμού</h1>
+      <div class="au-lead">Ξεκινήστε με το <b>ScanmyData</b> σε λιγότερο από ένα λεπτό.</div>
     </div>
-  </div>
+
+    {# Τα flash messages εμφανίζονται κεντρικά (base.html → #flashContainer) #}
+    <form method="post" action="/firebase-auth/signup" class="au-form" id="signupForm">
+      <div>
+        <label class="au-label" for="signupEmail">Email</label>
+        <div class="au-input-wrap">
+          <span class="au-input-ico" aria-hidden="true">✉️</span>
+          <input id="signupEmail" class="au-input" type="email" name="email" required placeholder="your@email.com" autocomplete="email" autofocus>
+        </div>
+      </div>
+
+      <div>
+        <label class="au-label" for="signupName">Όνομα χρήστη <span class="au-opt">(προαιρετικό)</span></label>
+        <div class="au-input-wrap">
+          <span class="au-input-ico" aria-hidden="true">👤</span>
+          <input id="signupName" class="au-input" type="text" name="display_name" placeholder="Όνομα εμφάνισης" autocomplete="name">
+        </div>
+      </div>
+
+      <div>
+        <label class="au-label" for="signupPassword">Κωδικός</label>
+        <div class="au-input-wrap has-eye">
+          <span class="au-input-ico" aria-hidden="true">🔑</span>
+          <input id="signupPassword" class="au-input" type="password" name="password" required minlength="6" autocomplete="new-password" placeholder="Τουλάχιστον 6 χαρακτήρες">
+          <button type="button" class="au-eye" data-toggle-password="signupPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+            <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+          </button>
+        </div>
+        <div class="au-meter" id="pwMeter" data-s="0"><i></i><i></i><i></i><i></i></div>
+        <div class="au-help" id="pwHint">Χρησιμοποιήστε 8+ χαρακτήρες με κεφαλαία, αριθμούς και σύμβολα για πιο ισχυρό κωδικό.</div>
+      </div>
+
+      <div>
+        <label class="au-label" for="signupPasswordConfirm">Επιβεβαίωση κωδικού</label>
+        <div class="au-input-wrap has-eye">
+          <span class="au-input-ico" aria-hidden="true">🔒</span>
+          <input id="signupPasswordConfirm" class="au-input" type="password" name="password_confirm" required minlength="6" autocomplete="new-password" placeholder="Ξαναγράψτε τον κωδικό">
+          <button type="button" class="au-eye" data-toggle-password="signupPasswordConfirm" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+            <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+          </button>
+        </div>
+        <div class="au-help au-match" id="pwMatch">Πρέπει να ταιριάζουν.</div>
+      </div>
+
+      <div class="au-alert info" style="margin:0;">
+        <div class="au-alert-ico">📧</div>
+        <div>Θα σας στείλουμε email για <strong>επιβεβαίωση</strong> του λογαριασμού. Μετά μπορείτε να δημιουργήσετε ομάδα ή να σας προσθέσει ένας διαχειριστής.</div>
+      </div>
+
+      <button type="submit" class="au-submit" id="signupSubmit">Δημιουργία λογαριασμού →</button>
+      <div class="au-help" style="text-align:center;">Με την εγγραφή αποδέχεστε τους <a class="au-link" href="/terms">Όρους Χρήσης</a> και την <a class="au-link" href="/privacy">Πολιτική Απορρήτου</a>.</div>
+    </form>
+
+    <div class="au-sep"></div>
+    <div class="au-alt">Έχετε ήδη λογαριασμό;
+      <a class="au-alt-btn" href="/firebase-auth/login">Σύνδεση</a>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  document.querySelectorAll('[data-toggle-password]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var input = document.getElementById(btn.getAttribute('data-toggle-password'));
+      if(!input) return;
+      var showing = input.type === 'text';
+      input.type = showing ? 'password' : 'text';
+      btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
+      var s = btn.querySelector('[data-eye-show]'), h = btn.querySelector('[data-eye-hide]');
+      if(s) s.style.display = showing ? '' : 'none';
+      if(h) h.style.display = showing ? 'none' : '';
+    });
+  });
+
+  var pw = document.getElementById('signupPassword'), pc = document.getElementById('signupPasswordConfirm');
+  var meter = document.getElementById('pwMeter'), hint = document.getElementById('pwHint'), match = document.getElementById('pwMatch');
+  var LABELS = ['', 'Αδύναμος κωδικός', 'Μέτριος κωδικός', 'Καλός κωδικός', 'Ισχυρός κωδικός'];
+  var DEFAULT_HINT = 'Χρησιμοποιήστε 8+ χαρακτήρες με κεφαλαία, αριθμούς και σύμβολα για πιο ισχυρό κωδικό.';
+  function score(v){
+    if(!v) return 0;
+    var s = 0;
+    if(v.length >= 6) s++;
+    if(v.length >= 10) s++;
+    if(/[a-zα-ω]/.test(v) && /[A-ZΑ-Ω]/.test(v)) s++;
+    if(/\d/.test(v) && /[^A-Za-z0-9α-ωΑ-Ω]/.test(v)) s++;
+    return Math.max(1, Math.min(4, s));
+  }
+  function update(){
+    var v = pw.value, sc = score(v);
+    meter.setAttribute('data-s', String(sc));
+    hint.textContent = v ? LABELS[sc] + (sc < 3 ? ' — προσθέστε μήκος, κεφαλαία, αριθμούς ή σύμβολα.' : '.') : DEFAULT_HINT;
+    if(!pc.value){ match.textContent = 'Πρέπει να ταιριάζουν.'; match.className = 'au-help au-match'; }
+    else if(pc.value === v){ match.textContent = '✓ Οι κωδικοί ταιριάζουν.'; match.className = 'au-help au-match ok'; }
+    else { match.textContent = '✕ Οι κωδικοί δεν ταιριάζουν.'; match.className = 'au-help au-match bad'; }
+  }
+  if(pw && pc){ pw.addEventListener('input', update); pc.addEventListener('input', update); }
+
+  var form = document.getElementById('signupForm'), btn = document.getElementById('signupSubmit');
+  if(form){
+    form.addEventListener('submit', function(e){
+      if(pw.value !== pc.value){
+        e.preventDefault();
+        update();
+        pc.focus();
+        return;
+      }
+      if(btn){ btn.disabled = true; btn.textContent = 'Δημιουργία…'; }
+    });
+  }
+})();
+</script>
 {% endblock %}
