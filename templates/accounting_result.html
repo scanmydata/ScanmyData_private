@@ -493,6 +493,25 @@
   </div>
 </div>
 
+<!-- Προβολή αποθηκευμένου αποτελέσματος (ιστορικό Ατομικού) σε popup: κλείνει με ×, Escape, κλικ εκτός
+     του παραθύρου (global dismiss στο modal_utils.js) και μετά τη διαγραφή. -->
+<div id="arHistoryViewModal" class="hidden fixed inset-0 flex items-center justify-center p-4" style="background:rgba(0,0,0,.45);z-index:100150;">
+  <div class="bg-white rounded-lg shadow-lg w-full p-5 overflow-y-auto" style="max-width:min(1100px,100%);max-height:90vh;">
+    <div class="flex justify-between items-start gap-3 mb-3">
+      <div>
+        <h3 class="text-lg font-semibold">📂 Αποθηκευμένο αποτέλεσμα</h3>
+        <div id="arHistoryViewStatus" class="text-sm text-gray-600 mt-1"></div>
+      </div>
+      <button id="arHistoryViewClose" type="button" data-modal-close aria-label="Κλείσιμο" class="text-2xl leading-none text-gray-500 hover:text-gray-700">&times;</button>
+    </div>
+    <div class="flex flex-wrap gap-2 mb-3">
+      <button id="arHistoryViewPdfBtn" type="button" data-lock-exempt class="px-3 py-1.5 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">⬇ Λήψη PDF</button>
+      <button id="arHistoryViewDeleteBtn" type="button" class="px-3 py-1.5 rounded-md text-sm font-medium bg-red-50 text-red-600 border border-red-300 hover:bg-red-100">🗑 Διαγραφή</button>
+    </div>
+    <div id="arHistoryViewContainer"></div>
+  </div>
+</div>
+
 <!-- Edit saved client (same shared store as Έλεγχος Ε3's «Αποθηκευμένα») —
      .brain-cred-* classes, same as e3_check.html's own credentials-edit
      modal, so the two look identical for the same underlying data. -->

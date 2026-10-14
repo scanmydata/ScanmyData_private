@@ -2436,23 +2436,84 @@ async function deleteHistoryEntry(vat, entryId, onDone) {
   return data;
 }
 
+// Το αποθηκευμένο αποτέλεσμα ανοίγει σε popup (όχι μέσα στη σελίδα). Κλείνει με ×, Escape (global dismiss),
+// κλικ εκτός του παραθύρου και μετά τη διαγραφή.
+var AR_OPEN_HISTORY = null; // { vat, id, name, section }
+
+function closeHistoryViewModal() {
+  const modal = document.getElementById('arHistoryViewModal');
+  if (modal) { modal.classList.add('hidden'); modal.style.display = 'none'; }
+  const c = document.getElementById('arHistoryViewContainer');
+  if (c) c.innerHTML = '';
+  AR_OPEN_HISTORY = null;
+}
+
 async function openHistoryEntry(vat, entryId, name) {
-  const statusEl = document.getElementById('arSingleStatus');
   if (!vat || !entryId) return;
+  moveModalsToBody();
+  const modal = document.getElementById('arHistoryViewModal');
+  const statusEl = document.getElementById('arHistoryViewStatus');
+  const container = document.getElementById('arHistoryViewContainer');
+  const pdfBtn = document.getElementById('arHistoryViewPdfBtn');
+  const delBtn = document.getElementById('arHistoryViewDeleteBtn');
+  const closeBtn = document.getElementById('arHistoryViewClose');
+  if (!modal || !statusEl || !container) return;
+
+  // onclick (όχι addEventListener): ξαναδένεται σε κάθε άνοιγμα χωρίς διπλούς listeners
+  closeBtn.onclick = closeHistoryViewModal;
+  pdfBtn.onclick = () => { if (AR_OPEN_HISTORY && AR_OPEN_HISTORY.section) exportIndividualPdf(AR_OPEN_HISTORY.section); };
+  delBtn.onclick = async () => {
+    const h = AR_OPEN_HISTORY;
+    if (!h) return;
+    let proceed = false;
+    try {
+      proceed = await showModalConfirm(
+        'Διαγραφή αποτελέσματος',
+        'Διαγραφή αυτού του αποθηκευμένου αποτελέσματος;',
+        'Διαγραφή', 'Άκυρο',
+      );
+    } catch (_) { proceed = false; }
+    if (!proceed) return;
+    delBtn.disabled = true;
+    try {
+      const resp = await deleteHistoryEntry(h.vat, h.id);
+      if (resp && resp.ok) {
+        closeHistoryViewModal();
+        try { await loadSingleHistory(h.name); } catch (_) {}
+      } else {
+        showArFlash((resp && resp.error) || 'Αποτυχία διαγραφής.', 'error');
+      }
+    } catch (err) {
+      showArFlash('Αποτυχία διαγραφής: ' + String(err), 'error');
+    } finally {
+      delBtn.disabled = false;
+    }
+  };
+
+  AR_OPEN_HISTORY = { vat, id: entryId, name, section: null };
+  container.innerHTML = '';
   statusEl.textContent = 'Άνοιγμα αποθηκευμένου αποτελέσματος...';
+  pdfBtn.disabled = true; delBtn.disabled = true; delBtn.classList.remove('hidden');
+  modal.classList.remove('hidden');
+  modal.style.display = '';
   try {
     const res = await fetch('/api/accounting_result/history/' + encodeURIComponent(entryId) + '?vat=' + encodeURIComponent(vat));
     const data = await res.json();
+    if (!AR_OPEN_HISTORY || AR_OPEN_HISTORY.id !== entryId) return;   // έκλεισε στο μεταξύ
     if (!data.ok || !data.entry || !data.entry.report) {
       statusEl.textContent = 'Σφάλμα: ' + (data.error || 'δεν βρέθηκε αποθηκευμένο αποτέλεσμα');
       return;
     }
     const e = data.entry;
-    const container = document.getElementById('arSingleReportContainer');
-    container.innerHTML = buildReportSectionHtml(e.credential_name || name, e.vat || vat, e.date_from, e.date_to, e.report);
-    window.__arSingleLastSection = { name: e.credential_name || name, vat: e.vat || vat, from: e.date_from, to: e.date_to, report: e.report };
-    document.getElementById('arSinglePdfBtn').classList.remove('hidden');
-    statusEl.textContent = '📂 Προβολή αποθηκευμένου αποτελέσματος από ' + ddmmyyyy(e.date_from) + ' – ' + ddmmyyyy(e.date_to) + ' (υπολογίστηκε ' + new Date(e.timestamp).toLocaleString('el-GR') + ').';
+    const section = { name: e.credential_name || name, vat: e.vat || vat, from: e.date_from, to: e.date_to, report: e.report };
+    AR_OPEN_HISTORY.section = section;
+    container.innerHTML = buildReportSectionHtml(section.name, section.vat, e.date_from, e.date_to, e.report);
+    statusEl.textContent = 'Από ' + ddmmyyyy(e.date_from) + ' – ' + ddmmyyyy(e.date_to) + ' (υπολογίστηκε ' + new Date(e.timestamp).toLocaleString('el-GR') + ').';
+    pdfBtn.disabled = false;
+    // Τα αποτελέσματα μαζικού υπολογισμού διατηρούνται (δεν διαγράφονται μεμονωμένα)· η διαγραφή τους γίνεται από το φάκελο μαζικών.
+    const isBulk = e.mode === 'bulk';
+    delBtn.classList.toggle('hidden', isBulk);
+    delBtn.disabled = isBulk;
   } catch (err) {
     statusEl.textContent = 'Σφάλμα: ' + String(err);
   }
@@ -4475,7 +4536,7 @@ function moveModalsToBody() {
   // these ids inside #appShell's content on every visit), not for
   // positioning correctness, so it no longer needs to be airtight about
   // exactly when it runs.
-  ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal'].forEach((id) => {
+  ['arExcelHintModal', 'arSavedExcelHintModal', 'arManualInvModal', 'arDepPickModal', 'waitOverlay', 'arBulkRunsModal', 'arSavedEditModal', 'arHistoryViewModal'].forEach((id) => {
     const matches = document.querySelectorAll('#' + id);
     if (matches.length > 1) {
       // Keep only the element document.getElementById(id) would itself
