@@ -1,0 +1,587 @@
+{% extends "base.html" %}
+{% block title %}Οδηγός χρήσης - ScanmyData{% endblock %}
+
+{% block head_extra %}
+<style>
+  .mn {
+    --mn-bg: #f4f7fb; --mn-card: #ffffff; --mn-text: #0f172a; --mn-muted: #475569; --mn-line: #e2e8f0;
+    --mn-accent: #0284c7; --mn-accent-soft: #e0f2fe; --mn-ok: #059669; --mn-ok-soft: #d1fae5;
+    --mn-warn: #b45309; --mn-warn-soft: #fef3c7; --mn-code: #f1f5f9;
+    max-width: 1180px; margin: 0 auto; padding: 4px 4px 40px;
+  }
+  :root[data-theme="dark"] .mn {
+    --mn-bg: #0b1324; --mn-card: #111c33; --mn-text: #e5edf9; --mn-muted: #9fb0c8; --mn-line: #243148;
+    --mn-accent: #38bdf8; --mn-accent-soft: #0c2a45; --mn-ok: #34d399; --mn-ok-soft: #0b2f27;
+    --mn-warn: #fbbf24; --mn-warn-soft: #3a2f0b; --mn-code: #162544;
+  }
+  html body .mn, html body .mn div, html body .mn li, html body .mn p, html body .mn span, html body .mn strong, html body .mn em, html body .mn b,
+  html body .mn h1, html body .mn h2, html body .mn h3, html body .mn h4 { color: var(--mn-text); }
+  html body .mn .mn-muted, html body .mn .mn-muted * { color: var(--mn-muted); }
+
+  .mn-hero {
+    border-radius: 24px; padding: 34px 32px; margin-bottom: 22px;
+    background: linear-gradient(135deg, #0369a1 0%, #2563eb 55%, #7c3aed 100%);
+    box-shadow: 0 18px 40px rgba(37, 99, 235, .25);
+  }
+  html body .mn .mn-hero, html body .mn .mn-hero * { color: #ffffff; }
+  .mn-hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 6px; }
+  .mn-hero-sub { font-size: 16px; opacity: .92; max-width: 720px; }
+  .mn-hero-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; align-items: center; }
+  .mn-search {
+    flex: 1 1 280px; max-width: 460px; padding: 11px 16px; border-radius: 14px; font-size: 15px;
+    border: 1px solid rgba(255,255,255,.35) !important; background: rgba(255,255,255,.16) !important; color: #fff !important;
+    outline: none;
+  }
+  .mn-search::placeholder { color: rgba(255,255,255,.8) !important; }
+  .mn-search:focus { background: rgba(255,255,255,.26) !important; }
+  html body .mn a.mn-btn, html body .mn button.mn-btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600;
+    text-decoration: none; cursor: pointer; border: 1px solid var(--mn-line) !important;
+    background: var(--mn-card) !important; color: var(--mn-text) !important; transition: transform .12s ease, box-shadow .12s ease;
+  }
+  html body .mn a.mn-btn:hover, html body .mn button.mn-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(2,6,23,.18); }
+  html body .mn a.mn-btn-primary, html body .mn button.mn-btn-primary {
+    background: #ffffff !important; color: #0369a1 !important; border-color: transparent !important;
+  }
+  html body .mn .mn-sec a.mn-btn-primary, html body .mn .mn-sec button.mn-btn-primary {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #fff !important;
+  }
+
+  .mn-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 22px; align-items: start; }
+  .mn-toc {
+    position: sticky; top: 108px; max-height: calc(100vh - 130px); overflow: auto;
+    background: var(--mn-card); border: 1px solid var(--mn-line); border-radius: 18px; padding: 12px;
+  }
+  .mn-toc-title { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px 8px; }
+  html body .mn .mn-toc a {
+    display: block; padding: 7px 10px; border-radius: 10px; font-size: 14px; text-decoration: none; color: var(--mn-text);
+  }
+  html body .mn .mn-toc a:hover { background: var(--mn-accent-soft); }
+  html body .mn .mn-toc a.mn-on { background: var(--mn-accent-soft); color: var(--mn-accent); font-weight: 700; }
+
+  .mn-sec {
+    background: var(--mn-card); border: 1px solid var(--mn-line); border-radius: 20px; padding: 24px 26px;
+    margin-bottom: 18px; scroll-margin-top: 110px;
+  }
+  .mn-sec[hidden] { display: none; }
+  .mn-sec-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+  .mn-ico {
+    width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 24px;
+    background: var(--mn-accent-soft);
+  }
+  .mn-sec h2 { font-size: 22px; font-weight: 800; margin: 0; flex: 1 1 200px; }
+  .mn-lead { font-size: 15px; line-height: 1.6; margin: 6px 0 14px; }
+  .mn-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .mn h3 { font-size: 15px; font-weight: 700; margin: 4px 0 8px; }
+  .mn ol, .mn ul { margin: 0; padding-left: 20px; }
+  .mn ol li, .mn ul li { margin: 6px 0; line-height: 1.55; font-size: 14.5px; }
+  .mn ol li::marker { color: var(--mn-accent); font-weight: 700; }
+  .mn-tip, .mn-warn {
+    margin-top: 14px; padding: 11px 14px; border-radius: 12px; font-size: 14px; line-height: 1.55;
+  }
+  .mn-tip { background: var(--mn-ok-soft); border: 1px solid var(--mn-ok); }
+  .mn-warn { background: var(--mn-warn-soft); border: 1px solid var(--mn-warn); }
+  .mn kbd, .mn code {
+    padding: 1px 7px; border-radius: 7px; background: var(--mn-code); border: 1px solid var(--mn-line); font-size: 13px;
+  }
+  .mn-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .mn-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 14px 0 4px; }
+  .mn-step { border: 1px solid var(--mn-line); border-radius: 16px; padding: 14px; background: var(--mn-bg); }
+  .mn-step-n {
+    width: 30px; height: 30px; border-radius: 9999px; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; background: var(--mn-accent); margin-bottom: 8px;
+  }
+  html body .mn .mn-step-n { color: #fff; }
+  .mn-step b { display: block; margin-bottom: 4px; }
+  .mn-faq details { border: 1px solid var(--mn-line); border-radius: 12px; padding: 10px 14px; margin: 8px 0; background: var(--mn-bg); }
+  .mn-faq summary { cursor: pointer; font-weight: 600; font-size: 14.5px; }
+  .mn-faq details > div { margin-top: 8px; font-size: 14.5px; line-height: 1.6; }
+  .mn-empty { display: none; text-align: center; padding: 40px 10px; }
+  .mn-footnote { text-align: center; font-size: 13px; margin-top: 10px; }
+
+  @media (max-width: 900px) {
+    .mn-layout { grid-template-columns: minmax(0, 1fr); }
+    .mn-toc { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 4px; }
+    .mn-toc-title { width: 100%; }
+    .mn-hero { padding: 24px 20px; }
+    .mn-sec { padding: 18px 16px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set logged = current_user.is_authenticated %}
+<div class="mn">
+
+  <!-- ===== Hero ===== -->
+  <div class="mn-hero">
+    <h1>📖 Οδηγός χρήσης</h1>
+    <div class="mn-hero-sub">Όλα όσα χρειάζεστε για να δουλέψετε με το ScanmyData: από την πρώτη επιλογή ομάδας και πελάτη μέχρι τον έλεγχο Ε3 και το λογιστικό αποτέλεσμα.</div>
+    <div class="mn-hero-row">
+      <input id="mnSearch" type="search" class="mn-search" placeholder="🔎 Αναζήτηση στον οδηγό (π.χ. QR, Epsilon, 2FA)…" autocomplete="off">
+      {% if logged %}
+        <a href="{{ url_for('manual_page') }}" data-tour-start="full" class="mn-btn mn-btn-primary">🧭 Ξενάγηση στην εφαρμογή</a>
+      {% else %}
+        <a href="{{ url_for('auth.signup') }}" class="mn-btn mn-btn-primary">🚀 Δημιουργία λογαριασμού</a>
+        <a href="{{ url_for('auth.login') }}" class="mn-btn">🔐 Σύνδεση</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mn-layout">
+    <!-- ===== Περιεχόμενα ===== -->
+    <nav class="mn-toc" id="mnToc" aria-label="Περιεχόμενα">
+      <div class="mn-toc-title mn-muted">Περιεχόμενα</div>
+      <a href="#start">🚀 Γρήγορη εκκίνηση</a>
+      <a href="#concepts">🧩 Βασικές έννοιες</a>
+      <a href="#groups">🏢 Ομάδες</a>
+      <a href="#customers">👥 Πελάτες</a>
+      <a href="#fetch">📥 Λήψη παραστατικών</a>
+      <a href="#search">🔍 Αναζήτηση &amp; καταχώρηση</a>
+      <a href="#classify">🏷️ Χαρακτηρισμός &amp; κανόνες</a>
+      <a href="#unchar">📋 Αχαρακτήριστα myDATA</a>
+      <a href="#list">🗂️ Λίστα &amp; εξαγωγές</a>
+      <a href="#e3">✅ Έλεγχος Ε3</a>
+      <a href="#ar">🧮 Λογιστικό αποτέλεσμα</a>
+      <a href="#account">🔐 Λογαριασμός &amp; ασφάλεια</a>
+      <a href="#backup">💾 Αντίγραφα ασφαλείας</a>
+      <a href="#support">💬 Υποστήριξη</a>
+      <a href="#faq">❓ Συχνές ερωτήσεις</a>
+    </nav>
+
+    <div id="mnContent">
+
+      <!-- ===== Γρήγορη εκκίνηση ===== -->
+      <section class="mn-sec" id="start">
+        <div class="mn-sec-head"><div class="mn-ico">🚀</div><h2>Γρήγορη εκκίνηση</h2></div>
+        <div class="mn-lead">Πέντε βήματα από τη δημιουργία λογαριασμού μέχρι το πρώτο αποτέλεσμα.</div>
+        <div class="mn-steps">
+          <div class="mn-step"><div class="mn-step-n">1</div><b>Ομάδα</b><div>Δημιουργήστε ομάδα ή ζητήστε από διαχειριστή να σας προσθέσει, και επιλέξτε την.</div></div>
+          <div class="mn-step"><div class="mn-step-n">2</div><b>Πελάτης</b><div>Προσθέστε πελάτη με ΑΦΜ και κωδικούς myDATA και ορίστε τον ως ενεργό.</div></div>
+          <div class="mn-step"><div class="mn-step-n">3</div><b>Λήψη</b><div>Κατεβάστε τα παραστατικά της περιόδου από το myDATA.</div></div>
+          <div class="mn-step"><div class="mn-step-n">4</div><b>Χαρακτηρισμός</b><div>Αναζητήστε ή σαρώστε παραστατικά, χαρακτηρίστε και αποθηκεύστε στη λίστα.</div></div>
+          <div class="mn-step"><div class="mn-step-n">5</div><b>Εξαγωγή &amp; έλεγχος</b><div>Εξαγωγή σε Excel/Epsilon, έλεγχος Ε3 και λογιστικό αποτέλεσμα.</div></div>
+        </div>
+        {% if logged %}
+        <div class="mn-actions"><a href="{{ url_for('manual_page') }}" data-tour-start="full" class="mn-btn mn-btn-primary">🧭 Δείξε μου βήμα-βήμα</a></div>
+        {% endif %}
+      </section>
+
+      <!-- ===== Βασικές έννοιες ===== -->
+      <section class="mn-sec" id="concepts">
+        <div class="mn-sec-head"><div class="mn-ico">🧩</div><h2>Βασικές έννοιες</h2></div>
+        <div class="mn-cols">
+          <div>
+            <h3>Ομάδα</h3>
+            <div>Ο κοινός χώρος εργασίας του γραφείου. Πελάτες, παραστατικά, κανόνες και αντίγραφα ανήκουν στην ομάδα και τα βλέπουν όλα τα μέλη της.</div>
+          </div>
+          <div>
+            <h3>Πελάτης (ενεργός πελάτης)</h3>
+            <div>Η επιχείρηση για την οποία δουλεύετε. Λήψη, αναζήτηση, Ε3 και αποτελέσματα αφορούν πάντα τον <b>ενεργό</b> πελάτη, που φαίνεται στην κεφαλίδα.</div>
+          </div>
+          <div>
+            <h3>Χρήση</h3>
+            <div>Η διαχειριστική χρήση (έτος) που επιλέγετε στην κεφαλίδα. Καθορίζει σε ποια περίοδο αναφέρονται οι σελίδες.</div>
+          </div>
+          <div>
+            <h3>Ρόλοι</h3>
+            <div><b>Διαχειριστής</b>: διαχειρίζεται μέλη και ομάδα και μπορεί να ξεκινά μαζικές διαδικασίες. <b>Μέλος</b>: εργάζεται κανονικά στα δεδομένα της ομάδας.</div>
+          </div>
+          <div>
+            <h3>Βιβλία Β΄ και Γ΄ κατηγορίας</h3>
+            <div>Κάθε πελάτης έχει κατηγορία βιβλίων. Επηρεάζει τις κατηγορίες χαρακτηρισμού, την εξαγωγή και τους ελέγχους.</div>
+          </div>
+          <div>
+            <h3>MARK</h3>
+            <div>Ο 15ψήφιος μοναδικός αριθμός καταχώρησης που δίνει το myDATA σε κάθε παραστατικό. Με αυτόν ή με το QR του εντύπου αναζητάτε ένα παραστατικό.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Ομάδες ===== -->
+      <section class="mn-sec" id="groups">
+        <div class="mn-sec-head"><div class="mn-ico">🏢</div><h2>Ομάδες</h2></div>
+        <div class="mn-lead">Η ομάδα είναι ο χώρος στον οποίο δουλεύουν μαζί οι χρήστες του γραφείου.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Πώς</h3>
+            <ol>
+              <li>Ανοίξτε <b>☰ Μενού → Διαχείριση ομάδων</b> (ή πατήστε την ενεργή ομάδα στην κεφαλίδα).</li>
+              <li>Πατήστε «Επιλογή ομάδας» στην κάρτα της ομάδας που θέλετε.</li>
+              <li>Για νέα ομάδα χρησιμοποιήστε «Δημιουργία ομάδας» — γίνεστε διαχειριστής της.</li>
+              <li>Ως διαχειριστής προσθέστε συναδέλφους με <b>username ή email</b> και ορίστε ρόλο.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Ό,τι πρέπει να ξέρετε</h3>
+            <ul>
+              <li>Ο χρήστης που προστίθεται ή αλλάζει ρόλο ή αφαιρείται λαμβάνει <b>ειδοποίηση</b> στο επόμενο login.</li>
+              <li>Μπορείτε να ανήκετε σε πολλές ομάδες και να εναλλάσσεστε από το μενού.</li>
+              <li>Κάθε μέλος μπορεί να αποχωρήσει από μια ομάδα.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-actions">
+          <a href="{{ url_for('auth.list_groups') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="groups" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Πελάτες ===== -->
+      <section class="mn-sec" id="customers">
+        <div class="mn-sec-head"><div class="mn-ico">👥</div><h2>Πελάτες</h2></div>
+        <div class="mn-lead">Εδώ καταχωρείτε τους πελάτες της ομάδας και επιλέγετε με ποιον δουλεύετε.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Προσθήκη πελάτη</h3>
+            <ol>
+              <li>Πατήστε «Προσθήκη πελάτη».</li>
+              <li>Συμπληρώστε επωνυμία και <b>ΑΦΜ</b> (ελέγχεται αυτόματα).</li>
+              <li>Βάλτε <b>myDATA user</b> και <b>subscription key</b> του πελάτη.</li>
+              <li>Επιλέξτε κατηγορία βιβλίων Β΄ ή Γ΄ και, αν χρειάζεται, τις σειρές παραστατικών.</li>
+              <li>Αποθηκεύστε και πατήστε «Ορισμός ως ενεργό».</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Στη λίστα</h3>
+            <ul>
+              <li>Αναζήτηση με όνομα ή ΑΦΜ, φίλτρο Όλα / Β / Γ, ταξινόμηση ανά στήλη.</li>
+              <li>Κλικ σε γραμμή για επιλογή· επεξεργασία και διαγραφή από τα εικονίδια της γραμμής.</li>
+              <li><b>⚙ Ρυθμίσεις</b>: γενικοί λογαριασμοί, συναλλασσόμενοι και αντίγραφα ασφαλείας.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-warn">⚠ Οι κωδικοί myDATA αποθηκεύονται για τη λειτουργία της λήψης. Η προσθήκη, επεξεργασία και διαγραφή πελατών απαιτεί δικαιώματα διαχειριστή της ομάδας.</div>
+        <div class="mn-actions">
+          <a href="{{ url_for('credentials') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="credentials" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Λήψη ===== -->
+      <section class="mn-sec" id="fetch">
+        <div class="mn-sec-head"><div class="mn-ico">📥</div><h2>Λήψη παραστατικών myDATA</h2></div>
+        <div class="mn-lead">Κατεβάζει από το myDATA τα παραστατικά του πελάτη για μια περίοδο και τα αποθηκεύει στην ομάδα.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Ατομική λήψη</h3>
+            <ol>
+              <li>Ελέγξτε ότι ο ενεργός πελάτης είναι ο σωστός.</li>
+              <li>Ορίστε <b>Από – Έως</b> (dd/mm/yyyy). Δίπλα φαίνεται η τελευταία λήψη.</li>
+              <li>Πατήστε «Ανάκτηση». Η πρόοδος εμφανίζεται και μπορείτε να συνεχίσετε να δουλεύετε.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Μαζική λήψη</h3>
+            <ul>
+              <li>Διαθέσιμη για διαχειριστές: επιλέγετε πολλούς πελάτες και την ίδια περίοδο.</li>
+              <li>Έχει κουμπιά «Επιλογή όλων» / «Αποεπιλογή όλων» και <b>Διακοπή</b>.</li>
+              <li>Ενώ τρέχει λήψη, κλειδώνει μόνο η ίδια η λήψη — οι υπόλοιπες σελίδες παραμένουν διαθέσιμες.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-tip">💡 Κάντε τη λήψη πριν από την αναζήτηση/χαρακτηρισμό: έτσι η λίστα και οι έλεγχοι δουλεύουν με πλήρη δεδομένα.</div>
+        <div class="mn-actions">
+          <a href="{{ url_for('fetch') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="fetch" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Αναζήτηση ===== -->
+      <section class="mn-sec" id="search">
+        <div class="mn-sec-head"><div class="mn-ico">🔍</div><h2>Αναζήτηση MARK &amp; καταχώρηση</h2></div>
+        <div class="mn-lead">Η κεντρική οθόνη εργασίας: βρίσκετε ένα παραστατικό, ελέγχετε τα στοιχεία του, το χαρακτηρίζετε και το αποθηκεύετε στη λίστα.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Τρόποι εισαγωγής</h3>
+            <ul>
+              <li><b>MARK</b>: γράψτε τον 15ψήφιο αριθμό.</li>
+              <li><b>URL / QR</b>: επικολλήστε τον σύνδεσμο του εντύπου — ανακτώνται τα στοιχεία από τον πάροχο του παραστατικού.</li>
+              <li><b>Κάμερα</b>: σάρωση QR από τον υπολογιστή.</li>
+              <li><b>Κινητό</b>: «Σύνδεση φορητής συσκευής» — σκανάρετε από το κινητό και τα αποτελέσματα έρχονται στον υπολογιστή, με επιλογή Τιμολόγια / Αποδείξεις.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Ροή</h3>
+            <ol>
+              <li>Εισάγετε MARK ή QR.</li>
+              <li>Ελέγξτε την περίληψη (εκδότης, ημερομηνία, καθαρό, ΦΠΑ, μικτό, γραμμές).</li>
+              <li>Επιλέξτε <b>κατηγορία χαρακτηρισμού</b> ανά γραμμή (και είδος κίνησης όπου χρειάζεται).</li>
+              <li>Επιβεβαιώστε. Το παραστατικό αποθηκεύεται και φαίνεται στη λίστα κάτω από την αναζήτηση.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Αποδείξεις</h3>
+            <ul>
+              <li>Ο διακόπτης Τιμολόγια / Αποδείξεις αλλάζει τη λειτουργία.</li>
+              <li>Στις αποδείξεις επιλέγετε <b>Ανάλυση</b> (ανά γραμμή) ή <b>Μικτό</b> (συνολικό ποσό).</li>
+              <li>Ορίζεται ο «Κωδικός κίνησης αποδείξεων» όταν ζητηθεί.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-tip">💡 Αν κάποιο παραστατικό ήδη υπάρχει στη λίστα, εμφανίζεται ειδοποίηση και μπορείτε να το επεξεργαστείτε αντί να το διπλοκαταχωρήσετε.</div>
+        <div class="mn-actions">
+          <a href="{{ url_for('search') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="search" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Χαρακτηρισμός ===== -->
+      <section class="mn-sec" id="classify">
+        <div class="mn-sec-head"><div class="mn-ico">🏷️</div><h2>Χαρακτηρισμός &amp; αυτοματισμοί</h2></div>
+        <div class="mn-lead">Ορίζετε μία φορά τους κανόνες και η εφαρμογή χαρακτηρίζει μόνη της τα επόμενα παραστατικά.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Επαναληπτική εισαγωγή</h3>
+            <div>Αντιστοιχίζετε κάθε συντελεστή ΦΠΑ (0%, 6%, 13%, 17%, 24%) σε κατηγορία χαρακτηρισμού. Όταν είναι ενεργή, τα νέα παραστατικά χαρακτηρίζονται και αποθηκεύονται αυτόματα.</div>
+          </div>
+          <div>
+            <h3>Προφίλ χαρακτηρισμών</h3>
+            <div>Ονομασμένα σετ αντιστοιχίσεων (π.χ. «Υλικά κατασκευής») για τιμολόγια ή αποδείξεις, με ορισμένο είδος κίνησης. Επιλέγονται από τη λίστα προφίλ.</div>
+          </div>
+          <div>
+            <h3>Κανόνες ΑΦΜ</h3>
+            <div>Σταθερός χαρακτηρισμός ανά προμηθευτή. Δημιουργείται με το ΑΦΜ (ή σάρωση παραστατικού) και, αν θέλετε, ελέγχει και το είδος κίνησης (MTYPE).</div>
+          </div>
+          <div>
+            <h3>Custom κατηγορίες</h3>
+            <div>Δικές σας κατηγορίες με τίτλο, λογαριασμό και ΦΠΑ %, ενεργές για τιμολόγια και προαιρετικά και για αποδείξεις.</div>
+          </div>
+        </div>
+        <div class="mn-actions">
+          <a href="{{ url_for('search') }}" class="mn-btn">Άνοιγμα αναζήτησης</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="search" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Αχαρακτήριστα ===== -->
+      <section class="mn-sec" id="unchar">
+        <div class="mn-sec-head"><div class="mn-ico">📋</div><h2>Αχαρακτήριστα τιμολόγια myDATA</h2></div>
+        <div class="mn-lead">Για παραστατικά χωρίς QR ή MARK στο έντυπο: επιλέξτε, χαρακτηρίστε και αποθηκεύστε στη λίστα με λίγα κλικ.</div>
+        <div class="mn-cols">
+          <div>
+            <ol>
+              <li>Στην Αναζήτηση πατήστε «Αχαρακτήριστα τιμολόγια myDATA».</li>
+              <li>Φιλτράρετε τη λίστα (αναζήτηση και <b>φίλτρο ανά στήλη</b>, με ομαδοποίηση ημερομηνιών ανά μήνα).</li>
+              <li>Επιλέξτε γραμμές και πατήστε «Εφαρμογή στα επιλεγμένα» με κατηγορία και είδος κίνησης.</li>
+              <li>Πατήστε «Αποθήκευση επιλεγμένων».</li>
+            </ol>
+          </div>
+          <div>
+            <ul>
+              <li>Η ένδειξη ενεργού φίλτρου φαίνεται πάντα στην κεφαλίδα της στήλης.</li>
+              <li>«PDF όλων (ZIP)» κατεβάζει τα PDF των παρόχων σε ένα αρχείο.</li>
+              <li>Κλείσιμο με <kbd>Esc</kbd> ή κλικ έξω από το παράθυρο.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Λίστα ===== -->
+      <section class="mn-sec" id="list">
+        <div class="mn-sec-head"><div class="mn-ico">🗂️</div><h2>Λίστα παραστατικών &amp; εξαγωγές</h2></div>
+        <div class="mn-lead">Όλα τα καταχωρημένα παραστατικά του πελάτη, με φίλτρα και εξαγωγή.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Λίστα</h3>
+            <ul>
+              <li>Αναζήτηση, <b>φίλτρα ανά στήλη</b>, ταξινόμηση και σελιδοποίηση.</li>
+              <li>«Μη χαρακτηρισμένα» για να δείτε μόνο όσα εκκρεμούν.</li>
+              <li><b>Μαζικός χαρακτηρισμός</b> των επιλεγμένων.</li>
+              <li>Διαγραφή επιλεγμένων με δυνατότητα <b>αναίρεσης</b>.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Εξαγωγές</h3>
+            <ul>
+              <li><b>Λήψη .xlsx</b>: εξοδολόγιο Β΄ ή Γ΄.</li>
+              <li><b>Epsilon</b>: προεπισκόπηση με έλεγχο ελλείψεων, γέφυρα (strict), XLSX γέφυρας και αρχείου .ect, αρχείο <b>HyperLog (.ld)</b> και ενημέρωση backup Epsilon (.zip).</li>
+              <li>Επιλογή «Εξαίρεση ήδη εξαγμένων» ώστε να μη διπλοεξάγονται παραστατικά.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-warn">⚠ Η γέφυρα Epsilon απαιτεί κάθε γραμμή να έχει κωδικό συναλλασσόμενου, χαρακτηρισμούς και λογαριασμούς· η προεπισκόπηση δείχνει τι λείπει.</div>
+      </section>
+
+      <!-- ===== Ε3 ===== -->
+      <section class="mn-sec" id="e3">
+        <div class="mn-sec-head"><div class="mn-ico">✅</div><h2>Έλεγχος Ε3</h2></div>
+        <div class="mn-lead">Συγκρίνει το ισοζύγιο του λογιστηρίου με τα δεδομένα myDATA και με τα πεδία του εντύπου Ε3.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Γρήγορος έλεγχος</h3>
+            <ol>
+              <li>Επιλέξτε περίοδο «Από – Έως» για τον ενεργό πελάτη.</li>
+              <li>Φορτώστε δεδομένα Ε3 / myDATA και ανεβάστε το <b>ισοζύγιο</b> (Excel).</li>
+              <li>Δείτε ανά κωδικό: ποσό Ε3, ποσό myDATA και διαφορά.</li>
+              <li>Η λίστα μη χαρακτηρισμένων δείχνει τι εκκρεμεί.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Αναλυτικός έλεγχος (E3 Brain)</h3>
+            <ul>
+              <li><b>Ατομικός</b> ή <b>Μαζικός</b> για πολλές εταιρίες· τα αποτελέσματα φυλάσσονται στα <b>Αποθηκευμένα</b>.</li>
+              <li>Στοιχεία εταιρίας από ΑΑΔΕ/ΓΕΜΗ, μέλη, διευθύνσεις υποκαταστημάτων, ΑΜΚΑ.</li>
+              <li>Έλεγχοι: <b>ΕΦΚΑ / ΤΕΚΑ</b>, <b>ΚΕΑΟ πιστώσεις</b>, <b>μισθωτήρια</b>, <b>Ε9 / ΕΝΦΙΑ</b>, καρτέλα εργοδότη.</li>
+              <li>Λήψη και αποθήκευση των PDF βεβαιώσεων ανά πελάτη, και Log ανακτήσεων.</li>
+              <li>Εισαγωγή κωδικών από Excel (τύπου «Κωδικοί_Υπόχρεων.xlsx»).</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-tip">💡 Ο μαζικός έλεγχος τρέχει στον server και συνεχίζει ακόμη κι αν αλλάξετε σελίδα· θα σας ζητηθεί να τον συνεχίσετε όταν γυρίσετε.</div>
+        <div class="mn-actions">
+          <a href="{{ url_for('e3_check') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="e3" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Λογιστικό αποτέλεσμα ===== -->
+      <section class="mn-sec" id="ar">
+        <div class="mn-sec-head"><div class="mn-ico">🧮</div><h2>Λογιστικό αποτέλεσμα</h2></div>
+        <div class="mn-lead">Υπολογίζει το λογιστικό αποτέλεσμα μιας εταιρίας για μια περίοδο, με εκτιμήσεις ΦΠΑ και φόρου.</div>
+        <div class="mn-cols">
+          <div>
+            <h3>Ατομικός</h3>
+            <ol>
+              <li>Επιλέξτε εταιρία και περίοδο.</li>
+              <li>Προαιρετικά επισυνάψτε <b>ισοζύγιο</b> Excel — αντικαθιστά τα ποσά myDATA στους αντίστοιχους κωδικούς.</li>
+              <li>Επιλέξτε αν θέλετε νέα λήψη από myDATA, εκτίμηση ΦΠΑ (TAXISnet) και φόρου εισοδήματος.</li>
+              <li>Πατήστε «Υπολογισμός». Απαντήστε σε τυχόν ερωτήσεις ελέγχου (απόθεμα λήξης, μηνιαία σύνολα, αποσβέσεις).</li>
+              <li>Κατεβάστε το <b>PDF</b> ή δείτε το ιστορικό υπολογισμών.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Μαζικός &amp; Αποθηκευμένα</h3>
+            <ul>
+              <li>Επιλέγετε πολλές εταιρίες· ο υπολογισμός τρέχει στον server και συνεχίζει στο παρασκήνιο.</li>
+              <li>Έλεγχος &amp; Εξαγωγή, <b>ZIP</b> με PDF ανά εταιρία ή <b>συγκεντρωτικό PDF</b>.</li>
+              <li>Αποθηκευμένες μαζικές καταστάσεις για επανάληψη/ανάκτηση.</li>
+              <li>Λίστα εταιριών: εισαγωγή από Excel, ανίχνευση ΦΠΑ, μαζική αναζήτηση στοιχείων ΑΑΔΕ.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mn-warn">⚠ Εταιρίες χωρίς κωδικούς myDATA δεν μπορούν να υπολογιστούν· ο έλεγχος τις επισημαίνει πριν την εκτέλεση.</div>
+        <div class="mn-actions">
+          <a href="{{ url_for('accounting_result_page') }}" class="mn-btn">Άνοιγμα σελίδας</a>
+          {% if logged %}<a href="{{ url_for('manual_page') }}" data-tour-start="ar" class="mn-btn mn-btn-primary">▶ Δείξε μου</a>{% endif %}
+        </div>
+      </section>
+
+      <!-- ===== Λογαριασμός ===== -->
+      <section class="mn-sec" id="account">
+        <div class="mn-sec-head"><div class="mn-ico">🔐</div><h2>Λογαριασμός &amp; ασφάλεια</h2></div>
+        <div class="mn-cols">
+          <div>
+            <h3>Ρυθμίσεις λογαριασμού</h3>
+            <ul>
+              <li>Από <b>☰ Μενού → ⚙</b> αλλάζετε κωδικό.</li>
+              <li><b>Επαλήθευση δύο παραγόντων (2FA)</b>: ενεργοποιείται με εφαρμογή authenticator ή με κωδικό στο email σας.</li>
+              <li>Η συνεδρία λήγει μετά από αδράνεια και όταν κλείσουν όλες οι καρτέλες.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Εμφάνιση &amp; προτιμήσεις</h3>
+            <ul>
+              <li>Διακόπτης φωτεινού / σκούρου θέματος στην κεφαλίδα.</li>
+              <li>Επιλογές cookies και δεδομένων στο banner και στην <a href="{{ url_for('privacy_page') }}">Πολιτική Απορρήτου</a>.</li>
+              <li>Όροι χρήσης: <a href="{{ url_for('terms_page') }}">Όροι Χρήσης</a>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Backup ===== -->
+      <section class="mn-sec" id="backup">
+        <div class="mn-sec-head"><div class="mn-ico">💾</div><h2>Αντίγραφα ασφαλείας</h2></div>
+        <div class="mn-lead">Τα δεδομένα της ομάδας συγχρονίζονται και διατηρούνται σε cloud αποθήκευση με αντίγραφα.</div>
+        <div class="mn-cols">
+          <div>
+            <ul>
+              <li>Στη σελίδα Πελάτες, <b>⚙ Ρυθμίσεις → Backup</b> δημιουργείτε αντίγραφο και κάνετε επαναφορά από αρχείο.</li>
+              <li>Η επαναφορά ζητά επιβεβαίωση, γιατί αντικαθιστά τα τρέχοντα δεδομένα.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Υποστήριξη ===== -->
+      <section class="mn-sec" id="support">
+        <div class="mn-sec-head"><div class="mn-ico">💬</div><h2>Υποστήριξη</h2></div>
+        <div class="mn-lead">Το κουμπί συνομιλίας κάτω δεξιά σας βάζει σε άμεση επικοινωνία με την ομάδα υποστήριξης.</div>
+        <div class="mn-cols">
+          <div>
+            <ul>
+              <li>Δηλώστε όνομα και γράψτε το μήνυμά σας· μπορείτε να επισυνάψετε αρχεία (εικόνες, PDF, Excel, zip).</li>
+              <li>Βλέπετε πότε παραδόθηκε και διαβάστηκε το μήνυμα και πότε πληκτρολογεί η υποστήριξη.</li>
+              <li>«Αρχείο» εμφανίζει τις προηγούμενες συνομιλίες σας.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== FAQ ===== -->
+      <section class="mn-sec mn-faq" id="faq">
+        <div class="mn-sec-head"><div class="mn-ico">❓</div><h2>Συχνές ερωτήσεις</h2></div>
+        <details><summary>Δεν βλέπω δεδομένα ή μου ζητά να επιλέξω ομάδα/πελάτη.</summary>
+          <div>Όλες οι σελίδες χρειάζονται <b>ενεργή ομάδα</b> και <b>ενεργό πελάτη</b>. Επιλέξτε ομάδα από το μενού και μετά πελάτη από τη σελίδα Πελάτες.</div></details>
+        <details><summary>Η λήψη δεν φέρνει παραστατικά.</summary>
+          <div>Ελέγξτε το <b>myDATA user</b> και το <b>subscription key</b> του πελάτη, καθώς και την περίοδο «Από – Έως». Αν το πρόβλημα συνεχίζεται, στείλτε μήνυμα στην υποστήριξη.</div></details>
+        <details><summary>Ένα παραστατικό δεν διαβάζεται από το QR.</summary>
+          <div>Δοκιμάστε τον σύνδεσμο (URL) ή το MARK. Αν ο πάροχος δεν υποστηρίζεται, χρησιμοποιήστε τα «Αχαρακτήριστα myDATA» για να το χαρακτηρίσετε χωρίς QR.</div></details>
+        <details><summary>Πώς αλλάζω ενεργό πελάτη γρήγορα;</summary>
+          <div>Πατήστε το όνομα του ενεργού πελάτη στην κεφαλίδα ή ανοίξτε «Πελάτες», επιλέξτε γραμμή και «Ορισμός ως ενεργό».</div></details>
+        <details><summary>Διέγραψα παραστατικά κατά λάθος.</summary>
+          <div>Στη λίστα υπάρχει το κουμπί <b>↩ Αναίρεση</b> που επαναφέρει την τελευταία διαγραφή.</div></details>
+        <details><summary>Μπορώ να ξαναδώ την ξενάγηση;</summary>
+          <div>Ναι, από <b>☰ Μενού → Ξενάγηση στην εφαρμογή</b>, ή ανά ενότητα με τα κουμπιά «Δείξε μου» σε αυτόν τον οδηγό.</div></details>
+      </section>
+
+      <div class="mn-empty mn-muted" id="mnEmpty">Δεν βρέθηκαν ενότητες για την αναζήτησή σας.</div>
+      <div class="mn-footnote mn-muted">Χρειάζεστε κάτι που δεν αναφέρεται εδώ; Ανοίξτε τη συνομιλία υποστήριξης κάτω δεξιά.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var input = document.getElementById('mnSearch');
+  var secs = Array.prototype.slice.call(document.querySelectorAll('#mnContent .mn-sec'));
+  var toc = Array.prototype.slice.call(document.querySelectorAll('#mnToc a'));
+  var empty = document.getElementById('mnEmpty');
+  function norm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+  var texts = secs.map(function (s) { return norm(s.textContent); });
+  if (input) {
+    input.addEventListener('input', function () {
+      var q = norm(input.value.trim());
+      var shown = 0;
+      secs.forEach(function (s, i) {
+        var ok = !q || texts[i].indexOf(q) !== -1;
+        s.hidden = !ok;
+        if (ok) shown++;
+      });
+      toc.forEach(function (a) {
+        var t = document.getElementById((a.getAttribute('href') || '').slice(1));
+        a.style.display = (t && t.hidden) ? 'none' : '';
+      });
+      if (empty) empty.style.display = shown ? 'none' : 'block';
+    });
+  }
+  // Επισήμανση ενεργής ενότητας στα περιεχόμενα
+  if ('IntersectionObserver' in window) {
+    var map = {};
+    toc.forEach(function (a) { map[(a.getAttribute('href') || '').slice(1)] = a; });
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting && map[en.target.id]) {
+          toc.forEach(function (a) { a.classList.remove('mn-on'); });
+          map[en.target.id].classList.add('mn-on');
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    secs.forEach(function (s) { io.observe(s); });
+  }
+})();
+</script>
+{% endblock %}

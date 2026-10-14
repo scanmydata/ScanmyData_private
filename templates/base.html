@@ -53,6 +53,7 @@
   {# Was 7 inline <style> blocks (~66KB on every page load). Extracted to a
      cacheable file; order between dialogs.css and tailwind.css is load-bearing. #}
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tour.css') }}">
     
   {% block head_extra %}{% endblock %}
 
@@ -228,10 +229,20 @@
             <a href="{{ url_for('credentials') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">👥 Πελάτες</a>
           </div>
         </div>
+
+        <!-- Βοήθεια -->
+        <div>
+          <p class="text-sm font-medium text-gray-700 mb-3">Βοήθεια</p>
+          <div class="space-y-2">
+            <a href="{{ url_for('manual_page') }}" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">📖 Οδηγός χρήσης</a>
+            <a href="{{ url_for('manual_page') }}" data-tour-start="full" class="block px-3 py-2 rounded text-sm hover:bg-gray-100 text-gray-700">🧭 Ξενάγηση στην εφαρμογή</a>
+          </div>
+        </div>
         {% else %}
         <div class="space-y-2">
           <a href="{{ url_for('auth.login') }}" class="block px-4 py-2 rounded-md text-sm text-white text-center font-medium shadow-sm">Σύνδεση</a>
           <a href="{{ url_for('auth.signup') }}" class="block px-4 py-2 rounded text-sm bg-gray-200 text-gray-700 hover:bg-gray-300 text-center">Δημιουργία λογαριασμού</a>
+          <a href="{{ url_for('manual_page') }}" class="block px-4 py-2 rounded text-sm hover:bg-gray-100 text-gray-700 text-center">📖 Οδηγός χρήσης</a>
         </div>
         {% endif %}
       </div>
@@ -596,6 +607,8 @@ html[data-theme="dark"] .hb-ticket-prev{color:#cbd5e1;}
   </form>
 </div>
 <script src="{{ url_for('static', filename='js/base_04.js') }}"></script>
+<script>window.SMD_USER = {{ {'id': current_user.id, 'created': (current_user.created_at.isoformat() ~ 'Z') if current_user.created_at else ''}|tojson }};</script>
+<script src="{{ url_for('static', filename='js/tour.js') }}"></script>
 {% endif %}
 
 

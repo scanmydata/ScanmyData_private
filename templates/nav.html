@@ -1,5 +1,152 @@
 {% extends "base.html" %}
 {% block title %}ScanmyData - Διαχείριση myDATA{% endblock %}
+
+{% block head_extra %}
+{% if not current_user.is_authenticated %}
+<style>
+  .lp {
+    --lp-bg: #f4f7fb; --lp-card: #ffffff; --lp-text: #0f172a; --lp-muted: #475569; --lp-line: #e2e8f0;
+    --lp-accent: #0284c7; --lp-accent-soft: #e0f2fe; --lp-ok: #059669; --lp-ok-soft: #d1fae5; --lp-warn: #b45309; --lp-warn-soft: #fef3c7;
+    --lp-shadow: 0 10px 30px rgba(15, 23, 42, .08);
+    max-width: 1120px; margin: 0 auto; padding: 8px 4px 48px;
+  }
+  :root[data-theme="dark"] .lp {
+    --lp-bg: #0b1324; --lp-card: #111c33; --lp-text: #e5edf9; --lp-muted: #9fb0c8; --lp-line: #243148;
+    --lp-accent: #38bdf8; --lp-accent-soft: #0c2a45; --lp-ok: #34d399; --lp-ok-soft: #0b2f27; --lp-warn: #fbbf24; --lp-warn-soft: #3a2f0b;
+    --lp-shadow: 0 14px 34px rgba(0, 0, 0, .35);
+  }
+  html body .lp, html body .lp div, html body .lp li, html body .lp b, html body .lp summary, html body .lp i,
+  html body .lp h1, html body .lp h2, html body .lp h3 { color: var(--lp-text); }
+  html body .lp .lp-sub, html body .lp .lp-card-text, html body .lp .lp-fact div, html body .lp .lp-step div, html body .lp .lp-mini div,
+  html body .lp .lp-final-sub, html body .lp .lp-faq details div, html body .lp .lp-card li { color: var(--lp-muted); }
+
+  /* Hero */
+  .lp-hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 34px; align-items: center; padding: 34px 6px 18px; }
+  .lp-pill {
+    display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 13px; font-weight: 700;
+    background: var(--lp-accent-soft); border: 1px solid var(--lp-line);
+  }
+  html body .lp .lp-pill { color: var(--lp-accent); }
+  .lp-hero h1 { font-size: 46px; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; margin: 16px 0 14px; }
+  .lp-sub { font-size: 18px; line-height: 1.6; max-width: 560px; }
+  .lp-cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .lp-cta-center { justify-content: center; }
+  html body .lp a.lp-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 13px 22px; border-radius: 14px;
+    font-weight: 700; font-size: 15px; text-decoration: none; transition: transform .14s ease, box-shadow .14s ease; cursor: pointer;
+  }
+  html body .lp a.lp-btn:hover { transform: translateY(-2px); }
+  html body .lp a.lp-btn-primary {
+    background: linear-gradient(135deg, #0ea5e9, #2563eb 60%, #7c3aed) !important; color: #fff !important;
+    box-shadow: 0 12px 26px rgba(37, 99, 235, .35);
+  }
+  html body .lp a.lp-btn-ghost { background: var(--lp-card) !important; color: var(--lp-text) !important; border: 1px solid var(--lp-line); }
+  .lp-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .lp-chip { padding: 6px 12px; border-radius: 9999px; font-size: 13px; background: var(--lp-card); border: 1px solid var(--lp-line); }
+
+  /* Μικρογραφία */
+  .lp-mock {
+    background: var(--lp-card); border: 1px solid var(--lp-line); border-radius: 20px; box-shadow: var(--lp-shadow);
+    padding: 14px 16px 16px; transform: rotate(1.2deg);
+  }
+  .lp-mock-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+  .lp-mock-bar i { width: 10px; height: 10px; border-radius: 9999px; background: var(--lp-line); display: inline-block; }
+  .lp-mock-bar i:nth-child(1) { background: #f87171; } .lp-mock-bar i:nth-child(2) { background: #fbbf24; } .lp-mock-bar i:nth-child(3) { background: #34d399; }
+  .lp-mock-title { margin-left: 8px; font-size: 13px; font-weight: 700; }
+  .lp-mock-search { display: flex; gap: 8px; margin-bottom: 12px; }
+  .lp-mock-input { flex: 1; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--lp-line); background: var(--lp-bg); font-size: 13px; letter-spacing: .04em; }
+  .lp-mock-go { padding: 9px 14px; border-radius: 10px; font-size: 13px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #2563eb); }
+  html body .lp .lp-mock-go { color: #fff; }
+  .lp-mock-row { display: grid; grid-template-columns: 1.6fr .8fr .7fr 1fr; gap: 8px; padding: 9px 4px; border-bottom: 1px solid var(--lp-line); font-size: 13px; align-items: center; }
+  .lp-mock-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  html body .lp .lp-mock-head div { color: var(--lp-muted); }
+  .lp-tag { display: inline-block; padding: 2px 9px; border-radius: 9999px; font-size: 12px; font-weight: 700; }
+  .lp-tag-ok { background: var(--lp-ok-soft); } html body .lp .lp-tag-ok { color: var(--lp-ok); }
+  .lp-tag-warn { background: var(--lp-warn-soft); } html body .lp .lp-tag-warn { color: var(--lp-warn); }
+  .lp-mock-foot { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .lp-mock-pill { padding: 6px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--lp-line); background: var(--lp-bg); }
+  .lp-mock-pill-on { background: var(--lp-ok-soft); border-color: var(--lp-ok); } html body .lp .lp-mock-pill-on { color: var(--lp-ok); }
+
+  /* Στοιχεία */
+  .lp-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 26px 0 8px; }
+  .lp-fact { background: var(--lp-card); border: 1px solid var(--lp-line); border-radius: 16px; padding: 14px 16px; text-align: center; }
+  .lp-fact b { display: block; font-size: 17px; font-weight: 800; }
+  .lp-fact div { font-size: 13px; margin-top: 2px; }
+
+  /* Ενότητες */
+  .lp-section { margin-top: 64px; scroll-margin-top: 110px; }
+  .lp-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; text-align: center; }
+  html body .lp .lp-eyebrow { color: var(--lp-accent); }
+  .lp-section h2 { font-size: 32px; font-weight: 800; letter-spacing: -.01em; text-align: center; margin: 8px 0 26px; }
+  .lp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .lp-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lp-card, .lp-mini {
+    background: var(--lp-card); border: 1px solid var(--lp-line); border-radius: 20px; padding: 22px;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .02); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  .lp-card:hover, .lp-mini:hover { transform: translateY(-3px); box-shadow: var(--lp-shadow); border-color: var(--lp-accent); }
+  .lp-ico {
+    width: 48px; height: 48px; border-radius: 14px; background: var(--lp-accent-soft);
+    display: flex; align-items: center; justify-content: center; font-size: 24px; margin-bottom: 14px;
+  }
+  .lp-card h3, .lp-mini h3 { font-size: 18px; font-weight: 800; margin: 0 0 8px; }
+  .lp-card-text { font-size: 14.5px; line-height: 1.6; }
+  .lp-card ul { list-style: none; margin: 14px 0 0; padding: 0; }
+  .lp-card li { position: relative; padding-left: 22px; margin: 6px 0; font-size: 13.5px; }
+  .lp-card li::before { content: "✓"; position: absolute; left: 0; font-weight: 800; color: var(--lp-ok); }
+  .lp-mini div:last-child { font-size: 14px; line-height: 1.55; }
+
+  /* Πώς λειτουργεί */
+  .lp-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; position: relative; }
+  .lp-step { background: var(--lp-card); border: 1px solid var(--lp-line); border-radius: 20px; padding: 22px; }
+  .lp-step h3 { font-size: 17px; font-weight: 800; margin: 12px 0 6px; }
+  .lp-step div:last-child { font-size: 14px; line-height: 1.55; }
+  .lp-step-n {
+    width: 38px; height: 38px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; font-weight: 800;
+    background: linear-gradient(135deg, #0ea5e9, #7c3aed);
+  }
+  html body .lp .lp-step-n { color: #fff; }
+
+  /* FAQ */
+  .lp-faq { max-width: 820px; margin-left: auto; margin-right: auto; }
+  .lp-faq details { background: var(--lp-card); border: 1px solid var(--lp-line); border-radius: 14px; padding: 14px 18px; margin: 10px 0; }
+  .lp-faq summary { cursor: pointer; font-weight: 700; font-size: 15.5px; }
+  .lp-faq details div { margin-top: 10px; font-size: 14.5px; line-height: 1.6; }
+
+  /* Τελικό CTA */
+  .lp-final {
+    margin-top: 64px; text-align: center; border-radius: 28px; padding: 54px 24px;
+    background: linear-gradient(135deg, #0369a1 0%, #2563eb 55%, #7c3aed 100%);
+    box-shadow: 0 22px 50px rgba(37, 99, 235, .3);
+  }
+  html body .lp .lp-final, html body .lp .lp-final h2, html body .lp .lp-final div { color: #fff; }
+  .lp-final h2 { font-size: 34px; font-weight: 800; margin: 0 0 10px; }
+  .lp-final-sub { font-size: 17px; opacity: .92; }
+  html body .lp a.lp-btn-white { background: #ffffff !important; color: #0369a1 !important; }
+  html body .lp a.lp-btn-outline { background: transparent !important; color: #ffffff !important; border: 1px solid rgba(255,255,255,.7); }
+
+  @media (max-width: 980px) {
+    .lp-hero { grid-template-columns: minmax(0, 1fr); }
+    .lp-mock { transform: none; }
+    .lp-hero h1 { font-size: 36px; }
+    .lp-grid, .lp-grid-4, .lp-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .lp-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 600px) {
+    .lp-grid, .lp-grid-4, .lp-steps { grid-template-columns: minmax(0, 1fr); }
+    .lp-hero h1 { font-size: 30px; }
+    .lp-sub { font-size: 16px; }
+    .lp-section h2, .lp-final h2 { font-size: 26px; }
+    .lp-mock-row { grid-template-columns: 1.4fr .8fr .7fr; }
+    .lp-mock-row > div:nth-child(4) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lp-card, .lp-mini, html body .lp a.lp-btn { transition: none; }
+  }
+</style>
+{% endif %}
+{% endblock %}
+
 {% block content %}
 
 {% if current_user.is_authenticated %}
@@ -14,146 +161,159 @@
       <a class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors" href="{{ url_for('accounting_result_page') }}">🧮 Λογιστικό Αποτέλεσμα</a>
 
       <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('credentials') }}">👥 Πελάτες</a>
+      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}">📖 Οδηγός χρήσης</a>
+      <a class="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg font-medium transition-colors" href="{{ url_for('manual_page') }}" data-tour-start="full">🧭 Ξενάγηση</a>
     </div>
   </div>
 
 {% else %}
-  <!-- Not logged in - show landing page -->
-  <div class="content-wrap max-w-6xl mx-auto">
-    
-    <!-- Hero Section -->
-    <div class="text-center mb-16">
-      <h1 class="text-5xl font-bold mb-4 bg-gradient-to-r from-sky-600 to-emerald-600 bg-clip-text text-transparent">
-        ScanmyData
-      </h1>
-      <p class="text-2xl mb-2">
-        Ολοκληρωμένη Διαχείριση myDATA της AADE
-      </p>
-      <p class="text-lg mb-8">
-        Αυτοματοποιήστε τη λογιστική σας εργασία με ένα κλικ
-      </p>
-    </div>
+  <!-- ===== Landing page (πριν το login) ===== -->
+  <div class="lp">
 
-    <!-- Features Grid -->
-    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
-      
-      <!-- Feature 1: Λήψη Παραστατικών -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">📥</div>
-        <h3 class="text-xl font-bold mb-3">Λήψη Παραστατικών</h3>
-        <p class="mb-4">
-          Κατεβάστε αυτόματα όλα τα παραστατικά σας από το myDATA με ένα κλικ. Υποστήριξη για πολλαπλά ΑΦΜ ταυτόχρονα.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ Λήψη ανά περίοδο</li>
-          <li>✓ Φίλτρα κατηγοριών</li>
-          <li>✓ Μαζική λήψη</li>
-        </ul>
-      </div>
-
-      <!-- Feature 2: Search -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">🔍</div>
-        <h3 class="text-xl font-bold mb-3">Έξυπνη Αναζήτηση</h3>
-        <p class="mb-4">
-          Βρείτε παραστατικά με MARK, ΑΦΜ, ημερομηνία ή ποσό. Προηγμένα φίλτρα για άμεση πρόσβαση.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ Αναζήτηση MARK</li>
-          <li>✓ Φίλτρα ημερομηνιών</li>
-          <li>✓ Ταξινόμηση αποτελεσμάτων</li>
-        </ul>
-      </div>
-
-      <!-- Feature 3: Excel Export -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">📊</div>
-        <h3 class="text-xl font-bold mb-3">Εξαγωγή Excel</h3>
-        <p class="mb-4">
-          Εξάγετε τα δεδομένα σε Excel για επεξεργασία. Έτοιμα αρχεία για λογιστές και φοροτεχνικούς.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ Εξοδολόγιο Β' & Γ'</li>
-          <li>✓ Γέφυρα Epsilon</li>
-          <li>✓ Custom φίλτρα</li>
-        </ul>
-      </div>
-
-      <!-- Feature 4: Multi-Client -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">👥</div>
-        <h3 class="text-xl font-bold mb-3">Πολλαπλοί Πελάτες</h3>
-        <p class="mb-4">
-          Διαχειριστείτε πολλούς πελάτες από έναν λογαριασμό. Ιδανικό για λογιστές και φοροτεχνικούς.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ Πολλαπλά ΑΦΜ</li>
-          <li>✓ Εναλλαγή πελατών</li>
-          <li>✓ Ομαδική διαχείριση</li>
-        </ul>
-      </div>
-
-      <!-- Feature 5: Backup -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">💾</div>
-        <h3 class="text-xl font-bold mb-3">Αυτόματα Backups</h3>
-        <p class="mb-4">
-          Ασφαλή αντίγραφα των δεδομένων σας στο cloud. Ανάκτηση με ένα κλικ οποιαδήποτε στιγμή.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ Cloud storage</li>
-          <li>✓ Αυτόματη αποθήκευση</li>
-          <li>✓ Εύκολη επαναφορά</li>
-        </ul>
-      </div>
-
-      <!-- Feature 6: Security -->
-      <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div class="text-4xl mb-4">🔒</div>
-        <h3 class="text-xl font-bold mb-3">Ασφάλεια & GDPR</h3>
-        <p class="mb-4">
-          Πλήρης συμμόρφωση με GDPR. Κρυπτογράφηση δεδομένων και ασφαλής αποθήκευση.
-        </p>
-        <ul class="text-sm space-y-2">
-          <li>✓ End-to-end encryption</li>
-          <li>✓ GDPR compliant</li>
-          <li>✓ 2FA authentication</li>
-        </ul>
-      </div>
-
-    </div>
-
-    <!-- How it Works -->
-    <div class="bg-gradient-to-br from-sky-50 to-emerald-50 rounded-2xl p-8 mb-16 border border-sky-200">
-      <h2 class="text-3xl font-bold text-center mb-8">Πώς Λειτουργεί</h2>
-      <div class="grid md:grid-cols-3 gap-6">
-        <div class="text-center">
-          <div class="bg-sky-600 text-white w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4">1</div>
-          <h3 class="font-bold text-lg mb-2">Σύνδεση με myDATA</h3>
-          <p>Εισάγετε τα credentials AADE σας με ασφάλεια</p>
+    <!-- Hero -->
+    <section class="lp-hero">
+      <div class="lp-hero-copy">
+        <div class="lp-pill">Για λογιστές &amp; φοροτεχνικούς · myDATA ΑΑΔΕ</div>
+        <h1>Η δουλειά σας με το myDATA, σε μία οθόνη.</h1>
+        <div class="lp-sub">Λήψη παραστατικών, σάρωση QR, χαρακτηρισμός, εξαγωγή σε Excel και Epsilon, έλεγχος Ε3 και λογιστικό αποτέλεσμα — για όλους τους πελάτες του γραφείου σας, από ένα μέρος.</div>
+        <div class="lp-cta-row">
+          <a href="/firebase-auth/signup" class="lp-btn lp-btn-primary">🚀 Δημιουργία λογαριασμού</a>
+          <a href="#lp-features" class="lp-btn lp-btn-ghost">Δείτε τις δυνατότητες</a>
+          <a href="{{ url_for('manual_page') }}" class="lp-btn lp-btn-ghost">📖 Οδηγός χρήσης</a>
         </div>
-        <div class="text-center">
-          <div class="bg-emerald-600 text-white w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4">2</div>
-          <h3 class="font-bold text-lg mb-2">Λήψη Παραστατικών</h3>
-          <p>Κατεβάστε αυτόματα όλα τα παραστατικά σας</p>
-        </div>
-        <div class="text-center">
-          <div class="bg-purple-600 text-white w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4">3</div>
-          <h3 class="font-bold text-lg mb-2">Εξαγωγή & Διαχείριση</h3>
-          <p>Εξάγετε σε Excel ή συνεχίστε στο λογιστικό σας</p>
+        <div class="lp-chips">
+          <div class="lp-chip">🔐 2FA</div>
+          <div class="lp-chip">☁️ Αντίγραφα ασφαλείας</div>
+          <div class="lp-chip">👥 Ομάδες &amp; ρόλοι</div>
+          <div class="lp-chip">🌙 Σκούρο θέμα</div>
         </div>
       </div>
-    </div>
 
-    <!-- CTA Section -->
-    <div class="cta-section text-center bg-sky-600 text-white rounded-2xl p-12 shadow-2xl">
-      <h2 class="text-3xl font-bold mb-4">Έτοιμοι να Ξεκινήσετε;</h2>
-      <p class="text-xl mb-8 opacity-90">Εγγραφείτε δωρεάν και αυτοματοποιήστε τη διαχείριση myDATA σήμερα!</p>
-      <a href="/firebase-auth/signup" class="cta-signup-btn inline-block px-10 py-4 bg-white text-sky-600 rounded-lg font-bold text-lg hover:bg-gray-100 transition-all transform hover:scale-105 shadow-lg">
-        🚀 Δημιουργία Λογαριασμού
-      </a>
-    </div>
+      <!-- Μικρογραφία της εφαρμογής -->
+      <div class="lp-mock" aria-hidden="true">
+        <div class="lp-mock-bar"><i></i><i></i><i></i><div class="lp-mock-title">Αναζήτηση MARK</div></div>
+        <div class="lp-mock-search"><div class="lp-mock-input">4000 1234 5678 901</div><div class="lp-mock-go">Αναζήτηση</div></div>
+        <div class="lp-mock-row lp-mock-head"><div>Εκδότης</div><div>Καθαρό</div><div>ΦΠΑ</div><div>Κατηγορία</div></div>
+        <div class="lp-mock-row"><div>ΑΛΦΑ ΥΛΙΚΑ Α.Ε.</div><div>1.240,00</div><div>297,60</div><div><b class="lp-tag lp-tag-ok">Υλικά</b></div></div>
+        <div class="lp-mock-row"><div>ΔΕΛΤΑ ΕΝΕΡΓΕΙΑ</div><div>312,40</div><div>74,98</div><div><b class="lp-tag lp-tag-ok">Ενέργεια</b></div></div>
+        <div class="lp-mock-row"><div>ΒΗΤΑ ΣΥΜΒΟΥΛΟΙ</div><div>600,00</div><div>144,00</div><div><b class="lp-tag lp-tag-warn">Εκκρεμεί</b></div></div>
+        <div class="lp-mock-foot"><div class="lp-mock-pill">⬇ Excel</div><div class="lp-mock-pill">Epsilon</div><div class="lp-mock-pill lp-mock-pill-on">✓ Έλεγχος Ε3</div></div>
+      </div>
+    </section>
 
+    <!-- Στοιχεία -->
+    <section class="lp-facts">
+      <div class="lp-fact"><b>Β΄ &amp; Γ΄</b><div>κατηγορία βιβλίων</div></div>
+      <div class="lp-fact"><b>Τιμολόγια &amp; αποδείξεις</b><div>με QR ή MARK</div></div>
+      <div class="lp-fact"><b>Ατομικά &amp; μαζικά</b><div>για πολλούς πελάτες</div></div>
+      <div class="lp-fact"><b>Υπολογιστής &amp; κινητό</b><div>σάρωση από οποιαδήποτε συσκευή</div></div>
+    </section>
+
+    <!-- Δυνατότητες -->
+    <section id="lp-features" class="lp-section">
+      <div class="lp-eyebrow">Δυνατότητες</div>
+      <h2>Όλη η ροή, από το παραστατικό μέχρι το αποτέλεσμα</h2>
+      <div class="lp-grid">
+        <article class="lp-card">
+          <div class="lp-ico">📥</div>
+          <h3>Λήψη παραστατικών myDATA</h3>
+          <div class="lp-card-text">Κατεβάστε αυτόματα τα παραστατικά ανά περίοδο — για έναν πελάτη ή μαζικά για όλους, με πρόοδο και δυνατότητα διακοπής.</div>
+          <ul><li>Ατομική και μαζική λήψη</li><li>Ένδειξη τελευταίας λήψης</li><li>Συνεχίζει στο παρασκήνιο</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">🔍</div>
+          <h3>Αναζήτηση MARK &amp; σάρωση QR</h3>
+          <div class="lp-card-text">Βρείτε παραστατικό με MARK ή σκανάρετε το QR — με την κάμερα του υπολογιστή ή από το κινητό σας, για τιμολόγια και αποδείξεις.</div>
+          <ul><li>Σύνδεση φορητής συσκευής</li><li>Τιμολόγια &amp; αποδείξεις</li><li>Ανάλυση ανά γραμμή ή μικτό</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">🏷️</div>
+          <h3>Χαρακτηρισμός με αυτοματισμούς</h3>
+          <div class="lp-card-text">Ορίστε μία φορά τον χαρακτηρισμό και αφήστε την εφαρμογή να τον επαναλαμβάνει για κάθε νέο παραστατικό.</div>
+          <ul><li>Επαναληπτική εισαγωγή ανά ΦΠΑ</li><li>Κανόνες ανά ΑΦΜ προμηθευτή</li><li>Προφίλ &amp; custom κατηγορίες</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">📋</div>
+          <h3>Αχαρακτήριστα myDATA</h3>
+          <div class="lp-card-text">Τιμολόγια χωρίς QR ή MARK στο έντυπο; Επιλέξτε, χαρακτηρίστε μαζικά και αποθηκεύστε στη λίστα.</div>
+          <ul><li>Φίλτρα ανά στήλη &amp; μήνα</li><li>Μαζική εφαρμογή κατηγορίας</li><li>PDF όλων σε ZIP</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">📊</div>
+          <h3>Λίστα, Excel &amp; Epsilon</h3>
+          <div class="lp-card-text">Λίστα με φίλτρα και αναίρεση διαγραφής, και εξαγωγή έτοιμη για το λογιστικό σας πρόγραμμα.</div>
+          <ul><li>Εξοδολόγιο Β΄ &amp; Γ΄ σε Excel</li><li>Γέφυρα Epsilon &amp; αρχείο .ld</li><li>Χωρίς διπλοεξαγωγή</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">✅</div>
+          <h3>Έλεγχος Ε3</h3>
+          <div class="lp-card-text">Συγκρίνετε το ισοζύγιο με το myDATA και το έντυπο Ε3, και συγκεντρώστε τις βεβαιώσεις από ΕΦΚΑ, ΤΕΚΑ, ΚΕΑΟ και Ε9.</div>
+          <ul><li>Γρήγορος &amp; αναλυτικός έλεγχος</li><li>Μισθωτήρια &amp; Ε9/ΕΝΦΙΑ</li><li>Μαζικά, με αποθηκευμένα PDF</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">🧮</div>
+          <h3>Λογιστικό αποτέλεσμα</h3>
+          <div class="lp-card-text">Υπολογισμός αποτελέσματος για μια εταιρία ή για πολλές, με εκτίμηση ΦΠΑ και φόρου και έτοιμα PDF.</div>
+          <ul><li>Ισοζύγιο Excel προαιρετικά</li><li>Μαζικός υπολογισμός στο παρασκήνιο</li><li>Ιστορικό &amp; συγκεντρωτικό PDF</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">👥</div>
+          <h3>Πελάτες, ομάδες &amp; ρόλοι</h3>
+          <div class="lp-card-text">Δουλέψτε με όλους τους πελάτες του γραφείου και μοιραστείτε τα δεδομένα με τους συναδέλφους σας.</div>
+          <ul><li>Πολλαπλά ΑΦΜ, άμεση εναλλαγή</li><li>Διαχειριστές &amp; μέλη</li><li>Ειδοποιήσεις συμμετοχής</li></ul>
+        </article>
+        <article class="lp-card">
+          <div class="lp-ico">💬</div>
+          <h3>Υποστήριξη &amp; οδηγίες</h3>
+          <div class="lp-card-text">Συνομιλία υποστήριξης μέσα στην εφαρμογή, οδηγός χρήσης και ξενάγηση για κάθε νέο χρήστη.</div>
+          <ul><li>Chat με συνημμένα</li><li>Οδηγός χρήσης</li><li>Ξενάγηση στο πρώτο login</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- Πώς λειτουργεί -->
+    <section id="lp-how" class="lp-section">
+      <div class="lp-eyebrow">Πώς λειτουργεί</div>
+      <h2>Σε τέσσερα βήματα</h2>
+      <div class="lp-steps">
+        <div class="lp-step"><div class="lp-step-n">1</div><h3>Ομάδα &amp; πελάτης</h3><div>Δημιουργείτε ομάδα και προσθέτετε τους πελάτες σας με ΑΦΜ και κωδικούς myDATA.</div></div>
+        <div class="lp-step"><div class="lp-step-n">2</div><h3>Λήψη</h3><div>Κατεβάζετε τα παραστατικά της περιόδου με ένα κλικ.</div></div>
+        <div class="lp-step"><div class="lp-step-n">3</div><h3>Χαρακτηρισμός</h3><div>Αναζητάτε, σκανάρετε και χαρακτηρίζετε — οι κανόνες δουλεύουν για εσάς.</div></div>
+        <div class="lp-step"><div class="lp-step-n">4</div><h3>Εξαγωγή &amp; έλεγχος</h3><div>Excel, Epsilon, έλεγχος Ε3 και λογιστικό αποτέλεσμα σε PDF.</div></div>
+      </div>
+    </section>
+
+    <!-- Ασφάλεια & συνεργασία -->
+    <section class="lp-section">
+      <div class="lp-eyebrow">Ασφάλεια &amp; συνεργασία</div>
+      <h2>Φτιαγμένο για γραφεία που δουλεύουν μαζί</h2>
+      <div class="lp-grid lp-grid-4">
+        <div class="lp-mini"><div class="lp-ico">🛡️</div><h3>2FA</h3><div>Επαλήθευση δύο παραγόντων με authenticator ή email.</div></div>
+        <div class="lp-mini"><div class="lp-ico">☁️</div><h3>Αντίγραφα ασφαλείας</h3><div>Συγχρονισμός στο cloud και επαναφορά όποτε χρειαστεί.</div></div>
+        <div class="lp-mini"><div class="lp-ico">🔑</div><h3>Ρόλοι ομάδας</h3><div>Διαχειριστές και μέλη, με ειδοποιήσεις όταν αλλάζει η συμμετοχή.</div></div>
+        <div class="lp-mini"><div class="lp-ico">📜</div><h3>GDPR</h3><div>Όροι χρήσης, πολιτική απορρήτου και επιλογές cookies.</div></div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="lp-section lp-faq">
+      <div class="lp-eyebrow">Συχνές ερωτήσεις</div>
+      <h2>Πριν ξεκινήσετε</h2>
+      <details><summary>Τι χρειάζομαι για να ξεκινήσω;</summary><div>Έναν λογαριασμό στο ScanmyData και, για κάθε πελάτη, το ΑΦΜ και τους κωδικούς πρόσβασης myDATA (user και subscription key).</div></details>
+      <details><summary>Μπορώ να δουλεύω με πολλούς συναδέλφους;</summary><div>Ναι. Δημιουργείτε ομάδα, προσθέτετε μέλη και όλοι δουλεύουν στα ίδια δεδομένα, με ρόλους διαχειριστή και μέλους.</div></details>
+      <details><summary>Υποστηρίζονται αποδείξεις και τιμολόγια;</summary><div>Ναι, και τα δύο — με MARK, σύνδεσμο ή QR, είτε από τον υπολογιστή είτε από το κινητό σας.</div></details>
+      <details><summary>Πού βρίσκω οδηγίες;</summary><div>Στον <a href="{{ url_for('manual_page') }}">Οδηγό χρήσης</a>. Μετά την εγγραφή σας, η εφαρμογή σάς κάνει και ξενάγηση στο πρώτο login.</div></details>
+    </section>
+
+    <!-- CTA -->
+    <section class="lp-final">
+      <h2>Έτοιμοι να ξεκινήσετε;</h2>
+      <div class="lp-final-sub">Δημιουργήστε λογαριασμό και δείτε πώς η δουλειά με το myDATA γίνεται πιο απλή.</div>
+      <div class="lp-cta-row lp-cta-center">
+        <a href="/firebase-auth/signup" class="lp-btn lp-btn-white">🚀 Δημιουργία λογαριασμού</a>
+        <a href="/firebase-auth/login" class="lp-btn lp-btn-outline">🔐 Σύνδεση</a>
+      </div>
+    </section>
   </div>
 {% endif %}
 

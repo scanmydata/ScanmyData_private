@@ -1,0 +1,109 @@
+/* ScanmyData — ξενάγηση (page tour). Όλα τα χρώματα με !important: το global theme (app.css) βάφει span/button/label. */
+#smdTourRoot {
+  --t-card: #ffffff;
+  --t-text: #0f172a;
+  --t-muted: #475569;
+  --t-line: #e2e8f0;
+  --t-accent: #0284c7;
+  --t-accent-2: #0ea5e9;
+  --t-soft: #f1f5f9;
+  --t-note-bg: #fef9c3;
+  --t-note-text: #854d0e;
+  --t-dim: rgba(2, 6, 23, .62);
+  position: fixed; inset: 0; z-index: 100500;
+  pointer-events: none;
+  font-family: inherit;
+}
+:root[data-theme="dark"] #smdTourRoot {
+  --t-card: #0f1b33;
+  --t-text: #e5edf9;
+  --t-muted: #9fb0c8;
+  --t-line: #25344f;
+  --t-accent: #38bdf8;
+  --t-accent-2: #0ea5e9;
+  --t-soft: #162544;
+  --t-note-bg: #3a2f0b;
+  --t-note-text: #fde68a;
+  --t-dim: rgba(2, 6, 14, .72);
+}
+
+#smdTourRoot .smdt-blocker { position: fixed; inset: 0; pointer-events: auto; background: transparent; }
+#smdTourRoot.smdt-centered .smdt-blocker { background: var(--t-dim); }
+
+#smdTourRoot .smdt-ring {
+  position: fixed; left: 0; top: 0; width: 0; height: 0; opacity: 0;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px var(--t-dim), 0 0 0 3px var(--t-accent-2), 0 0 24px 4px rgba(14, 165, 233, .45);
+  pointer-events: none;
+  transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease, opacity .15s ease;
+}
+
+#smdTourRoot .smdt-card {
+  position: fixed; left: 50%; top: 50%;
+  width: 400px; max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  padding: 16px 18px 14px;
+  background: var(--t-card) !important;
+  color: var(--t-text) !important;
+  border: 1px solid var(--t-line);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(2, 6, 23, .35);
+  pointer-events: auto;
+  line-height: 1.5;
+  transition: left .22s ease, top .22s ease, opacity .15s ease;
+}
+#smdTourRoot.smdt-busy .smdt-card { opacity: .55; }
+#smdTourRoot.smdt-centered .smdt-card { width: 460px; padding: 20px 22px 16px; }
+
+#smdTourRoot .smdt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+#smdTourRoot .smdt-section {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--t-accent) !important;
+}
+#smdTourRoot .smdt-x {
+  width: 28px; height: 28px; border-radius: 9999px; border: 0 !important;
+  background: transparent !important; color: var(--t-muted) !important;
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 0 !important;
+}
+#smdTourRoot .smdt-x:hover { background: var(--t-soft) !important; color: var(--t-text) !important; }
+
+#smdTourRoot .smdt-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; color: var(--t-text) !important; background: transparent !important; }
+#smdTourRoot .smdt-body { font-size: 14px; color: var(--t-text) !important; }
+#smdTourRoot .smdt-body b { color: var(--t-text) !important; }
+#smdTourRoot .smdt-note {
+  margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: 12.5px;
+  background: var(--t-note-bg) !important; color: var(--t-note-text) !important;
+}
+#smdTourRoot .smdt-note[hidden] { display: none; }
+
+#smdTourRoot .smdt-progress { margin-top: 14px; height: 4px; border-radius: 9999px; background: var(--t-line); overflow: hidden; }
+#smdTourRoot .smdt-bar { height: 100%; width: 0; border-radius: 9999px; background: linear-gradient(90deg, var(--t-accent), #34d399); transition: width .25s ease; }
+
+#smdTourRoot .smdt-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+#smdTourRoot .smdt-count { font-size: 12px; color: var(--t-muted) !important; }
+#smdTourRoot .smdt-btns { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+#smdTourRoot .smdt-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 7px 12px; border-radius: 10px; font-size: 13px; font-weight: 600; line-height: 1.2;
+  border: 1px solid var(--t-line) !important;
+  background: var(--t-soft) !important; color: var(--t-text) !important;
+  cursor: pointer; text-decoration: none !important; box-shadow: none !important;
+}
+#smdTourRoot .smdt-btn:hover { filter: brightness(.96); }
+#smdTourRoot .smdt-btn[disabled] { opacity: .5; cursor: default; }
+#smdTourRoot .smdt-skip { background: transparent !important; color: var(--t-muted) !important; border-color: transparent !important; }
+#smdTourRoot .smdt-primary {
+  background: linear-gradient(135deg, var(--t-accent-2), #2563eb) !important;
+  border-color: transparent !important; color: #ffffff !important;
+}
+#smdTourRoot .smdt-btn:focus-visible { outline: 2px solid var(--t-accent); outline-offset: 2px; }
+
+@media (max-width: 520px) {
+  #smdTourRoot .smdt-card, #smdTourRoot.smdt-centered .smdt-card { width: auto; }
+  #smdTourRoot .smdt-foot { flex-direction: column; align-items: stretch; }
+  #smdTourRoot .smdt-btns { justify-content: space-between; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #smdTourRoot .smdt-ring, #smdTourRoot .smdt-card, #smdTourRoot .smdt-bar { transition: none; }
+}

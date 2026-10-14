@@ -1235,7 +1235,7 @@ try:
         if endpoint.startswith('auth.') or endpoint.startswith('static') or endpoint.startswith('firebase_auth.'):
             return None
         # allow public pages (terms, privacy, cookie consent)
-        if endpoint in ['terms_page', 'privacy_page', '_debug_log']:
+        if endpoint in ['terms_page', 'privacy_page', 'manual_page', '_debug_log']:
             return None
         # allow public API endpoints (if any) - keep a whitelist here if needed
         public = {'home', 'index', 'healthcheck', 'serve_icons', 'system_readiness'}
@@ -6480,6 +6480,13 @@ def serve_icons(filename):
 @monitor_resources('home')
 def home():
     return safe_render("nav.html", active_page="home")
+
+
+@app.route('/manual')
+@monitor_resources('manual_page')
+def manual_page():
+    """Οδηγός χρήσης (manual) — δημόσια προσβάσιμος· οι χρήστες βλέπουν επιπλέον το κουμπί «Ξενάγηση»."""
+    return safe_render("manual.html", active_page="manual")
 
 
 @app.route('/terms')
