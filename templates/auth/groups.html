@@ -91,6 +91,8 @@
     .remove-member-btn{border:none;background:#fee2e2;color:#991b1b !important;border-radius:999px;width:20px;height:20px;line-height:20px;
       padding:0;cursor:pointer;font-weight:800;font-size:.7rem;}
     .remove-member-btn:hover{background:#fecaca;}
+    .cancel-invite-btn{border:none;background:#fee2e2;color:#991b1b !important;border-radius:999px;width:20px;height:20px;line-height:20px;font-size:11px;cursor:pointer;padding:0;}
+    .cancel-invite-btn:hover{background:#fecaca;}
     .group-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:auto;padding-top:6px;}
     .group-actions .gp-btn.select{flex:1 1 190px;}
     .group-folder{font-size:.78rem;color:var(--gp-muted);margin-top:-4px;}
@@ -134,7 +136,7 @@
       </p>
     </div>
     <div class="gp-who">
-      <span>Συνδεδεμένος χρήστης: <strong>{{ current_user.username }}</strong></span>
+      <span>Συνδεδεμένος χρήστης: <strong>{{ current_user.display_name or current_user.username }}</strong></span>
       {% if active_name %}
         <span class="gp-chip is-active">✓ Ενεργή ομάδα: {{ active_name }}</span>
       {% else %}
@@ -142,6 +144,40 @@
       {% endif %}
     </div>
   </div>
+
+  {% if my_invites %}
+  <style>
+    .gp-invites { margin: 0 0 18px; display: grid; gap: 12px; }
+    .gp-invite {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 18px; border-radius: 18px;
+      background: rgba(14,165,233,.10); border: 1px solid #0ea5e9; border-left-width: 6px;
+    }
+    .gp-invite-ico { width: 44px; height: 44px; border-radius: 14px; background: rgba(14,165,233,.2); display: flex; align-items: center; justify-content: center; font-size: 22px; flex: none; }
+    .gp-invite-body { flex: 1 1 260px; min-width: 0; }
+    .gp-invite-title { font-weight: 800; font-size: 1rem; }
+    .gp-invite-sub { font-size: .9rem; opacity: .85; margin-top: 2px; }
+    .gp-invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+  <div class="gp-invites" id="gp-invites">
+    {% for inv in my_invites %}
+    <div class="gp-invite" data-invite-id="{{ inv.id }}">
+      <div class="gp-invite-ico" aria-hidden="true">✉️</div>
+      <div class="gp-invite-body">
+        <div class="gp-invite-title">Πρόσκληση στην ομάδα «{{ inv.group_name }}»</div>
+        <div class="gp-invite-sub">
+          {% if inv.invited_by %}Από τον/την <b>{{ inv.invited_by.public_name }}</b> · {% endif %}
+          Ρόλος: <b>{{ 'Διαχειριστής' if inv.role == 'admin' else 'Μέλος' }}</b>.
+          Αν την αποδεχτείτε, θα έχετε πρόσβαση στους πελάτες και τα παραστατικά της ομάδας.
+        </div>
+      </div>
+      <div class="gp-invite-actions">
+        <button type="button" class="gp-btn ok" data-invite-respond="accept" data-invite="{{ inv.id }}">✓ Αποδοχή</button>
+        <button type="button" class="gp-btn danger" data-invite-respond="decline" data-invite="{{ inv.id }}">Απόρριψη</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   <!-- ===== Οδηγός ===== -->
   <details class="gp-how" id="gp-how" open>
@@ -178,7 +214,7 @@
     Έχετε δύο επιλογές: <b>δημιουργήστε</b> μια νέα ομάδα παρακάτω (θα είστε ο διαχειριστής της), ή ζητήστε από τον διαχειριστή
     της ομάδας που θέλετε να σας προσθέσει, δίνοντάς του το username
     <b>{{ current_user.username }}</b>{% if current_user.email %} ή το email <b>{{ current_user.email }}</b>{% endif %}.
-    Μόλις σας προσθέσει, θα δείτε ειδοποίηση στην επόμενη σελίδα που θα ανοίξετε.
+    Θα λάβετε <b>πρόσκληση</b> στην επόμενη σελίδα που θα ανοίξετε και θα προστεθείτε όταν την αποδεχτείτε.
   </div>
   {% endif %}
 
@@ -201,7 +237,7 @@
         <div>
           <div class="group-sub">Διαχειριστές</div>
           <div class="members-list">
-            {% for u in g.admins() %}<span class="pill is-admin {% if u.id == current_user.id %}is-me{% endif %}">{{ u.username }}{% if u.id == current_user.id %} <small>(εσείς)</small>{% endif %}</span>{% else %}<span class="pill">Κανένας</span>{% endfor %}
+            {% for u in g.admins() %}<span class="pill is-admin {% if u.id == current_user.id %}is-me{% endif %}">{{ u.public_name }}{% if u.id == current_user.id %} <small>(εσείς)</small>{% endif %}</span>{% else %}<span class="pill">Κανένας</span>{% endfor %}
           </div>
         </div>
 
@@ -210,10 +246,10 @@
           <div class="members-list">
             {% for ug in g.user_groups %}
               <span class="pill {% if ug.role == 'admin' %}is-admin{% endif %} {% if ug.user.id == current_user.id %}is-me{% endif %}">
-                <span>{{ ug.user.username }}</span>
+                <span>{{ ug.user.public_name }}</span>
                 <small>{{ role_labels.get(ug.role, ug.role) }}</small>
                 {% if current_user.is_authenticated and my_role == 'admin' and ug.user.id != current_user.id %}
-                  <button class="remove-member-btn" data-username="{{ ug.user.username }}" data-group="{{ g.name }}" type="button" title="Αφαίρεση από την ομάδα" aria-label="Αφαίρεση {{ ug.user.username }} από την ομάδα">✖</button>
+                  <button class="remove-member-btn" data-username="{{ ug.user.username }}" data-group="{{ g.name }}" type="button" title="Αφαίρεση από την ομάδα" aria-label="Αφαίρεση {{ ug.user.public_name }} από την ομάδα">✖</button>
                 {% endif %}
               </span>
             {% else %}
@@ -221,6 +257,21 @@
             {% endfor %}
           </div>
         </div>
+
+        {% if my_role == 'admin' and sent_invites.get(g.id) %}
+        <div>
+          <div class="group-sub">Εκκρεμείς προσκλήσεις</div>
+          <div class="members-list">
+            {% for inv in sent_invites.get(g.id) %}
+              <span class="pill">
+                <span>✉️ {{ inv.user.public_name if inv.user else '—' }}</span>
+                <small>{{ 'Διαχειριστής' if inv.role == 'admin' else 'Μέλος' }} · αναμένεται αποδοχή</small>
+                <button class="cancel-invite-btn" data-invite="{{ inv.id }}" type="button" title="Ακύρωση πρόσκλησης" aria-label="Ακύρωση πρόσκλησης">✖</button>
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
 
         <div class="group-actions">
           {% if is_active %}
@@ -264,11 +315,11 @@
       <p>Δώστε σε έναν συνάδελφο πρόσβαση στα δεδομένα μιας ομάδας που διαχειρίζεστε.</p>
       <ul>
         <li>Ο χρήστης πρέπει να έχει ήδη λογαριασμό στο ScanmyData (username ή email).</li>
-        <li>Μόλις συνδεθεί ή ανοίξει μια σελίδα, θα δει <b>ειδοποίηση</b> ότι προστέθηκε και σε ποια ομάδα.</li>
+        <li>Ο χρήστης λαμβάνει <b>πρόσκληση</b> και προστίθεται στην ομάδα μόνο όταν την <b>αποδεχτεί</b> ο ίδιος.</li>
         <li>Μόνο ο διαχειριστής μιας ομάδας μπορεί να προσθέτει μέλη σε αυτήν.</li>
       </ul>
       {% if admin_groups %}
-        <button id="open-assign" class="gp-btn" type="button">Προσθήκη χρήστη</button>
+        <button id="open-assign" class="gp-btn" type="button">Πρόσκληση χρήστη</button>
       {% else %}
         <div class="gp-note">Δεν διαχειρίζεστε καμία ομάδα. Δημιουργήστε μια ομάδα (ή ζητήστε να γίνετε διαχειριστής) για να προσθέτετε χρήστες.</div>
         <button id="open-assign" class="gp-btn" type="button" disabled>Προσθήκη χρήστη</button>
@@ -304,8 +355,8 @@
     <div class="gm-modal" role="dialog" aria-modal="true" aria-label="Προσθήκη χρήστη σε ομάδα">
       <h3>Προσθήκη χρήστη σε ομάδα</h3>
       <p class="gm-help">
-        Γράψτε το username ή το email ενός υπάρχοντος χρήστη και επιλέξτε την ομάδα. Ο χρήστης θα ειδοποιηθεί
-        την επόμενη φορά που θα συνδεθεί ή θα ανοίξει μια σελίδα.
+        Γράψτε το username ή το email ενός υπάρχοντος χρήστη και επιλέξτε την ομάδα. Θα σταλεί <b>πρόσκληση</b>·
+        ο χρήστης προστίθεται μόνο όταν την αποδεχτεί, την επόμενη φορά που θα ανοίξει μια σελίδα.
       </p>
       <form id="assign-form" method="post" action="{{ url_for('auth.assign_user_to_group') }}">
         <div class="gm-field">
@@ -333,7 +384,7 @@
         </div>
         <div class="gm-actions">
           <button type="button" id="close-assign" class="gp-btn ghost">Άκυρο</button>
-          <button type="submit" class="gp-btn">Προσθήκη στην ομάδα</button>
+          <button type="submit" class="gp-btn">Αποστολή πρόσκλησης</button>
         </div>
       </form>
     </div>
@@ -476,6 +527,43 @@
           });
           document.body.appendChild(form);
           form.submit();
+        });
+      });
+
+      // Προσκλήσεις: αποδοχή / απόρριψη (παραλήπτης) και ακύρωση (διαχειριστής)
+      document.querySelectorAll('[data-invite-respond]').forEach((btn)=>{
+        btn.addEventListener('click', async ()=>{
+          const accept = btn.dataset.inviteRespond === 'accept';
+          const id = Number(btn.dataset.invite);
+          btn.disabled = true;
+          try{
+            const resp = await fetch("{{ url_for('auth.api_group_invites_respond') }}", {
+              method:'POST', credentials:'same-origin',
+              headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+              body: JSON.stringify({ id: id, accept: accept })
+            });
+            const data = await resp.json().catch(()=>({}));
+            if(resp.ok && data.ok){ window.location.reload(); return; }
+            btn.disabled = false;
+            await showModalAlert('Σφάλμα', data.error || 'Η ενέργεια απέτυχε.');
+          }catch(_e){ btn.disabled = false; await showModalAlert('Σφάλμα', 'Σφάλμα δικτύου'); }
+        });
+      });
+      document.querySelectorAll('.cancel-invite-btn').forEach((btn)=>{
+        btn.addEventListener('click', async (ev)=>{
+          ev.preventDefault(); ev.stopPropagation();
+          const ok = await showModalConfirm('Ακύρωση πρόσκλησης', 'Να ακυρωθεί η πρόσκληση;', 'Ακύρωση πρόσκλησης', 'Όχι');
+          if(!ok) return;
+          try{
+            const resp = await fetch("{{ url_for('auth.cancel_group_invite') }}", {
+              method:'POST', credentials:'same-origin',
+              headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+              body: JSON.stringify({ id: Number(btn.dataset.invite) })
+            });
+            const data = await resp.json().catch(()=>({}));
+            if(resp.ok && data.ok){ window.location.reload(); return; }
+            await showModalAlert('Σφάλμα', data.error || 'Η ακύρωση απέτυχε.');
+          }catch(_e){ await showModalAlert('Σφάλμα', 'Σφάλμα δικτύου'); }
         });
       });
 

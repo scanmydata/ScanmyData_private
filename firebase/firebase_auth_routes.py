@@ -384,6 +384,10 @@ def firebase_signup():
                     email=email,
                     firebase_uid=uid
                 )
+                # Όνομα εμφάνισης (GDPR: τα μέλη/logs βλέπουν αυτό, όχι το email)· μπορεί να αλλάξει από τις Ρυθμίσεις λογαριασμού.
+                _dn = ' '.join((display_name or '').split())[:60]
+                if _dn and '@' not in _dn:
+                    user.display_name = _dn
                 db.session.add(user)
                 try:
                     db.session.commit()

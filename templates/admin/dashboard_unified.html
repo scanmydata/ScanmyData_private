@@ -93,8 +93,8 @@
         <table class="w-full text-sm">
           <thead class="bg-gray-50 border-b border-gray-200">
             <tr>
+              <th class="text-left px-4 py-3 font-medium">Όνομα εμφάνισης</th>
               <th class="text-left px-4 py-3 font-medium">Email</th>
-              <th class="text-left px-4 py-3 font-medium">Όνομα</th>
               <th class="text-left px-2 py-3 font-medium">Κατάσταση</th>
               <th class="text-left px-4 py-3 font-medium">Ομάδες</th>
               <th class="text-left px-4 py-3 font-medium">Δημιουργία</th>
@@ -733,9 +733,11 @@ async function loadRecentActivity() {
       'system': 'Σύστημα'
     };
 
+    await ensureUsersLookup();
     container.innerHTML = data.logs.map(log => {
-      const rawUser = log.user_email || log.user_username || log.user_id || log.user || 'system';
-      const userLabel = actionTranslations[rawUser] || rawUser;
+      const _u = lookupLogUser(log);
+      const rawUser = (_u && (_u.display_name || _u.public_name)) || log.user_username || log.user_id || log.user || 'system';
+      const userLabel = escDash(actionTranslations[rawUser] || rawUser);
       const rawAction = log.summary || log.action || '-';
       const actionLabel = actionTranslations[rawAction] || rawAction;
       return `
@@ -847,8 +849,8 @@ async function loadUsers() {
 
       return `
       <tr data-user-id="${user.id}" class="border-b border-gray-200 hover:bg-gray-50">
-        <td class="px-4 py-3">${user.email || '-'}</td>
-        <td class="px-4 py-3">${user.username || user.display_name || '-'}</td>
+        <td class="px-4 py-3">${user.display_name ? escDash(user.display_name) : '<span class="text-xs text-gray-400 italic">— δεν έχει οριστεί —</span>'}</td>
+        <td class="px-4 py-3 text-sm">${escDash(user.email || user.username || '-')}</td>
         <td class="px-2 py-3">${dot}${sinceHtml}</td>
         <td class="px-4 py-3">
           <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">${groupsCount} ομάδες</span>
@@ -1079,7 +1081,7 @@ async function viewGroupDetails(groupId) {
           <span class="font-medium">Μέλη:</span> <span class="text-sky-600 font-bold">${(data.group?.members || data.members || []).length}</span>
           <div class="mt-2 space-y-1">
             ${(data.group?.members || data.members || []).map(m => {
-              const memberName = typeof m === 'object' ? (m.username || m.name) : m;
+              const memberName = typeof m === 'object' ? escDash(m.display_name || m.public_name || m.name || m.username) + (m.email ? ` <span class="text-xs text-gray-400">(${escDash(m.email)})</span>` : '') : escDash(m);
               const memberRole = typeof m === 'object' ? (m.role || 'member') : 'member';
               const roleColors = {
                 'admin': 'bg-red-100 text-red-700',
@@ -1141,20 +1143,63 @@ async function performGroupDeletion(groupId, groupName) {
 
 // ==================== ACTIVITY TAB ====================
 let activityTable = null;
+// Ασφαλής εμφάνιση κειμένου χρήστη (το όνομα εμφάνισης το γράφει ο χρήστης → πρέπει escape).
+function escDash(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+// Αναζήτηση χρήστη από id / firebase uid / email / username (τα logs έχουν ποικίλες μορφές αναγνωριστικού).
+function _ul() { return (window.__smdUserLookup = window.__smdUserLookup || {}); }
+function ensureUsersLookup() {
+  if (window.__smdUserLookupPromise) return window.__smdUserLookupPromise;
+  window.__smdUserLookupPromise = fetch('/admin/api/users', { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(d => {
+      (d.users || []).forEach(u => {
+        [u.id, u.firebase_uid, u.email, u.username].forEach(k => {
+          if (k !== null && k !== undefined && String(k).trim() !== '') _ul()[String(k).trim().toLowerCase()] = u;
+        });
+      });
+    })
+    .catch(() => {});
+  return window.__smdUserLookupPromise;
+}
+function lookupLogUser(log) {
+  const keys = [log.user_id, log.user_email, log.user_username, log.user];
+  for (const k of keys) {
+    if (k === null || k === undefined) continue;
+    const u = _ul()[String(k).trim().toLowerCase()];
+    if (u) return u;
+  }
+  return null;
+}
+// «Όνομα» + (μόνο για τον γενικό admin) email από κάτω.
+function logUserHtml(log) {
+  const u = lookupLogUser(log);
+  if (u) {
+    const name = u.display_name || u.public_name || log.user_username || '—';
+    return `<div>${escDash(name)}</div>` + (u.email ? `<div class="text-xs text-gray-500">${escDash(u.email)}</div>` : '');
+  }
+  const raw = log.user_username || log.user_id || log.user || '-';
+  return escDash(raw);
+}
+
 let usersMap = {}; // Map user_id to display_name
 let groupsMap = {}; // Map data_folder (VAT) to group name
 
 async function loadActivity() {
   try {
-    // First load users to get display names
+    // Πρώτα φορτώνονται οι χρήστες (όνομα εμφάνισης + email) για την αντιστοίχιση των logs
+    await ensureUsersLookup();
     if (Object.keys(usersMap).length === 0) {
-      const usersResponse = await fetch('/admin/api/users');
-      const usersData = await usersResponse.json();
-      if (usersData.users) {
-        usersData.users.forEach(user => {
-          usersMap[user.id] = user.username || user.display_name || user.email || user.id;
-        });
-      }
+      try {
+        const usersResponse = await fetch('/admin/api/users');
+        const usersData = await usersResponse.json();
+        if (usersData.users) {
+          usersData.users.forEach(user => {
+            usersMap[user.id] = user.display_name || user.public_name || user.username || user.email || user.id;
+          });
+        }
+      } catch (_) {}
     }
     
     // Load groups to map data_folder (VAT) to group names
@@ -1211,7 +1256,7 @@ async function loadActivity() {
     // Prepare data for DataTable
     const tableData = data.logs.map(log => {
       // User display: prefer email/username from API
-      const userDisplay = log.user_email || log.user_username || usersMap[log.user_id] || log.user_id || '-';
+      const userDisplay = logUserHtml(log);
       
       // Group display: map data_folder (VAT) to group name if available
       const groupDisplay = groupsMap[log.group] || log.group || '-';

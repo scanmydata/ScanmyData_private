@@ -60,6 +60,8 @@ def admin_list_all_users(include_deleted: bool = False) -> List[Dict[str, Any]]:
             result.append({
                 'id': user.id,
                 'username': user.username,
+                'display_name': getattr(user, 'display_name', None),
+                'public_name': getattr(user, 'public_name', None),
                 'email': getattr(user, 'email', None),
                 'firebase_uid': getattr(user, 'pw_hash', None),
                 'created_at': str(getattr(user, 'created_at', None)),
@@ -312,6 +314,9 @@ def admin_get_group_details(group_id: int) -> Optional[Dict[str, Any]]:
             members.append({
                 'user_id': ug.user_id,
                 'username': ug.user.username,
+                'display_name': getattr(ug.user, 'display_name', None),
+                'public_name': getattr(ug.user, 'public_name', None),
+                'email': getattr(ug.user, 'email', None),
                 'role': ug.role
             })
         

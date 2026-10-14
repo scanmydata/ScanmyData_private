@@ -222,7 +222,127 @@
         }
       } catch (e) { console.warn('side menu highlight error', e); }
 
+      try { initGroupInvites(); } catch (e) { console.warn('group invites init failed', e); }
       try { initGroupNotices(); } catch (e) { console.warn('group notices init failed', e); }
+    }
+
+    // ── Προσκλήσεις σε ομάδα: ο παραλήπτης πρέπει να τις ΑΠΟΔΕΧΤΕΙ ή να τις απορρίψει ─────────────────────
+    function initGroupInvites(){
+      if (!document.getElementById('groupsList')) return;             // μόνο για συνδεδεμένους
+      if (window.location.pathname.replace(/\/+$/, '') === '/groups') return;   // η σελίδα ομάδων τις δείχνει ήδη
+      const now = Date.now();
+      if (window.__groupInviteBusy || (window.__groupInviteAt && now - window.__groupInviteAt < 20000)) return;
+      window.__groupInviteBusy = true;
+      window.__groupInviteAt = now;
+      fetch('/api/group_invites', {
+        credentials: 'same-origin', cache: 'no-store',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          const list = (data && Array.isArray(data.invites)) ? data.invites : [];
+          if (list.length) showGroupInvites(list);
+        })
+        .catch(() => {})
+        .then(() => { window.__groupInviteBusy = false; });
+    }
+
+    function showGroupInvites(list){
+      const old = document.getElementById('groupInviteModal');
+      if (old) old.remove();
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const roleLabel = r => (r === 'admin' ? 'Διαχειριστής' : 'Μέλος');
+      const wrap = document.createElement('div');
+      wrap.id = 'groupInviteModal';
+      wrap.setAttribute('role', 'dialog');
+      wrap.setAttribute('aria-modal', 'true');
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:100002;background:rgba(2,6,23,.6);display:flex;align-items:center;justify-content:center;padding:18px;';
+      const box = document.createElement('div');
+      box.style.cssText = 'box-sizing:border-box;width:min(560px,100%);max-height:90vh;overflow:auto;border-radius:20px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,.45);' +
+        'border:1px solid ' + (dark ? '#334155' : '#e2e8f0') + ';background:' + (dark ? '#0f172a' : '#fff') + ';color:' + (dark ? '#e2e8f0' : '#0f172a') + ';';
+      const head = document.createElement('div');
+      head.style.cssText = 'display:flex;gap:12px;align-items:center;margin-bottom:14px;';
+      const ico = document.createElement('div');
+      ico.textContent = '✉️';
+      ico.style.cssText = 'width:46px;height:46px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:22px;background:' + (dark ? '#0c2a45' : '#e0f2fe') + ';';
+      const h = document.createElement('div');
+      h.style.cssText = 'font-size:1.2rem;font-weight:800;color:inherit;';
+      h.textContent = list.length > 1 ? 'Έχετε ' + list.length + ' προσκλήσεις σε ομάδες' : 'Πρόσκληση σε ομάδα';
+      head.appendChild(ico); head.appendChild(h);
+      box.appendChild(head);
+
+      list.forEach(inv => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:14px;border-radius:14px;margin-bottom:10px;line-height:1.5;font-size:.95rem;' +
+          'background:' + (dark ? '#111c33' : '#f8fafc') + ';border:1px solid ' + (dark ? '#334155' : '#e2e8f0') + ';';
+        const txt = document.createElement('div');
+        txt.style.cssText = 'color:inherit;margin-bottom:10px;';
+        const who = inv.inviter ? ('Ο/Η ' + inv.inviter + ' σας προσκαλεί') : 'Σας προσκαλούν';
+        const g = document.createElement('strong');
+        g.textContent = '«' + inv.group + '»';
+        txt.appendChild(document.createTextNode(who + ' στην ομάδα '));
+        txt.appendChild(g);
+        txt.appendChild(document.createTextNode(' ως ' + roleLabel(inv.role) + '. Αν αποδεχτείτε, θα έχετε πρόσβαση στους πελάτες και τα παραστατικά της ομάδας.'));
+        item.appendChild(txt);
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+        const mk = (label, filled) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = label;
+          b.style.cssText = 'border-radius:12px;padding:9px 16px;font-weight:700;cursor:pointer;font-size:.92rem;' +
+            (filled ? 'background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;border:0;'
+                    : 'background:transparent;color:inherit;border:1px solid ' + (dark ? '#475569' : '#cbd5e1') + ';');
+          return b;
+        };
+        const acc = mk('✓ Αποδοχή', true);
+        const dec = mk('Απόρριψη', false);
+        const respond = (accept) => {
+          acc.disabled = true; dec.disabled = true;
+          fetch('/api/group_invites/respond', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-Wait-Overlay': 'skip' },
+            body: JSON.stringify({ id: inv.id, accept: accept })
+          })
+            .then(r => r.json().catch(() => ({})).then(j => ({ ok: r.ok && j && j.ok, j })))
+            .then(res => {
+              if (!res.ok) {
+                acc.disabled = false; dec.disabled = false;
+                if (typeof window.showFlash === 'function') window.showFlash((res.j && res.j.error) || 'Η ενέργεια απέτυχε.', 'error', 5000);
+                return;
+              }
+              item.remove();
+              if (typeof window.showFlash === 'function') {
+                window.showFlash(accept ? 'Προστεθήκατε στην ομάδα «' + inv.group + '».' : 'Η πρόσκληση απορρίφθηκε.', accept ? 'success' : 'info', 5000);
+              }
+              if (!box.querySelector('[data-invite-item]')) {
+                try { wrap.remove(); } catch (_) {}
+                document.removeEventListener('keydown', onKey, true);
+                if (accept) { window.location.href = '/groups'; }
+              }
+            })
+            .catch(() => { acc.disabled = false; dec.disabled = false; });
+        };
+        acc.addEventListener('click', () => respond(true));
+        dec.addEventListener('click', () => respond(false));
+        row.appendChild(acc); row.appendChild(dec);
+        item.appendChild(row);
+        item.setAttribute('data-invite-item', '1');
+        box.appendChild(item);
+      });
+
+      const later = document.createElement('button');
+      later.type = 'button';
+      later.textContent = 'Αργότερα';
+      later.style.cssText = 'margin-top:4px;background:transparent;border:0;color:' + (dark ? '#94a3b8' : '#64748b') + ';cursor:pointer;font-size:.88rem;';
+      const close = () => { try { wrap.remove(); } catch (_) {} document.removeEventListener('keydown', onKey, true); };
+      function onKey(e){ if (e.key === 'Escape') close(); }
+      later.addEventListener('click', close);
+      box.appendChild(later);
+      wrap.appendChild(box);
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(wrap);
     }
 
     // ── Ειδοποιήσεις συμμετοχής σε ομάδα (προσθήκη / αλλαγή ρόλου / αφαίρεση από διαχειριστή) ──────────────
@@ -279,7 +399,12 @@
         g.textContent = '«' + n.group + '»';
         const lead = document.createElement('span');
         lead.style.color = 'inherit';
-        if (n.action === 'removed') {
+        if (n.action === 'invite_accepted' || n.action === 'invite_declined') {
+          const accepted = n.action === 'invite_accepted';
+          lead.appendChild(document.createTextNode((n.actor || 'Ο χρήστης') + (accepted ? ' αποδέχτηκε' : ' απέρριψε') + ' την πρόσκλησή σας για την ομάδα '));
+          lead.appendChild(g);
+          lead.appendChild(document.createTextNode(accepted ? ' και προστέθηκε ως ' + roleLabel(n.role) + '.' : '.'));
+        } else if (n.action === 'removed') {
           lead.appendChild(document.createTextNode('Αφαιρεθήκατε από την ομάδα '));
           lead.appendChild(g);
           if (n.actor) lead.appendChild(document.createTextNode(by + n.actor));

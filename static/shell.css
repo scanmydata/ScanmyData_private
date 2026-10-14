@@ -176,3 +176,51 @@ html body .sm2 a.sm2-cta {
   html body header.mb-6 .layout-header__nav a { padding: 6px 11px; font-size: 12.5px; }
   html body header.mb-6 .layout-header__brand .logo-img { height: 60px; }
 }
+
+/* =====================  BANNERS (κίτρινα / ενημερωτικά)  ===================== */
+.smd-banner {
+  --bn-bg: #fffbeb; --bn-line: #f59e0b; --bn-text: #78350f; --bn-muted: #92400e; --bn-ico: #fde68a;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 18px; margin: 0 0 16px;
+  border-radius: 18px; background: var(--bn-bg); border: 1px solid var(--bn-line); border-left-width: 6px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .06);
+}
+.smd-banner.info { --bn-bg: #f0f9ff; --bn-line: #0ea5e9; --bn-text: #0c4a6e; --bn-muted: #0369a1; --bn-ico: #bae6fd; }
+:root[data-theme="dark"] .smd-banner { --bn-bg: #2a2106; --bn-line: #f59e0b; --bn-text: #fde68a; --bn-muted: #fcd34d; --bn-ico: #4a3a0a; }
+:root[data-theme="dark"] .smd-banner.info { --bn-bg: #0c2236; --bn-line: #38bdf8; --bn-text: #bae6fd; --bn-muted: #7dd3fc; --bn-ico: #0c3a57; }
+.smd-banner-ico {
+  width: 44px; height: 44px; border-radius: 14px; flex: none; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; background: var(--bn-ico);
+}
+.smd-banner-body { flex: 1 1 260px; min-width: 0; }
+html body .smd-banner .smd-banner-title { font-size: 1rem; font-weight: 800; color: var(--bn-text) !important; }
+html body .smd-banner .smd-banner-text { font-size: .9rem; line-height: 1.5; margin-top: 2px; color: var(--bn-muted) !important; }
+html body .smd-banner .smd-banner-text b, html body .smd-banner .smd-banner-text strong { color: var(--bn-text) !important; }
+.smd-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+html body .smd-banner a.smd-btn, html body .smd-banner button.smd-btn {
+  display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 12px; font-size: 14px; font-weight: 700;
+  text-decoration: none; cursor: pointer; line-height: 1.2; background: transparent !important; color: var(--bn-text) !important;
+  border: 1px solid var(--bn-line) !important; box-shadow: none !important; transition: filter .14s ease, transform .14s ease;
+}
+html body .smd-banner a.smd-btn:hover, html body .smd-banner button.smd-btn:hover { filter: brightness(.95); transform: translateY(-1px); }
+html body .smd-banner a.smd-btn-primary, html body .smd-banner button.smd-btn-primary {
+  background: linear-gradient(135deg, #f59e0b, #d97706) !important; color: #fff !important; border-color: transparent !important;
+  box-shadow: 0 8px 18px rgba(217, 119, 6, .3) !important;
+}
+html body .smd-banner.info a.smd-btn-primary, html body .smd-banner.info button.smd-btn-primary {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; box-shadow: 0 8px 18px rgba(37, 99, 235, .3) !important;
+}
+/* βήματα Ομάδα → Πελάτης */
+.smd-steps { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.smd-step {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px 3px 4px; border-radius: 9999px; font-size: 13px; font-weight: 700;
+  border: 1px solid var(--bn-line); color: var(--bn-muted); background: transparent; opacity: .75;
+}
+.smd-step i {
+  width: 22px; height: 22px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center;
+  font-style: normal; font-size: 12px; background: var(--bn-ico); color: var(--bn-text);
+}
+.smd-step.now { opacity: 1; background: var(--bn-ico); color: var(--bn-text); }
+.smd-step.done { opacity: 1; border-color: #10b981; color: #047857; }
+:root[data-theme="dark"] .smd-step.done { color: #6ee7b7; }
+.smd-step.done i { background: #10b981; color: #fff; }
+html body .smd-banner .smd-step-sep { color: var(--bn-muted) !important; font-weight: 800; }

@@ -1080,6 +1080,8 @@ try:
                 _missing.append("ALTER TABLE user ADD COLUMN email_otp_expires TIMESTAMP")
             if 'tab_alive_at' not in _user_cols:
                 _missing.append("ALTER TABLE user ADD COLUMN tab_alive_at TIMESTAMP")
+            if 'display_name' not in _user_cols:
+                _missing.append("ALTER TABLE user ADD COLUMN display_name VARCHAR(80)")
             if _missing:
                 with db.engine.begin() as _conn:
                     for _stmt in _missing:
@@ -9695,7 +9697,7 @@ def credentials():
                     from admin.auth import _append_group_log, get_active_group
                     grp = get_active_group()
                     if grp:
-                        _append_group_log(grp, f"Credential '{name}' added by {current_user.username if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
+                        _append_group_log(grp, f"Credential '{name}' added by {current_user.public_name if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
                 except Exception:
                     pass
                 flash("Αποθηκεύτηκε", "success")
@@ -9900,7 +9902,7 @@ def credentials_delete(name):
         from admin.auth import _append_group_log, get_active_group
         grp = get_active_group()
         if grp:
-            _append_group_log(grp, f"Credential '{name}' deleted by {current_user.username if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
+            _append_group_log(grp, f"Credential '{name}' deleted by {current_user.public_name if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
     except Exception:
         pass
 

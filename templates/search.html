@@ -242,17 +242,16 @@
 
 {# --- Yellow box αν υπάρχει MARK ήδη στο Excel --- #}
 {% if allow_edit_existing and not request.args.get('force_edit') %}
-<div class="mt-4 p-4 bg-yellow-50 rounded border border-yellow-300 text-yellow-800" id="existingBanner">
-  Το MARK <strong>{{ mark }}</strong> υπάρχει ήδη στο Epsilon. Θέλεις να τροποποιήσεις τον χαρακτηρισμό;
-    <div class="mt-2 flex gap-2">
-        <button id="forceEditBtn" type="button" class="bg-yellow-600 text-white px-3 py-2 rounded hover:bg-yellow-700">
-            Επιβεβαίωση
-        </button>
-        <button id="dismissBannerBtn" type="button" onclick="this.parentElement.parentElement.style.display='none'"
-                class="px-3 py-2 border rounded hover:bg-gray-50">
-            Άκυρο
-        </button>
-    </div>
+<div class="smd-banner warn" id="existingBanner" role="status" style="margin-top:16px;">
+  <div class="smd-banner-ico" aria-hidden="true">♻️</div>
+  <div class="smd-banner-body">
+    <div class="smd-banner-title">Το παραστατικό υπάρχει ήδη</div>
+    <div class="smd-banner-text">Το MARK <strong>{{ mark }}</strong> έχει ήδη καταχωρηθεί στο Epsilon. Θέλετε να τροποποιήσετε τον χαρακτηρισμό του;</div>
+  </div>
+  <div class="smd-banner-actions">
+    <button id="forceEditBtn" type="button" class="smd-btn smd-btn-primary">Επαναχαρακτηρισμός</button>
+    <button id="dismissBannerBtn" type="button" onclick="this.closest('.smd-banner').style.display='none'" class="smd-btn">Άκυρο</button>
+  </div>
 </div>
 {% endif %}
 
@@ -7305,12 +7304,18 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     if (!banner) {
       banner = document.createElement('div');
       banner.id = 'existingBanner';
-      banner.className = 'mt-4 p-4 bg-yellow-50 rounded border border-yellow-300 text-yellow-800';
+      banner.className = 'smd-banner warn';
+      banner.style.marginTop = '16px';
+      banner.setAttribute('role', 'status');
       banner.innerHTML =
-        'Το MARK <strong></strong> υπάρχει ήδη στο Epsilon. Θέλεις να τροποποιήσεις τον χαρακτηρισμό;'
-        + '<div class="mt-2 flex gap-2">'
-        + '<button id="forceEditBtn" type="button" class="bg-yellow-600 text-white px-3 py-2 rounded hover:bg-yellow-700">Επιβεβαίωση</button>'
-        + '<button id="dismissBannerBtn" type="button" class="px-3 py-2 border rounded hover:bg-gray-50">Άκυρο</button>'
+        '<div class="smd-banner-ico" aria-hidden="true">♻️</div>'
+        + '<div class="smd-banner-body">'
+        + '<div class="smd-banner-title">Το παραστατικό υπάρχει ήδη</div>'
+        + '<div class="smd-banner-text">Το MARK <strong></strong> έχει ήδη καταχωρηθεί στο Epsilon. Θέλετε να τροποποιήσετε τον χαρακτηρισμό του;</div>'
+        + '</div>'
+        + '<div class="smd-banner-actions">'
+        + '<button id="forceEditBtn" type="button" class="smd-btn smd-btn-primary">Επαναχαρακτηρισμός</button>'
+        + '<button id="dismissBannerBtn" type="button" class="smd-btn">Άκυρο</button>'
         + '</div>';
       const host = document.getElementById('markSearchForm')?.closest('.bg-white');
       if (host && host.parentNode) host.parentNode.insertBefore(banner, host.nextSibling);

@@ -25,6 +25,8 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(150), unique=False, nullable=True)
     # Firebase UID if user is managed by Firebase
     firebase_uid = db.Column(db.String(128), unique=False, nullable=True)
+    # Όνομα/ψευδώνυμο που βλέπουν τα υπόλοιπα μέλη των ομάδων και τα logs (αντί για email — GDPR).
+    display_name = db.Column(db.String(80), nullable=True)
     # optional timestamps
     created_at = db.Column(db.DateTime(), nullable=False, default=datetime.datetime.utcnow)
     last_login = db.Column(db.DateTime(), nullable=True)
@@ -78,6 +80,21 @@ class User(UserMixin, db.Model):
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
+
+    @property
+    def public_name(self) -> str:
+        """Το όνομα που εμφανίζεται σε ΑΛΛΟΥΣ χρήστες και στα logs. Ποτέ ολόκληρο email (GDPR).
+
+        Προτεραιότητα: display_name → κρυμμένο τοπικό μέρος του email (π.χ. «an***») → «Χρήστης».
+        """
+        name = (getattr(self, 'display_name', None) or '').strip()
+        if name:
+            return name
+        base = (getattr(self, 'email', None) or getattr(self, 'username', None) or '').strip()
+        local = base.split('@', 1)[0] if base else ''
+        if not local:
+            return 'Χρήστης'
+        return (local[:2] if len(local) > 2 else local[:1]) + '***'
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
@@ -339,6 +356,28 @@ class GroupNotice(db.Model):
     actor = db.Column(db.String(150), nullable=True)           # username του διαχειριστή που έκανε την αλλαγή
     created_at = db.Column(db.DateTime(), nullable=False, default=datetime.datetime.utcnow)
     seen_at = db.Column(db.DateTime(), nullable=True)
+
+
+class GroupInvite(db.Model):
+    """Πρόσκληση χρήστη σε ομάδα που πρέπει να γίνει ΑΠΟΔΕΚΤΗ από τον παραλήπτη.
+
+    Ο διαχειριστής ομάδας δημιουργεί πρόσκληση (status='pending')· ο χρήστης τη βλέπει στην επόμενη σελίδα και
+    την αποδέχεται ή την απορρίπτει. Μόνο με την αποδοχή δημιουργείται το UserGroup.
+    Νέος πίνακας: δημιουργείται αυτόματα από db.create_all().
+    """
+    __tablename__ = 'group_invite'
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False, index=True)
+    group_name = db.Column(db.String(150), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)       # ο προσκεκλημένος
+    invited_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)               # ο διαχειριστής
+    role = db.Column(db.String(32), nullable=False, default='member')
+    status = db.Column(db.String(16), nullable=False, default='pending', index=True)  # pending|accepted|declined|cancelled
+    created_at = db.Column(db.DateTime(), nullable=False, default=datetime.datetime.utcnow)
+    responded_at = db.Column(db.DateTime(), nullable=True)
+
+    invited_by = db.relationship('User', foreign_keys=[invited_by_id])
+    user = db.relationship('User', foreign_keys=[user_id])
 
 
 class VerificationToken(db.Model):

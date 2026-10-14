@@ -256,25 +256,39 @@
        ώστε τα μηνύματα να μη χάνονται σε partial navigation. #}
 
     {% if current_user.is_authenticated and not active_credential %}
-    <div class="missing-customer-warning p-4 mb-4 rounded-r-lg" id="globalNoCredentialBanner">
-      <div class="flex items-center">
-        <div class="flex-shrink-0">
-          <svg class="h-5 w-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
-          </svg>
+    <div class="smd-banner warn" id="globalNoCredentialBanner" role="status">
+      <div class="smd-banner-ico" aria-hidden="true">{% if not active_group %}🏢{% else %}👥{% endif %}</div>
+      <div class="smd-banner-body">
+        <div class="smd-banner-title">{% if not active_group %}Επιλέξτε ενεργή ομάδα{% else %}Επιλέξτε ενεργό πελάτη{% endif %}</div>
+        <div class="smd-banner-text">
+          {% if not active_group %}
+            Για να συνεχίσετε χρειάζεται πρώτα μια <b>ομάδα εργασίας</b> και μετά ένας <b>πελάτης</b>.
+          {% else %}
+            Η ομάδα είναι έτοιμη· επιλέξτε τον <b>πελάτη</b> για τον οποίο θα δουλέψετε.
+          {% endif %}
         </div>
-        <div class="ml-3">
-          <p class="text-sm">
-            {% if not active_group %}
-            <strong>Δεν έχει επιλεγεί ενεργή ομάδα.</strong>
-            <a href="{{ url_for('auth.list_groups') }}" class="font-medium underline">Επιλέξτε ενεργή ομάδα</a> και μετά πελάτη για να συνεχίσετε.
-            {% else %}
-            <strong>Δεν έχει επιλεγεί ενεργός πελάτης.</strong>
-            <a href="{{ url_for('credentials') }}" class="font-medium underline">Επιλέξτε πελάτη</a> για να συνεχίσετε.
-            {% endif %}
-          </p>
+        <div class="smd-steps">
+          <div class="smd-step {% if active_group %}done{% else %}now{% endif %}"><i>{% if active_group %}✓{% else %}1{% endif %}</i>Ομάδα</div>
+          <div class="smd-step-sep">→</div>
+          <div class="smd-step {% if active_group %}now{% endif %}"><i>2</i>Πελάτης</div>
         </div>
       </div>
+      {% if not active_group %}
+      <a href="{{ url_for('auth.list_groups') }}" class="smd-btn smd-btn-primary">Επιλογή ομάδας →</a>
+      {% else %}
+      <a href="{{ url_for('credentials') }}" class="smd-btn smd-btn-primary">Επιλογή πελάτη →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if current_user.is_authenticated and not current_user.display_name and request.endpoint != 'auth.account_settings' %}
+    <div class="smd-banner info" id="displayNameBanner" role="status">
+      <div class="smd-banner-ico" aria-hidden="true">🪪</div>
+      <div class="smd-banner-body">
+        <div class="smd-banner-title">Ορίστε το όνομά σας</div>
+        <div class="smd-banner-text">Τα μέλη των ομάδων σας και τα logs θα βλέπουν <b>αυτό το όνομα</b> αντί για το email σας (GDPR). Συμπληρώστε ονοματεπώνυμο ή ψευδώνυμο.</div>
+      </div>
+      <a href="{{ url_for('auth.account_settings') }}" class="smd-btn smd-btn-primary">Ορισμός ονόματος →</a>
     </div>
     {% endif %}
 

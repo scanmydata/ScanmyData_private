@@ -3,7 +3,7 @@ from werkzeug.utils import secure_filename
 import os
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from firebase import firebase_config
-from models import db, User, Group, UserGroup, GroupNotice
+from models import db, User, Group, UserGroup, GroupNotice, GroupInvite
 import datetime
 import threading
 import time
@@ -424,6 +424,20 @@ def logout():
 @auth_bp.route('/account', methods=['GET', 'POST'])
 @login_required
 def account_settings():
+    if request.method == 'POST' and (request.form.get('form') or '') == 'profile':
+        name = ' '.join((request.form.get('display_name') or '').split())
+        if len(name) < 2:
+            flash('Το όνομα εμφάνισης πρέπει να έχει τουλάχιστον 2 χαρακτήρες.', 'warning')
+        elif len(name) > 60:
+            flash('Το όνομα εμφάνισης δεν μπορεί να ξεπερνά τους 60 χαρακτήρες.', 'warning')
+        elif '@' in name:
+            flash('Για λόγους απορρήτου (GDPR) το όνομα εμφάνισης δεν μπορεί να είναι email. Γράψτε ονοματεπώνυμο ή ψευδώνυμο.', 'warning')
+        else:
+            current_user.display_name = name
+            db.session.commit()
+            flash('Το όνομα εμφάνισης αποθηκεύτηκε. Θα το βλέπουν τα μέλη των ομάδων σας και τα logs.', 'success')
+        return redirect(url_for('auth.account_settings'))
+
     if request.method == 'POST':
         current_password = request.form.get('current_password') or ''
         new_password = request.form.get('new_password') or ''
@@ -820,7 +834,20 @@ def list_groups():
     except Exception:
         groups = []
         admin_groups = []
-    return render_template('auth/groups.html', groups=groups, admin_groups=admin_groups)
+    my_invites = []
+    sent_invites = {}
+    try:
+        my_invites = (GroupInvite.query.filter_by(user_id=current_user.id, status='pending')
+                      .order_by(GroupInvite.created_at.desc()).all())
+        admin_ids = [g.id for g in admin_groups]
+        if admin_ids:
+            for inv in (GroupInvite.query.filter(GroupInvite.group_id.in_(admin_ids), GroupInvite.status == 'pending')
+                        .order_by(GroupInvite.created_at.desc()).all()):
+                sent_invites.setdefault(inv.group_id, []).append(inv)
+    except Exception:
+        current_app.logger.exception('list_groups: failed to load invites')
+    return render_template('auth/groups.html', groups=groups, admin_groups=admin_groups,
+                           my_invites=my_invites, sent_invites=sent_invites)
 
 
 @auth_bp.route('/groups/delete', methods=['POST'])
@@ -910,12 +937,20 @@ def delete_group():
         return (jsonify(resp), 500) if request.is_json else (flash('Σφάλμα διαγραφής ομάδας.', 'danger'), redirect(url_for('auth.list_groups')))
 
 
-def _notify_group_change(user, group_name, action, role=None, actor=None):
+def _actor_public_name():
+    """Το όνομα του τρέχοντος χρήστη όπως το βλέπουν οι άλλοι (display name, ποτέ email)."""
+    try:
+        return current_user.public_name
+    except Exception:
+        return None
+
+
+def _notify_group_change(user, group_name, action, role=None, actor=None, actor_id=None):
     """Καταχωρεί ειδοποίηση για τον χρήστη (εμφανίζεται στην επόμενη σελίδα που θα ανοίξει). Ποτέ δεν ρίχνει exception."""
     try:
         if not user or not group_name:
             return
-        if actor and actor == getattr(user, 'username', None):
+        if actor_id is not None and actor_id == getattr(user, 'id', None):
             return                                    # αλλαγή από τον ίδιο: δεν χρειάζεται ειδοποίηση
         # Παλιότερες μη διαβασμένες ειδοποιήσεις για την ίδια ομάδα αντικαθίστανται από τη νεότερη.
         GroupNotice.query.filter_by(user_id=user.id, group_name=group_name, seen_at=None).delete()
@@ -930,6 +965,25 @@ def _notify_group_change(user, group_name, action, role=None, actor=None):
             current_app.logger.exception('Failed to record group notice')
         except Exception:
             pass
+
+
+def _pending_invite(grp, user):
+    return GroupInvite.query.filter_by(group_id=grp.id, user_id=user.id, status='pending').first()
+
+
+def _create_group_invite(grp, user, role):
+    """Δημιουργεί (ή ενημερώνει τον ρόλο σε) εκκρεμή πρόσκληση. Επιστρέφει (invite, created)."""
+    inv = _pending_invite(grp, user)
+    if inv is not None:
+        inv.role = role
+        inv.invited_by_id = getattr(current_user, 'id', None)
+        db.session.commit()
+        return inv, False
+    inv = GroupInvite(group_id=grp.id, group_name=grp.name, user_id=user.id,
+                      invited_by_id=getattr(current_user, 'id', None), role=role, status='pending')
+    db.session.add(inv)
+    db.session.commit()
+    return inv, True
 
 
 def _wants_json() -> bool:
@@ -989,35 +1043,48 @@ def assign_user_to_group():
                 return _fail('Η ομάδα έχει ήδη διαχειριστή· ο χρήστης μπορεί να προστεθεί μόνο ως μέλος.',
                              'η ομάδα έχει ήδη διαχειριστή', 400)
 
-        # Add user to group with specified role
-        user.add_to_group(grp, role=role)
-        db.session.commit()
-
-        # Ειδοποίηση προς τον χρήστη (προσθήκη ή αλλαγή ρόλου)
-        if previous_role is None:
-            _notify_group_change(user, grp.name, 'added', role=role, actor=getattr(current_user, 'username', None))
-        elif previous_role != role:
-            _notify_group_change(user, grp.name, 'role', role=role, actor=getattr(current_user, 'username', None))
-
-        # append to group activity log (structured)
-        try:
-            _append_group_log(grp, {
-                'action': 'add_user',
-                'target_user': user.username,
-                'role': role,
-                'description': f'Προσθήκη χρήστη {user.username} ως {role}',
-            })
-        except Exception:
-            pass
-
         _role_el = 'Διαχειριστής' if role == 'admin' else 'Μέλος'
+        _name = user.public_name
+        _actor = _actor_public_name()
+
         if previous_role is None:
-            flash(f'Ο χρήστης {user.username} προστέθηκε στην ομάδα «{group_name}» ως {_role_el}. '
-                  f'Θα ειδοποιηθεί την επόμενη φορά που θα ανοίξει μια σελίδα.', 'success')
-        elif previous_role != role:
-            flash(f'Ο ρόλος του χρήστη {user.username} στην ομάδα «{group_name}» άλλαξε σε {_role_el}.', 'success')
+            # Νέο μέλος: ΠΡΟΣΚΛΗΣΗ — προστίθεται μόνο όταν την αποδεχτεί ο ίδιος ο χρήστης.
+            if user.id == current_user.id:
+                return _fail('Δεν μπορείτε να προσκαλέσετε τον εαυτό σας.', 'cannot invite self', 400)
+            _inv, created = _create_group_invite(grp, user, role)
+            try:
+                _append_group_log(grp, {
+                    'action': 'invite_user',
+                    'target_user': _name,
+                    'role': role,
+                    'description': f'Πρόσκληση προς {_name} ως {role}',
+                })
+            except Exception:
+                pass
+            if created:
+                flash(f'Στάλθηκε πρόσκληση στον χρήστη {_name} για την ομάδα «{group_name}» ως {_role_el}. '
+                      f'Θα προστεθεί μόλις την αποδεχτεί.', 'success')
+            else:
+                flash(f'Υπάρχει ήδη εκκρεμής πρόσκληση για τον χρήστη {_name} στην ομάδα «{group_name}» (ενημερώθηκε ο ρόλος: {_role_el}).', 'info')
+            return redirect(url_for('auth.list_groups'))
+
+        # Υπάρχον μέλος: αλλαγή ρόλου εφαρμόζεται άμεσα (με ειδοποίηση).
+        if previous_role != role:
+            user.add_to_group(grp, role=role)
+            db.session.commit()
+            _notify_group_change(user, grp.name, 'role', role=role, actor=_actor, actor_id=current_user.id)
+            try:
+                _append_group_log(grp, {
+                    'action': 'change_role',
+                    'target_user': _name,
+                    'role': role,
+                    'description': f'Αλλαγή ρόλου του {_name} σε {role}',
+                })
+            except Exception:
+                pass
+            flash(f'Ο ρόλος του χρήστη {_name} στην ομάδα «{group_name}» άλλαξε σε {_role_el}.', 'success')
         else:
-            flash(f'Ο χρήστης {user.username} είναι ήδη {_role_el} στην ομάδα «{group_name}».', 'info')
+            flash(f'Ο χρήστης {_name} είναι ήδη {_role_el} στην ομάδα «{group_name}».', 'info')
         return redirect(url_for('auth.list_groups'))
     except Exception as e:
         current_app.logger.exception('Error assigning user to group')
@@ -1141,27 +1208,34 @@ def assign_user_to_group_legacy():
         if _ug.user_id == user.id:
             previous_role = _ug.role
             break
-    # assign role
-    user.add_to_group(grp, role=role)
-    db.session.commit()
+    _name = user.public_name
     if previous_role is None:
-        _notify_group_change(user, grp.name, 'added', role=role, actor=getattr(current_user, 'username', None))
-    elif previous_role != role:
-        _notify_group_change(user, grp.name, 'role', role=role, actor=getattr(current_user, 'username', None))
+        # Νέο μέλος: πρόσκληση που πρέπει να αποδεχτεί ο χρήστης.
+        if user.id == current_user.id:
+            return jsonify({'ok': False, 'error': 'cannot invite self'}), 400
+        _create_group_invite(grp, user, role)
+        try:
+            _append_group_log(grp, {
+                'action': 'invite_user', 'target_user': _name, 'role': role,
+                'description': f'Πρόσκληση προς {_name} ως {role}',
+            })
+        except Exception:
+            pass
+        return jsonify({'ok': True, 'refresh': True, 'invited': True,
+                        'message': f'Invitation sent to {_name} as {role}'})
 
-    # log the assignment in the group's activity log (structured)
-    try:
-        _append_group_log(grp, {
-            'action': 'add_user',
-            'target_user': user.username,
-            'role': role,
-            'description': f'Προσθήκη χρήστη {user.username} ως {role}',
-        })
-    except Exception:
-        pass
-
-    # Return with refresh flag so frontend auto-refreshes
-    return jsonify({'ok': True, 'refresh': True, 'message': f'User {user.username} assigned as {role}'})
+    if previous_role != role:
+        user.add_to_group(grp, role=role)
+        db.session.commit()
+        _notify_group_change(user, grp.name, 'role', role=role, actor=_actor_public_name(), actor_id=current_user.id)
+        try:
+            _append_group_log(grp, {
+                'action': 'change_role', 'target_user': _name, 'role': role,
+                'description': f'Αλλαγή ρόλου του {_name} σε {role}',
+            })
+        except Exception:
+            pass
+    return jsonify({'ok': True, 'refresh': True, 'message': f'User {_name} role set to {role}'})
 
 
 @auth_bp.route('/groups/remove_member', methods=['POST'])
@@ -1215,17 +1289,17 @@ def remove_member():
         
         db.session.delete(ug)
         db.session.commit()
-        _notify_group_change(target, group_name, 'removed', actor=getattr(current_user, 'username', None))
+        _notify_group_change(target, group_name, 'removed', actor=_actor_public_name(), actor_id=current_user.id)
         # structured log for removal
         try:
             _append_group_log(grp, {
                 'action': 'remove_user',
-                'target_user': target.username,
-                'description': f'Αφαίρεση χρήστη {target.username} από ομάδα',
+                'target_user': target.public_name,
+                'description': f'Αφαίρεση χρήστη {target.public_name} από ομάδα',
             })
         except Exception:
             pass
-        flash(f'Ο χρήστης {target.username} αφαιρέθηκε από την ομάδα {group_name}', 'success')
+        flash(f'Ο χρήστης {target.public_name} αφαιρέθηκε από την ομάδα {group_name}', 'success')
         return redirect(url_for('auth.list_groups'))
     except Exception:
         db.session.rollback()
@@ -1498,18 +1572,13 @@ def _append_group_log(group: Group, message: str) -> None:
                 obj = {"message": str(message)}
 
             # Add actor/username and email and user_id if not provided
+            # GDPR: στα logs καταγράφεται το όνομα εμφάνισης (display name) — ΟΧΙ το email του χρήστη.
             try:
-                actor = getattr(current_user, 'username', None)
+                actor = getattr(current_user, 'public_name', None)
                 if actor and 'actor' not in obj:
                     obj['actor'] = actor
             except Exception:
                 actor = None
-            try:
-                uemail = getattr(current_user, 'email', None)
-                if uemail and 'user_email' not in obj:
-                    obj['user_email'] = uemail
-            except Exception:
-                pass
             try:
                 uid = getattr(current_user, 'id', None)
                 if uid and 'user_id' not in obj:
@@ -1765,6 +1834,129 @@ def api_user():
     if getattr(current_user, 'is_authenticated', False):
         return jsonify({'authenticated': True, 'username': current_user.username, 'groups': [g.name for g in current_user.groups]})
     return jsonify({'authenticated': False})
+
+
+def _invite_to_dict(inv):
+    inviter = inv.invited_by
+    return {
+        'id': inv.id,
+        'group': inv.group_name,
+        'role': inv.role,
+        'inviter': (inviter.public_name if inviter is not None else None),
+        'created_at': inv.created_at.isoformat() + 'Z' if inv.created_at else None,
+    }
+
+
+@auth_bp.route('/api/group_invites', methods=['GET'])
+def api_group_invites():
+    """Εκκρεμείς προσκλήσεις σε ομάδες για τον συνδεδεμένο χρήστη."""
+    if not getattr(current_user, 'is_authenticated', False):
+        return jsonify({'ok': True, 'invites': []})
+    try:
+        rows = (GroupInvite.query.filter_by(user_id=current_user.id, status='pending')
+                .order_by(GroupInvite.created_at.asc(), GroupInvite.id.asc()).limit(20).all())
+        return jsonify({'ok': True, 'invites': [_invite_to_dict(r) for r in rows]})
+    except Exception:
+        current_app.logger.exception('api_group_invites failed')
+        return jsonify({'ok': False, 'invites': []}), 500
+
+
+@auth_bp.route('/api/group_invites/respond', methods=['POST'])
+@login_required
+def api_group_invites_respond():
+    """Ο προσκεκλημένος αποδέχεται ή απορρίπτει πρόσκληση: {id, accept: bool}."""
+    try:
+        payload = request.get_json(silent=True) or request.form or {}
+        inv_id = payload.get('id')
+        accept = payload.get('accept')
+        if isinstance(accept, str):
+            accept = accept.strip().lower() in ('1', 'true', 'yes', 'accept')
+        try:
+            inv = GroupInvite.query.get(int(inv_id))
+        except Exception:
+            inv = None
+        if inv is None or inv.user_id != current_user.id:
+            return jsonify({'ok': False, 'error': 'not found'}), 404
+        if inv.status != 'pending':
+            return jsonify({'ok': False, 'error': 'already responded'}), 409
+
+        grp = Group.query.get(inv.group_id)
+        now = datetime.datetime.utcnow()
+        me = current_user.public_name
+        inviter = inv.invited_by
+
+        if not accept:
+            inv.status = 'declined'
+            inv.responded_at = now
+            db.session.commit()
+            if inviter is not None:
+                _notify_group_change(inviter, inv.group_name, 'invite_declined', role=inv.role, actor=me, actor_id=current_user.id)
+            return jsonify({'ok': True, 'status': 'declined', 'group': inv.group_name})
+
+        if grp is None:
+            inv.status = 'cancelled'
+            inv.responded_at = now
+            db.session.commit()
+            return jsonify({'ok': False, 'error': 'group no longer exists'}), 410
+
+        role = inv.role if inv.role in ('member', 'admin') else 'member'
+        downgraded = False
+        if role == 'admin':
+            others = [ug for ug in grp.user_groups if ug.role == 'admin' and ug.user_id != current_user.id]
+            if others:
+                role = 'member'          # η ομάδα απέκτησε στο μεταξύ διαχειριστή
+                downgraded = True
+        current_user.add_to_group(grp, role=role)
+        inv.status = 'accepted'
+        inv.responded_at = now
+        db.session.commit()
+        try:
+            _append_group_log(grp, {
+                'action': 'invite_accepted', 'target_user': me, 'role': role,
+                'description': f'Ο χρήστης {me} αποδέχτηκε την πρόσκληση και προστέθηκε ως {role}',
+            })
+        except Exception:
+            pass
+        if inviter is not None:
+            _notify_group_change(inviter, inv.group_name, 'invite_accepted', role=role, actor=me, actor_id=current_user.id)
+        return jsonify({'ok': True, 'status': 'accepted', 'group': inv.group_name, 'role': role, 'downgraded': downgraded})
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        current_app.logger.exception('api_group_invites_respond failed')
+        return jsonify({'ok': False, 'error': 'server error'}), 500
+
+
+@auth_bp.route('/groups/invite/cancel', methods=['POST'])
+@login_required
+def cancel_group_invite():
+    """Ο διαχειριστής της ομάδας ακυρώνει εκκρεμή πρόσκληση."""
+    try:
+        inv_id = request.form.get('id') or (request.get_json(silent=True) or {}).get('id')
+        inv = GroupInvite.query.get(int(inv_id))
+    except Exception:
+        inv = None
+    if inv is None:
+        return (jsonify({'ok': False, 'error': 'not found'}), 404) if _wants_json() else (flash('Η πρόσκληση δεν βρέθηκε.', 'warning'), redirect(url_for('auth.list_groups')))[1]
+    grp = Group.query.get(inv.group_id)
+    allowed = False
+    try:
+        from admin.admin_panel import is_admin
+        allowed = bool(grp is not None and (is_admin(current_user) or current_user.role_for_group(grp) == 'admin'))
+    except Exception:
+        allowed = False
+    if not allowed:
+        return (jsonify({'ok': False, 'error': 'not authorized'}), 403) if _wants_json() else (flash('Δεν έχετε δικαίωμα.', 'danger'), redirect(url_for('auth.list_groups')))[1]
+    if inv.status == 'pending':
+        inv.status = 'cancelled'
+        inv.responded_at = datetime.datetime.utcnow()
+        db.session.commit()
+    if _wants_json():
+        return jsonify({'ok': True})
+    flash('Η πρόσκληση ακυρώθηκε.', 'success')
+    return redirect(url_for('auth.list_groups'))
 
 
 @auth_bp.route('/api/group_notices', methods=['GET'])

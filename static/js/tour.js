@@ -52,7 +52,7 @@
       { sel: '#open-create', place: 'bottom', title: 'Νέα ομάδα',
         body: 'Δημιουργήστε δική σας ομάδα· θα είστε ο <b>διαχειριστής</b> της.' },
       { sel: '#open-assign', place: 'bottom', title: 'Προσθήκη μελών και ρόλοι',
-        body: 'Ως διαχειριστής προσθέτετε συναδέλφους με username ή email. Ο <b>διαχειριστής</b> διαχειρίζεται μέλη· το <b>μέλος</b> εργάζεται κανονικά στα δεδομένα. Ο χρήστης ειδοποιείται στο επόμενο login του.' }
+        body: 'Ως διαχειριστής προσκαλείτε συναδέλφους με username ή email· προστίθενται όταν <b>αποδεχτούν</b> την πρόσκληση. Ο <b>διαχειριστής</b> διαχειρίζεται μέλη· το <b>μέλος</b> εργάζεται κανονικά στα δεδομένα.' }
     ] },
 
     credentials: { label: 'Πελάτες', path: '/credentials', steps: [
@@ -578,7 +578,7 @@
   function autoStart() {
     if (autoChecked || run) return;
     if (!window.IS_LOGGED_IN) return;
-    if (/^\/(firebase-auth|login|signup|manual|terms|privacy)/.test(window.location.pathname)) return;
+    if (/^\/(firebase-auth|login|signup|manual|terms|privacy|admin)/.test(window.location.pathname)) return;
     autoChecked = true;
     if (wasSeen()) return;
     // Νέος λογαριασμός = δημιουργήθηκε τις τελευταίες NEW_ACCOUNT_DAYS μέρες· οι παλιότεροι βλέπουν μόνο μια ενημέρωση.

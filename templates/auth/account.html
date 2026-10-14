@@ -3,81 +3,195 @@
 {% block title %}Ρυθμίσεις λογαριασμού{% endblock %}
 
 {% block content %}
-<div class="content-wrap max-w-2xl">
-  <h1 class="text-xl font-semibold mb-4">Ρυθμίσεις λογαριασμού</h1>
-  <form method="post" class="grid gap-4 max-w-md">
-    <div>
-      <label for="currentPassword" class="block text-sm font-medium text-gray-700">Τρέχων κωδικός</label>
-      <div class="mt-1 relative">
-        <input id="currentPassword" name="current_password" type="password" required class="w-full border rounded px-3 py-2 pr-10" autocomplete="current-password">
-        <button type="button" class="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700" data-toggle-password="currentPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
-          <span data-eye-show class="block">👁</span>
-          <span data-eye-hide class="hidden">🙈</span>
-        </button>
+{% include 'partials/auth_ui_css.html' %}
+<style id="accountUiCss">
+  .au.ac { grid-template-columns: minmax(0, 1fr); max-width: 880px; gap: 18px; }
+  .ac .au-card { padding: 26px 28px; }
+  .ac-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .ac-avatar {
+    width: 64px; height: 64px; border-radius: 20px; display: flex; align-items: center; justify-content: center; font-size: 30px; flex: none;
+    background: linear-gradient(135deg, #0ea5e9, #7c3aed);
+  }
+  html body .ac .ac-name { font-size: 1.35rem; font-weight: 800; color: var(--au-text) !important; }
+  html body .ac .ac-email { font-size: .9rem; color: var(--au-muted) !important; }
+  .ac-pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: .8rem; font-weight: 700;
+    background: var(--au-accent-soft); border: 1px solid var(--au-accent);
+  }
+  html body .ac .ac-pill { color: var(--au-accent) !important; }
+  .ac-sec-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .ac-sec-ico { width: 42px; height: 42px; border-radius: 13px; display: flex; align-items: center; justify-content: center; font-size: 21px; background: var(--au-accent-soft); flex: none; }
+  html body .ac .ac-sec-title { font-size: 1.12rem; font-weight: 800; margin: 0; color: var(--au-text) !important; }
+  html body .ac .ac-sec-sub { font-size: .88rem; color: var(--au-muted) !important; }
+  .ac-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .ac-preview {
+    margin-top: 12px; padding: 12px 14px; border-radius: 14px; background: var(--au-soft); border: 1px dashed var(--au-line);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .9rem;
+  }
+  html body .ac .ac-preview, html body .ac .ac-preview div { color: var(--au-muted) !important; }
+  html body .ac .ac-preview b { color: var(--au-text) !important; }
+  html body .ac button.au-submit { width: auto; padding: 0 26px; height: 46px; font-size: 15px; }
+  .ac-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+  html body .ac button.ac-danger {
+    height: 46px; padding: 0 20px; border-radius: 14px; font-weight: 800; cursor: pointer; font-size: 15px;
+    background: var(--au-danger-soft) !important; color: var(--au-danger) !important; border: 1px solid var(--au-danger) !important;
+  }
+  .ac-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  html body .ac a.ac-method {
+    display: block; padding: 18px; border-radius: 18px; text-decoration: none; background: var(--au-soft); border: 1px solid var(--au-line);
+    transition: border-color .14s ease, transform .14s ease;
+  }
+  html body .ac a.ac-method:hover { border-color: var(--au-accent); transform: translateY(-2px); }
+  .ac-method.disabled { opacity: .6; display: block; padding: 18px; border-radius: 18px; background: var(--au-soft); border: 1px solid var(--au-line); }
+  .ac-method-ico { font-size: 26px; margin-bottom: 6px; }
+  html body .ac .ac-method-title { font-weight: 800; color: var(--au-text) !important; }
+  html body .ac .ac-method-sub { font-size: .82rem; color: var(--au-muted) !important; margin-top: 2px; }
+  .ac-box { padding: 16px 18px; border-radius: 16px; background: var(--au-soft); border: 1px solid var(--au-line); }
+  .ac-box.ok { background: var(--au-ok-soft); border-color: var(--au-ok); }
+  html body .ac .ac-box.ok, html body .ac .ac-box.ok * { color: var(--au-ok) !important; }
+  .ac-qr { display: flex; justify-content: center; margin: 12px 0; }
+  .ac-qr img { background: #fff; padding: 8px; border-radius: 14px; border: 1px solid var(--au-line); }
+  html body .ac code.ac-secret { display: block; text-align: center; padding: 8px 10px; border-radius: 10px; background: var(--au-card); border: 1px solid var(--au-line); color: var(--au-text) !important; word-break: break-all; font-size: .85rem; }
+  @media (max-width: 720px) { .ac-two, .ac-method-grid { grid-template-columns: minmax(0, 1fr); } .ac .au-card { padding: 20px 18px; } }
+</style>
+
+<div class="au ac">
+
+  <!-- ============== Επικεφαλίδα ============== -->
+  <section class="au-card">
+    <div class="ac-top">
+      <div class="ac-avatar" aria-hidden="true">👤</div>
+      <div style="flex:1;min-width:0;">
+        <div class="ac-name">{{ current_user.display_name or 'Χωρίς όνομα εμφάνισης' }}</div>
+        <div class="ac-email">{{ current_user.email or current_user.username }}</div>
+      </div>
+      <div class="ac-pill">{% if twofa and twofa.enabled %}🛡️ 2FA ενεργή{% else %}🔓 2FA ανενεργή{% endif %}</div>
+    </div>
+  </section>
+
+  <!-- ============== Προφίλ / όνομα εμφάνισης ============== -->
+  <section class="au-card" id="profileCard">
+    <div class="ac-sec-head">
+      <div class="ac-sec-ico">🪪</div>
+      <div>
+        <h2 class="ac-sec-title">Προφίλ &amp; απόρρητο</h2>
+        <div class="ac-sec-sub">Το όνομα που βλέπουν οι συνάδελφοί σας.</div>
       </div>
     </div>
 
-    <div>
-      <label for="newPassword" class="block text-sm font-medium text-gray-700">Νέος κωδικός</label>
-      <div class="mt-1 relative">
-        <input id="newPassword" name="new_password" type="password" required minlength="8" class="w-full border rounded px-3 py-2 pr-10" autocomplete="new-password">
-        <button type="button" class="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700" data-toggle-password="newPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
-          <span data-eye-show class="block">👁</span>
-          <span data-eye-hide class="hidden">🙈</span>
-        </button>
+    <form method="post" class="au-form" id="profileForm">
+      <input type="hidden" name="form" value="profile">
+      <div>
+        <label class="au-label" for="displayName">Ονοματεπώνυμο / ψευδώνυμο</label>
+        <div class="au-input-wrap">
+          <span class="au-input-ico" aria-hidden="true">✍️</span>
+          <input id="displayName" class="au-input" name="display_name" type="text" maxlength="60" minlength="2" required
+                 value="{{ current_user.display_name or '' }}" placeholder="π.χ. Μαρία Παπαδοπούλου" autocomplete="name">
+        </div>
+        <div class="au-help">Εμφανίζεται στα <b>μέλη των ομάδων σας</b> (λίστες μελών, προσκλήσεις, ειδοποιήσεις) και στα <b>logs</b> αντί για το email σας, ώστε να προστατεύεται το απόρρητό σας (GDPR).</div>
+        <div class="ac-preview">
+          <div>Έτσι θα εμφανίζεστε:</div>
+          <div class="ac-pill" id="namePreview">{{ current_user.display_name or current_user.public_name }}</div>
+        </div>
       </div>
-      <p class="mt-1 text-xs text-gray-500">Ο νέος κωδικός πρέπει να αποτελείται από τουλάχιστον 8 χαρακτήρες.</p>
-    </div>
+      <div class="ac-actions">
+        <button type="submit" class="au-submit">Αποθήκευση ονόματος</button>
+      </div>
+    </form>
+  </section>
 
-    <div>
-      <label for="confirmPassword" class="block text-sm font-medium text-gray-700">Επιβεβαίωση νέου κωδικού</label>
-      <div class="mt-1 relative">
-        <input id="confirmPassword" name="confirm_password" type="password" required minlength="8" class="w-full border rounded px-3 py-2 pr-10" autocomplete="new-password">
-        <button type="button" class="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700" data-toggle-password="confirmPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
-          <span data-eye-show class="block">👁</span>
-          <span data-eye-hide class="hidden">🙈</span>
-        </button>
+  <!-- ============== Κωδικός ============== -->
+  <section class="au-card">
+    <div class="ac-sec-head">
+      <div class="ac-sec-ico">🔑</div>
+      <div>
+        <h2 class="ac-sec-title">Κωδικός πρόσβασης</h2>
+        <div class="ac-sec-sub">Αλλαγή κωδικού σύνδεσης.</div>
       </div>
     </div>
 
-    <div class="flex items-center gap-3">
-      <button type="submit" class="px-4 py-2 rounded bg-sky-600 text-white">Αποθήκευση αλλαγών</button>
-      <a href="{{ url_for('home') }}" class="text-sm text-gray-600 hover:text-gray-800">Επιστροφή</a>
-    </div>
-  </form>
+    <form method="post" class="au-form">
+      <div>
+        <label class="au-label" for="currentPassword">Τρέχων κωδικός</label>
+        <div class="au-input-wrap has-eye">
+          <span class="au-input-ico" aria-hidden="true">🔒</span>
+          <input id="currentPassword" class="au-input" name="current_password" type="password" required autocomplete="current-password">
+          <button type="button" class="au-eye" data-toggle-password="currentPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+            <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+          </button>
+        </div>
+      </div>
 
-  <!-- ============================ 2FA ============================ -->
-  <section class="mt-10 border-t pt-6">
-    <h2 class="text-lg font-semibold mb-1">Επαλήθευση δύο παραγόντων (2FA)</h2>
-    <p class="text-sm text-gray-500 mb-4">Πρόσθετο επίπεδο ασφάλειας κατά τη σύνδεση.</p>
+      <div class="ac-two">
+        <div>
+          <label class="au-label" for="newPassword">Νέος κωδικός</label>
+          <div class="au-input-wrap has-eye">
+            <span class="au-input-ico" aria-hidden="true">🔑</span>
+            <input id="newPassword" class="au-input" name="new_password" type="password" required minlength="8" autocomplete="new-password">
+            <button type="button" class="au-eye" data-toggle-password="newPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+              <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+            </button>
+          </div>
+          <div class="au-meter" id="pwMeter" data-s="0"><i></i><i></i><i></i><i></i></div>
+          <div class="au-help" id="pwHint">Τουλάχιστον 8 χαρακτήρες.</div>
+        </div>
+        <div>
+          <label class="au-label" for="confirmPassword">Επιβεβαίωση νέου κωδικού</label>
+          <div class="au-input-wrap has-eye">
+            <span class="au-input-ico" aria-hidden="true">🔒</span>
+            <input id="confirmPassword" class="au-input" name="confirm_password" type="password" required minlength="8" autocomplete="new-password">
+            <button type="button" class="au-eye" data-toggle-password="confirmPassword" aria-label="Εναλλαγή εμφάνισης κωδικού" aria-pressed="false">
+              <span data-eye-show>👁</span><span data-eye-hide style="display:none;">🙈</span>
+            </button>
+          </div>
+          <div class="au-help au-match" id="pwMatch">Πρέπει να ταιριάζουν.</div>
+        </div>
+      </div>
+
+      <div class="ac-actions">
+        <button type="submit" class="au-submit">Αποθήκευση κωδικού</button>
+        <a href="{{ url_for('home') }}" class="au-link">Επιστροφή</a>
+      </div>
+    </form>
+  </section>
+
+  <!-- ============== 2FA ============== -->
+  <section class="au-card">
+    <div class="ac-sec-head">
+      <div class="ac-sec-ico">🛡️</div>
+      <div>
+        <h2 class="ac-sec-title">Επαλήθευση δύο παραγόντων (2FA)</h2>
+        <div class="ac-sec-sub">Πρόσθετο επίπεδο ασφάλειας κατά τη σύνδεση.</div>
+      </div>
+    </div>
 
     {% if twofa_setup is defined and twofa_setup %}
       {# ---------- Setup / confirm mode ---------- #}
       {% if twofa_setup.method == 'totp' %}
-        <div class="rounded border border-gray-200 p-4 bg-gray-50 max-w-md">
-          <p class="text-sm text-gray-700 mb-3">1. Σκάναρε τον κωδικό QR με μια εφαρμογή authenticator (Google Authenticator, Authy, Microsoft Authenticator).</p>
-          <div class="flex justify-center mb-3">
-            <img src="{{ twofa_setup.qr }}" alt="QR code 2FA" width="200" height="200" class="border rounded bg-white p-2">
-          </div>
-          <p class="text-xs text-gray-500 mb-1">Ή καταχώρησε χειροκίνητα το κλειδί:</p>
-          <code class="block text-center text-sm bg-white border rounded px-2 py-1 mb-4 break-all">{{ twofa_setup.secret }}</code>
-          <form method="post" action="{{ url_for('auth.twofa_confirm') }}" class="grid gap-3">
-            <label class="text-sm font-medium text-gray-700">2. Καταχώρησε τον 6ψήφιο κωδικό από την εφαρμογή:</label>
-            <input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required class="w-full border rounded px-3 py-2 tracking-widest text-center" placeholder="000000">
-            <div class="flex gap-3">
-              <button type="submit" class="px-4 py-2 rounded bg-emerald-600 text-white">Επιβεβαίωση & ενεργοποίηση</button>
-              <a href="{{ url_for('auth.account_settings') }}" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 self-center">Άκυρο</a>
+        <div class="ac-box">
+          <div class="au-label">1. Σκανάρετε τον κωδικό QR με μια εφαρμογή authenticator (Google Authenticator, Authy, Microsoft Authenticator).</div>
+          <div class="ac-qr"><img src="{{ twofa_setup.qr }}" alt="QR code 2FA" width="200" height="200"></div>
+          <div class="au-help" style="text-align:center;">Ή καταχωρήστε χειροκίνητα το κλειδί:</div>
+          <code class="ac-secret">{{ twofa_setup.secret }}</code>
+          <form method="post" action="{{ url_for('auth.twofa_confirm') }}" class="au-form" style="margin-top:16px;">
+            <div>
+              <label class="au-label" for="totpCode">2. Γράψτε τον 6ψήφιο κωδικό από την εφαρμογή:</label>
+              <input id="totpCode" name="code" class="au-input au-code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required placeholder="000000" maxlength="8">
+            </div>
+            <div class="ac-actions">
+              <button type="submit" class="au-submit">Επιβεβαίωση &amp; ενεργοποίηση</button>
+              <a href="{{ url_for('auth.account_settings') }}" class="au-link">Άκυρο</a>
             </div>
           </form>
         </div>
       {% else %}
-        <div class="rounded border border-gray-200 p-4 bg-gray-50 max-w-md">
-          <p class="text-sm text-gray-700 mb-3">Στείλαμε έναν 6ψήφιο κωδικό στο <strong>{{ twofa_setup.masked_email }}</strong>. Καταχώρησέ τον για να ενεργοποιηθεί η 2FA μέσω email.</p>
-          <form method="post" action="{{ url_for('auth.twofa_confirm') }}" class="grid gap-3">
-            <input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required class="w-full border rounded px-3 py-2 tracking-widest text-center" placeholder="000000">
-            <div class="flex gap-3">
-              <button type="submit" class="px-4 py-2 rounded bg-emerald-600 text-white">Επιβεβαίωση & ενεργοποίηση</button>
-              <a href="{{ url_for('auth.account_settings') }}" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 self-center">Άκυρο</a>
+        <div class="ac-box">
+          <div class="au-label">Στείλαμε έναν 6ψήφιο κωδικό στο <b>{{ twofa_setup.masked_email }}</b>. Γράψτε τον για να ενεργοποιηθεί η 2FA μέσω email.</div>
+          <form method="post" action="{{ url_for('auth.twofa_confirm') }}" class="au-form" style="margin-top:12px;">
+            <input name="code" class="au-input au-code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required placeholder="000000" maxlength="8">
+            <div class="ac-actions">
+              <button type="submit" class="au-submit">Επιβεβαίωση &amp; ενεργοποίηση</button>
+              <a href="{{ url_for('auth.account_settings') }}" class="au-link">Άκυρο</a>
             </div>
           </form>
         </div>
@@ -85,37 +199,42 @@
 
     {% elif twofa and twofa.enabled %}
       {# ---------- Enabled ---------- #}
-      <div class="rounded border border-emerald-200 bg-emerald-50 p-4 max-w-md">
-        <p class="text-sm text-emerald-800 mb-3">
+      <div class="ac-box ok">
+        <div style="font-weight:800;margin-bottom:10px;">
           ✅ Ενεργή —
           {% if twofa.method == 'totp' %}Εφαρμογή authenticator{% else %}Κωδικός μέσω email ({{ twofa.masked_email }}){% endif %}
-        </p>
-        <form method="post" action="{{ url_for('auth.twofa_disable') }}" class="grid gap-3">
-          <label class="text-sm font-medium text-gray-700">Για απενεργοποίηση, δώσε τον κωδικό σου:</label>
-          <input name="current_password" type="password" required class="w-full border rounded px-3 py-2" autocomplete="current-password">
-          <button type="submit" class="px-4 py-2 rounded bg-red-600 text-white w-max">Απενεργοποίηση 2FA</button>
-        </form>
+        </div>
       </div>
+      <form method="post" action="{{ url_for('auth.twofa_disable') }}" class="au-form" style="margin-top:16px;">
+        <div>
+          <label class="au-label" for="disable2faPw">Για απενεργοποίηση, δώστε τον κωδικό σας:</label>
+          <div class="au-input-wrap">
+            <span class="au-input-ico" aria-hidden="true">🔒</span>
+            <input id="disable2faPw" name="current_password" type="password" required class="au-input" autocomplete="current-password">
+          </div>
+        </div>
+        <div class="ac-actions"><button type="submit" class="ac-danger">Απενεργοποίηση 2FA</button></div>
+      </form>
 
     {% else %}
       {# ---------- Disabled: choose a method ---------- #}
-      <div class="grid gap-3 sm:grid-cols-2 max-w-xl">
-        <a href="{{ url_for('auth.twofa_setup', method='totp') }}" class="block rounded border border-gray-200 p-4 hover:border-sky-400 hover:bg-sky-50 transition">
-          <div class="text-2xl mb-1">📱</div>
-          <div class="font-medium">Εφαρμογή authenticator</div>
-          <div class="text-xs text-gray-500">Σάρωση QR code (Google Authenticator κ.ά.)</div>
+      <div class="ac-method-grid">
+        <a href="{{ url_for('auth.twofa_setup', method='totp') }}" class="ac-method">
+          <div class="ac-method-ico">📱</div>
+          <div class="ac-method-title">Εφαρμογή authenticator</div>
+          <div class="ac-method-sub">Σάρωση QR code (Google Authenticator κ.ά.)</div>
         </a>
         {% if twofa and twofa.has_email %}
-        <a href="{{ url_for('auth.twofa_setup', method='email') }}" class="block rounded border border-gray-200 p-4 hover:border-sky-400 hover:bg-sky-50 transition">
-          <div class="text-2xl mb-1">✉️</div>
-          <div class="font-medium">Κωδικός μέσω email</div>
-          <div class="text-xs text-gray-500">Αποστολή OTP στο {{ twofa.masked_email }}</div>
+        <a href="{{ url_for('auth.twofa_setup', method='email') }}" class="ac-method">
+          <div class="ac-method-ico">✉️</div>
+          <div class="ac-method-title">Κωδικός μέσω email</div>
+          <div class="ac-method-sub">Αποστολή OTP στο {{ twofa.masked_email }}</div>
         </a>
         {% else %}
-        <div class="block rounded border border-gray-100 p-4 opacity-60">
-          <div class="text-2xl mb-1">✉️</div>
-          <div class="font-medium">Κωδικός μέσω email</div>
-          <div class="text-xs text-gray-500">Δεν υπάρχει καταχωρημένο email στον λογαριασμό.</div>
+        <div class="ac-method disabled">
+          <div class="ac-method-ico">✉️</div>
+          <div class="ac-method-title">Κωδικός μέσω email</div>
+          <div class="ac-method-sub">Δεν υπάρχει καταχωρημένο email στον λογαριασμό.</div>
         </div>
         {% endif %}
       </div>
@@ -129,16 +248,52 @@
 (function(){
   document.querySelectorAll('[data-toggle-password]').forEach(function(btn){
     btn.addEventListener('click', function(){
-      const targetId = btn.getAttribute('data-toggle-password');
-      const input = targetId ? document.getElementById(targetId) : null;
+      var input = document.getElementById(btn.getAttribute('data-toggle-password'));
       if(!input) return;
-      const showing = input.type === 'text';
+      var showing = input.type === 'text';
       input.type = showing ? 'password' : 'text';
       btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
-      btn.querySelectorAll('[data-eye-show]').forEach(function(el){ el.classList.toggle('hidden', !showing); });
-      btn.querySelectorAll('[data-eye-hide]').forEach(function(el){ el.classList.toggle('hidden', showing); });
+      var s = btn.querySelector('[data-eye-show]'), h = btn.querySelector('[data-eye-hide]');
+      if(s) s.style.display = showing ? '' : 'none';
+      if(h) h.style.display = showing ? 'none' : '';
     });
   });
+
+  // ζωντανή προεπισκόπηση ονόματος εμφάνισης
+  var dn = document.getElementById('displayName'), pv = document.getElementById('namePreview');
+  if(dn && pv){
+    var fallback = pv.textContent;
+    dn.addEventListener('input', function(){ pv.textContent = dn.value.trim() || fallback; });
+  }
+
+  // δείκτης ισχύος / ταύτισης κωδικού
+  var pw = document.getElementById('newPassword'), pc = document.getElementById('confirmPassword');
+  var meter = document.getElementById('pwMeter'), hint = document.getElementById('pwHint'), match = document.getElementById('pwMatch');
+  var LABELS = ['', 'Αδύναμος κωδικός', 'Μέτριος κωδικός', 'Καλός κωδικός', 'Ισχυρός κωδικός'];
+  function score(v){
+    if(!v) return 0;
+    var s = 0;
+    if(v.length >= 8) s++;
+    if(v.length >= 12) s++;
+    if(/[a-zα-ω]/.test(v) && /[A-ZΑ-Ω]/.test(v)) s++;
+    if(/\d/.test(v) && /[^A-Za-z0-9α-ωΑ-Ω]/.test(v)) s++;
+    return Math.max(1, Math.min(4, s));
+  }
+  function update(){
+    if(!pw || !pc) return;
+    var v = pw.value, sc = score(v);
+    meter.setAttribute('data-s', String(sc));
+    hint.textContent = v ? LABELS[sc] + '.' : 'Τουλάχιστον 8 χαρακτήρες.';
+    if(!pc.value){ match.textContent = 'Πρέπει να ταιριάζουν.'; match.className = 'au-help au-match'; }
+    else if(pc.value === v){ match.textContent = '✓ Οι κωδικοί ταιριάζουν.'; match.className = 'au-help au-match ok'; }
+    else { match.textContent = '✕ Οι κωδικοί δεν ταιριάζουν.'; match.className = 'au-help au-match bad'; }
+  }
+  if(pw && pc){ pw.addEventListener('input', update); pc.addEventListener('input', update); }
+
+  // εστίαση στο όνομα όταν λείπει (π.χ. μετά το register)
+  try {
+    if(dn && !dn.value) { setTimeout(function(){ dn.focus(); }, 150); }
+  } catch(_) {}
 })();
 </script>
 {% endblock %}

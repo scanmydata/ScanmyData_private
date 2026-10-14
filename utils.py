@@ -976,6 +976,27 @@ def extract_marks_from_text(text: str):
 # Enhanced User Activity Logging
 # ============================================================================
 
+def _public_label_for_log(user_id, user_email=None, user_username=None):
+    """Βρίσκει το public_name (display name) του χρήστη με βάση id/email/username· None αν δεν βρεθεί."""
+    try:
+        from models import User
+        u = None
+        sid = str(user_id or '').strip()
+        if sid.isdigit():
+            u = User.query.get(int(sid))
+        if u is None:
+            for key in (user_email, user_username, sid):
+                key = str(key or '').strip()
+                if not key:
+                    continue
+                u = User.query.filter((User.username == key) | (User.email == key) | (User.firebase_uid == key)).first()
+                if u is not None:
+                    break
+        return u.public_name if u is not None else None
+    except Exception:
+        return None
+
+
 def log_user_activity(user_id, group_name, action, details=None, user_email=None, user_username=None):
     """
     Comprehensive user activity logging with detailed metadata.
@@ -1015,6 +1036,20 @@ def log_user_activity(user_id, group_name, action, details=None, user_email=None
         except:
             pass
         
+        # GDPR: στο log μπαίνει το όνομα εμφάνισης του χρήστη (display name) και ΟΧΙ το email.
+        # Ο γενικός admin βλέπει το email από την καρτέλα χρηστών (αντιστοίχιση με user_id).
+        try:
+            _label = _public_label_for_log(user_id, user_email, user_username)
+        except Exception:
+            _label = None
+        if _label:
+            user_username = _label
+            user_email = None
+        elif user_username and '@' in str(user_username):
+            _loc = str(user_username).split('@', 1)[0]
+            user_username = (_loc[:2] if len(_loc) > 2 else _loc[:1]) + '***'
+            user_email = None
+
         log_entry = {
             'user_id': str(user_id) if user_id else 'unknown',
             'user_email': user_email,

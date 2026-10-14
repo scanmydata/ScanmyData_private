@@ -640,7 +640,7 @@
 </div>
 
 <script>
-window.AR_ACCOUNTANT_NAME = {{ (current_user.username if current_user.is_authenticated else "") | tojson }};
+window.AR_ACCOUNTANT_NAME = {{ ((current_user.display_name or current_user.username) if current_user.is_authenticated else "") | tojson }};
 window.AR_CREDENTIALS = {{ credentials_min | tojson }};
 window.AR_STOCK_CODES = ["20","21","23","24","25","26","27","28"];
 window.AR_STOCK_LABELS = {
