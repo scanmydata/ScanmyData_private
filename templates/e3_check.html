@@ -1422,7 +1422,7 @@
       </div>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
-               title="Κάνει scrape το ΕΦΚΑ/ΤΕΚΑ (585.007) ΚΑΙ κατεβάζει τη Φορολογική Βεβαίωση PDF ανά μέλος για αυτόματη αντιπαραβολή του ποσού δίπλα στο 585.007.">
+               title="Φορολογικές βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ ανά ασφαλισμένο (ατομική: ο ίδιος, εταιρεία: κάθε μέλος) με αντιπαραβολή έναντι καθαρών καταβολών e-ΕΦΚΑ/ΚΕΑΟ και καρτέλα PDF. 585.007 = καθαρά βεβαιώσεων, επιβαρύνσεις → 588.">
           <input id="brainRunEfkaTeka" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           ΕΦΚΑ/ΤΕΚΑ
         </label>
@@ -1445,11 +1445,13 @@
           Λήψη &amp; διατήρηση βεβαιώσεων / αποδείξεων (PDF)
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <!-- Οι βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (και η καρτέλα αντιπαραβολής) αποθηκεύονται πάντα από τον έλεγχο
+               ΕΦΚΑ/ΤΕΚΑ· οι δύο επιλογές του παλιού scrape μένουν κρυφές (ids για συμβατότητα). -->
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300" style="display:none;">
             <input id="brainDownloadEfkaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Λήψη PDF βεβαιώσεων ΕΦΚΑ (μόνο επιλεγμένο έτος)
           </label>
-          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300" style="display:none;">
             <input id="brainDownloadTekaPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Λήψη PDF βεβαιώσεων ΤΕΚΑ (μόνο επιλεγμένο έτος)
           </label>
@@ -3451,10 +3453,12 @@
         const data = await resp.json();
         if (stopped) return;
         const p = data && data.progress;
-        if (p && p.label && p.label !== lastLabel) {
+        // Ανανέωση και όταν αλλάζει ΜΟΝΟ το ποσοστό (π.χ. σελίδες/ειδοποιητήρια ΕΦΚΑ/ΤΕΚΑ με ίδιο βήμα).
+        const progKey = p ? (String(p.label || '') + '|' + String(p.percent)) : null;
+        if (p && p.label && progKey !== lastLabel) {
           // First real progress event → silence the fallback cycler.
           if (stopFallback) { try { stopFallback(); } catch (_) {} stopFallback = null; }
-          lastLabel = p.label;
+          lastLabel = progKey;
           var pct = (typeof p.percent === 'number') ? ` (${p.percent}%)` : '';
           if (!noOverlay) {
             showGlobalWaitOverlay(label, label + ' — ' + p.label + pct,
@@ -4250,11 +4254,24 @@
             const compareVal = e3Val !== 0 ? e3Val : mydataVal;
             let bciClass = 'bci-info';
             let bciSymbol = 'ℹ';
-            if (compareVal !== 0) {
-              const isMatch = Math.abs(brainVal - compareVal) <= 0.01;
-              bciClass = isMatch ? 'bci-match' : 'bci-mismatch';
-              bciSymbol = isMatch ? '✓' : '⚠';
+            // Αντιπαραβολή ΚΑΙ με τις δύο πηγές του πίνακα: εισαγόμενο ισοζύγιο (στήλη Ε3,
+            // μόνο αν ανέβηκε) και myDATA. ⚠ αν έστω μία διαθέσιμη πηγή διαφέρει.
+            const hasIsoz = !!(E3_EXCEL_TOTALS && E3_EXCEL_TOTALS.size && E3_EXCEL_TOTALS.has(rowCode));
+            const cmpParts = [];
+            let anyMismatch = false, anyCompared = false;
+            const fmtC = (v) => Number(v).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            [['Ισοζύγιο', hasIsoz, e3Val], ['myDATA', true, mydataVal]].forEach(([nm, avail, v]) => {
+              if (!avail) { cmpParts.push(`${nm}: —`); return; }
+              anyCompared = true;
+              const d = Math.round((brainVal - v) * 100) / 100;
+              if (Math.abs(d) <= 0.01) cmpParts.push(`${nm}: ✓`);
+              else { anyMismatch = true; cmpParts.push(`${nm}: ⚠ διαφορά ${fmtC(d)} €`); }
+            });
+            if (anyCompared && (compareVal !== 0 || brainVal !== 0)) {
+              bciClass = anyMismatch ? 'bci-mismatch' : 'bci-match';
+              bciSymbol = anyMismatch ? '⚠' : '✓';
             }
+            const cmpText = `Brain ${fmtC(brainVal)} € · ` + cmpParts.join(' · ');
             const esc = (s) => String(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
             brainIndicatorHtml = `<span class="brain-check-indicator ${bciClass}" ` +
               `data-b-code="${esc(rowCode)}" data-b-val="${brainVal}" ` +
@@ -4270,6 +4287,9 @@
                 `style="font-size:0.72rem;color:#64748b;font-weight:400;margin-top:0.15rem;">` +
                 `${esc(bc.label)}</div>`;
             }
+            brainSublabelHtml += `<div class="brain-check-compare" ` +
+              `style="font-size:0.72rem;font-weight:600;margin-top:0.1rem;color:${anyMismatch ? '#b45309' : '#15803d'};">` +
+              `${esc(cmpText)}</div>`;
           }
 
           if (isExpandable) {
@@ -5064,27 +5084,48 @@
       // Το ✓/διαφορά εδώ αφορά ΜΟΝΟ scrape vs βεβαίωση (δύο ανεξάρτητες
       // πηγές για ΤΟ ΙΔΙΟ ποσό) — δεν υπάρχει πια «πειραματικό» tag αφού
       // επιβεβαιώθηκε σε πραγματικά δεδομένα.
-      let label = 'ΕΦΚΑ/ΤΕΚΑ';
-      if (taxCertTotal !== null && taxCertTotal !== undefined) {
-        const fmtCert = Number(taxCertTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
-        if (efkaTotal !== null && efkaTotal !== undefined) {
-          const diff = Math.abs(Number(taxCertTotal) - Number(efkaTotal));
-          const matchNote = diff < 0.02 ? ' ✓ ταιριάζει' : ` (διαφορά ${diff.toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)`;
-          label += ` — Φορ. Βεβ. PDF: ${fmtCert} €${matchNote}`;
-        } else {
-          label += ` — Φορ. Βεβ. PDF: ${fmtCert} € (το scrape ΕΦΚΑ/ΤΕΚΑ δεν έδωσε ποσό)`;
-        }
-      }
+      // 585.007 = άθροισμα των φορολογικών βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ (καθαρά ποσά) όλων των
+      // ασφαλισμένων (ατομική: ο ίδιος· εταιρεία: κάθε μέλος) — από την αντιπαραβολή.
+      let label = 'ΕΦΚΑ/ΤΕΚΑ — Φορ. Βεβαιώσεις (καθαρά)';
       if (keaoMhMisthwtonTotal !== null && keaoMhMisthwtonTotal !== undefined) {
-        // Πληροφοριακό μόνο — τα ΚΕΑΟ Πιστώσεις ΕΦΚΑ Μη Μισθωτών είναι ΜΕΡΟΣ
-        // (όχι το σύνολο) της ετήσιας Φορολογικής Βεβαίωσης, οπότε ΔΕΝ
-        // αναμένεται να ταιριάζουν — δεν εμφανίζουμε «διαφορά»/«ταιριάζει».
+        // Πληροφοριακό μόνο — μέρος (όχι σύνολο) της βεβαίωσης.
         const fmtKeao = Number(keaoMhMisthwtonTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
         label += ` — ΚΕΑΟ Πιστώσεις (Μη Μισθ.): ${fmtKeao} €`;
       }
+      // Αντιπαραβολή βεβαίωσης με καθαρές καταβολές e-ΕΦΚΑ/ΚΕΑΟ (νέος έλεγχος) —
+      // η αναλυτική καρτέλα PDF βρίσκεται στα «Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ».
+      const reconList = Array.isArray(checks.efka_teka_recon) ? checks.efka_teka_recon : [];
+      const fmtE = (v) => Number(v || 0).toLocaleString('el-GR', { minimumFractionDigits: 2 });
+      reconList.forEach((r) => {
+        if (!r || !r.ok || !r.kinds) return;
+        Object.keys(r.kinds).forEach((kind) => {
+          const k = r.kinds[kind] || {};
+          const nm = kind === 'TEKA' ? 'ΤΕΚΑ' : 'ΕΦΚΑ';
+          const who = reconList.length > 1 && r.name ? ` ${r.name}` : '';
+          const fees = Number(k.surcharges_total || 0) > 0.004 ? `, επιβαρύνσεις ${fmtE(k.surcharges_total)} €` : '';
+          if (k.status === 'match') {
+            label += ` — Αντιπαραβολή ${nm}${who}: ✓ συμφωνεί με καθαρές καταβολές${fees}`;
+          } else if (k.status === 'difference') {
+            label += ` — Αντιπαραβολή ${nm}${who}: ⚠ διαφορά ${fmtE(k.difference)} €${fees} (δες καρτέλα PDF)`;
+          }
+        });
+      });
       E3_BRAIN_CHECKS.set('585.007', {
         value: Number(efkaTotal !== null && efkaTotal !== undefined ? efkaTotal : taxCertTotal),
         label,
+        source: 'brain'
+      });
+      updated = true;
+    }
+    // 588 — επιβαρύνσεις εισφορών (πρόσθετα τέλη/προσαυξήσεις ειδοποιητηρίων e-ΕΦΚΑ/ΤΕΚΑ και ΚΕΑΟ)
+    // από την αντιπαραβολή· ΔΕΝ είναι στη βεβαίωση, αντιπαραβάλλονται με ισοζύγιο/myDATA στο 588.
+    const feesTotal = checks.efka_teka_fees_total;
+    if (feesTotal !== null && feesTotal !== undefined) {
+      const v588 = (checks.keao_588_total !== null && checks.keao_588_total !== undefined)
+        ? Number(checks.keao_588_total) : Number(feesTotal);
+      E3_BRAIN_CHECKS.set('588', {
+        value: v588,
+        label: 'Επιβαρύνσεις εισφορών ΕΦΚΑ/ΤΕΚΑ/ΚΕΑΟ (πρόσθετα τέλη + προσαυξήσεις) — εκτός βεβαίωσης',
         source: 'brain'
       });
       updated = true;
@@ -7436,7 +7477,7 @@
           '<th>Διαφορά Brain-myDATA</th><th>Διαφορά Brain-Excel</th>' +
         '</tr></thead><tbody>' +
         '<tr>' +
-          '<td>585.007</td><td>Εισφορές ΕΦΚΑ/ΤΕΚΑ</td>' +
+          '<td>585.007</td><td>Εισφορές ΕΦΚΑ/ΤΕΚΑ (καθαρά, φορ. βεβαιώσεις)</td>' +
           '<td style="text-align:right;">' + fmt(efka) + ' €</td>' +
           '<td style="text-align:right;">' + fmt(my007) + ' €</td>' +
           '<td style="text-align:right;">' + fmt(xl007) + ' €</td>' +
@@ -7453,9 +7494,9 @@
         '</tr>' +
         // 588 row — ΚΕΑΟ πρόσθετα τέλη + προσαυξήσεις. Surface always
         // when the brain ran ΚΕΑΟ; "—" when no KEAO check ran.
-        (checks.keao_ran ? (
+        ((checks.keao_ran || (checks.efka_teka_fees_total !== null && checks.efka_teka_fees_total !== undefined)) ? (
           '<tr>' +
-            '<td>588</td><td>Πρόσθετα τέλη + προσαυξήσεις (ΚΕΑΟ)</td>' +
+            '<td>588</td><td>Επιβαρύνσεις εισφορών — πρόσθετα τέλη + προσαυξήσεις (ειδοποιητήρια ΕΦΚΑ/ΤΕΚΑ, ΚΕΑΟ)</td>' +
             '<td style="text-align:right;">' + fmt(checks.keao_588_total) + ' €</td>' +
             '<td style="text-align:right;">' + fmt(checks.mydata_588) + ' €</td>' +
             '<td style="text-align:right;">' + fmt(checks.excel_588) + ' €</td>' +
@@ -7464,6 +7505,30 @@
           '</tr>'
         ) : '') +
         '</tbody></table>';
+      // Σημείωση αντιπαραβολής ΕΦΚΑ/ΤΕΚΑ ανά ασφαλισμένο (ατομική: ο ίδιος, εταιρεία: κάθε μέλος).
+      const reconL = Array.isArray(checks.efka_teka_recon) ? checks.efka_teka_recon : [];
+      const reconItems = [];
+      reconL.forEach((r) => {
+        if (!r) return;
+        const who = esc(r.name || r.afm || '');
+        if (!r.ok) { reconItems.push(who + ': ⚠ η αντιπαραβολή δεν ολοκληρώθηκε' + (r.reason ? ' (' + esc(r.reason) + ')' : '')); return; }
+        Object.keys(r.kinds || {}).forEach((kind) => {
+          const k = r.kinds[kind] || {};
+          const nm = kind === 'TEKA' ? 'ΤΕΚΑ' : 'ΕΦΚΑ';
+          const st = k.status === 'match' ? '✓ συμφωνεί με τις καθαρές καταβολές'
+            : (k.status === 'difference' ? '⚠ διαφορά ' + fmt(k.difference) + ' €' : esc(k.status || ''));
+          reconItems.push(who + ' — ' + nm + ': βεβαίωση ' + fmt(k.certificate_amount) + ' € · ' + st +
+            (Number(k.surcharges_total || 0) > 0.004 ? ' · επιβαρύνσεις ' + fmt(k.surcharges_total) + ' € (→ 588)' : ''));
+        });
+      });
+      const reconNote = reconItems.length
+        ? '<div class="notes-block"><strong>Αντιπαραβολή ΕΦΚΑ/ΤΕΚΑ (φορ. βεβαιώσεις έναντι καταβολών):</strong><ul>' +
+          reconItems.map((x) => '<li>' + x + '</li>').join('') + '</ul>' +
+          '<div style="font-size:0.85em;color:#475569;">Σημείωση: το 585.007 ισούται με το καθαρό ποσό των φορολογικών ' +
+          'βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ όλων των ασφαλισμένων και αντιπαραβάλλεται με myDATA και ισοζύγιο· οι επιβαρύνσεις ' +
+          '(πρόσθετα τέλη/προσαυξήσεις) δεν είναι εισφορές και αντιπαραβάλλονται με τον κωδικό 588. Αναλυτική καρτέλα ' +
+          'ανά ασφαλισμένο στα PDF «Φορ. Βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ».</div></div>'
+        : '';
       const noteList = (label, items) => items.length
         ? '<div class="notes-block"><strong>' + label + ':</strong><ul>' +
           items.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
@@ -7530,6 +7595,20 @@
             if (r.is_group) {
               return '<tr><td colspan="' + (showExcel ? 5 : 3) + '" style="background:#dbe4f0;font-weight:700;">' + esc(desc) + '</td></tr>';
             }
+            // Υπογραμμή αντιπαραβολής ΕΦΚΑ/ΤΕΚΑ: 585.007 = καθαρά βεβαιώσεων, 588 = επιβαρύνσεις.
+            let reconSub = '';
+            const brainV = code === '585.007' ? checks.efka_teka_total
+              : (code === '588' && checks.efka_teka_fees_total !== null && checks.efka_teka_fees_total !== undefined
+                  ? checks.keao_588_total : null);
+            if (brainV !== null && brainV !== undefined && (code === '585.007' || code === '588')) {
+              const dM = Number(brainV) - myd;
+              const dX = showExcel ? Number(brainV) - xls : null;
+              const mark = (d) => (d === null ? '' : (Math.abs(d) <= 0.01 ? ' ✓' : ' ⚠ ' + fmt(d)));
+              reconSub = '<tr><td></td><td colspan="' + (showExcel ? 4 : 2) + '" style="font-size:0.85em;color:#475569;font-style:italic;">' +
+                '↳ * ' + (code === '585.007' ? 'Φορ. βεβαιώσεις ΕΦΚΑ/ΤΕΚΑ (καθαρά)' : 'Επιβαρύνσεις εισφορών (ειδοποιητήρια/ΚΕΑΟ)') +
+                ': ' + fmt(brainV) + ' € — myDATA' + mark(dM) + (showExcel ? ' · Ισοζύγιο' + mark(dX) : '') +
+                '</td></tr>';
+            }
             return '<tr>' +
               '<td>' + esc(code) + '</td>' +
               '<td>' + esc(desc) + '</td>' +
@@ -7537,7 +7616,7 @@
               (showExcel
                 ? '<td style="text-align:right;">' + fmt(xls) + '</td><td style="text-align:right;">' + fmt(diff) + '</td>'
                 : '') +
-              '</tr>';
+              '</tr>' + reconSub;
           }).join('');
           return '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">' + esc(s.title) + '</h4>' + head + body + '</tbody></table>';
         }).filter(Boolean).join('');
@@ -7577,6 +7656,7 @@
           })() +
           '<h4 style="margin:6px 0 2px 0;font-size:10pt;color:#0f766e;">Πίνακας E3 (βασικοί κωδικοί)</h4>' +
           e3Table +
+          reconNote +
           (brk.length ? '<h4 style="margin:8px 0 2px 0;font-size:10pt;color:#0f766e;">Ανάλυση 585.014 ανά ακίνητο</h4>' + breakdown : '') +
           atakDetailsHtml +
           analyticTable +
@@ -8539,13 +8619,21 @@
       const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
       return `ΚΑΡΤΕΛΑ ΕΡΓΟΔΟΤΗ ${service}${afm ? ` · ΑΦΜ ${afm}` : ''}`;
     }
+    if (kind === 'tax_certificate' && /efka_teka_recon/i.test(stem)) {
+      // efka_teka_recon_<afm>_<year>.pdf — καρτέλα αντιπαραβολής βεβαίωσης/καταβολών
+      const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
+      const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
+      return ['ΚΑΡΤΕΛΑ ΑΝΤΙΠΑΡΑΒΟΛΗΣ ΕΦΚΑ/ΤΕΚΑ', year, afm ? `ΑΦΜ ${afm}` : ''].filter(Boolean).join(' · ');
+    }
     if (kind === 'tax_certificate') {
       // efka_teka_cert_<efka|teka>_<afm>_<year>.pdf — distinguish ΕΦΚΑ μη
       // μισθωτών από ΤΕΚΑ (η γενική διαδρομή παρακάτω πετάει ακριβώς αυτό
       // το token επειδή ταιριάζει με το φίλτρο ^efka$|^teka$).
-      const service = /(?:^|_)efka(?:_|$)/i.test(stem)
-        ? 'ΕΦΚΑ'
-        : (/(?:^|_)teka(?:_|$)/i.test(stem) ? 'ΤΕΚΑ' : '');
+      // Το είδος είναι το token ΜΕΤΑ το «cert_» (το πρόθεμα «efka_teka_» υπάρχει σε όλα).
+      const kindTok = (stem.match(/cert_(efka|teka)(?:_|$)/i) || [])[1] || '';
+      const service = kindTok
+        ? (kindTok.toLowerCase() === 'teka' ? 'ΤΕΚΑ' : 'ΕΦΚΑ')
+        : (/(?:^|_)efka(?:_|$)/i.test(stem) ? 'ΕΦΚΑ' : (/(?:^|_)teka(?:_|$)/i.test(stem) ? 'ΤΕΚΑ' : ''));
       const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
       const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
       const bits = ['ΦΟΡ. ΒΕΒΑΙΩΣΗ', service].filter(Boolean);

@@ -21857,7 +21857,8 @@ def _e3_bulk_worker(app_obj, job, snapshot, env, group_dir, payload):
             return
         # ΝΕΟ: πελάτης-πελάτη. Αποτυχία ενός πελάτη (εξαίρεση/σφάλμα) δεν ρίχνει όλο το run· τα αποτελέσματα που
         # έχουν ήδη βγει μένουν (στη μνήμη και στο δίσκο) και η διακοπή (Διακοπή) τηρείται ανάμεσα στους πελάτες.
-        from e3.checks.e3_brain import _publish_brain_step, _clear_brain_progress, _get_or_init_brain_abort_registry
+        from e3.checks.e3_brain import (_publish_brain_step, _clear_brain_progress, _get_or_init_brain_abort_registry,
+                                        set_brain_progress_scope)
         reg = _get_or_init_brain_abort_registry()
         reg.setdefault(str(jid), {"abort": False})
         todo = [c for c in clients if isinstance(c, dict)]
@@ -21872,6 +21873,9 @@ def _e3_bulk_worker(app_obj, job, snapshot, env, group_dir, payload):
                 break
             name = str(c.get("name") or "").strip() or str(c.get("afm") or "?")
             try:
+                # Τα βήματα του πελάτη (ΕΦΚΑ/ΤΕΚΑ ανά μέλος, myDATA, …) μετατρέπονται σε συνολικό
+                # ποσοστό του μαζικού με πρόθεμα «Πελάτης i/n» (βλ. set_brain_progress_scope).
+                set_brain_progress_scope(str(jid), i, n, name)
                 _publish_brain_step(str(jid), f"Πελάτης {i}/{n}: {name}", percent=int((i - 1) * 100 / n))
             except Exception:
                 pass

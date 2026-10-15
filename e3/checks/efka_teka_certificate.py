@@ -378,10 +378,18 @@ def _get_certificates(http: _HyperHttp, url: str, kind: str, afm: str,
             return ""
         return _strip_tags(c)
 
+    headers = [_strip_tags(h) for h in re.findall(
+        r'<th\b[\s\S]*?<span\b[^>]*class="[^"]*ui-column-title[^"]*"[^>]*>([\s\S]*?)</span>', upd, re.I)]
+
     table: List[Dict[str, str]] = []
     for tds in raw_rows:
         cells = [cell_text(c) for c in tds]
-        row: Dict[str, str] = {"year": cells[0] if cells else ""}
+        row: Dict[str, Any] = {"year": cells[0] if cells else ""}
+        # Στοιχεία γραμμής από τον πίνακα (ποσό, ονοματεπώνυμο) — το ποσό της
+        # σελίδας είναι πιο αξιόπιστο από την ανάγνωση του PDF.
+        row["_cells"] = dict(zip(headers, cells)) if len(headers) == len(cells) else {}
+        amt = next((c for c in cells if "€" in c and _AMOUNT_RE.search(c)), "")
+        row["_amount"] = round(_to_float_amount(_AMOUNT_RE.search(amt).group(0)), 2) if amt else None
         btn_id = ""
         if len(tds) > 7:
             bm = re.search(r'<button\b[^>]*id="([^"]*)"', tds[7], re.I)
@@ -436,6 +444,8 @@ def _get_certificates(http: _HyperHttp, url: str, kind: str, afm: str,
 
     result["pdf"] = str(dest)
     result["year"] = target["year"]
+    result["table_row"] = target.get("_cells") or {}
+    result["table_amount"] = target.get("_amount")
     try:
         result["amount"] = extract_amount_from_pdf(pdf_bytes)
     except Exception as exc:
