@@ -1574,9 +1574,9 @@ def build_report_html(recon: Dict[str, Any], holder: Dict[str, Any], afm: str, a
     year = recon["year"]
     now = _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
     name = " ".join(x for x in (holder.get("Επίθετο"), holder.get("Όνομα")) if x) or "—"
-    parts = [f"<!doctype html><html lang='el'><head><meta charset='utf-8'><title>Καρτέλα αντιπαραβολής ΕΦΚΑ/ΤΕΚΑ {year}</title>"
+    parts = [f"<!doctype html><html lang='el'><head><meta charset='utf-8'><title>Αντιπαραβολή εισφορών μη μισθωτών {year}</title>"
              f"<style>{_CSS}</style></head><body>",
-             f"<h1>Καρτέλα Αντιπαραβολής Εισφορών e-ΕΦΚΑ / ΤΕΚΑ</h1>"
+             f"<h1>Αντιπαραβολή Εισφορών Μη Μισθωτών (e-ΕΦΚΑ / ΤΕΚΑ)</h1>"
              f"<div class='sub'>Φορολογικό έτος {year} · Φορολογική βεβαίωση έναντι καταβολών στον e-ΕΦΚΑ και στο ΚΕΑΟ</div>",
              "<div class='meta'>"
              f"<div><b>Ασφαλισμένος</b>{_e(name)}</div><div><b>ΑΦΜ</b>{_e(afm)}</div>"

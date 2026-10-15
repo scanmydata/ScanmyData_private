@@ -3,6 +3,13 @@
 
 {% block content %}
 <style>
+  /* Μαζικός έλεγχος: πίνακας πελατών με κύλιση, σταθερή κεφαλίδα, συμπαγείς γραμμές */
+  .brain-bulk-table thead th { position: sticky; top: 0; z-index: 2; background: #f3f4f6; box-shadow: inset 0 -1px 0 #d1d5db; }
+  .dark .brain-bulk-table thead th { background: #1f2937; box-shadow: inset 0 -1px 0 #374151; }
+  .brain-bulk-table td { padding-top: .3rem !important; padding-bottom: .3rem !important; }
+  .brain-bulk-table td input:not([type=checkbox]) { padding-top: .15rem; padding-bottom: .15rem; }
+  .brain-bulk-table tbody tr[data-bulk-row]:hover { background: rgba(14, 165, 233, .06); }
+  .brain-bulk-table tr.bulk-filtered-out { display: none !important; }
   .e3-section {
     margin-top: 2rem;
     margin-bottom: 2rem;
@@ -1426,7 +1433,9 @@
           <input id="brainRunEfkaTeka" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
           ΕΦΚΑ/ΤΕΚΑ
         </label>
-        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+        <!-- Οι πιστώσεις ΚΕΑΟ διαβάζονται πλέον από τον έλεγχο ΕΦΚΑ/ΤΕΚΑ· το ΚΕΑΟ τρέχει μόνο για το
+             αποδεικτικό PDF μέσω του «Λήψη PDF Πιστώσεων ΚΕΑΟ» παρακάτω (id κρατιέται για συμβατότητα). -->
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300" style="display:none;"
                title="ΚΕΑΟ Πιστώσεις — εφαρμόζεται μόνο σε μέλη εταιριών και ατομικές. Η κύρια εισφορά προστίθεται στο 585.007· πρόσθετα τέλη + προσαυξήσεις αντιπαραβάλλονται με τον κωδικό 588.">
           <input id="brainRunKeao" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
           ΚΕΑΟ Πιστώσεις
@@ -1464,9 +1473,9 @@
             Λήψη PDF εκκαθαριστικού Ε9 / ΕΝΦΙΑ
           </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
-                 title="Ένα PDF ανά φορέα (εκτός Ι.Κ.Α. Εργοδότη) — Ηλεκτρονική Καρτέλα Οφειλέτη, καθαρά το panel με στοιχεία οφειλέτη + grid + σύνολα.">
+                 title="Αποδεικτικό PDF από το ΚΕΑΟ (Ηλεκτρονική Καρτέλα Οφειλέτη → Πιστώσεις, μητρώο μη μισθωτών) ανά ασφαλισμένο. Τα ποσά του ΚΕΑΟ τα διαβάζει ήδη ο έλεγχος ΕΦΚΑ/ΤΕΚΑ· αν δεν υπάρχουν πιστώσεις στο έτος, δεν κατεβαίνει τίποτα.">
             <input id="brainDownloadKeaoPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
-            Λήψη PDF Πιστώσεων ΚΕΑΟ (ανά φορέα)
+            Λήψη PDF Πιστώσεων ΚΕΑΟ (αποδεικτικό, ανά φορέα)
           </label>
           <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
               title="Αποθηκεύει δύο ξεχωριστά PDF: Καρτέλα Εργοδότη ΕΦΚΑ και Καρτέλα Εργοδότη ΤΕΚΑ. Απαιτεί TaxisNet για ΕΦΚΑ και κωδικούς Ι.Κ.Α. Εργοδότη για ΤΕΚΑ.">
@@ -1538,7 +1547,7 @@
               <input id="brainRunEfkaTekaBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" checked />
               ΕΦΚΑ/ΤΕΚΑ
             </label>
-            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300" style="display:none;"
                    title="ΚΕΑΟ Πιστώσεις (μόνο μέλη εταιριών / ατομικές). Κύρια εισφορά → 585.007, πρόσθετα τέλη + προσαυξήσεις → 588.">
               <input id="brainRunKeaoBulk" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
               ΚΕΑΟ Πιστώσεις
@@ -1561,6 +1570,11 @@
         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input id="brainBulkSavePdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
           Αποθήκευση όλων των διαθέσιμων PDF (ΕΦΚΑ, ΤΕΚΑ, Μισθωτήρια, Ε9/ΕΝΦΙΑ) ανά πελάτη
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 ml-4"
+               title="Αποδεικτικό PDF από το ΚΕΑΟ (Πιστώσεις, μητρώο μη μισθωτών) ανά ασφαλισμένο — μόνο όπου υπάρχουν πιστώσεις στο έτος.">
+          <input id="brainBulkKeaoPdfs" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+          Λήψη PDF Πιστώσεων ΚΕΑΟ (αποδεικτικό, ανά φορέα)
         </label>
         <div class="text-xs text-gray-500 dark:text-gray-400 mt-2">
           ℹ️ Στο μαζικό υπάρχει μόνο ένας master διακόπτης — όταν ενεργοποιείται, το backend κρατάει ό,τι PDF παράγεται για κάθε εταιρία στον per-AFM φάκελο.
@@ -1589,8 +1603,19 @@
             Επιλογή όλων
           </label>
           <span id="brainBulkPreviewCount" class="text-sm text-gray-600 dark:text-gray-300"></span>
+          <span id="brainBulkSelectedCount" class="text-sm font-semibold text-sky-700 dark:text-sky-300"></span>
+          <input id="brainBulkSearch" type="search" placeholder="🔍 Αναζήτηση ΑΦΜ / επωνυμίας…" autocomplete="off"
+                 class="ml-auto w-64 max-w-full px-3 py-1.5 text-sm border rounded-lg dark:bg-gray-800 dark:border-gray-600" />
+          <select id="brainBulkFilter" class="px-2 py-1.5 text-sm border rounded-lg dark:bg-gray-800 dark:border-gray-600" title="Φίλτρο γραμμών">
+            <option value="all">Όλοι</option>
+            <option value="selected">Μόνο επιλεγμένοι</option>
+            <option value="unselected">Μόνο μη επιλεγμένοι</option>
+            <option value="missing">Χωρίς κωδικούς TAXISnet</option>
+            <option value="unknown">Άγνωστη νομική μορφή</option>
+          </select>
         </div>
-        <div id="brainBulkPreviewTable" class="overflow-x-auto"></div>
+        <div id="brainBulkPreviewTable" class="overflow-auto border rounded-lg dark:border-gray-700" style="max-height:60vh;"></div>
+        <div id="brainBulkNoMatch" class="hidden text-sm text-gray-500 dark:text-gray-400 py-3 text-center">Κανένας πελάτης δεν ταιριάζει στην αναζήτηση.</div>
       </div>
       <div class="flex flex-wrap gap-3 items-center mb-2">
         <button id="brainRunSelectedBulkBtn" type="button" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-medium transition">
@@ -4672,7 +4697,8 @@
     // sub-tab switch in the middle of preparing does not lose the
     // selection.
     const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
-    const runKeao = !!(runKeaoEl && runKeaoEl.checked);
+    // Το ΚΕΑΟ τρέχει μόνο για το αποδεικτικό PDF — οδηγείται από το κάτω checkbox λήψης PDF.
+    const runKeao = !!(document.getElementById('brainDownloadKeaoPdfs') || {}).checked;
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
     // Η βεβαίωση PDF (τ. πειραματική) τρέχει πλέον μαζί με το ΕΦΚΑ/ΤΕΚΑ —
@@ -4966,6 +4992,9 @@
           ['e9',    'Ε9/ΕΝΦΙΑ'],
           ['efka',  'ΕΦΚΑ'],
           ['teka',  'ΤΕΚΑ'],
+          ['tax_certificate', 'Φορ. βεβαιώσεων / αντιπαραβολής ΕΦΚΑ-ΤΕΚΑ'],
+          ['keao',  'ΚΕΑΟ'],
+          ['kartela_ergodoti', 'Καρτέλας Εργοδότη'],
         ].filter(([k]) => Number(_ps[k] || 0) > 0);
         if (_kinds.length) {
           const parts = _kinds.map(([k, label]) => `${label}: ${_ps[k]}`).join(' · ');
@@ -4987,6 +5016,29 @@
           ameEl.value = _discoveredAme;
           try { autoSaveBrainCredentialsFromForm({ verbose: false }).catch(() => {}); } catch (_) {}
           showBrainFlash(`Βρέθηκε ΑΜΕ ${_discoveredAme} από την καρτέλα ΤΕΚΑ — αποθηκεύτηκε.`, 'info', 5000);
+        }
+      } catch (_) {}
+      // Τι έγινε με Καρτέλα Εργοδότη / αποδεικτικό ΚΕΑΟ — ρητά, όχι σιωπηλά.
+      try {
+        const _c0 = (data.clients && data.clients[0] && data.clients[0].checks) || {};
+        const _ks = _c0.kartela_status;
+        const _msgs = [];
+        let _warn = false;
+        if (_ks && _ks.requested && !(_ks.ran && _ks.ok)) {
+          _warn = true;
+          _msgs.push(`Καρτέλα Εργοδότη: ${_ks.reason || 'δεν αποθηκεύτηκε'}` +
+            (_ks.payroll_hint ? ` (το myDATA δείχνει μισθοδοσία 581: ${Number(_ks.payroll_hint).toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)` : ''));
+        }
+        (Array.isArray(_c0.keao_pdf_status) ? _c0.keao_pdf_status : []).forEach((k) => {
+          _msgs.push(`ΚΕΑΟ αποδεικτικό PDF — ${k.name || k.afm}: ${k.reason || ''}`);
+        });
+        if (_msgs.length) {
+          // Ξεχωριστό flash (δικό του id) ώστε να μη σβήνει το «📎 Αποθηκεύτηκαν PDF».
+          if (typeof showStandardFetchFlash === 'function') {
+            showStandardFetchFlash(_msgs.join(' · '), _warn ? 'warning' : 'info', 15000, 'e3BrainDiagFlash', {});
+          } else {
+            showBrainFlash(_msgs.join(' · '), _warn ? 'warning' : 'info', 15000);
+          }
         }
       } catch (_) {}
       _applyBrainChecksToE3Table(data);
@@ -5052,6 +5104,31 @@
       try { stopProgress(); } catch (_) {}
       hideGlobalWaitOverlay();
     }
+  }
+
+  // Διαγνωστικά ΕΦΚΑ/ΤΕΚΑ, Καρτέλας Εργοδότη και αποδεικτικού ΚΕΑΟ (κοινά για κάρτες μαζικού και PDF).
+  function _brainExtraDiagItems(checks, esc) {
+    const out = [];
+    esc = esc || ((x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+    const recon = Array.isArray(checks.efka_teka_recon) ? checks.efka_teka_recon : [];
+    if (recon.length) {
+      const ok = recon.filter((r) => r && r.ok).length;
+      const cards = recon.filter((r) => r && r.report_pdf).length;
+      out.push('Αντιπαραβολή εισφορών μη μισθωτών: ' + ok + '/' + recon.length + ' ασφαλισμένοι · καρτέλες PDF: ' + cards +
+        recon.filter((r) => r && !r.ok).map((r) => ' · ⚠ ' + esc(r.name || r.afm) + ': ' + esc(r.reason || 'αποτυχία')).join(''));
+    }
+    const ks = checks.kartela_status;
+    if (ks && (ks.requested || ks.ran)) {
+      const icon = ks.ran ? (ks.ok ? '✓' : '⚠') : '—';
+      out.push('Καρτέλα Εργοδότη: ' + icon + ' ' + esc(ks.reason || (ks.ran ? 'έτρεξε' : 'δεν έτρεξε')) +
+        (ks.pdfs ? ' (' + ks.pdfs + ' PDF)' : '') +
+        (ks.payroll_hint ? ' · myDATA 581: ' + Number(ks.payroll_hint).toLocaleString('el-GR', { minimumFractionDigits: 2 }) + ' €' : ''));
+    }
+    const kp = Array.isArray(checks.keao_pdf_status) ? checks.keao_pdf_status : [];
+    kp.forEach((k) => {
+      out.push('ΚΕΑΟ αποδεικτικό PDF — ' + esc(k.name || k.afm) + ': ' + (k.pdf ? '✓ ' : '— ') + esc(k.reason || ''));
+    });
+    return out;
   }
 
   function _applyBrainChecksToE3Table(data) {
@@ -5716,7 +5793,7 @@
       return;
     }
     previewPanel.classList.remove('hidden');
-    let html = '<table class="min-w-full text-sm border-collapse"><thead><tr class="bg-gray-100 dark:bg-gray-800">';
+    let html = '<table class="min-w-full text-sm border-collapse brain-bulk-table"><thead><tr class="bg-gray-100 dark:bg-gray-800">';
     html += '<th class="border px-2 py-2"><input type="checkbox" class="rounded border-gray-300 dark:border-gray-600" disabled /></th>';
     html += '<th class="border px-2 py-2" title="Επέκταση γραμμής εταιρίας για συμπλήρωση μελών"></th>';
     html += '<th class="border px-2 py-2">ΑΦΜ</th>';
@@ -5823,16 +5900,29 @@
     });
     html += '</tbody></table>';
     previewTable.innerHTML = html;
+    previewTable.scrollTop = 0;
     previewCount.textContent = `${clients.length} πελάτες στο αρχείο`;
     const selectAll = document.getElementById('brainBulkSelectAll');
     if (selectAll) {
       selectAll.checked = true;
-      selectAll.addEventListener('change', () => {
-        document.querySelectorAll('.brainBulkPreviewCheckbox').forEach((cb) => {
+      // onchange (όχι addEventListener) ώστε να μη συσσωρεύονται handlers σε κάθε render.
+      // Εφαρμόζεται μόνο στις ορατές (φιλτραρισμένες) γραμμές.
+      selectAll.onchange = () => {
+        _brainBulkVisibleRows().forEach((row) => {
+          const cb = row.querySelector('.brainBulkPreviewCheckbox');
           if (cb instanceof HTMLInputElement) cb.checked = selectAll.checked;
         });
-      });
+        _brainBulkApplyFilter();
+      };
     }
+    previewTable.onchange = (ev) => {
+      if (ev.target && ev.target.classList && ev.target.classList.contains('brainBulkPreviewCheckbox')) _brainBulkApplyFilter();
+    };
+    const search = document.getElementById('brainBulkSearch');
+    if (search) search.oninput = () => _brainBulkApplyFilter();
+    const filterSel = document.getElementById('brainBulkFilter');
+    if (filterSel) filterSel.onchange = () => _brainBulkApplyFilter();
+    _brainBulkApplyFilter();
 
     // Wire each row's "📎 Προσθήκη" button to its hidden file input and
     // upload to /api/e3/upload_excel. On success we stash the parsed
@@ -6376,6 +6466,52 @@
     }
   }
 
+  // Γραμμές πελατών του μαζικού πίνακα που φαίνονται με την τρέχουσα αναζήτηση/φίλτρο.
+  function _brainBulkVisibleRows() {
+    const host = document.getElementById('brainBulkPreviewTable');
+    if (!host) return [];
+    return Array.from(host.querySelectorAll('tr[data-bulk-row]')).filter((r) => !r.classList.contains('bulk-filtered-out'));
+  }
+
+  // Αναζήτηση (ΑΦΜ / επωνυμία / νομική μορφή / username) + φίλτρο· κρύβει και τη
+  // γραμμή μελών της εταιρίας. Η επιλογή των κρυμμένων γραμμών ΔΕΝ αλλάζει.
+  function _brainBulkApplyFilter() {
+    const host = document.getElementById('brainBulkPreviewTable');
+    if (!host) return;
+    const norm = (v) => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const q = norm((document.getElementById('brainBulkSearch') || {}).value || '').trim();
+    const mode = ((document.getElementById('brainBulkFilter') || {}).value) || 'all';
+    let shown = 0, selected = 0, total = 0;
+    host.querySelectorAll('tr[data-bulk-row]').forEach((row) => {
+      const idx = Number(row.dataset.bulkRow);
+      const c = (E3_BRAIN_PREVIEW_CLIENTS || [])[idx] || {};
+      const cb = row.querySelector('.brainBulkPreviewCheckbox');
+      const isSel = !!(cb && cb.checked);
+      total++;
+      if (isSel) selected++;
+      let ok = !q || norm([c.afm, c.name, c.legal_type, c.taxisnet_username].join(' ')).includes(q);
+      if (ok && mode === 'selected') ok = isSel;
+      else if (ok && mode === 'unselected') ok = !isSel;
+      else if (ok && mode === 'missing') ok = !c.taxisnet_username || !c.taxisnet_password;
+      else if (ok && mode === 'unknown') ok = row.dataset.unknownType === '1';
+      row.classList.toggle('bulk-filtered-out', !ok);
+      const exp = host.querySelector(`tr[data-bulk-expand-row="${idx}"]`);
+      if (exp) exp.classList.toggle('bulk-filtered-out', !ok);
+      if (ok) shown++;
+    });
+    const sc = document.getElementById('brainBulkSelectedCount');
+    if (sc) sc.textContent = total ? `· επιλεγμένοι ${selected}/${total}` + (shown !== total ? ` · εμφανίζονται ${shown}` : '') : '';
+    const none = document.getElementById('brainBulkNoMatch');
+    if (none) none.classList.toggle('hidden', !(total && !shown));
+    const sa = document.getElementById('brainBulkSelectAll');
+    if (sa) {
+      const vis = _brainBulkVisibleRows().map((r) => r.querySelector('.brainBulkPreviewCheckbox')).filter(Boolean);
+      const n = vis.filter((x) => x.checked).length;
+      sa.checked = vis.length > 0 && n === vis.length;
+      sa.indeterminate = n > 0 && n < vis.length;
+    }
+  }
+
   function getSelectedBulkClients() {
     return Array.from(document.querySelectorAll('.brainBulkPreviewCheckbox'))
       .filter((input) => input instanceof HTMLInputElement && input.checked)
@@ -6545,7 +6681,8 @@
     // Pre-flight snapshot — match runE3BrainSingle so the bulk run can't
     // diverge from the visible checkbox state.
     const runEfkaTeka = !!(runEfkaTekaEl && runEfkaTekaEl.checked);
-    const runKeao = !!(runKeaoEl && runKeaoEl.checked);
+    // Μαζικός: το ΚΕΑΟ τρέχει μόνο για το αποδεικτικό PDF (checkbox στην ενότητα PDF).
+    const runKeao = !!(document.getElementById('brainBulkKeaoPdfs') || {}).checked;
     const runMisth = !!(runMisthEl && runMisthEl.checked);
     const runE9 = !!(runE9El && runE9El.checked);
     if (!runEfkaTeka && !runKeao && !runMisth && !runE9) {
@@ -6582,7 +6719,7 @@
       download_teka_pdfs: _bulkSaveAllPdfs && runEfkaTeka,
       download_misth_pdfs: _bulkSaveAllPdfs && runMisth,
       download_e9_pdfs: _bulkSaveAllPdfs && runE9,
-      download_keao_pdfs: _bulkSaveAllPdfs && runKeao,
+      download_keao_pdfs: runKeao,
       save_kartela_ergodoti: _bulkSaveAllPdfs,
       save_comparison_pdf: false,
       headed: false,
@@ -6817,18 +6954,13 @@
       }
       if (checks.pdfs_saved && typeof checks.pdfs_saved === 'object') {
         const ps = checks.pdfs_saved;
-        const total = Number(ps.efka||0) + Number(ps.teka||0) + Number(ps.misth||0) + Number(ps.e9||0) + Number(ps.keao||0);
+        const total = Number(ps.tax_certificate||0) + Number(ps.misth||0) + Number(ps.e9||0) + Number(ps.keao||0) + Number(ps.kartela_ergodoti||0);
         diagItems.push('PDFs αποθηκευμένα: σύνολο ' + total +
-          ' (ΕΦΚΑ ' + (ps.efka||0) + ' · ΤΕΚΑ ' + (ps.teka||0) +
+          ' (Φορ. βεβ./αντιπαραβολή ' + (ps.tax_certificate||0) +
           ' · Μισθωτήρια ' + (ps.misth||0) + ' · Ε9/ΕΝΦΙΑ ' + (ps.e9||0) +
-          ' · ΚΕΑΟ ' + (ps.keao||0) + ')');
+          ' · ΚΕΑΟ ' + (ps.keao||0) + ' · Καρτέλα Εργοδότη ' + (ps.kartela_ergodoti||0) + ')');
       }
-      if (checks.keao_ran) {
-        const fmt588 = (v) => (typeof v === 'number') ? v.toFixed(2) : '0.00';
-        diagItems.push('ΚΕΑΟ Πιστώσεις: ✓ έτρεξε — προς 585.007: ' +
-          fmt588(checks.keao_585_007_total) + ' € · προς 588: ' +
-          fmt588(checks.keao_588_total) + ' €');
-      }
+      _brainExtraDiagItems(checks).forEach((x) => diagItems.push(x));
       const diagHtml = diagItems.length
         ? '<div class="brain-bulk-sublabel">Διαγνωστικά εκτέλεσης</div>' +
           '<ul class="brain-bulk-messages">' +
@@ -7234,6 +7366,58 @@
     return String(s || 'E3_Brain').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, '_').slice(0, 150);
   }
 
+  // Σελιδοποίηση πριν το html2pdf (mode 'legacy' = κόψιμο του canvas σε ίσα ύψη A4): κάθε
+  // γραμμή πίνακα / επικεφαλίδα / στοιχείο λίστας που θα έπεφτε πάνω σε όριο σελίδας σπρώχνεται
+  // ΟΛΟΚΛΗΡΟ στην επόμενη με ένα κενό πριν από αυτό — αλλιώς γραμμές κόβονται στη μέση.
+  function _e3PaginateForPdf(container, orientation, marginMm) {
+    const m = (typeof marginMm === 'number') ? marginMm : 8;
+    const pageWmm = (orientation === 'landscape' ? 297 : 210) - 2 * m;
+    const pageHmm = (orientation === 'landscape' ? 210 : 297) - 2 * m;
+    const pageH = Math.floor(container.scrollWidth * pageHmm / pageWmm) - 2;
+    if (!(pageH > 100)) return 0;
+    const els = container.querySelectorAll('tr, h1, h2, h3, h4, li, .notes-block > strong, .brain-bulk-sublabel');
+    let inserted = 0;
+    els.forEach((el) => {
+      if (el.tagName !== 'TR' && el.closest('tr')) return;          // περιεχόμενο κελιού
+      const base = container.getBoundingClientRect().top;
+      const r = el.getBoundingClientRect();
+      const top = r.top - base, bottom = r.bottom - base, h = bottom - top;
+      if (h <= 0 || h >= pageH * 0.9) return;
+      const pageEnd = (Math.floor(top / pageH) + 1) * pageH;
+      // επικεφαλίδες / γραμμή κεφαλίδας πίνακα: μένουν μαζί με ό,τι ακολουθεί
+      const keepNext = /^H[1-4]$/.test(el.tagName) ? 48 : ((el.tagName === 'TR' && el.closest('thead')) ? 28 : 0);
+      if (bottom + keepNext <= pageEnd) return;
+      const gap = Math.ceil(pageEnd - top) + 1;
+      let sp;
+      if (el.tagName === 'TR') {
+        sp = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 99;
+        td.style.cssText = 'height:' + gap + 'px;padding:0;border:0;background:#fff;';
+        sp.appendChild(td);
+        // η γραμμή κεφαλίδας (thead) πάει μαζί με τον πίνακα: κενό ΠΡΙΝ από τον πίνακα
+        if (el.closest('thead')) {
+          const tbl = el.closest('table');
+          sp = document.createElement('div');
+          sp.style.height = gap + 'px';
+          tbl.parentNode.insertBefore(sp, tbl);
+          inserted++;
+          return;
+        }
+      } else if (el.tagName === 'LI') {
+        sp = document.createElement('li');
+        sp.style.cssText = 'list-style:none;height:' + gap + 'px;';
+      } else {
+        sp = document.createElement('div');
+        sp.style.height = gap + 'px';
+      }
+      sp.className = 'pdf-page-spacer';
+      el.parentNode.insertBefore(sp, el);
+      inserted++;
+    });
+    return inserted;
+  }
+
   async function _exportE3HtmlAsPdf(innerHtml, filename, orientation) {
     await _ensureE3Html2Pdf();
     const container = document.createElement('div');
@@ -7250,6 +7434,7 @@
       // enough that a too-early capture truncates it mid-table.
       try { await document.fonts.ready; } catch (_) {}
       await new Promise((r) => setTimeout(r, 250));
+      try { _e3PaginateForPdf(container, orientation || 'portrait', 8); } catch (_) {}
       const capturedWidth = container.scrollWidth;
       const capturedHeight = container.scrollHeight;
       await window.html2pdf().from(container).set({
@@ -7546,16 +7731,12 @@
         diagItems.push('Ε9/ΕΝΦΙΑ: ' + (checks.e9_ran ? '✓ έτρεξε' : '— δεν έτρεξε') +
           (checks.e9_error ? ' (σφάλμα: ' + esc(checks.e9_error) + ')' : ''));
       }
-      if (typeof checks.keao_ran === 'boolean') {
-        const k = '585.007 +' + fmt(checks.keao_585_007_total) +
-          ' € · 588 ' + fmt(checks.keao_588_total) + ' €';
-        diagItems.push('ΚΕΑΟ Πιστώσεις: ' + (checks.keao_ran ? '✓ έτρεξε (' + k + ')' : '— δεν έτρεξε'));
-      }
+      _brainExtraDiagItems(checks, esc).forEach((x) => diagItems.push(x));
       if (checks.pdfs_saved && typeof checks.pdfs_saved === 'object') {
         const ps = checks.pdfs_saved;
-        diagItems.push('PDFs αποθηκευμένα — ΕΦΚΑ: ' + (ps.efka || 0) + ', ΤΕΚΑ: ' + (ps.teka || 0) +
+        diagItems.push('PDFs αποθηκευμένα — Φορ. βεβαιώσεις/αντιπαραβολή ΕΦΚΑ-ΤΕΚΑ: ' + (ps.tax_certificate || 0) +
           ', Μισθωτήρια: ' + (ps.misth || 0) + ', Ε9/ΕΝΦΙΑ: ' + (ps.e9 || 0) +
-          ', ΚΕΑΟ: ' + (ps.keao || 0));
+          ', ΚΕΑΟ: ' + (ps.keao || 0) + ', Καρτέλα Εργοδότη: ' + (ps.kartela_ergodoti || 0));
       }
       const diagBlock = diagItems.length
         ? '<div class="notes-block"><strong>Διαγνωστικά εκτέλεσης:</strong><ul>' +
@@ -8496,7 +8677,8 @@
   var BRAIN_PERSIST_CHECKBOX_IDS = [
     'brainRunEfkaTeka', 'brainRunMisth', 'brainRunE9',
     'brainDownloadEfkaPdfs', 'brainDownloadTekaPdfs',
-    'brainRunEfkaTekaBulk', 'brainRunMisthBulk', 'brainRunE9Bulk'
+    'brainRunEfkaTekaBulk', 'brainRunMisthBulk', 'brainRunE9Bulk',
+    'brainDownloadKeaoPdfs', 'brainBulkKeaoPdfs'
   ];
 
   function saveE3BrainState() {
@@ -8623,7 +8805,7 @@
       // efka_teka_recon_<afm>_<year>.pdf — καρτέλα αντιπαραβολής βεβαίωσης/καταβολών
       const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
       const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
-      return ['ΚΑΡΤΕΛΑ ΑΝΤΙΠΑΡΑΒΟΛΗΣ ΕΦΚΑ/ΤΕΚΑ', year, afm ? `ΑΦΜ ${afm}` : ''].filter(Boolean).join(' · ');
+      return ['ΑΝΤΙΠΑΡΑΒΟΛΗ ΕΙΣΦΟΡΩΝ ΜΗ ΜΙΣΘΩΤΩΝ', year, afm ? `ΑΦΜ ${afm}` : ''].filter(Boolean).join(' · ');
     }
     if (kind === 'tax_certificate') {
       // efka_teka_cert_<efka|teka>_<afm>_<year>.pdf — distinguish ΕΦΚΑ μη

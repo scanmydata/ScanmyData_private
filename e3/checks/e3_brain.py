@@ -1502,7 +1502,7 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
     out.mkdir(parents=True, exist_ok=True)
     args = [sys.executable, str(script), "--username", t.taxisnet_username, "--password", t.taxisnet_password,
             "--afm", t.afm or afm, "--amka", t.amka, "--year", str(year), "--out-dir", str(out),
-            "--notices", "auto"]
+            "--notices", "auto", "--always-report"]
     tail: List[str] = []
     try:
         proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -1558,6 +1558,10 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
                                                       "extra_fees", "increments", "surcharges_total", "gross_paid",
                                                       "matched_label", "explanation")}
     res["notices"] = {k: (s.get("notices") or {}).get(k) for k in ("skipped", "used_for", "downloaded")}
+    res["keao_mh_count"] = sum(int(c.get("count") or 0)
+                               for r in (s.get("reconciliation") or {}).values()
+                               for c in (r.get("components") or []) if c.get("key") == "keao_efka_mh")
+    res["keao_ok"] = bool(((s.get("sources") or {}).get("keao") or {}).get("ok"))
     if pdf_dir is not None:
         try:
             pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -1600,7 +1604,7 @@ def _regen_recon_report(checks_dir: Path, rec: Dict[str, Any], year: int, compar
     cmp_path.write_text(json.dumps(compare, ensure_ascii=False), encoding="utf-8")
     try:
         subprocess.run([sys.executable, str(checks_dir / "efka_teka_reconciliation.py"), "--from-raw", raw_path,
-                        "--out-dir", str(out), "--compare-json", str(cmp_path)],
+                        "--out-dir", str(out), "--compare-json", str(cmp_path), "--always-report"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
                        stdin=subprocess.DEVNULL)
         s = json.loads((out / "efka_teka_recon_summary.json").read_text(encoding="utf-8"))
@@ -2304,6 +2308,8 @@ def process_client(
     # they show up in the unified "Όλα τα διαθέσιμα PDFs" panel.
     # ------------------------------------------------------------------
     kartela_ergodoti_result: Optional[Dict[str, Any]] = None
+    # Τι έγινε με την Οικονομική Καρτέλα Εργοδότη (εμφανίζεται στα διαγνωστικά/PDF).
+    kartela_status: Dict[str, Any] = {"requested": False, "ran": False, "ok": None, "reason": "", "pdfs": 0}
     ika_emp_user = _norm_text(client.get("ika_employer_username"))
     ika_emp_pass = _norm_text(client.get("ika_employer_password"))
     ika_emp_ame = _norm_text(client.get("ika_employer_ame"))
@@ -2313,6 +2319,16 @@ def process_client(
     # Ο χρήστης μπορεί να επιλέξει να ΜΗΝ αποθηκευτεί/τρέξει η Οικονομική Καρτέλα
     # Εργοδότη (default: ναι, για συμβατότητα).
     save_kartela = _flags.get("save_kartela_ergodoti", True)
+    kartela_status["requested"] = bool(save_kartela)
+    if not save_kartela:
+        kartela_status["reason"] = "δεν ζητήθηκε (απενεργοποιημένη αποθήκευση Καρτέλας Εργοδότη)"
+    elif not has_payroll_flag:
+        kartela_status["reason"] = ("δεν έτρεξε — δεν έχει επιλεγεί «Έχει μισθοδοσία» και δεν υπάρχουν "
+                                    "αποθηκευμένοι κωδικοί Ι.Κ.Α. Εργοδότη για τον πελάτη")
+    elif not (ika_emp_user and ika_emp_pass):
+        kartela_status["reason"] = "δεν έτρεξε — λείπουν οι κωδικοί Ι.Κ.Α. Εργοδότη (για την καρτέλα ΤΕΚΑ)"
+    elif not (efka_taxis_user and efka_taxis_pass):
+        kartela_status["reason"] = "δεν έτρεξε — λείπουν οι κωδικοί TAXISnet της επιχείρησης (για την καρτέλα ΕΦΚΑ)"
     if (save_kartela and has_payroll_flag and ika_emp_user and ika_emp_pass
             and efka_taxis_user and efka_taxis_pass and afm):
         root = Path(__file__).resolve().parents[2]
@@ -2344,6 +2360,7 @@ def process_client(
             ]
             if not headed:
                 kart_args.append("--headless")
+            kartela_status["ran"] = True
             try:
                 proc = subprocess.run(
                     kart_args, capture_output=True, text=True, timeout=300
@@ -2371,6 +2388,7 @@ def process_client(
                     _summ = kartela_ergodoti_result.get("summary") or {}
                     _efka_err = ((_summ.get("efka") or {}).get("error")) or "—"
                     _teka_err = ((_summ.get("teka") or {}).get("error")) or "—"
+                    kartela_status.update({"ok": False, "reason": f"αποτυχία — ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}"})
                     warnings.append(
                         "Οικονομική Καρτέλα Εργοδότη: αποτυχία και στα δύο (ΕΦΚΑ+ΤΕΚΑ) — "
                         f"ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}. "
@@ -2387,6 +2405,11 @@ def process_client(
                         pdfs_saved["kartela_ergodoti"] = (
                             pdfs_saved.get("kartela_ergodoti", 0) + len(saved)
                         )
+                        _ks = (kartela_ergodoti_result or {}).get("summary") or {}
+                        _part = [f"{nm}: {'✓' if (_ks.get(k) or {}).get('ok') else '✗ ' + str((_ks.get(k) or {}).get('error') or '—')}"
+                                 for k, nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ"))]
+                        kartela_status.update({"ok": bool(saved), "pdfs": len(saved),
+                                               "reason": ("αποθηκεύτηκε" if saved else "έτρεξε χωρίς PDF") + " — " + " · ".join(_part)})
                         if not saved:
                             warnings.append(
                                 "Οικονομική Καρτέλα Εργοδότη: το script έτρεξε αλλά δεν εντοπίστηκαν PDFs στον per-AFM φάκελο."
@@ -2396,9 +2419,11 @@ def process_client(
             except subprocess.TimeoutExpired:
                 warnings.append("Οικονομική Καρτέλα Εργοδότη: timeout κατά τη λήψη.")
                 kartela_ergodoti_result = {"ok": False, "error": "timeout"}
+                kartela_status.update({"ok": False, "reason": "λήξη χρόνου (timeout)"})
             except Exception as exc:
                 warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
                 kartela_ergodoti_result = {"ok": False, "error": str(exc)}
+                kartela_status.update({"ok": False, "reason": str(exc)})
     elif save_kartela and has_payroll_flag and not (ika_emp_user and ika_emp_pass):
         warnings.append(
             "Έχει επισημανθεί μισθοδοσία αλλά λείπουν τα IKA Εργοδότη credentials — "
@@ -2439,16 +2464,25 @@ def process_client(
     # the 585.007 row — it never feeds any total.
     keao_mh_misthwton_total = 0.0
     keao_mh_misthwton_available = False
+    keao_pdf_status: List[Dict[str, Any]] = []
     if _flag_for("keao") and extractor_targets:
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
-        _publish_brain_step(job_id, f"Έλεγχος ΚΕΑΟ — {input_name or afm}", percent=35)
+        _publish_brain_step(job_id, f"ΚΕΑΟ — αποδεικτικό PDF πιστώσεων — {input_name or afm}", percent=35)
+        _recon_by_afm = {r.get("afm"): r for r in efka_teka_recon_results}
         for t in extractor_targets:
+            who_k = t.full_name or t.afm
+            _rr = _recon_by_afm.get(t.afm)
+            # Η αντιπαραβολή ΕΦΚΑ/ΤΕΚΑ έχει ήδη διαβάσει το ΚΕΑΟ: αν δεν υπάρχει καμία πίστωση
+            # μητρώου μη μισθωτών μέσα στο έτος, δεν υπάρχει τι να αποδειχθεί.
+            if _rr and _rr.get("ok") and _rr.get("keao_ok") and not _rr.get("keao_mh_count"):
+                keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": 0,
+                                        "reason": f"καμία πίστωση ΚΕΑΟ (μητρώο μη μισθωτών) μέσα στο {year} — δεν χρειάζεται αποδεικτικό"})
+                continue
             with tempfile.TemporaryDirectory(prefix=f"e3keao_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
-                keao_pdf_dir = None
-                if _flag_for("download_keao_pdfs"):
-                    keao_pdf_dir = _resolve_pdfs_dir("keao", afm)
+                # Το ΚΕΑΟ τρέχει πλέον ΜΟΝΟ για το αποδεικτικό PDF (τα ποσά έρχονται από την αντιπαραβολή).
+                keao_pdf_dir = _resolve_pdfs_dir("keao", afm)
                 out_dir = keao_pdf_dir if keao_pdf_dir is not None else (tmp / "keao_out")
                 keao_args = [
                     sys.executable,
@@ -2468,8 +2502,18 @@ def process_client(
                     keao_args, tmp, "keao_out.json"
                 )
                 if not ok_k:
-                    warnings.append(f"ΚΕΑΟ extractor ({t.full_name or t.afm}): {k_err}")
+                    warnings.append(f"ΚΕΑΟ — αποδεικτικό PDF ({who_k}): {k_err}")
+                    keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": 0, "reason": f"αποτυχία: {k_err}"})
                     continue
+                _k_pdfs = [r.get("pdf") for r in (k_json.get("registries") or []) if r.get("pdf")]
+                _k_regs = "; ".join(f"ΑΜΟ {r.get('amo')}: {r.get('status')}" for r in (k_json.get("registries") or []))
+                keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": len(_k_pdfs),
+                                        "reason": ("αποθηκεύτηκε" if _k_pdfs else
+                                                   f"δεν παράχθηκε PDF (κατάσταση: {k_json.get('status')}"
+                                                   + (f" — {_k_regs}" if _k_regs else "") + ")")})
+                if not _k_pdfs:
+                    warnings.append(f"ΚΕΑΟ — αποδεικτικό PDF ({who_k}): δεν παράχθηκε PDF "
+                                    f"(κατάσταση: {k_json.get('status')}{' — ' + _k_regs if _k_regs else ''}).")
                 keao_available = True
                 add_585 = float(k_json.get("e3_585_007_year") or 0.0)
                 add_588 = float(k_json.get("e3_588_year") or 0.0)
@@ -2520,6 +2564,7 @@ def process_client(
     mydata_585_007 = None
     mydata_585_014 = None
     mydata_588 = None
+    mydata_581 = None
     mydata_e3_report: Optional[Dict[str, Any]] = None
     unclassified_total: float = 0.0
     unclassified_invoices: List[Dict[str, Any]] = []
@@ -2606,9 +2651,21 @@ def process_client(
                 if str(_r.get("code") or "") == "588"
             )
             mydata_588 = round(mydata_588, 2)
+            mydata_581 = round(sum(
+                float(_r.get("amount") or 0.0)
+                for _r in _classified_entries
+                if str(_r.get("code") or "") == "581"
+            ), 2)
         except Exception as exc:
             warnings.append(f"Αποτυχία ανάκτησης myDATA E3: {exc}")
 
+    if kartela_status.get("requested") and not kartela_status.get("ran") and (mydata_581 or 0) > 0:
+        kartela_status["payroll_hint"] = mydata_581
+        warnings.append(
+            f"Οικονομική Καρτέλα Εργοδότη: {kartela_status.get('reason')}· όμως το myDATA δείχνει "
+            f"«Παροχές σε εργαζόμενους» (581) {_pretty_money(mydata_581)} € — επίλεξε «Έχει μισθοδοσία» "
+            "και συμπλήρωσε τους κωδικούς Ι.Κ.Α. Εργοδότη για να αποθηκευτεί η καρτέλα."
+        )
     excel_vals = client.get("excel_values") if isinstance(client.get("excel_values"), dict) else {}
     excel_585_007 = round(float(excel_vals.get("E3_585_007") or 0.0), 2)
     excel_585_014 = round(float(excel_vals.get("E3_585_014") or 0.0), 2)
@@ -3290,6 +3347,8 @@ def process_client(
             # stdout_tail, stderr_tail} — the summary mirrors the JSON written
             # by kartela_ergodoti.py (efka/teka per-PDF status).
             "kartela_ergodoti": kartela_ergodoti_result,
+            "kartela_status": kartela_status,
+            "keao_pdf_status": keao_pdf_status,
             "has_payroll": has_payroll_flag,
             # Full myDATA E3 report (revenue / expenses / info / tableZ)
             # so the bulk renderer + PDF export can build the analytic
