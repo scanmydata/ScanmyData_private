@@ -5451,6 +5451,17 @@
           'ολοκληρώστε την ενημέρωση και ξανατρέξτε τον έλεγχο.');
       }
     }
+    const ec = checks.employer_contrib;
+    if (ec && ec.funds && Object.keys(ec.funds).length) {
+      const f2 = (v) => Number(v || 0).toLocaleString('el-GR', { minimumFractionDigits: 2 });
+      const parts = Object.keys(ec.funds).map((k) => {
+        const t = ec.funds[k].totals || {};
+        return `${k === 'IKA' ? 'ΙΚΑ' : 'ΤΕΚΑ'}: ΑΠΔ ${f2(t.apd)} €, εξοφλ. ${f2(t.paid_by_deadline)} €` +
+          (Number(t.unpaid || 0) > 0.01 ? `, <b>απλήρωτα ${f2(t.unpaid)} €</b>` : '');
+      });
+      out.push(`Εισφορές εργοδότη ${esc(ec.year)} (προθεσμία ${esc(ec.deadline)}): ` +
+        (ec.status === 'unpaid' ? '⚠ ' : '✓ ') + parts.join(' · ') + (ec.report_pdf ? ' · καρτέλα αντιπαραβολής PDF' : ''));
+    }
     const kp = Array.isArray(checks.keao_pdf_status) ? checks.keao_pdf_status : [];
     kp.forEach((k) => {
       out.push('ΚΕΑΟ αποδεικτικό PDF — ' + esc(k.name || k.afm) + ': ' + (k.pdf ? '✓ ' : '— ') + esc(k.reason || ''));
@@ -9232,12 +9243,32 @@
   function _prettifyPdfName(kind, name) {
     if (!name) return name;
     const stem = String(name).replace(/\.pdf$/i, '');
+    if (kind === 'kartela_ergodoti' && /kartela_ergodoti_antiparavoli/i.test(stem)) {
+      // kartela_ergodoti_antiparavoli_<afm>_<year>.pdf — απλήρωτες εισφορές εργοδότη (καρτέλα ↔ ΚΕΑΟ)
+      const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
+      const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
+      return ['ΑΝΤΙΠΑΡΑΒΟΛΗ ΕΙΣΦΟΡΩΝ ΕΡΓΟΔΟΤΗ (ΚΑΡΤΕΛΑ ↔ ΚΕΑΟ)', year, afm ? `ΑΦΜ ${afm}` : ''].filter(Boolean).join(' · ');
+    }
+    if (kind === 'keao') {
+      // keao_<είδος>_<afm>_<year>_amo<ΑΜΟ>.pdf (νέα ονομασία) ή keao_pistwseis_<φορέας>_amo<ΑΜΟ>.pdf (παλιά)
+      const KEAO_KIND = { efka_mh_misthoton: 'e-ΕΦΚΑ ΜΗ ΜΙΣΘΩΤΩΝ', teka_mh_misthoton: 'ΤΕΚΑ ΜΗ ΜΙΣΘΩΤΩΝ',
+        ika_ergodoti: 'ΙΚΑ ΕΡΓΟΔΟΤΗ', teka_ergodoti: 'ΤΕΚΑ ΕΡΓΟΔΟΤΗ', oaee: 'ΟΑΕΕ', tsmede: 'ΤΣΜΕΔΕ', tsay: 'ΤΣΑΥ',
+        etaa: 'ΕΤΑΑ', oga: 'ΟΓΑ', nat: 'ΝΑΤ', dypa: 'ΔΥΠΑ/ΟΑΕΔ', allo_tameio: 'ΛΟΙΠΟ ΤΑΜΕΙΟ' };
+      const km = stem.match(/^keao_([a-z_]+?)_(\d{9})_(\d{4})_amo(\w+)$/i);
+      if (km) {
+        return ['ΚΕΑΟ ΠΙΣΤΩΣΕΙΣ', KEAO_KIND[km[1].toLowerCase()] || km[1].toUpperCase(), km[3], `ΑΦΜ ${km[2]}`, `ΑΜΟ ${km[4]}`].join(' · ');
+      }
+      const amo = (stem.match(/amo(\w+)$/i) || [])[1] || '';
+      const old = stem.replace(/^keao_pistwseis_/i, '').replace(/_amo\w+$/i, '').replace(/_/g, ' ').trim();
+      return ['ΚΕΑΟ ΠΙΣΤΩΣΕΙΣ', old, amo ? `ΑΜΟ ${amo}` : ''].filter(Boolean).join(' · ');
+    }
     if (kind === 'kartela_ergodoti') {
       const service = /kartela_ergodoti_efka(?:_|$)/i.test(stem)
         ? 'ΕΦΚΑ'
         : (/kartela_ergodoti_teka(?:_|$)/i.test(stem) ? 'ΤΕΚΑ' : 'Εργοδότη');
       const afm = (stem.match(/(?:_|^)(\d{9})(?:_|$)/) || [])[1] || '';
-      return `ΚΑΡΤΕΛΑ ΕΡΓΟΔΟΤΗ ${service}${afm ? ` · ΑΦΜ ${afm}` : ''}`;
+      const year = (stem.match(/(?:_|^)(\d{4})(?:_|$)/) || [])[1] || '';
+      return `ΚΑΡΤΕΛΑ ΕΡΓΟΔΟΤΗ ${service}${year ? ` · ${year}` : ''}${afm ? ` · ΑΦΜ ${afm}` : ''}`;
     }
     if (kind === 'tax_certificate' && /efka_teka_recon/i.test(stem)) {
       // efka_teka_recon_<afm>_<year>.pdf — καρτέλα αντιπαραβολής βεβαίωσης/καταβολών

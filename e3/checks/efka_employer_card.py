@@ -133,8 +133,30 @@ def _print_submit_name(html: str) -> str:
     return "PrintTransactionsForm:j_idt209"
 
 
+def fetch_keao_employer(http: "_Http", diag_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """ΚΕΑΟ με την ίδια συνεδρία εργοδότη: πιστώσεις των μητρώων ΙΚΑ/ΤΕΚΑ εργοδότη (για τον έλεγχο
+    απλήρωτων εισφορών). Χρησιμοποιεί τον HTTP κώδικα ΚΕΑΟ της αντιπαραβολής μη μισθωτών."""
+    try:
+        from e3.checks import efka_teka_reconciliation as R
+    except Exception:  # pragma: no cover
+        import efka_teka_reconciliation as R  # type: ignore
+    rh = R._Http()
+    rh.jar = http.jar                      # ίδια cookies (ίδια συνεδρία)
+    url = R.SVC.rstrip("/") + R.KEAO_PATH_FALLBACK
+    try:
+        k = R.fetch_keao(rh, url, R._Diag(diag_dir))
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "registries": []}
+    regs = [{"amo": r.get("amo"), "forea": r.get("forea"), "am": r.get("am"), "status": r.get("status"),
+             "employer_fund": r.get("employer_fund") or ("TEKA" if "τεκα" in R._norm(r.get("forea") or "") else "IKA"),
+             "rows": r.get("rows") or []}
+            for r in k.get("registries") or [] if r.get("class") == "employer"]
+    return {"ok": bool(regs) or bool(k.get("ok")), "error": k.get("error"), "registries": regs, "source": "employer_session"}
+
+
 def fetch_card(user: str, password: str, afm: str, ame: str, date_from: str, date_to: str,
-               out_dir: Path, year: Optional[str] = None, diag_dir: Optional[Path] = None) -> Dict[str, Any]:
+               out_dir: Path, year: Optional[str] = None, diag_dir: Optional[Path] = None,
+               with_keao: bool = False) -> Dict[str, Any]:
     """Καρτέλα ΕΦΚΑ εργοδότη (καθαρό HTTP). Επιστρέφει {ok, pdf, error, count, rows, reason}."""
     res: Dict[str, Any] = {"ok": False, "pdf": None, "error": None, "count": 0, "rows": [], "source": "http"}
 
@@ -222,6 +244,11 @@ def fetch_card(user: str, password: str, afm: str, ame: str, date_from: str, dat
     target.write_bytes(pdf)
     res.update(ok=True, pdf=str(target), exists=True, size=len(pdf))
     logging.info("[emp-card] PDF %s (%d κινήσεις)", target, len(rows))
+    if with_keao:
+        try:
+            res["keao_employer"] = fetch_keao_employer(http, diag_dir)
+        except Exception as exc:
+            res["keao_employer"] = {"ok": False, "error": str(exc), "registries": []}
     return res
 
 

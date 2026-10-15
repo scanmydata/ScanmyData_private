@@ -1161,11 +1161,12 @@ def period_view(year: int, periods: List[Dict[str, Any]]) -> Dict[str, Any]:
 def classify_registry(forea: str) -> str:
     """efka_mh | teka_mh | employer | other_non_employee."""
     name = re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", (forea or "").strip(), flags=re.I)
-    n = _norm(name)
+    # τελικό ς → σ (αλλιώς «ΟΠΣ-ΙΚΑ» → «οπς-ικα» και το μητρώο εργοδότη περνούσε για «λοιπό ταμείο»)
+    n = _norm(name).replace("ς", "σ").replace(".", "")
     if name == EFKA_MH_MISTHWTWN_FOREA:
         return "efka_mh"
     if "τεκα" in n:
-        return "employer" if ("μισθωτοι" in n and "μη μισθωτοι" not in n) else "teka_mh"
+        return "employer" if ("μισθωτ" in n and "μη μισθωτ" not in n) else "teka_mh"
     if "ικα" in n.split() or "οπσ-ικα" in n or "ιδρυμα κοινωνικων ασφαλισεων" in n or "εργοδοτ" in n:
         return "employer"
     return "other_non_employee"
@@ -1345,9 +1346,9 @@ def fetch_keao(http: _Http, keao_url: str, diag: _Diag) -> Dict[str, Any]:
         rec = {k: reg[k] for k in ("amo", "forea", "am", "epwnymia")}
         rec["class"] = kind
         if kind == "employer":
-            rec.update({"status": "skipped_employer", "rows": []})
-            res["registries"].append(rec)
-            continue
+            # Μητρώα ΕΡΓΟΔΟΤΗ (ΙΚΑ/ΤΕΚΑ μισθωτών): ΔΕΝ μπαίνουν στην αντιπαραβολή μη μισθωτών, αλλά οι
+            # πιστώσεις τους χρειάζονται για τον έλεγχο απλήρωτων εισφορών εργοδότη (καρτέλα ↔ ΚΕΑΟ).
+            rec["employer_fund"] = "TEKA" if "τεκα" in _norm(reg["forea"]) else "IKA"
         try:
             if i > 0:
                 picker = _keao_picker(http, keao_url)  # φρέσκο ViewState ανά μητρώο
@@ -1358,9 +1359,10 @@ def fetch_keao(http: _Http, keao_url: str, diag: _Diag) -> Dict[str, Any]:
             rec.update({"status": f"error: {exc}", "rows": []})
         res["registries"].append(rec)
     # ok μόνο αν ΟΛΑ τα μη-εργοδοτικά μητρώα διαβάστηκαν — αλλιώς τρέχει το fallback.
-    res["ok"] = all(r.get("status") in ("ok", "skipped_employer") for r in res["registries"])
+    res["ok"] = all(r.get("status") in ("ok", "skipped_employer") or r.get("class") == "employer"
+                    for r in res["registries"])
     bad = [f"ΑΜΟ {r.get('amo')}: {r.get('status')}" for r in res["registries"]
-           if r.get("status") not in ("ok", "skipped_employer")]
+           if r.get("status") not in ("ok", "skipped_employer") and r.get("class") != "employer"]
     if bad:
         res["error"] = "; ".join(bad)
     return res
@@ -2004,8 +2006,12 @@ def finish(raw: Dict[str, Any], out_dir: Path, always_report: bool = False,
                          "rows_total": len((raw.get("payments") or {}).get("rows") or [])},
             "keao": {"ok": (raw.get("keao") or {}).get("ok"), "source": (raw.get("keao") or {}).get("source"),
                      "error": (raw.get("keao") or {}).get("error"),
-                     "registries": [{k: r.get(k) for k in ("amo", "forea", "class", "status")} | {"rows": len(r.get("rows") or [])}
+                     "registries": [{k: r.get(k) for k in ("amo", "forea", "am", "class", "employer_fund", "status")}
+                                    | {"rows": len(r.get("rows") or [])}
                                     for r in (raw.get("keao") or {}).get("registries") or []]},
+            # πιστώσεις ΚΕΑΟ των μητρώων ΕΡΓΟΔΟΤΗ (για τον έλεγχο απλήρωτων εισφορών ΙΚΑ/ΤΕΚΑ εργοδότη)
+            "keao_employer": [{k: r.get(k) for k in ("amo", "forea", "am", "employer_fund", "status", "rows")}
+                              for r in (raw.get("keao") or {}).get("registries") or [] if r.get("class") == "employer"],
         },
         "reconciliation": {k: {kk: v[kk] for kk in ("status", "certificate_amount", "matched_label", "net_amount",
                                                     "difference", "extra_fees", "increments", "surcharges_total",

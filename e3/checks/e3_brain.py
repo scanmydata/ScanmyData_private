@@ -1566,6 +1566,8 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
                                for r in (s.get("reconciliation") or {}).values()
                                for c in (r.get("components") or []) if c.get("key") == "keao_efka_mh")
     res["keao_ok"] = bool(((s.get("sources") or {}).get("keao") or {}).get("ok"))
+    res["keao_employer"] = (s.get("sources") or {}).get("keao_employer") or []
+    res["keao_any_count"] = sum(int(r.get("rows") or 0) for r in ((s.get("sources") or {}).get("keao") or {}).get("registries") or [])
     # Καθαρές εισφορές σε ΛΟΙΠΑ ταμεία μη μισθωτού (ΟΑΕΕ, ΤΣΜΕΔΕ, ΟΓΑ κ.λπ. — μέσω ΚΕΑΟ) που
     # δεν περιλαμβάνονται στη βεβαίωση e-ΕΦΚΑ: προστίθενται στο 585.007 (καθαρά) και οι
     # επιβαρύνσεις τους στο 588. Μητρώα εργοδότη (ΙΚΑ / ΤΕΚΑ μισθωτών) δεν συμμετέχουν ποτέ.
@@ -1604,6 +1606,78 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
     if own_tmp:
         res.pop("raw_path", None)
         shutil.rmtree(own_tmp, ignore_errors=True)
+    return res
+
+
+def _employer_card_date_to(year: int) -> str:
+    """Η Καρτέλα Εργοδότη ζητείται έως το τέλος Φεβρουαρίου Y+1 (εισφορές Δεκεμβρίου/δώρου
+    Χριστουγέννων πληρωτέες έως τότε) — ή έως σήμερα, αν η ημερομηνία δεν έχει έρθει ακόμη."""
+    import calendar as _cal
+    d = date(year + 1, 2, _cal.monthrange(year + 1, 2)[1])
+    return min(d, date.today()).strftime("%d/%m/%Y")
+
+
+def _employer_contrib_check(year: int, afm: str, name: str, ksum: Dict[str, Any],
+                            recon_results: List[Dict[str, Any]], pdf_dir: Optional[Path]) -> Dict[str, Any]:
+    """Καρτέλα Εργοδότη (ΕΦΚΑ/ΙΚΑ + ΤΕΚΑ) ↔ ΚΕΑΟ εργοδότη → απλήρωτες εισφορές έως τέλος Φεβρουαρίου Y+1."""
+    from . import employer_contrib_recon as ER
+    cards: Dict[str, List[Dict[str, Any]]] = {}
+    efka = ksum.get("efka") or {}
+    if ksum.get("efka_rows"):
+        cards["IKA"] = ksum["efka_rows"]
+    elif efka.get("ok") and efka.get("pdf") and Path(efka["pdf"]).exists():
+        cards["IKA"] = ER.parse_card_pdf(Path(efka["pdf"]))
+    teka_rows: List[Dict[str, Any]] = []
+    for key in ("teka", "teka_next"):
+        t = ksum.get(key) or {}
+        if t.get("ok") and t.get("pdf") and Path(t["pdf"]).exists():
+            try:
+                teka_rows.extend(ER.parse_card_pdf(Path(t["pdf"])))
+            except Exception:
+                pass
+    if teka_rows:
+        seen, uniq = set(), []
+        for r in teka_rows:
+            k = (r.get("date"), r.get("docNo"), r.get("period"), r.get("charge"), r.get("credit"))
+            if k not in seen:
+                seen.add(k)
+                uniq.append(r)
+        cards["TEKA"] = uniq
+    # ΚΕΑΟ εργοδότη: πρώτα η συνεδρία εργοδότη (καρτέλα ΕΦΚΑ), μετά η συνεδρία του επιχειρηματία (αντιπαραβολή).
+    ame = "".join(ch for ch in str(ksum.get("ame") or "") if ch.isdigit())
+    regs: List[Dict[str, Any]] = []
+    source = None
+    ke = ksum.get("keao_employer") or {}
+    if ke.get("registries"):
+        regs, source = list(ke["registries"]), "employer_session"
+    else:
+        for rr in recon_results or []:
+            if rr.get("keao_employer"):
+                regs.extend(rr["keao_employer"])
+                source = "owner_session"
+    if ame:
+        regs = [r for r in regs if not str(r.get("am") or "").strip() or str(r.get("am")).strip() == ame] or regs
+    keao_read = bool(ke.get("ok")) or any(rr.get("keao_ok") for rr in recon_results or [])
+    keao: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+    for fund in ("IKA", "TEKA"):
+        rows = [x for r in regs if (r.get("employer_fund") or "IKA") == fund for x in (r.get("rows") or [])]
+        keao[fund] = rows if (rows or keao_read) else None
+    res = ER.reconcile(year, cards, keao)
+    res["keao_source"] = source
+    res["deadline"] = ER.deadline_for(year).strftime("%d/%m/%Y")
+    res["keao_fees_total"] = round(sum(f["totals"]["keao_fees"] for f in res["funds"].values()), 2)
+    res["report_pdf"] = None
+    if res["funds"] and pdf_dir is not None:
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        target = pdf_dir / f"kartela_ergodoti_antiparavoli_{afm}_{year}.pdf"
+        err = ER.render_report(res, afm, name, target, ame=ame)
+        if err:
+            res["report_error"] = err[:300]
+        else:
+            res["report_pdf"] = target.name
+    for f in res["funds"].values():
+        f.pop("keao_payments", None)
+        f.pop("movements", None)
     return res
 
 
@@ -2403,7 +2477,7 @@ def process_client(
                 "--ame", ika_emp_ame,
                 "--afm", afm,
                 "--date-from", f"01/01/{year}",
-                "--date-to", f"31/12/{year}",
+                "--date-to", _employer_card_date_to(year),
                 "--pdf-dir", str(target_dir),
                 "--summary-out", str(summary_path),
             ]
@@ -2472,7 +2546,7 @@ def process_client(
                 elif kart_pdf_dir is not None:
                     try:
                         _ks0 = (kartela_ergodoti_result or {}).get("summary") or {}
-                        saved = [Path(str((_ks0.get(k) or {}).get("pdf"))) for k in ("efka", "teka")
+                        saved = [Path(str((_ks0.get(k) or {}).get("pdf"))) for k in ("efka", "teka", "teka_next")
                                  if (_ks0.get(k) or {}).get("ok") and (_ks0.get(k) or {}).get("pdf")
                                  and Path(str((_ks0.get(k) or {}).get("pdf"))).exists()]
                         pdfs_saved["kartela_ergodoti"] = (
@@ -2507,6 +2581,34 @@ def process_client(
             "Έχει επισημανθεί μισθοδοσία αλλά λείπουν οι κωδικοί TaxisNet εταιρίας "
             "(απαιτούνται για τη νέα υπηρεσία ΕΦΚΑ) — η Οικονομική Καρτέλα Εργοδότη παραλείπεται."
         )
+
+    # ------------------------------------------------------------------
+    # Απλήρωτες εισφορές ΕΡΓΟΔΟΤΗ (ΙΚΑ/ΤΕΚΑ): Καρτέλα Εργοδότη ↔ ΚΕΑΟ εργοδότη, προθεσμία τέλος
+    # Φεβρουαρίου Y+1 (βλ. employer_contrib_recon.py).
+    # ------------------------------------------------------------------
+    employer_contrib: Optional[Dict[str, Any]] = None
+    employer_keao_fees = 0.0
+    _ksum_e = (kartela_ergodoti_result or {}).get("summary") or {}
+    if _ksum_e and ((_ksum_e.get("efka") or {}).get("ok") or (_ksum_e.get("teka") or {}).get("ok")):
+        _publish_brain_step(job_id, f"Καρτέλα Εργοδότη — έλεγχος απλήρωτων εισφορών ΙΚΑ/ΤΕΚΑ — {input_name or afm}", percent=34)
+        try:
+            # καρτέλα PDF μόνο με ενεργή την «Αποθήκευση PDF Καρτέλας Εργοδότη ΕΦΚΑ + ΤΕΚΑ»
+            employer_contrib = _employer_contrib_check(year, afm, input_name or afm, _ksum_e, efka_teka_recon_results,
+                                                       _resolve_pdfs_dir("kartela_ergodoti", afm) if save_kartela else None)
+            employer_keao_fees = float(employer_contrib.get("keao_fees_total") or 0.0)
+            if employer_contrib.get("report_pdf"):
+                pdfs_saved["kartela_ergodoti"] = pdfs_saved.get("kartela_ergodoti", 0) + 1
+            if employer_contrib.get("status") == "unpaid":
+                _fund_txt = " · ".join(
+                    ("ΙΚΑ" if k == "IKA" else "ΤΕΚΑ") + ": " + _pretty_money(v["totals"]["unpaid"]) + " €"
+                    for k, v in (employer_contrib.get("funds") or {}).items())
+                warnings.append(
+                    f"Εισφορές εργοδότη {year}: απλήρωτες έως {employer_contrib.get('deadline')} "
+                    f"{_pretty_money(employer_contrib.get('unpaid_total'))} € ({_fund_txt}) — μεταφέρθηκαν στο ΚΕΑΟ και "
+                    "δεν εξοφλήθηκαν εμπρόθεσμα· δεν εκπίπτουν στη χρήση. Δες την καρτέλα αντιπαραβολής εργοδότη.")
+        except Exception as exc:
+            logging.getLogger(__name__).exception("employer contrib check")
+            warnings.append(f"Έλεγχος απλήρωτων εισφορών εργοδότη: {exc}")
 
     # ------------------------------------------------------------------
     # ΚΕΑΟ Πιστώσεις (only μέλη εταιριών / ατομικές — same `targets`
@@ -2545,9 +2647,10 @@ def process_client(
             _rr = _recon_by_afm.get(t.afm)
             # Η αντιπαραβολή ΕΦΚΑ/ΤΕΚΑ έχει ήδη διαβάσει το ΚΕΑΟ: αν δεν υπάρχει καμία πίστωση
             # μητρώου μη μισθωτών μέσα στο έτος, δεν υπάρχει τι να αποδειχθεί.
-            if _rr and _rr.get("ok") and _rr.get("keao_ok") and not _rr.get("keao_mh_count"):
+            if (_rr and _rr.get("ok") and _rr.get("keao_ok") and not _rr.get("keao_mh_count")
+                    and not _rr.get("keao_any_count") and not _rr.get("keao_employer")):
                 keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": 0,
-                                        "reason": f"καμία πίστωση ΚΕΑΟ (μητρώο μη μισθωτών) μέσα στο {year} — δεν χρειάζεται αποδεικτικό"})
+                                        "reason": "καμία πίστωση ΚΕΑΟ σε κανένα μητρώο — δεν χρειάζεται αποδεικτικό"})
                 continue
             with tempfile.TemporaryDirectory(prefix=f"e3keao_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
@@ -2760,6 +2863,9 @@ def process_client(
     # που ΔΕΝ είναι στη βεβαίωση) → μαζί με το ΚΕΑΟ προς τον κωδικό 588.
     if efka_teka_fees_total:
         keao_588_total = round(keao_588_total + efka_teka_fees_total, 2)
+    # Πρόσθετα τέλη/προσαυξήσεις ΚΕΑΟ εργοδότη που πληρώθηκαν έως την προθεσμία → 588.
+    if employer_keao_fees:
+        keao_588_total = round(keao_588_total + employer_keao_fees, 2)
     # Καρτέλα αντιπαραβολής: ξαναβγαίνει με τα ποσά του πίνακα Ε3 (myDATA / ισοζύγιο).
     if any(r.get("ok") for r in efka_teka_recon_results):
         _publish_brain_step(job_id, "ΕΦΚΑ/ΤΕΚΑ — αντιπαραβολή με myDATA / ισοζύγιο στην καρτέλα PDF", percent=44)
@@ -3434,6 +3540,7 @@ def process_client(
             # by kartela_ergodoti.py (efka/teka per-PDF status).
             "kartela_ergodoti": kartela_ergodoti_result,
             "kartela_status": kartela_status,
+            "employer_contrib": employer_contrib,
             "keao_pdf_status": keao_pdf_status,
             "has_payroll": has_payroll_flag,
             # Full myDATA E3 report (revenue / expenses / info / tableZ)

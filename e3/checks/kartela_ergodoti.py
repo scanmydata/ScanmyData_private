@@ -441,7 +441,8 @@ def _extract_year(date_from: str) -> Optional[str]:
 def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
                           out_dir: Path, prefix: str, afm: str, label: str,
                           date_from: Optional[str] = None,
-                          date_to: Optional[str] = None) -> dict:
+                          date_to: Optional[str] = None,
+                          require_year: bool = False) -> dict:
     """Navigate to the PrimeFaces ``transactionsReport.xhtml`` view and click
     its «Εκτύπωση» button. The button does a form POST with ``target='_blank'``
     so the PDF is served into a new tab. Chromium typically auto-downloads
@@ -489,6 +490,8 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
             str(year),
         )
         logging.info("[%s] Year %s %s.", label, year, "set" if changed else "not found")
+        if require_year and not changed:
+            return {"ok": False, "pdf": None, "error": f"{label}: το έτος {year} δεν είναι ακόμη διαθέσιμο"}
 
     if date_from and date_to:
         # New EFKA opens a PrimeFaces dialog before submitting the PDF form.
@@ -638,14 +641,14 @@ def _open_efka_kartela(context: BrowserContext, portal: Page,
 
 
 def _open_teka_kartela(context: BrowserContext, portal: Page,
-                       date_from: str, out_dir: Path, afm: str) -> dict:
+                       date_from: str, out_dir: Path, afm: str, require_year: bool = False) -> dict:
     """Download the TEKA Κίνηση Εργοδότη report PDF."""
     page = context.new_page()
     page.set_default_timeout(NAV_TIMEOUT)
     try:
         return _download_report_pdf(
             page, TEKA_REPORT_URL, _extract_year(date_from),
-            out_dir, "kartela_ergodoti_teka", afm, "TEKA")
+            out_dir, "kartela_ergodoti_teka", afm, "TEKA", require_year=require_year)
     finally:
         try:
             page.close()
@@ -703,6 +706,15 @@ def run_extractor(efka_username: str, efka_password: str,
                     summary["teka"] = _open_teka_kartela(
                         context, teka_portal, date_from, pdf_dir, afm
                     )
+                    # Εισφορές του έτους πληρωτέες έως τέλος Φεβρουαρίου του επόμενου (δώρο Χριστουγέννων):
+                    # η ΤΕΚΑ δίνει καρτέλα ανά έτος → και το επόμενο, αν υπάρχει ήδη.
+                    _y0, _y1 = _extract_year(date_from), _extract_year(date_to)
+                    if _y0 and _y1 and int(_y1) > int(_y0) and summary["teka"].get("ok"):
+                        try:
+                            summary["teka_next"] = _open_teka_kartela(context, teka_portal, f"01/01/{_y1}", pdf_dir, afm,
+                                                                      require_year=True)
+                        except Exception as exc:
+                            summary["teka_next"] = {"ok": False, "pdf": None, "error": str(exc)}
                     if not ame:
                         ame = summary["teka"].get("ame") or _extract_ame_from_page(teka_portal)
                         if ame:
@@ -732,8 +744,10 @@ def run_extractor(efka_username: str, efka_password: str,
                 year_tok = _extract_year(date_from) or _extract_year(date_to)
                 try:
                     summary["efka"] = emp.fetch_card(efka_username, efka_password, afm, ame, date_from, date_to,
-                                                     pdf_dir, year=year_tok)
-                    summary["efka"].pop("rows", None)
+                                                     pdf_dir, year=year_tok, with_keao=True)
+                    # κινήσεις καρτέλας + ΚΕΑΟ εργοδότη → έλεγχος απλήρωτων εισφορών (employer_contrib_recon)
+                    summary["efka_rows"] = summary["efka"].pop("rows", None) or []
+                    summary["keao_employer"] = summary["efka"].pop("keao_employer", None)
                 except Exception as exc:
                     logging.exception("EFKA HTTP card failed")
                     summary["efka"] = {"ok": False, "pdf": None, "error": f"HTTP: {exc}", "reason": "Exception"}

@@ -83,6 +83,43 @@ def _is_efka_mh_misthwton(forea: str) -> bool:
     return name == EFKA_MH_MISTHWTWN_FOREA
 
 
+# Κατηγορία μητρώου ΚΕΑΟ → (slug ονόματος αρχείου, ετικέτα). Η σειρά των κανόνων μετράει.
+_REGISTRY_KINDS = [
+    (lambda n: n == _norm_gr(EFKA_MH_MISTHWTWN_FOREA), "efka_mh_misthoton", "e-ΕΦΚΑ μη μισθωτών"),
+    (lambda n: "τεκα" in n and "μισθωτ" in n and "μη μισθωτ" not in n, "teka_ergodoti", "ΤΕΚΑ εργοδότη"),
+    (lambda n: "τεκα" in n, "teka_mh_misthoton", "ΤΕΚΑ μη μισθωτών"),
+    (lambda n: "ικα" in n.split() or "οπσ-ικα" in n or "ιδρυμα κοινωνικων ασφαλισεων" in n or "εργοδοτ" in n,
+     "ika_ergodoti", "ΙΚΑ εργοδότη"),
+    (lambda n: "οαεε" in n or "οργανισμος ασφαλισης ελευθερων επαγγελματιων" in n, "oaee", "ΟΑΕΕ"),
+    (lambda n: "τσμεδε" in n, "tsmede", "ΤΣΜΕΔΕ"),
+    (lambda n: "τσαυ" in n, "tsay", "ΤΣΑΥ"),
+    (lambda n: "τσαυ" not in n and ("εταα" in n or "ετααπ" in n), "etaa", "ΕΤΑΑ"),
+    (lambda n: "ογα" in n.split() or "οργανισμος γεωργικων ασφαλισεων" in n, "oga", "ΟΓΑ"),
+    (lambda n: "νατ" in n.split() or "ναυτικ" in n, "nat", "ΝΑΤ"),
+    (lambda n: "οαεδ" in n or "δυπα" in n, "dypa", "ΔΥΠΑ/ΟΑΕΔ"),
+]
+
+
+def _norm_gr(s: str) -> str:
+    import unicodedata as _ud
+    s = re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", (s or "").strip(), flags=re.IGNORECASE)
+    s = "".join(ch for ch in _ud.normalize("NFD", s) if _ud.category(ch) != "Mn")
+    s = s.replace(".", "")
+    return " ".join(s.lower().replace("ς", "σ").split())
+
+
+def registry_kind(forea: str):
+    """(slug, ετικέτα) του μητρώου ΚΕΑΟ — για ονοματολογία αρχείων και κατάταξη."""
+    n = _norm_gr(forea)
+    for test, slug, label in _REGISTRY_KINDS:
+        try:
+            if test(n):
+                return slug, label
+        except Exception:
+            continue
+    return "allo_tameio", "Λοιπό ταμείο"
+
+
 def _to_float(text: str) -> float:
     """Parse Greek-formatted amount like «1.234,56» to float."""
     if not text:
@@ -670,10 +707,12 @@ def _stitch_pdf(png_paths: list[Path], pdf_path: Path) -> Path:
 
 
 def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
-                      output_dir: Path) -> dict:
+                      output_dir: Path, afm: str = "") -> dict:
     """Drive one registry through the credits tab and emit a PDF + totals."""
-    safe = _safe_filename(reg["forea"], fallback=f"amo_{reg['amo']}")
-    artifact_safe = f"{safe}_amo{reg['amo']}"
+    kind_slug, kind_label = registry_kind(reg["forea"])
+    # Όνομα: keao_<είδος>_<ΑΦΜ>_<έτος>_amo<ΑΜΟ> (π.χ. keao_oaee_062373436_2025_amo1234567.pdf)
+    artifact_safe = "_".join(x for x in ("keao", kind_slug, _safe_filename(afm, "") if afm else "", str(year),
+                                         f"amo{reg['amo']}") if x)
     reg_dir = output_dir / "shots" / artifact_safe
     reg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -682,6 +721,9 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         "amo": reg["amo"],
         "epwnymia": reg["epwnymia"],
         "is_efka_mh_misthwton": _is_efka_mh_misthwton(reg["forea"]),
+        "kind": kind_slug,
+        "kind_label": kind_label,
+        "is_employer": kind_slug in ("ika_ergodoti", "teka_ergodoti"),
         "status": "unknown",
         "pages_captured": 0,
         "pdf": None,
@@ -740,7 +782,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
             break
         idx += 1
 
-    pdf_path = output_dir / f"keao_pistwseis_{artifact_safe}.pdf"
+    pdf_path = output_dir / f"{artifact_safe}.pdf"
     _stitch_pdf(shot_paths, pdf_path)
     record["pdf"] = str(pdf_path)
     record["rows"] = all_rows
@@ -774,7 +816,7 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
 
 
 def run(playwright, username: str, password: str, afm: str, amka: str,
-        date_from: str, year: int, output_dir: Path, headless: bool) -> dict:
+        date_from: str, year: int, output_dir: Path, headless: bool, registries: str = "all") -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -835,9 +877,11 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
             result["status"] = "no_registries"
             return result
 
-        targets = [r for r in all_registries if _is_efka_mh_misthwton(r["forea"])]
-        logging.info("Found %d registries; %d requested EFKA registry to process",
-                     len(all_registries), len(targets))
+        # «all»: αποδεικτικό για ΚΑΘΕ μητρώο (μη μισθωτών, ΟΑΕΕ, ΤΣΜΕΔΕ…, ΙΚΑ/ΤΕΚΑ εργοδότη)·
+        # «efka»: μόνο e-ΕΦΚΑ μη μισθωτών (παλιά συμπεριφορά).
+        targets = (all_registries if registries == "all"
+                   else [r for r in all_registries if _is_efka_mh_misthwton(r["forea"])])
+        logging.info("Found %d registries; %d to process (%s)", len(all_registries), len(targets), registries)
 
         for i, reg in enumerate(targets):
             if i > 0:
@@ -849,7 +893,7 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
                     break
 
             try:
-                rec = _process_registry(picker, reg, date_from, year, output_dir)
+                rec = _process_registry(picker, reg, date_from, year, output_dir, afm=afm)
             except Exception as exc:
                 logging.exception("Registry %s failed: %s", reg["forea"], exc)
                 rec = {**reg, "status": f"error: {exc}", "pages_captured": 0,
@@ -862,7 +906,8 @@ def run(playwright, username: str, password: str, afm: str, amka: str,
                 result["totals_all"][k] += rec["totals_all"][k]
             # Exclude Ε.Φ.Κ.Α. Μη Μισθωτών from the brain reconciliation
             # totals — already counted by the EFKA cert step.
-            if not rec.get("is_efka_mh_misthwton"):
+            # …και τα μητρώα ΕΡΓΟΔΟΤΗ (ΙΚΑ/ΤΕΚΑ μισθωτών): δεν είναι εισφορές αυτοαπασχολούμενου.
+            if not rec.get("is_efka_mh_misthwton") and not rec.get("is_employer"):
                 ty = rec["totals_year"]
                 result["e3_585_007_year"] += ty["main_contrib"]
                 result["e3_588_year"] += ty["extra_fees"] + ty["surcharges"]
@@ -893,6 +938,8 @@ def main() -> None:
     parser.add_argument("--output-json", default="keao_out.json")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--registries", choices=("all", "efka"), default="all",
+                        help="all: αποδεικτικό για κάθε μητρώο (μη μισθωτών, ΟΑΕΕ, ΤΣΜΕΔΕ…, ΙΚΑ/ΤΕΚΑ εργοδότη)· efka: μόνο e-ΕΦΚΑ μη μισθωτών.")
     args = parser.parse_args()
 
     headless = True
@@ -908,7 +955,7 @@ def main() -> None:
 
     with sync_playwright() as p:
         result = run(p, args.username, args.password, afm, args.amka,
-                     args.date_from, args.year, Path(args.output_dir), headless)
+                     args.date_from, args.year, Path(args.output_dir), headless, registries=args.registries)
 
     Path(args.output_json).write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
