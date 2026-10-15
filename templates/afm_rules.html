@@ -103,7 +103,7 @@
 
 {% block scripts %}
 <script>
-const G_CATEGORY_DATA = (function(){
+var G_CATEGORY_DATA = (function(){
   try {
     return {{ (g_category_data or {}) | tojson | safe }} || null;
   } catch(e){ return null; }

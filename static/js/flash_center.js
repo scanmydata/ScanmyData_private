@@ -134,6 +134,8 @@
 
       function show(message, type, ttl, opts){
         opts = opts || {};
+        // Remote control της Αναζήτησης: βλ. __rcRemoteFlashTap στο search.html.
+        try { if (typeof window.__rcRemoteFlashTap === 'function') window.__rcRemoteFlashTap(message, type); } catch (_) {}
         var html = opts.html ? String(opts.html) : '';
         var text = html ? normText(htmlToText(html)) : normText(message);
         if (!text) return null;

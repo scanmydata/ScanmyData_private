@@ -2370,8 +2370,8 @@
   // new information. Cache hydrates the form instantly on repeat loads;
   // user can force a refresh by holding Shift while clicking «Ανάκτηση
   // διεύθυνσης» (see binding below).
-  const _MEMBERS_CACHE_PREFIX = 'E3_BRAIN_MEMBERS_CACHE:';
-  const _MEMBERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+  var _MEMBERS_CACHE_PREFIX = 'E3_BRAIN_MEMBERS_CACHE:';
+  var _MEMBERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
   function _membersCacheKey(afm, year) {
     return _MEMBERS_CACHE_PREFIX + String(afm || '').trim() + ':' + String(year || '').trim();
   }
@@ -3175,7 +3175,7 @@
   // each one independently.
   // Type/title metadata that came from sub_home — keyed by normalised
   // address so re-renders preserve the chip next to each input.
-  let _BRAIN_BRANCH_META = new Map();
+  var _BRAIN_BRANCH_META = new Map();
   function _renderBrainBranchList(values) {
     const wrap = document.getElementById('brainBranchList');
     if (!wrap) return;
@@ -7174,7 +7174,7 @@
   //  2) html2canvas.width/height must be set explicitly from the container's
   //     real scrollWidth/scrollHeight — html2pdf.js otherwise silently caps
   //     the capture at ~794px logical width, cropping wide tables.
-  let __e3Html2PdfPromise = null;
+  var __e3Html2PdfPromise = null;
   function _ensureE3Html2Pdf() {
     if (window.html2pdf) return Promise.resolve();
     if (!__e3Html2PdfPromise) {
@@ -7643,7 +7643,7 @@
   // needs its own class + the same init call. Column 0 (checkbox) is left
   // out of sorting/search like the accounting_result table's own checkbox
   // column.
-  const E3_CRED_DT_LANG = {
+  var E3_CRED_DT_LANG = {
     search: '🔎 Αναζήτηση:',
     lengthMenu: 'Εμφάνιση _MENU_ εταιριών',
     info: '_START_–_END_ από _TOTAL_',
@@ -8501,11 +8501,11 @@
   // delete/bulk-download buttons know which folder to hit. For the
   // unified view this is "all" and per-row actions use each file's own
   // kind from data-pdf-kind.
-  let _BRAIN_PDFS_KIND = null;
-  let _BRAIN_PDFS_FILTER = 'all';
-  let _BRAIN_PDFS_AGGREGATE = []; // [{kind, name, size, mtime}]
+  var _BRAIN_PDFS_KIND = null;
+  var _BRAIN_PDFS_FILTER = 'all';
+  var _BRAIN_PDFS_AGGREGATE = []; // [{kind, name, size, mtime}]
 
-  const _BRAIN_PDFS_KIND_LABELS = {
+  var _BRAIN_PDFS_KIND_LABELS = {
     efka: 'ΕΦΚΑ',
     teka: 'ΤΕΚΑ',
     misth: 'Μισθωτήρια',

@@ -886,7 +886,7 @@ function afmRuleApplyButtonLabel(validation){
   return 'Εφαρμογή κανόνα';
 }
 
-const AFM_RULE_DECISION_STORAGE_PREFIX = 'scanmydata:afmRuleDecisionMode:v1:';
+var AFM_RULE_DECISION_STORAGE_PREFIX = 'scanmydata:afmRuleDecisionMode:v1:';
 
 function afmRuleDecisionStorageKey(vatOverride){
   const vat = String(vatOverride || (typeof rcResolveActiveVat === 'function' ? rcResolveActiveVat() : '') || '').trim() || 'global';
@@ -1817,7 +1817,7 @@ function relabelSummaryModal(){
 }
 
 // Αν έχεις ήδη openModal(id), απλά κάλεσέ το εκεί:
-const oldOpenModal = window.openModal || function(id){
+var oldOpenModal = window.openModal || function(id){
   document.getElementById(id)?.classList.remove('hidden');
 };
 // helper: βεβαιώσου ότι τα labels έχουν φορτωθεί
@@ -3522,14 +3522,14 @@ try {
   });
 })();
 // --- Reclass guard (yellow box -> ?force_edit=1) ---
-const URL_PARAMS = (function(){ try { return new URL(window.location.href).searchParams; } catch(_) { return new URLSearchParams(''); } })();
-const FORCE_EDIT = (function(){ try { return URL_PARAMS.get('force_edit') === '1'; } catch(_) { return false; } })();
-const ALLOW_EDIT_EXISTING = {{ 'true' if allow_edit_existing else 'false' }};
-const CATEGORY_LABELS = (function(){
+var URL_PARAMS = (function(){ try { return new URL(window.location.href).searchParams; } catch(_) { return new URLSearchParams(''); } })();
+var FORCE_EDIT = (function(){ try { return URL_PARAMS.get('force_edit') === '1'; } catch(_) { return false; } })();
+var ALLOW_EDIT_EXISTING = {{ 'true' if allow_edit_existing else 'false' }};
+var CATEGORY_LABELS = (function(){
   try { return {{ (customer_category_labels or {}) | tojson | safe }} || {}; }
   catch(e){ return {}; }
 })();
-const labelForCategory = (val) => {
+var labelForCategory = (val) => {
   if(!val) return '';
   const key = String(val);
   if(Object.prototype.hasOwnProperty.call(CATEGORY_LABELS, key)){
@@ -3538,10 +3538,10 @@ const labelForCategory = (val) => {
   return key;
 };
 
-const SEARCH_BASE_URL = "{{ url_for('search') }}";
-const VAT = "{{ vat or '' }}"; // active vat from server
-const INITIAL_MARK = "{{ mark|e }}"; // αρχική τιμή mark (αν υπήρχε)
-const RC_CLEAR_FLAG_KEY = 'rc:clearSearchAfterReload';
+var SEARCH_BASE_URL = "{{ url_for('search') }}";
+var VAT = "{{ vat or '' }}"; // active vat from server
+var INITIAL_MARK = "{{ mark|e }}"; // αρχική τιμή mark (αν υπήρχε)
+var RC_CLEAR_FLAG_KEY = 'rc:clearSearchAfterReload';
   window.__RC_DISABLE_POSTSAVE_HIGHLIGHT = false;
   window.__RC_CLEAR_MARK_AFTER_SAVE = false;
   window.__RC_LIVE_DEBUG_ENABLED = false;
@@ -3575,7 +3575,7 @@ function rcConsumeSearchClear(){
   } catch(_){ }
   return false;
 }
-const ACTIVE_YEAR = (function(){ try { return {{ active_year|default('null') }}; } catch(e){ return null; } })();
+var ACTIVE_YEAR = (function(){ try { return {{ active_year|default('null') }}; } catch(e){ return null; } })();
 async function getActiveFiscalYear() {
   try {
     if (typeof window !== 'undefined' && window.__ACTIVE_FISCAL_YEAR != null) {
@@ -3673,12 +3673,14 @@ document.addEventListener('DOMContentLoaded', function(){
     if(!m){
       var el=document.createElement('div');
       el.id=id;
+      // data-modal-type/data-warning-body/data-remote-action: το remote control το δείχνει και στο κινητό.
+      el.setAttribute('data-modal-type', 'warning');
       el.style.cssText='position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.4);z-index:9999';
       el.innerHTML =
         '<div style="background:#fff;border-radius:10px;max-width:480px;width:calc(100% - 32px);padding:20px;">'
         + '<h3 style="margin:0 0 10px;color:#b91c1c;font-weight:600;font-size:18px">Προειδοποίηση</h3>'
-        + '<div id="receiptWarnBody" style="margin-bottom:14px;color:#374151;font-size:14px"></div>'
-        + '<div style="text-align:right"><button id="receiptWarnOk" type="button"'
+        + '<div id="receiptWarnBody" data-warning-body style="margin-bottom:14px;color:#374151;font-size:14px"></div>'
+        + '<div style="text-align:right"><button id="receiptWarnOk" type="button" data-ack="1" data-remote-action="warning_ack"'
         + ' style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:8px 12px;cursor:pointer">Κατάλαβα</button></div>'
         + '</div>';
       document.body.appendChild(el);
@@ -3762,7 +3764,7 @@ window.RC_POST_SAVE_FREEZE_MS = 2000;
   });
 
   // Καθαρισμός στη single-line περίπτωση
-  const singleClear = document.getElementById('single-clear');
+  var singleClear = document.getElementById('single-clear');
   if (singleClear) {
     singleClear.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -3782,7 +3784,7 @@ window.RC_POST_SAVE_FREEZE_MS = 2000;
     }
   }, true);
     // initial categories passed from server as fallback; will be overridden if API returns expense_tags
-let CUSTOMER_CATEGORIES = (function(){
+var CUSTOMER_CATEGORIES = (function(){
   try {
     const raw = {{ customer_categories | tojson | safe }} || [];
     const cleaned = [];
@@ -4131,6 +4133,8 @@ function ensureFlashContainer(){
 }
 
 function showFlash(message, type='info', timeout=3000){
+  // Remote control: τα μηνύματα της σελίδας εξηγούν στο κινητό γιατί δεν έγινε μια αποθήκευση.
+  try { if (typeof window.__rcRemoteFlashTap === 'function') window.__rcRemoteFlashTap(message, type); } catch (_) {}
   try {
     const container = ensureFlashContainer() || document.getElementById('clientFlashContainer');
     if(!container) return;
@@ -4285,6 +4289,51 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
     if (evt.target === menu || evt.target === menuToggle || menu.contains(evt.target)) return;
     hideMenu();
   });
+
+  // Παρατηρητής των αιτημάτων αποθήκευσης και των μηνυμάτων της σελίδας για το remote
+  // control. Μπαίνει μία φορά ανά φόρτωση (το partial navigation ξανατρέχει αυτό το
+  // script) και καλεί πάντα τον τρέχοντα controller μέσω window.__rcRemoteSaveObserver.
+  (function installRemoteSaveObserver(){
+    function notify(evt){
+      try { if (typeof window.__rcRemoteSaveObserver === 'function') window.__rcRemoteSaveObserver(evt); } catch (_) {}
+    }
+    if (!window.__rcRemoteSaveFetchWrapped && typeof window.fetch === 'function') {
+      window.__rcRemoteSaveFetchWrapped = true;
+      const innerFetch = window.fetch;
+      window.fetch = function(input, init){
+        let isSave = false;
+        try {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+          isSave = method === 'POST' && /\/save_summary(\?|$)/.test(url);
+        } catch (_) {}
+        if (!isSave) return innerFetch.apply(this, arguments);
+        notify({ phase: 'start' });
+        return innerFetch.apply(this, arguments).then(function(res){
+          try {
+            res.clone().json().then(function(data){
+              const ok = res.ok && !(data && data.ok === false);
+              notify({
+                phase: 'done', ok: ok, status: res.status,
+                conflict: res.status === 409 && !!(data && data.afm_rule_conflict),
+                message: (data && (data.message || data.error)) || '',
+              });
+            }, function(){
+              notify({ phase: 'done', ok: res.ok, status: res.status, message: '' });
+            });
+          } catch (_) {
+            notify({ phase: 'done', ok: res.ok, status: res.status, message: '' });
+          }
+          return res;
+        }, function(err){
+          notify({ phase: 'done', ok: false, message: 'Σφάλμα δικτύου στον υπολογιστή κατά την αποθήκευση.' });
+          throw err;
+        });
+      };
+    }
+    // Τα showFlash της σελίδας (π.χ. «επίλεξε κατηγορία») εξηγούν γιατί δεν έγινε αποθήκευση.
+    window.__rcRemoteFlashTap = function(message, type){ notify({ phase: 'flash', message: message, type: type }); };
+  })();
 
   const remoteCtrl = initRemoteController();
   const localCtrl = supportsMedia ? initLocalScanner() : null;
@@ -4649,10 +4698,18 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
       }
     }
 
+    // Κλειδί σύγκρισης χωρίς τη χρονοσφραγίδα: αλλιώς η κατάσταση «άλλαζε» κάθε
+    // δευτερόλεπτο, ξαναστελνόταν, και το κινητό ξαναζωγράφιζε τη φόρμα του (έκλειναν
+    // τα dropdown, χάνονταν τα μηνύματα) ακόμη κι όταν δεν είχε αλλάξει τίποτα.
+    function summaryKey(state){
+      if (!state) return '';
+      try { return JSON.stringify(Object.assign({}, state, { updated_at: '' })); } catch (_) { return ''; }
+    }
+
     async function pushSummaryState(force){
       if (!sessionId) return;
       const state = collectSummaryState();
-      const payload = state ? JSON.stringify(state) : '';
+      const payload = summaryKey(state);
       if (!force && payload === lastSummaryPayload){
         return;
       }
@@ -4919,9 +4976,84 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
       }
     }
 
+    // ---------- αποτέλεσμα αποθήκευσης που ζήτησε το κινητό ----------
+    // Το κινητό δεν βλέπει τη σελίδα: του στέλνουμε ρητά αν η αποθήκευση έγινε
+    // (για να κλείσει το παράθυρό του και να το πει) ή γιατί δεν έγινε.
+    let pendingRemoteSave = null;
+    const REMOTE_SAVE_TIMEOUT_MS = 20000;
+
+    function reportRemoteResult(result){
+      if (!sessionId) return;
+      try { sendSessionUpdate({ result: result }, { syncPage: false, syncRepeat: false }); } catch (_) {}
+    }
+
+    function finishRemoteSave(ok, message){
+      const pending = pendingRemoteSave;
+      if (!pending) return;
+      pendingRemoteSave = null;
+      clearTimeout(pending.timer);
+      clearTimeout(pending.flashTimer);
+      reportRemoteResult({
+        type: 'summary_save',
+        ok: !!ok,
+        message: message || (ok ? 'Το παραστατικό αποθηκεύτηκε.' : 'Η αποθήκευση δεν ολοκληρώθηκε στον υπολογιστή.'),
+        mark: pending.mark,
+      });
+      // Η νέα κατάσταση (κλειστό παράθυρο) αμέσως, χωρίς να περιμένει τον επόμενο κύκλο.
+      setTimeout(() => { pushSummaryState(true); }, 300);
+    }
+
+    function beginRemoteSave(){
+      if (pendingRemoteSave) { clearTimeout(pendingRemoteSave.timer); clearTimeout(pendingRemoteSave.flashTimer); }
+      const markEl = document.getElementById('summaryModalMark');
+      const mark = markEl ? String(markEl.textContent || '').replace(/[^0-9]/g, '') : '';
+      pendingRemoteSave = {
+        mark: mark,
+        requestStarted: false,
+        lastMessage: '',
+        flashTimer: null,
+        timer: setTimeout(() => {
+          const p = pendingRemoteSave;
+          finishRemoteSave(false, (p && p.lastMessage) || 'Δεν έγινε αποθήκευση στον υπολογιστή — δες το παράθυρο χαρακτηρισμών εκεί.');
+        }, REMOTE_SAVE_TIMEOUT_MS),
+      };
+    }
+
+    // Καλείται από τον κοινό παρατηρητή των αιτημάτων /save_summary (πιο κάτω) και από
+    // τα μηνύματα της σελίδας, μόνο όσο περιμένουμε αποθήκευση που ζήτησε το κινητό.
+    window.__rcRemoteSaveObserver = function(evt){
+      const pending = pendingRemoteSave;
+      if (!pending || !evt) return;
+      if (evt.phase === 'start') { pending.requestStarted = true; return; }
+      if (evt.phase === 'flash') {
+        if (evt.type === 'error' || evt.type === 'warning') {
+          pending.lastMessage = String(evt.message || '').trim();
+          // Μήνυμα σφάλματος χωρίς αίτημα αποθήκευσης = η σελίδα απέρριψε την αποθήκευση (π.χ. λείπει κατηγορία).
+          clearTimeout(pending.flashTimer);
+          pending.flashTimer = setTimeout(() => {
+            if (pendingRemoteSave === pending && !pending.requestStarted) finishRemoteSave(false, pending.lastMessage);
+          }, 1500);
+        }
+        return;
+      }
+      if (evt.phase === 'done') {
+        if (evt.conflict) {
+          // Ο υπολογιστής ζητά επιβεβαίωση κανόνα ΑΦΜ· περιμένουμε την απάντηση εκεί.
+          pending.requestStarted = false;
+          pending.lastMessage = 'Χρειάζεται επιβεβαίωση στον υπολογιστή (διαφορά από κανόνα ΑΦΜ).';
+          return;
+        }
+        finishRemoteSave(!!evt.ok, evt.message);
+      }
+    };
+
     function triggerSummarySave(){
       const form = document.getElementById('saveSummaryForm');
-      if (!form) return;
+      if (!form || !isElementVisible(document.getElementById('summaryModal'))) {
+        reportRemoteResult({ type: 'summary_save', ok: false, message: 'Δεν υπάρχει ανοιχτό παράθυρο χαρακτηρισμών στον υπολογιστή.' });
+        return;
+      }
+      beginRemoteSave();
       try {
         if (typeof form.requestSubmit === 'function') form.requestSubmit();
         else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -5153,9 +5285,6 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         }
         if (Object.prototype.hasOwnProperty.call(data, 'summary_version')){
           lastSummaryVersion = data.summary_version || 0;
-        }
-        if (data.summary_state){
-          try { lastSummaryPayload = JSON.stringify(data.summary_state); } catch (_) {}
         }
 
         if (isAttached){
@@ -5468,9 +5597,6 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         if (Object.prototype.hasOwnProperty.call(data, 'summary_version')){
           lastSummaryVersion = data.summary_version || 0;
         }
-        if (data.summary_state){
-          try { lastSummaryPayload = JSON.stringify(data.summary_state); } catch (_) {}
-        }
 
         if (data.attached){
           rememberRemoteActivity();
@@ -5661,9 +5787,6 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         isAttached = false;
         autoClosed = false;
         lastSummaryVersion = data.summary_version || 0;
-        if (data.summary_state){
-          try { lastSummaryPayload = JSON.stringify(data.summary_state); } catch (_) { lastSummaryPayload = ''; }
-        }
 
         if (data.mode){
           setRemoteMode(data.mode, { syncPage: true });
@@ -5755,9 +5878,6 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         }
         if (Object.prototype.hasOwnProperty.call(data, 'summary_version')){
           lastSummaryVersion = data.summary_version || 0;
-        }
-        if (data.summary_state){
-          try { lastSummaryPayload = JSON.stringify(data.summary_state); } catch (_) {}
         }
         persistSessionState();
         return data;
@@ -8257,6 +8377,21 @@ try {
   /* αν αποτύχει ο έλεγχος, δεν μπλοκάρουμε σιωπηλά */
 }
 
+      // ---- Ήδη καταχωρημένη στη λίστα (ίδια ημερομηνία + α/α + ΦΗΜ): modal + STOP.
+      // Οι αποδείξεις δεν επαναχαρακτηρίζονται από εδώ, οπότε ούτε banner ούτε
+      // modal χαρακτηρισμού ούτε (επαναληπτική) αποθήκευση.
+      if (j && j.already_registered) {
+        const who = String(j.issuer_name || (j.issuer_vat ? 'ΑΦΜ ' + j.issuer_vat : '') || '').trim();
+        const details = [
+          who,
+          j.progressive_aa ? 'α/α ' + j.progressive_aa : '',
+          j.issue_date ? String(j.issue_date) : '',
+          j.fhm ? 'ΦΗΜ ' + j.fhm : ''
+        ].filter(Boolean).join(' · ');
+        openReceiptWarning('Η απόδειξη έχει ήδη καταχωρηθεί στη λίστα' + (details ? ' (' + details + ')' : '') + ' και δεν αποθηκεύεται ξανά.');
+        return; // STOP
+      }
+
 
       const nextMark = (function(){
         const candidate = String((j && j.mark) || '').trim();
@@ -8369,6 +8504,7 @@ try {
         category: (receiptAnalysisEnabled ? '' : 'αποδειξακια'),
   is_receipt: true,
   number: (j.progressive_aa || ''),
+        fhm: String(j.fhm || '').trim(),
         __rc_cycle_key: receiptCycleKey,
         __rc_source_url: String(url || '').trim()};
 
@@ -8760,21 +8896,24 @@ async function _partiallyReloadInvoiceTableImpl(options = {}) {
 
     const isDarkTheme = () => {
       try {
-        if (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.theme === 'dark') return true;
-        if (document.body && document.body.dataset && document.body.dataset.theme === 'dark') return true;
+        // Το θέμα της εφαρμογής (data-theme) έχει προτεραιότητα έναντι του θέματος του λειτουργικού.
+        const appTheme = (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.theme)
+          || (document.body && document.body.dataset && document.body.dataset.theme) || '';
+        if (appTheme) return appTheme === 'dark';
         if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
       } catch(_) {}
       return false;
     };
     const dark = isDarkTheme();
-    const bg = dark ? '#134e4a' : '#dcfce7';
-    const outline = dark ? '#22c55e' : '#16a34a';
+    // Απαλό πράσινο, όπως στη Λίστα (list_inner.html).
+    const bg = dark ? '#173f39' : '#f0fdf4';
+    const outline = dark ? '#4ade80' : '#86efac';
 
     row.classList.add('rc-new-row-highlight');
     row.style.setProperty('background-color', bg, 'important');
     row.style.setProperty('outline', '2px solid ' + outline, 'important');
     row.style.setProperty('outline-offset', '-2px', 'important');
-    row.style.setProperty('box-shadow', '0 0 0 3px rgba(34, 197, 94, 0.28)', 'important');
+    row.style.setProperty('box-shadow', '0 0 0 3px rgba(34, 197, 94, ' + (dark ? '0.18' : '0.14') + ')', 'important');
     row.style.setProperty('transition', 'background-color 1.2s ease, box-shadow 1.2s ease, outline-color 1.2s ease', 'important');
     setTimeout(() => {
       try {
@@ -11997,6 +12136,12 @@ document.addEventListener('submit', function(ev){
         const newQS = p.toString();
         const cur  = location.pathname + location.search;
         const next = location.pathname + (newQS ? '?' + newQS : '');
+        // Partial reload της σελίδας (όπως η υπόλοιπη πλοήγηση) — πλήρης φόρτωση μόνο αν δεν υπάρχει.
+        if (typeof window.__partialNavigateTo === 'function') {
+          try { history.replaceState({ partialNav: true }, '', next); } catch (_) {}
+          window.__partialNavigateTo(next, { replaceState: true });
+          return normalized;
+        }
         if (next === cur) {
           location.reload();          // αν δεν αλλάζει το URL, αναγκαστικό reload
         } else {

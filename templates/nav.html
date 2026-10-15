@@ -165,6 +165,31 @@
   @media (prefers-reduced-motion: reduce) {
     .lp-card, .lp-mini, html body .lp a.lp-btn { transition: none; }
   }
+
+  /* Εφέ κύλισης: τα στοιχεία εμφανίζονται καθώς μπαίνουν στην οθόνη. Η κλάση lp-anim μπαίνει
+     από το script· χωρίς αυτό (ή με «μειωμένη κίνηση») όλα φαίνονται κανονικά. Χρησιμοποιούνται
+     οι ιδιότητες translate/scale (όχι transform), ώστε να μένουν τα hover και η κλίση της μικρογραφίας. */
+  .lp.lp-anim [data-reveal] {
+    opacity: 0; translate: 0 28px;
+    transition: opacity .7s cubic-bezier(.2, .7, .2, 1) var(--lp-delay, 0ms),
+                translate .7s cubic-bezier(.2, .7, .2, 1) var(--lp-delay, 0ms),
+                scale .7s cubic-bezier(.2, .7, .2, 1) var(--lp-delay, 0ms),
+                transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  .lp.lp-anim [data-reveal="left"] { translate: -40px 0; }
+  .lp.lp-anim [data-reveal="right"] { translate: 40px 0; }
+  .lp.lp-anim [data-reveal="zoom"] { translate: 0 0; scale: .94; }
+  .lp.lp-anim [data-reveal].is-in { opacity: 1; translate: 0 0; scale: 1; }
+  /* Η μικρογραφία κινείται λίγο πιο αργά από τη σελίδα (parallax). */
+  .lp.lp-anim .lp-mock { transform: translateY(calc(var(--lp-parallax, 0) * 1px)) rotate(1.2deg); }
+  .lp.lp-anim .lp-step.is-in .lp-step-n { animation: lp-pop .5s cubic-bezier(.2, .9, .3, 1.4) calc(var(--lp-delay, 0ms) + 200ms) both; }
+  @keyframes lp-pop { from { scale: .4; opacity: 0; } to { scale: 1; opacity: 1; } }
+  .lp-progress {
+    position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 70; pointer-events: none;
+    transform-origin: 0 50%; transform: scaleX(var(--lp-scroll, 0));
+    background: linear-gradient(90deg, #0ea5e9, #2563eb 55%, #7c3aed);
+  }
+  @media (max-width: 980px) { .lp.lp-anim .lp-mock { transform: none; } }
 </style>
   <div class="lp">
 
@@ -313,6 +338,89 @@
       </div>
     </section>
   </div>
+  <script>
+  /* Εφέ κύλισης της αρχικής: εμφάνιση στοιχείων στην οθόνη, διαδοχικά στα πλέγματα, parallax
+     στη μικρογραφία και μπάρα προόδου. Τρέχει ξανά σε κάθε partial navigation προς την αρχική. */
+  (function(){
+    var root = document.querySelector('.lp');
+    if (!root || root.__lpAnimBound) return;
+    root.__lpAnimBound = true;
+    var reduce = false;
+    try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) {}
+    if (reduce || !('IntersectionObserver' in window)) return;
+
+    function mark(el, kind, delay){
+      if (!el) return;
+      el.setAttribute('data-reveal', kind || 'up');
+      if (delay) el.style.setProperty('--lp-delay', delay + 'ms');
+    }
+    function stagger(selector, step, kind){
+      root.querySelectorAll(selector).forEach(function(group){
+        Array.prototype.forEach.call(group.children, function(child, i){ mark(child, kind, Math.min(i * step, 480)); });
+      });
+    }
+    mark(root.querySelector('.lp-hero-copy'), 'left');
+    mark(root.querySelector('.lp-mock'), 'right', 120);
+    stagger('.lp-facts', 90);
+    root.querySelectorAll('.lp-section > .lp-eyebrow, .lp-section > h2').forEach(function(el){ mark(el, 'up'); });
+    stagger('.lp-grid', 80);
+    stagger('.lp-steps', 120);
+    root.querySelectorAll('.lp-faq details').forEach(function(el, i){ mark(el, 'up', Math.min(i * 70, 350)); });
+    mark(root.querySelector('.lp-final'), 'zoom');
+
+    var targets = root.querySelectorAll('[data-reveal]');
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add('is-in');
+        io.unobserve(entry.target);
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.12 });
+    root.classList.add('lp-anim');
+    targets.forEach(function(el){ io.observe(el); });
+    // Ό,τι φαίνεται ήδη στην οθόνη εμφανίζεται αμέσως (στο επόμενο frame, ώστε να «παίξει» η
+    // μετάβαση), χωρίς να περιμένει την πρώτη αναφορά του observer.
+    function revealVisible(){
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      targets.forEach(function(el){
+        if (el.classList.contains('is-in')) return;
+        var r = el.getBoundingClientRect();
+        if (r.top < vh * 0.92 && r.bottom > 0) { el.classList.add('is-in'); io.unobserve(el); }
+      });
+    }
+    window.requestAnimationFrame(function(){ window.requestAnimationFrame(revealVisible); });
+    setTimeout(revealVisible, 350);   // και χωρίς frames (π.χ. καρτέλα στο παρασκήνιο)
+
+    var bar = document.createElement('div');
+    bar.className = 'lp-progress';
+    bar.setAttribute('aria-hidden', 'true');
+    root.appendChild(bar);
+
+    var ticking = false;
+    function update(){
+      ticking = false;
+      if (!root.isConnected) {   // έφυγε η αρχική (partial navigation): καθάρισμα
+        window.removeEventListener('scroll', onScroll);
+        window.removeEventListener('resize', onScroll);
+        io.disconnect();
+        return;
+      }
+      var doc = document.documentElement;
+      var max = Math.max(1, doc.scrollHeight - window.innerHeight);
+      var y = window.scrollY || doc.scrollTop || 0;
+      root.style.setProperty('--lp-scroll', Math.min(1, y / max).toFixed(4));
+      root.style.setProperty('--lp-parallax', Math.min(60, y * 0.12).toFixed(1));
+    }
+    function onScroll(){
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(update);
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    update();
+  })();
+  </script>
 {% endif %}
 
 {% endblock %}

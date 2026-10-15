@@ -1706,36 +1706,80 @@
       }
 
       // ── Επιστροφή στη σελίδα που φορτώθηκε ΑΡΧΙΚΑ με πλήρη φόρτωση ─────────────────────────────────────────────
-      // Τα inline scripts της αρχικής φόρτωσης δηλώνουν global `let/const`. Όταν η ίδια σελίδα ξαναφορτωθεί με partial
-      // navigation, τα scripts εκτελούνται ξανά (με let/const→var) και η δήλωση συγκρούεται με το ήδη υπάρχον global
-      // lexical binding → «Identifier '…' has already been declared» και ΟΛΟΚΛΗΡΟ το script μπλοκ δεν τρέχει (μισοδεμένη
-      // σελίδα: κουμπιά/επιλογές που δεν δουλεύουν μέχρι ανανέωση). Για την αρχική σελίδα γίνεται πλήρης φόρτωση.
+      // Ό,τι δήλωσαν τα scripts της αρχικής φόρτωσης ως global `let/const/class` μένει global lexical binding. Όταν η
+      // ίδια σελίδα ξαναφορτωθεί με partial navigation, τα scripts εκτελούνται ξανά (με let/const→var) και η δήλωση
+      // συγκρούεται με το binding → «Identifier '…' has already been declared» και ΟΛΟΚΛΗΡΟ το script μπλοκ δεν τρέχει
+      // (μισοδεμένη σελίδα). Μόνο τότε γίνεται πλήρης φόρτωση. Ελέγχεται το πραγματικό global scope, όχι το κείμενο: τα
+      // let/const μέσα σε συναρτήσεις δεν δημιουργούν bindings, οπότε δεν στερούν από τη σελίδα το partial navigation.
+      // (Γι' αυτό οι σελίδες δηλώνουν τα κοινά τους globals με `var`.)
       const __initialPagePath = normalizePath(window.location.pathname);
-      let __initialHasLexical = null;
-      function initialPageHasLexicalDecls() {
-        if (__initialHasLexical !== null) return __initialHasLexical;
-        let risky = false;
+      let __initialLexicalNames = null;   // null = δεν έχει υπολογιστεί ακόμη
+      function declaredNames(text, into) {
+        String(text || '').split('\n').forEach(function(line) {
+          const m = line.match(/^\s*(?:let|const|class)\s+([A-Za-z_$][\w$]*)/);
+          if (m) into.add(m[1]);
+        });
+      }
+      function isGlobalLexical(name) {
+        // Ακριβώς ο έλεγχος που θα αποτύγχανε στο partial: δήλωση `var` του ονόματος στο global scope. Το SyntaxError
+        // σημαίνει global let/const/class (ακόμη κι αν υπάρχει και ιδιότητα window.<όνομα> με το ίδιο όνομα).
+        // Ό,τι var δημιουργήσει ο έλεγχος σβήνεται αμέσως.
+        if (!name) return false;
+        const had = Object.prototype.hasOwnProperty.call(window, name);
+        try {
+          (0, eval)('if (false) { var ' + name + '; }');
+        } catch (e) {
+          return e instanceof SyntaxError;
+        }
+        if (!had) { try { delete window[name]; } catch (_) {} }
+        return false;
+      }
+      function computeInitialLexicalNames() {
+        if (__initialLexicalNames !== null) return;
+        const names = new Set();
+        const sameOriginSrcs = [];
         try {
           [document.getElementById('appShell'), document.getElementById('appPageScripts')].forEach(function(host) {
-            if (!host || risky) return;
+            if (!host) return;
             host.querySelectorAll('script').forEach(function(s) {
-              if (risky) return;
-              if (s.getAttribute('src')) { risky = true; return; }
-              if (/^\s*(let|const)\s/m.test(s.textContent || '')) risky = true;
+              const src = s.getAttribute('src');
+              if (!src) { declaredNames(s.textContent, names); return; }
+              try {
+                const u = new URL(src, window.location.href);
+                if (u.origin === window.location.origin) sameOriginSrcs.push(u.href);
+              } catch (_) {}
             });
           });
-        } catch (_) { risky = true; }
-        __initialHasLexical = risky;
-        return risky;
+        } catch (_) {
+          __initialLexicalNames = ['?'];
+          return;
+        }
+        const finish = function() {
+          try { __initialLexicalNames = Array.from(names).filter(isGlobalLexical); }
+          catch (_) { __initialLexicalNames = ['?']; }
+        };
+        if (!sameOriginSrcs.length) { finish(); return; }
+        // Τα per-page αρχεία (π.χ. accounting_result.js) ξανατρέχουν κι αυτά με τον ίδιο μετασχηματισμό.
+        Promise.all(sameOriginSrcs.map(function(u) {
+          return fetch(u, { credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.text() : ''; })
+            .then(function(t) { declaredNames(t, names); })
+            .catch(function() {});
+        })).then(finish, finish);
       }
       // Πρέπει να υπολογιστεί όσο το DOM είναι ακόμη το αρχικό (πριν την πρώτη αλλαγή σελίδας).
-      try { window.__runOnPageReady(function() { initialPageHasLexicalDecls(); }); } catch (_) { try { initialPageHasLexicalDecls(); } catch (_e) {} }
+      try { window.__runOnPageReady(computeInitialLexicalNames); } catch (_) { try { computeInitialLexicalNames(); } catch (_e) {} }
 
       function mustFullLoad(url) {
         try {
           if (normalizePath(url.pathname) !== __initialPagePath) return false;
-          return initialPageHasLexicalDecls();
-        } catch (_) { return false; }
+          if (__initialLexicalNames === null) return true;   // δεν ξέρουμε ακόμη: η ασφαλής επιλογή
+          if (__initialLexicalNames.length) {
+            try { console.info('[partial-nav] full load: global let/const of the initial page:', __initialLexicalNames.join(', ')); } catch (_) {}
+            return true;
+          }
+          return false;
+        } catch (_) { return true; }
       }
 
       function fullLoad(url, options) {

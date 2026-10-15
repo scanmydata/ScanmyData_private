@@ -99,7 +99,7 @@
   <script src="{{ url_for('static', filename='js/base_06.js') }}"></script>
   <div class="container">
     <div id="appShell">
-    <header class="mb-6">
+    <header class="mb-6{% if not current_user.is_authenticated %} is-guest{% endif %}">
       <div class="layout-header flex items-center justify-between">
         <div class="layout-header__brand">
           <a href="{{ url_for('home') }}" class="inline-block">
@@ -645,5 +645,24 @@ html[data-theme="dark"] .hb-ticket-prev{color:#cbd5e1;}
 </div>
 
 <script src="{{ url_for('static', filename='js/base_05.js') }}"></script>
+<script>
+  /* Η κεφαλίδα είναι sticky: όταν η σελίδα κυλήσει, «μαζεύει» (μικρότερο λογότυπο) ώστε να μην
+     πιάνει μισή οθόνη. Η κλάση μπαίνει στο <html>, άρα επιβιώνει του partial navigation. */
+  (function(){
+    if (window.__headerShrinkBound) return;
+    window.__headerShrinkBound = true;
+    var ticking = false;
+    function update(){
+      ticking = false;
+      document.documentElement.classList.toggle('is-scrolled', (window.scrollY || document.documentElement.scrollTop || 0) > 48);
+    }
+    window.addEventListener('scroll', function(){
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(update);
+    }, { passive: true });
+    update();
+  })();
+</script>
 </body>
 </html>

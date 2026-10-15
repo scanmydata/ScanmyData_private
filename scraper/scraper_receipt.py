@@ -739,6 +739,8 @@ def scrape_www1_aade(url, timeout=15, debug=False):
             res["issuer_name"] = val.strip()
         elif re.search(r"Προοδευτικός α\/α|Προοδευτικ", label, re.I):
             res["progressive_aa"] = val.strip()
+        elif re.fullmatch(r"ΦΗΜ", label.strip(), re.I):
+            res["fhm"] = val.strip().upper()
         elif re.search(r"Είδος παραστατικού", label, re.I):
             res["doc_type"] = val.strip()
         # MARK could be absent; try rows or paragraphs earlier

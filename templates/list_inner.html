@@ -335,8 +335,11 @@
         };
         const isDarkTheme = () => {
           try {
-            if (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.theme === 'dark') return true;
-            if (document.body && document.body.dataset && document.body.dataset.theme === 'dark') return true;
+            // Το θέμα της εφαρμογής (data-theme) έχει προτεραιότητα: με φωτεινό θέμα σε σκοτεινό
+            // λειτουργικό η γραμμή έπαιρνε το σκούρο πράσινο του dark mode πάνω σε λευκή σελίδα.
+            const appTheme = (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.theme)
+              || (document.body && document.body.dataset && document.body.dataset.theme) || '';
+            if (appTheme) return appTheme === 'dark';
             if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
           } catch(_) {}
           return false;
@@ -345,15 +348,16 @@
           if (!rowEl) return false;
           const cellEls = Array.from(rowEl.querySelectorAll ? rowEl.querySelectorAll('.tabulator-cell') : []);
           const dark = isDarkTheme();
-          const rowBg = dark ? '#134e4a' : '#dcfce7';
-          const cellBg = dark ? '#0f433b' : '#dcfce7';
-          const outlineColor = dark ? '#22c55e' : '#16a34a';
+          // Απαλό πράσινο: ξεχωρίζει τη νέα γραμμή χωρίς να «φωνάζει».
+          const rowBg = dark ? '#173f39' : '#f0fdf4';
+          const cellBg = dark ? '#173f39' : '#f0fdf4';
+          const outlineColor = dark ? '#4ade80' : '#86efac';
           try { rowEl.setAttribute('tabindex', '-1'); } catch(_) {}
           try { if (typeof rowEl.blur === 'function') rowEl.blur(); } catch(_) {}
           rowEl.style.setProperty('background-color', rowBg, 'important');
           rowEl.style.setProperty('outline', '2px solid ' + outlineColor, 'important');
           rowEl.style.setProperty('outline-offset', '-2px', 'important');
-          rowEl.style.setProperty('box-shadow', '0 0 0 3px rgba(34, 197, 94, 0.28)', 'important');
+          rowEl.style.setProperty('box-shadow', '0 0 0 3px rgba(34, 197, 94, ' + (dark ? '0.18' : '0.14') + ')', 'important');
           rowEl.style.setProperty('transition', 'background-color 1.2s ease, box-shadow 1.2s ease, outline-color 1.2s ease', 'important');
           cellEls.forEach((cell) => {
             try {

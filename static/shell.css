@@ -21,7 +21,15 @@ html body header.mb-6 {
 }
 :root[data-theme="dark"] header.mb-6 { box-shadow: 0 14px 34px rgba(0, 0, 0, .45); }
 html body header.mb-6 .layout-header { gap: 20px; }
-html body header.mb-6 .layout-header__brand .logo-img { height: 80px; width: auto; }
+html body header.mb-6 .layout-header__brand .logo-img { height: 96px; width: auto; transition: height .2s ease; }
+/* Επισκέπτης (χωρίς σύνδεση): η κεφαλίδα έχει λίγα κουμπιά, το λογότυπο παίρνει τον χώρο. */
+html body header.mb-6.is-guest .layout-header__brand .logo-img { height: 132px; }
+/* Κυλισμένη σελίδα: η sticky κεφαλίδα μαζεύει (κλάση is-scrolled στο <html>, base.html). */
+html.is-scrolled body header.mb-6 .layout-header__brand .logo-img,
+html.is-scrolled body header.mb-6.is-guest .layout-header__brand .logo-img { height: 64px; }
+@media (prefers-reduced-motion: reduce) {
+  html body header.mb-6 .layout-header__brand .logo-img { transition: none; }
+}
 
 /* πλοήγηση: pills */
 html body header.mb-6 .layout-header__nav { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
@@ -174,7 +182,8 @@ html body .sm2 a.sm2-cta {
   html body header.mb-6 { padding: 10px 12px; }
   html body header.mb-6 .layout-header__nav { justify-content: flex-start; }
   html body header.mb-6 .layout-header__nav a { padding: 6px 11px; font-size: 12.5px; }
-  html body header.mb-6 .layout-header__brand .logo-img { height: 60px; }
+  html body header.mb-6 .layout-header__brand .logo-img { height: 68px; }
+  html body header.mb-6.is-guest .layout-header__brand .logo-img { height: 92px; }
 }
 
 /* =====================  BANNERS (κίτρινα / ενημερωτικά)  ===================== */
@@ -224,3 +233,38 @@ html body .smd-banner.info a.smd-btn-primary, html body .smd-banner.info button.
 :root[data-theme="dark"] .smd-step.done { color: #6ee7b7; }
 .smd-step.done i { background: #10b981; color: #fff; }
 html body .smd-banner .smd-step-sep { color: var(--bn-muted) !important; font-weight: 800; }
+
+/* =====================  WAIT OVERLAYS (αναμονή)  ===================== */
+/* Σε φωτεινό θέμα η λευκή κάρτα πάνω σε ελαφρά σκιασμένη, φωτεινή σελίδα δεν ξεχώριζε (και με σκοτεινό
+   λειτουργικό αλλά φωτεινό θέμα εφαρμογής, το dark: της Tailwind έβαφε την κάρτα σκούρα). Ίδια εμφάνιση σε
+   όλες τις σελίδες (#loadingOverlay της Αναζήτησης, #waitOverlay Λήψης/Ε3/Λογιστικού): σκουρότερο θολό φόντο,
+   κάρτα με περίγραμμα, χρωματιστή πάνω μπάρα και έντονη σκιά. Μόνο εμφάνιση — το άνοιγμα/κλείσιμο δεν αλλάζει. */
+html body #loadingOverlay,
+html body #waitOverlay {
+  background-color: rgba(15, 23, 42, .72) !important;
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+html body #loadingOverlay > div,
+html body #waitOverlay > div {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-top: 4px solid #0284c7 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .45) !important;
+}
+html body #loadingOverlayTitle,
+html body #waitOverlayTitle { color: #0f172a !important; }
+html body #loadingOverlayMessage,
+html body #waitOverlayMsg { color: #475569 !important; }
+:root[data-theme="dark"] body #loadingOverlay > div,
+:root[data-theme="dark"] body #waitOverlay > div {
+  background: #111827 !important;
+  border-color: #374151 !important;
+  border-top-color: #38bdf8 !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .6) !important;
+}
+:root[data-theme="dark"] body #loadingOverlayTitle,
+:root[data-theme="dark"] body #waitOverlayTitle { color: #f3f4f6 !important; }
+:root[data-theme="dark"] body #loadingOverlayMessage,
+:root[data-theme="dark"] body #waitOverlayMsg { color: #cbd5e1 !important; }

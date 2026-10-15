@@ -888,6 +888,12 @@
       let sendingInProgress = false;
       let lastOcrHighlight = null;
       let missedHeartbeats = 0; // Counter για ανίχνευση αποσύνδεσης
+      // Αποτελέσματα εντολών από τον υπολογιστή (π.χ. «αποθηκεύτηκε»): η τελευταία
+      // έκδοση που δείξαμε, ώστε να μη ξαναδειχτεί και να μη δειχτεί παλιό κατά τη σύνδεση.
+      CFG.resultVersion = 0;
+      let resultSeeded = false;
+      let saveWaitTimer = null;
+      let summaryStatusHoldUntil = 0;   // μην «πατηθεί» ένα μήνυμα αποτελέσματος από την επόμενη ενημέρωση
       const MAX_MISSED_HEARTBEATS = 3; // Μετά από 3 αποτυχημένα heartbeats, ειδοποίηση
 
       function setStatus(text, tone){
@@ -907,8 +913,9 @@
         else if (tone === 'error') resultEl.classList.add('error');
       }
 
-      function setSummaryStatus(text, tone){
+      function setSummaryStatus(text, tone, holdMs){
         if (!summaryStatus) return;
+        if (holdMs) summaryStatusHoldUntil = Date.now() + holdMs;
         summaryStatus.textContent = text || '';
         summaryStatus.classList.remove('error','success');
         if (tone === 'error') summaryStatus.classList.add('error');
@@ -1102,7 +1109,10 @@
 
       function applySummaryState(state, version){
         if (!summaryPanel) return;
-        const payload = state ? JSON.stringify(state) : '';
+        // Χωρίς τη χρονοσφραγίδα: η φόρμα ξαναζωγραφίζεται μόνο όταν αλλάξει κάτι πραγματικά
+        // (αλλιώς έκλειναν τα dropdown ενώ ο χρήστης διάλεγε).
+        let payload = '';
+        try { payload = state ? JSON.stringify(Object.assign({}, state, { updated_at: '' })) : ''; } catch (_) { payload = ''; }
         if (payload && payload === lastSummaryHash) return;
         lastSummaryHash = payload;
         if (typeof version === 'number'){
@@ -1120,7 +1130,7 @@
         const shouldShow = !!(state && (state.visible === true || (!Object.prototype.hasOwnProperty.call(state, 'visible') && hasContent)));
         if (!shouldShow){
           summaryPanel.classList.add('hidden');
-          setSummaryStatus('', null);
+          if (Date.now() >= summaryStatusHoldUntil) setSummaryStatus('', null);
           if (summaryBanner){ summaryBanner.classList.remove('show'); summaryBanner.textContent = ''; }
           return;
         }
@@ -1157,13 +1167,13 @@
           }
         }
 
-        if (summarySaveBtn){ summarySaveBtn.disabled = state && state.can_save === false; }
+        if (summarySaveBtn && !saveWaitTimer){ summarySaveBtn.disabled = state && state.can_save === false; }
         if (summaryCloseBtn){ summaryCloseBtn.disabled = state && state.can_close === false; }
 
         const message = state && state.visible
           ? 'Το παράθυρο χαρακτηρισμών είναι ανοιχτό στον υπολογιστή. Μπορείς να επεξεργαστείς και να αποθηκεύσεις από τη φορητή συσκευή.'
           : 'Το παράθυρο χαρακτηρισμών είναι κλειστό. Μπορείς να προεπιλέξεις κατηγορίες και να αποθηκεύσεις από εδώ.';
-        setSummaryStatus(message, null);
+        if (Date.now() >= summaryStatusHoldUntil) setSummaryStatus(message, null);
 
         renderSummaryLines(state && state.lines ? state.lines : []);
       }
@@ -1316,17 +1326,101 @@
           if (!res.ok || !data || data.ok === false){
             const message = data && data.error ? data.error : 'Δεν στάλθηκε η εντολή.';
             if (scope === 'warning') setWarningStatus(message, 'error');
-            else setSummaryStatus(message, 'error');
+            else setSummaryStatus(message, 'error', 6000);
+            if (options.onFail) options.onFail();
             return;
           }
           if (scope === 'warning') setWarningStatus('Η εντολή στάλθηκε στον υπολογιστή.', 'success');
-          else setSummaryStatus('Η εντολή στάλθηκε στον υπολογιστή.', 'success');
+          else if (options.sentText) setSummaryStatus(options.sentText, null, 25000);
+          else setSummaryStatus('Η εντολή στάλθηκε στον υπολογιστή.', 'success', 2500);
           await sendHeartbeat();
         } catch (err){
           console.warn('sendControlCommand failed', err);
           if (scope === 'warning') setWarningStatus('Προσωρινό σφάλμα αποστολής εντολής.', 'error');
-          else setSummaryStatus('Προσωρινό σφάλμα αποστολής εντολής.', 'error');
+          else setSummaryStatus('Προσωρινό σφάλμα αποστολής εντολής.', 'error', 6000);
+          if (options.onFail) options.onFail();
         }
+      }
+
+      // ---------- αποτέλεσμα αποθήκευσης από τον υπολογιστή ----------
+      function endSaveWait(){
+        if (saveWaitTimer){ clearTimeout(saveWaitTimer); saveWaitTimer = null; }
+        if (summarySaveBtn){
+          summarySaveBtn.disabled = false;
+          summarySaveBtn.textContent = 'Αποθήκευση';
+        }
+      }
+
+      function startSaveWait(){
+        endSaveWait();
+        if (summarySaveBtn){
+          summarySaveBtn.disabled = true;
+          summarySaveBtn.textContent = 'Αποθήκευση…';
+        }
+        saveWaitTimer = setTimeout(() => {
+          saveWaitTimer = null;
+          endSaveWait();
+          setSummaryStatus('Δεν ήρθε επιβεβαίωση από τον υπολογιστή. Έλεγξε την οθόνη του υπολογιστή.', 'error', 8000);
+        }, 25000);
+      }
+
+      // Σύντομο μήνυμα στο πάνω μέρος της οθόνης: φαίνεται όπου κι αν έχει κυλήσει η σελίδα.
+      function showToast(text, ok){
+        let toast = document.getElementById('remoteResultToast');
+        if (!toast){
+          toast = document.createElement('div');
+          toast.id = 'remoteResultToast';
+          toast.setAttribute('role', 'status');
+          toast.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:10000;max-width:calc(100% - 32px);'
+            + 'padding:12px 16px;border-radius:12px;font-weight:600;font-size:15px;line-height:1.35;text-align:center;'
+            + 'box-shadow:0 10px 30px rgba(0,0,0,.25);transition:opacity .3s ease;';
+          document.body.appendChild(toast);
+        }
+        toast.textContent = text;
+        toast.style.background = ok ? '#047857' : '#b91c1c';
+        toast.style.color = '#fff';
+        toast.style.opacity = '1';
+        clearTimeout(toast.__hideTimer);
+        toast.__hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, ok ? 3500 : 6000);
+      }
+
+      function applyResult(result, version){
+        if (typeof version === 'number') CFG.resultVersion = version;
+        if (!result || typeof result !== 'object') return;
+        if (result.type !== 'summary_save') return;
+        endSaveWait();
+        const markText = result.mark ? ` (MARK ${result.mark})` : '';
+        if (result.ok){
+          const text = '✅ ' + (result.message || 'Το παραστατικό αποθηκεύτηκε.') + markText;
+          // Το παράθυρο κλείνει αμέσως, χωρίς να περιμένει τον επόμενο συγχρονισμό.
+          if (summaryPanel) summaryPanel.classList.add('hidden');
+          setSummaryStatus(text, 'success', 4000);
+          setStatus(text, 'success');
+          updateResultBox(`<strong>${escapeHtml(text)}</strong>`, 'success');
+          showToast(text, true);
+          try { if (navigator.vibrate) navigator.vibrate(80); } catch (_) {}
+        } else {
+          const text = '⚠️ ' + (result.message || 'Η αποθήκευση δεν ολοκληρώθηκε στον υπολογιστή.');
+          setSummaryStatus(text, 'error', 10000);
+          setStatus(text, 'error');
+          showToast(text, false);
+          try { if (navigator.vibrate) navigator.vibrate([60, 60, 60]); } catch (_) {}
+        }
+      }
+
+      function handleResultFields(data){
+        if (!data || !Object.prototype.hasOwnProperty.call(data, 'result_version')) {
+          resultSeeded = true;
+          return;
+        }
+        const version = Number(data.result_version) || 0;
+        if (!resultSeeded){
+          // Κατά τη σύνδεση: ό,τι υπήρχε ήδη είναι παλιό, δεν το δείχνουμε.
+          resultSeeded = true;
+          CFG.resultVersion = version;
+          return;
+        }
+        if (version > (CFG.resultVersion || 0)) applyResult(data.result, version);
       }
 
       function updateModeBadge(){
@@ -1845,6 +1939,7 @@
             // Only block scans if repeat-entry is enabled, as requested
             setProcessing(!!data.excel_updating && !!CFG.repeatEnabled);
           }
+          if (data) handleResultFields(data);
           if (data && data.mode){
             applyMode(data.mode);
           }
@@ -1902,6 +1997,7 @@
           if (Object.prototype.hasOwnProperty.call(data, 'excel_updating')){
             setProcessing(!!data.excel_updating && !!CFG.repeatEnabled);
           }
+          handleResultFields(data);
           if (data.mode){
             applyMode(data.mode);
           }
@@ -2110,8 +2206,13 @@
       });
 
       summarySaveBtn?.addEventListener('click', () => {
-        setSummaryStatus('Αποστολή αποθήκευσης…', null);
-        sendControlCommand({ type: 'summary_save' });
+        if (saveWaitTimer) return;   // ήδη σε εξέλιξη
+        startSaveWait();
+        setSummaryStatus('Αποστολή αποθήκευσης…', null, 25000);
+        sendControlCommand({ type: 'summary_save' }, {
+          sentText: 'Ο υπολογιστής αποθηκεύει… Περίμενε την επιβεβαίωση.',
+          onFail: endSaveWait,
+        });
       });
 
       summaryCloseBtn?.addEventListener('click', () => {

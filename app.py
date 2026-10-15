@@ -747,6 +747,40 @@ def _sanitize_remote_control(value: Any) -> Optional[Dict[str, Any]]:
     return control
 
 
+def _sanitize_remote_result(value: Any) -> Optional[Dict[str, Any]]:
+    """Αποτέλεσμα εντολής του κινητού όπως το αναφέρει ο υπολογιστής (π.χ. αν
+    έγινε η αποθήκευση που ζητήθηκε), για να το δείξει το κινητό."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        kind = str(value.get("type") or "").strip().lower()[:40]
+    except Exception:
+        kind = ""
+    if not kind:
+        return None
+
+    def _clip(raw: Any, limit: int) -> str:
+        try:
+            text = str(raw or "").strip()
+        except Exception:
+            text = ""
+        return text[:limit]
+
+    return {
+        "type": kind,
+        "ok": bool(value.get("ok")),
+        "message": _clip(value.get("message"), 300),
+        "mark": _clip(value.get("mark"), 40),
+    }
+
+
+def _remote_result_fields(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Πεδία αποτελέσματος για τις απαντήσεις προς το κινητό."""
+    if not entry.get("result_version"):
+        return {}
+    return {"result": entry.get("result"), "result_version": int(entry.get("result_version") or 0)}
+
+
 def _prime_remote_summary_state(
     mark_value: str,
     modal_summary: Optional[Dict[str, Any]],
@@ -7640,6 +7674,8 @@ def api_qr_remote_start():
         "control": None,
         "control_version": 0,
         "control_last_delivered": 0,
+        "result": None,
+        "result_version": 0,
         "excel_updating": False,
         "excel_updating_until": None,
     }
@@ -7843,6 +7879,7 @@ def api_qr_remote_attach():
 
         # Include current processing state so mobile can block scans immediately on attach
         response["excel_updating"] = _is_remote_processing(entry)
+        response.update(_remote_result_fields(entry))
 
         summary_version = int(entry.get("summary_version") or 0)
         response["summary_version"] = summary_version
@@ -7910,6 +7947,7 @@ def api_qr_remote_heartbeat():
         }
 
         response["excel_updating"] = _is_remote_processing(entry)
+        response.update(_remote_result_fields(entry))
 
         summary_version = int(entry.get("summary_version") or 0)
         response["summary_version"] = summary_version
@@ -7942,7 +7980,8 @@ def api_qr_remote_update():
     repeat_flag = _parse_bool(data.get("repeat_enabled"))
     auto_flag = _parse_bool(data.get("auto_submit_enabled"))
     summary_present = "summary_state" in data
-    if not mode_present and repeat_flag is None and not summary_present:
+    result_present = "result" in data
+    if not mode_present and repeat_flag is None and not summary_present and not result_present:
         return jsonify(ok=False, error="Δεν ελήφθη ενημέρωση.", field="missing"), 400
 
     token = data.get("token") or data.get("secret")
@@ -7964,9 +8003,12 @@ def api_qr_remote_update():
         if not authorized:
             return jsonify(ok=False, error="Μη εξουσιοδοτημένη αλλαγή."), 403
 
+        is_owner = bool(owner and entry.get("owner_token") == owner)
         summary_state = None
-        if summary_present and owner and entry.get("owner_token") == owner:
+        if summary_present and is_owner:
             summary_state = _sanitize_summary_state(data.get("summary_state"))
+        # Μόνο ο υπολογιστής αναφέρει αποτελέσματα (το κινητό τα διαβάζει).
+        result = _sanitize_remote_result(data.get("result")) if (result_present and is_owner) else None
 
         if desired_mode is not None:
             entry["mode"] = desired_mode
@@ -7978,18 +8020,22 @@ def api_qr_remote_update():
             entry["summary_state"] = summary_state
             entry["summary_version"] = (entry.get("summary_version") or 0) + 1
             entry["summary_last_delivered"] = 0
+        if result is not None:
+            entry["result"] = {**result, "at": now.isoformat()}
+            entry["result_version"] = (entry.get("result_version") or 0) + 1
         entry["last_seen"] = now
         entry["expires_at"] = now + REMOTE_QR_SESSION_TTL
         expires_at = entry.get("expires_at")
 
     log.info(
-        "remote.update session=%s owner=%s mode=%s repeat=%s auto=%s summary=%s",
+        "remote.update session=%s owner=%s mode=%s repeat=%s auto=%s summary=%s result=%s",
         session_id,
         _token_hint(owner),
         entry.get("mode"),
         bool(entry.get("repeat_enabled")),
         bool(entry.get("auto_submit_enabled")),
         bool(summary_present),
+        (result or {}).get("type", "-") + (":ok" if (result or {}).get("ok") else ":fail") if result else "-",
     )
 
     return jsonify(
@@ -10459,6 +10505,22 @@ def append_summary_to_customer_file(summary, vat):
 RECEIPT_FALLBACK_MARK = "500000000000000"
 
 
+def _first(*values):
+    """Η πρώτη μη κενή τιμή (None και κενό κείμενο παραλείπονται), αλλιώς None.
+
+    Τη χρησιμοποιούν ο έλεγχος «υπάρχει ήδη στη λίστα» της Αναζήτησης και η
+    ταυτοποίηση αποδείξεων· έλειπε σε επίπεδο module, οπότε και οι δύο έπεφταν
+    σιωπηλά σε NameError (μέσα σε try) και δεν ταίριαζαν ποτέ.
+    """
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
 def _norm_id_value(v: Any) -> str:
     try:
         return str(v or "").strip()
@@ -10466,16 +10528,47 @@ def _norm_id_value(v: Any) -> str:
         return ""
 
 
+# QR ταμειακής μηχανής: www1.aade.gr/tameiakes/myweb/q1.php?SIG=<ΦΗΜ 11><α/α 8><hash 40><ποσό>
+_AADE_RECEIPT_SIG_RE = re.compile(r"[?&]SIG=([A-Z0-9]{11})(\d{8})", re.I)
+
+
+def _receipt_sig_parts(url: Any) -> Tuple[str, str]:
+    """(ΦΗΜ, α/α χωρίς μηδενικά μπροστά) από το SIG ενός URL ταμειακής, αλλιώς ("", "")."""
+    m = _AADE_RECEIPT_SIG_RE.search(str(url or ""))
+    if not m:
+        return "", ""
+    return m.group(1).upper(), (m.group(2).lstrip("0") or "0")
+
+
+def _receipt_fhm_of(doc: Any) -> str:
+    """Κωδικός ΦΗΜ μιας απόδειξης: από το πεδίο fhm ή από το SIG του URL της."""
+    if not isinstance(doc, dict):
+        return ""
+    fhm = str(_first(doc.get("fhm"), doc.get("FHM")) or "").strip().upper()
+    if fhm:
+        return fhm
+    for key in ("__rc_source_url", "__rc_cycle_key", "url", "receipt_url"):
+        fhm, _aa = _receipt_sig_parts(doc.get(key))
+        if fhm:
+            return fhm
+    return ""
+
+
 def _same_receipt_identity(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     """
     Robust identity check for receipts when MARK is shared fallback.
-    Requires AA + issueDate + issuer AFM to all match.
+    Requires AA + issueDate + issuer AFM to all match — or, when both receipts
+    carry a ΦΗΜ code, AA + issueDate + ΦΗΜ (the same issuer can run several
+    cash registers with overlapping α/α).
     """
     try:
         a_aa = _norm_id_value(_first(a.get("number"), a.get("AA"), a.get("aa"), a.get("progressive_aa")))
         b_aa = _norm_id_value(_first(b.get("number"), b.get("AA"), b.get("aa"), b.get("progressive_aa")))
         a_date = _norm_id_value(_first(a.get("issueDate"), a.get("issue_date"), a.get("date")))
         b_date = _norm_id_value(_first(b.get("issueDate"), b.get("issue_date"), b.get("date")))
+        a_fhm, b_fhm = _receipt_fhm_of(a), _receipt_fhm_of(b)
+        if a_fhm and b_fhm:
+            return bool(a_aa and a_date and a_fhm == b_fhm and a_aa == b_aa and a_date == b_date)
         a_afm = _norm_id_value(_first(a.get("AFM_issuer"), a.get("AFM"), a.get("issuer_vat"), a.get("issuer_afm")))
         b_afm = _norm_id_value(_first(b.get("AFM_issuer"), b.get("AFM"), b.get("issuer_vat"), b.get("issuer_afm")))
         return bool(a_aa and b_aa and a_date and b_date and a_afm and b_afm and a_aa == b_aa and a_date == b_date and a_afm == b_afm)
@@ -13972,6 +14065,79 @@ def api_next_receipt_mark():
         log.exception("api_next_receipt_mark: unexpected")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+def _receipt_registered_in_list(vat: str, issuer_vat: Any, issue_date: Any,
+                                progressive_aa: Any, fhm: Any) -> bool:
+    """Υπάρχει ήδη η απόδειξη στη λίστα (epsilon) του πελάτη;
+
+    Το MARK των αποδείξεων δεν είναι αξιόπιστο (συχνά ψευδο-MARK 5…, ή λάθος από
+    τη σελίδα του παρόχου), οπότε η απόδειξη αναγνωρίζεται από ημερομηνία + α/α +
+    ΦΗΜ. Όταν η μία από τις δύο πλευρές δεν έχει ΦΗΜ (π.χ. πάροχος χωρίς QR
+    ταμειακής, ή παλιά εγγραφή χωρίς αποθηκευμένο URL), η ΦΗΜ αντικαθίσταται από
+    τον ΑΦΜ του εκδότη. Το ΦΗΜ των εγγραφών της λίστας βρίσκεται από το πεδίο fhm
+    ή, για παλιότερες, από το URL της ίδιας εγγραφής στο summary του πελάτη.
+    """
+    if not vat:
+        return False
+
+    def _digits(value: Any) -> str:
+        return re.sub(r"\D", "", str(value or ""))
+
+    def _iso(value: Any) -> str:
+        text = str(value or "").strip()
+        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", text)
+        if m:
+            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        m = re.match(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})", text)
+        if m:
+            return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+        return ""
+
+    def _aa(value: Any) -> str:
+        text = str(value or "").strip()
+        if text.isdigit():
+            return text.lstrip("0") or "0"
+        return text.casefold()
+
+    want_date, want_aa = _iso(issue_date), _aa(progressive_aa)
+    want_fhm, want_afm = str(fhm or "").strip().upper(), _digits(issuer_vat)
+    if not (want_date and want_aa and (want_fhm or want_afm)):
+        return False
+    try:
+        entries = load_epsilon_cache_for_vat(vat) or []
+    except Exception:
+        return False
+
+    fhm_by_mark = None  # mark -> ΦΗΜ από το summary, μόνο αν χρειαστεί
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if _iso(_first(entry.get("issueDate"), entry.get("issue_date"), entry.get("date"))) != want_date:
+            continue
+        if _aa(_first(entry.get("AA"), entry.get("aa"), entry.get("number"), entry.get("progressive_aa"))) != want_aa:
+            continue
+        entry_fhm = _receipt_fhm_of(entry)
+        if want_fhm and not entry_fhm:
+            if fhm_by_mark is None:
+                fhm_by_mark = {}
+                try:
+                    for s in _cf_read(get_customer_summary_file(vat)) or []:
+                        s_mark = str((s or {}).get("mark") or "").strip() if isinstance(s, dict) else ""
+                        s_fhm = _receipt_fhm_of(s)
+                        if s_mark and s_fhm:
+                            fhm_by_mark[s_mark] = s_fhm
+                except Exception:
+                    log.exception("_receipt_registered_in_list: summary read failed")
+            entry_fhm = fhm_by_mark.get(str(entry.get("mark") or entry.get("MARK") or "").strip(), "")
+        if want_fhm and entry_fhm:
+            if entry_fhm == want_fhm:
+                return True
+            continue
+        entry_afm = _digits(_first(entry.get("AFM_issuer"), entry.get("issuer_vat"), entry.get("AFM")))
+        if want_afm and entry_afm == want_afm:
+            return True
+    return False
+
+
 def _record_failed_scrape(url: str, reason: str, *, missing_fields=None, scraper_source=None,
                           error=None, kind=None) -> bool:
     """Καταγράφει στη λίστα του admin ένα URL που δεν μπόρεσε να διαβαστεί (με ομάδα/χρήστη/πελάτη)."""
@@ -14226,8 +14392,26 @@ def api_scrape_receipt():
         except Exception:
             log.exception("api_scrape_receipt: incomplete-receipt detection failed")
 
-        log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s incomplete=%s",
-                 url, mode, is_invoice, mark, review_info.get("incomplete"))
+        # ΦΗΜ (κωδικός ταμειακής) από τη σελίδα ή από το SIG του QR της ΑΑΔΕ.
+        fhm = str(scraped.get("fhm") or scraped.get("FHM") or "").strip().upper()
+        sig_fhm, sig_aa = _receipt_sig_parts(url)
+        fhm = fhm or sig_fhm
+
+        # Ήδη καταχωρημένη στη λίστα (ημερομηνία + α/α + ΦΗΜ); Η Αναζήτηση δείχνει
+        # τότε προειδοποίηση και δεν ανοίγει ούτε ξανααποθηκεύει την απόδειξη.
+        already_registered = False
+        if not is_invoice:
+            try:
+                _reg_active = get_active_credential_from_session() or {}
+                already_registered = _receipt_registered_in_list(
+                    str(_reg_active.get("vat") or "").strip(), issuer_vat, issue_date,
+                    progressive_aa or sig_aa, fhm,
+                )
+            except Exception:
+                log.exception("api_scrape_receipt: registered check failed")
+
+        log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s incomplete=%s registered=%s",
+                 url, mode, is_invoice, mark, review_info.get("incomplete"), already_registered)
 
         return jsonify({
             "ok": True,
@@ -14242,10 +14426,12 @@ def api_scrape_receipt():
             "issuer_vat": issuer_vat,
             "issuer_name": issuer_name,
             "progressive_aa": progressive_aa,
+            "fhm": fhm,
             "receipt_analysis": receipt_analysis,
             "vat_analysis": vat_analysis,
             "vat_analysis_inferred": vat_analysis_inferred,
             "review": review_info,
+            "already_registered": bool(already_registered),
             "raw": scraped
         })
     except Exception as e:
@@ -15572,6 +15758,9 @@ def _save_summary_impl():
                 ),
                 "vat_category": ln.get("vatCategory","") or ""
             })
+        # ΦΗΜ της απόδειξης: μαζί με ημερομηνία + α/α την ταυτοποιεί (βλ. _receipt_registered_in_list).
+        if is_receipt and _receipt_fhm_of(summary):
+            epsilon_entry["fhm"] = _receipt_fhm_of(summary)
 
         # skip append αν δεν υπάρχει 15ψήφιο mark ή καθόλου ουσιαστικές lines.
         # Για αποδείξεις (ιδίως mixed mode), επιτρέπουμε append και με header-only
@@ -16039,6 +16228,8 @@ def api_confirm_receipt():
     # Προσθήκη MTYPE στο root level (μόνο για Γ Κατηγορία)
     if invoice_mtype:
         epsilon_item["mtype"] = invoice_mtype
+    if _receipt_fhm_of(summary):
+        epsilon_item["fhm"] = _receipt_fhm_of(summary)
 
     mirror_created = False
     mirror_removed = False
