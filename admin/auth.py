@@ -435,6 +435,12 @@ def account_settings():
         else:
             current_user.display_name = name
             db.session.commit()
+            # Αντίγραφο στο Firebase: η τοπική SQLite μπορεί να ξαναδημιουργηθεί (deploy) και το όνομα να χαθεί.
+            try:
+                from firebase.display_name_sync import save_remote
+                save_remote(current_user, name)
+            except Exception:
+                pass
             flash('Το όνομα εμφάνισης αποθηκεύτηκε. Θα το βλέπουν τα μέλη των ομάδων σας και τα logs.', 'success')
         return redirect(url_for('auth.account_settings'))
 

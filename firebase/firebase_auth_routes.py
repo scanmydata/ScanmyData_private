@@ -396,6 +396,14 @@ def firebase_signup():
                     db.session.rollback()
                     user = User.query.filter_by(username=email).first()
             
+            # Αντίγραφο του ονόματος εμφάνισης στο Firebase (επιβιώνει σε επανεκκίνηση/deploy της τοπικής βάσης)
+            try:
+                if user is not None and getattr(user, 'display_name', None):
+                    from firebase.display_name_sync import save_remote
+                    save_remote(user, user.display_name)
+            except Exception:
+                pass
+
             # Log the registration
             firebase_config.firebase_log_activity(
                 uid,
@@ -578,7 +586,14 @@ def firebase_login():
         if getattr(user, 'email', None) != firebase_email:
             user.email = firebase_email
         db.session.commit()
-        
+
+        # Το όνομα εμφάνισης (GDPR) επανέρχεται από το Firebase αν η τοπική βάση ξαναδημιουργήθηκε.
+        try:
+            from firebase.display_name_sync import restore_local
+            restore_local(user)
+        except Exception:
+            pass
+
         # Prevent concurrent login: check DB-backed session and allow takeover if stale
         try:
             SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 300))

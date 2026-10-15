@@ -1697,6 +1697,29 @@ def _flash_ajax_to_header(response):
 
 
 @app.before_request
+def _restore_display_name_once():
+    """Όνομα εμφάνισης που λείπει τοπικά (π.χ. η SQLite ξαναδημιουργήθηκε σε deploy) επανέρχεται από το Firebase —
+    μία προσπάθεια ανά session, ώστε ο χρήστης να μη ρωτιέται ξανά και ξανά."""
+    try:
+        from flask_login import current_user
+        from flask import session as _session
+        if request.endpoint == 'static' or not getattr(current_user, 'is_authenticated', False):
+            return None
+        if _session.get('_dn_restore_tried'):
+            return None
+        _session['_dn_restore_tried'] = True
+        from firebase.display_name_sync import restore_local, save_remote
+        if getattr(current_user, 'display_name', None):
+            # υπάρχει τοπικά (π.χ. ορίστηκε πριν το αντίγραφο στο Firebase): γράψε το και απομακρυσμένα
+            save_remote(current_user, current_user.display_name)
+        else:
+            restore_local(current_user)
+    except Exception:
+        pass
+    return None
+
+
+@app.before_request
 def session_heartbeat():
     """Lightweight heartbeat to update user's last_active_at when they have an active session.
     Writes to DB at most once every 30 seconds (tracked in flask session) to avoid excessive writes.
