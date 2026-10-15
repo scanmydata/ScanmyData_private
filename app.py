@@ -24858,15 +24858,30 @@ def _read_credentials_store_or_refuse(file_path: str):
         )
 
 
+_CREDENTIALS_STORE_WRITE_LOCK = threading.Lock()
+
+
 def _write_credentials_store_atomic(file_path: str, data: dict) -> None:
     """Atomic replace (temp file + os.replace) so a crash or a second
     request writing concurrently can never leave the file half-written —
     the exact race that corrupted this file in production (two overlapping
     plain `open(path, 'w')` writers interleaved their output)."""
-    tmp_path = file_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, file_path)
+    # Μοναδικό προσωρινό αρχείο ανά εγγραφή: το σταθερό «<αρχείο>.tmp» το μοιράζονταν δύο ταυτόχρονες αποθηκεύσεις
+    # (αυτόματη αποθήκευση φόρμας + χειροκίνητη/μαζικός Ε3)· η πρώτη το μετονόμαζε και η δεύτερη έπαιρνε
+    # «[Errno 2] No such file or directory: '….json.tmp' -> '….json'». Επιπλέον κλειδώνεται η εγγραφή μέσα στη διεργασία.
+    dir_name = os.path.dirname(file_path) or "."
+    with _CREDENTIALS_STORE_WRITE_LOCK:
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".e3cred_", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, file_path)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @app.route("/api/e3/brain/save_credentials", methods=["POST"])
