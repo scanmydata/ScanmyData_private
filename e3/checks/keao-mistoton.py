@@ -108,12 +108,17 @@ def _norm_gr(s: str) -> str:
     return " ".join(s.lower().replace("ς", "σ").split())
 
 
+def _finalsig(n: str) -> str:
+    """«οργανισμοσ ασφαλισησ» → «οργανισμος ασφαλισης» (οι κανόνες είναι γραμμένοι με τελικό ς)."""
+    return re.sub(r"σ(?=$|[\s\-.,)/])", "ς", n)
+
+
 def registry_kind(forea: str):
     """(slug, ετικέτα) του μητρώου ΚΕΑΟ — για ονοματολογία αρχείων και κατάταξη."""
     n = _norm_gr(forea)
     for test, slug, label in _REGISTRY_KINDS:
         try:
-            if test(n):
+            if test(n) or test(_finalsig(n)):
                 return slug, label
         except Exception:
             continue

@@ -18823,6 +18823,141 @@ def api_uncharacterized_invoices_pdf():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+# --- Αχαρακτήριστα του Ελέγχου Ε3: στοιχεία + PDF από τον πάροχο ---------------
+# Ο Έλεγχος Ε3 βρίσκει τα μη χαρακτηρισμένα από το RequestE3Info (μόνο MARK + ποσό) για τον πελάτη του Ε3 — όχι
+# απαραίτητα τον ενεργό πελάτη της Αναζήτησης. Εδώ συμπληρώνονται (εκδότης, σειρά/αριθμός, ημερομηνία, σύνδεσμος
+# παρόχου) με ΜΙΑ κλήση RequestDocs και κρατιούνται στον server (e3_data_cache), ώστε το PDF να κατεβαίνει από το
+# αποθηκευμένο URL (ποτέ από URL του αιτήματος).
+def _e3_unchar_cache_path(afm: str, year: str) -> Optional[str]:
+    try:
+        from e3.checks.e3_brain import _resolve_pdfs_dir
+        base = _resolve_pdfs_dir("e3_cache", afm)
+        if base is None:
+            return None
+        d = base / str(year)
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / "unclassified_docs.json")
+    except Exception:
+        return None
+
+
+def _e3_mydata_creds_for(afm: str, payload: Dict[str, Any]):
+    """myDATA user/key: πρώτα του αιτήματος (φόρμα Ε3), μετά credentials.json / κοινό store του Ε3."""
+    user = str(payload.get("mydata_user") or "").strip()
+    key = str(payload.get("mydata_key") or "").strip()
+    if user and key:
+        return user, key
+    cred = get_cred_by_vat(afm) or {}
+    if cred.get("user") and cred.get("key"):
+        return str(cred["user"]), str(cred["key"])
+    co = (_ar_store_company_record(afm).get("company") or {})
+    return str(co.get("mydata_user") or ""), str(co.get("mydata_key") or "")
+
+
+@app.route('/api/e3/unclassified/details', methods=['POST'])
+@login_required
+def api_e3_unclassified_details():
+    """Body: {afm, year, marks:[...], mydata_user?, mydata_key?, refresh?} → γραμμές για το popup."""
+    try:
+        p = request.get_json(silent=True) or {}
+        afm = "".join(ch for ch in str(p.get("afm") or "") if ch.isdigit())
+        year = "".join(ch for ch in str(p.get("year") or "") if ch.isdigit())[:4]
+        marks = [m for m in ("".join(ch for ch in str(x) if ch.isdigit()) for x in (p.get("marks") or [])) if m]
+        if len(afm) != 9 or len(year) != 4 or not marks:
+            return jsonify({"ok": False, "error": "Λείπουν ΑΦΜ / έτος / MARK."}), 400
+        cache_path = _e3_unchar_cache_path(afm, year)
+        cached = (json_read(cache_path) if cache_path and os.path.exists(cache_path) else None) or {}
+        docs = cached.get("docs") or {}
+        missing = [m for m in marks if m not in docs]
+        fetched_now = False
+        if missing or p.get("refresh"):
+            user, key = _e3_mydata_creds_for(afm, p)
+            if not user or not key:
+                return jsonify({"ok": False, "error": "Λείπουν τα στοιχεία σύνδεσης myDATA του πελάτη."}), 400
+            from fetch import _fetch_request_docs
+            try:
+                rows = _fetch_request_docs(str(min(int(m) for m in (missing or marks)) - 1),
+                                           f"01/01/{year}", f"31/12/{year}", user, key)
+            except Exception as exc:
+                log.exception("api_e3_unclassified_details: RequestDocs failed")
+                return jsonify({"ok": False, "error": f"Το myDATA δεν απάντησε: {str(exc)[:200]}"}), 502
+            want = set(missing or marks)
+            built: Dict[str, Any] = {}      # ένα παραστατικό έρχεται σε μία γραμμή ανά κατηγορία ΦΠΑ → άθροιση
+            for r in rows or []:
+                mk = str(r.get("mark") or "").strip()
+                if mk not in want:
+                    continue
+                d = built.get(mk)
+                if d is None:
+                    d = {"mark": mk, "afm": str(r.get("AFM_issuer") or ""), "name": str(r.get("Name_issuer") or ""),
+                         "series": str(r.get("series") or ""), "number": str(r.get("aa") or r.get("AA") or ""),
+                         "date": str(r.get("issueDate") or ""), "type_code": str(r.get("type") or ""),
+                         "net": 0.0, "vat": 0.0, "total": 0.0, "url": str(r.get(_UNCHAR_URL_KEY) or "")}
+                d["net"] = round(float(d["net"]) + float(r.get("totalNetValue") or 0), 2)
+                d["vat"] = round(float(d["vat"]) + float(r.get("totalVatAmount") or 0), 2)
+                d["total"] = round(float(d["total"]) + float(r.get("totalValue") or 0), 2)
+                if not d.get("url") and r.get(_UNCHAR_URL_KEY):
+                    d["url"] = str(r.get(_UNCHAR_URL_KEY))
+                docs[mk] = d
+                built[mk] = d
+            fetched_now = True
+            for mk in want:
+                docs.setdefault(mk, {"mark": mk, "not_found": True, "url": ""})
+            if cache_path:
+                json_write(cache_path, {"afm": afm, "year": year, "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                        "docs": docs})
+        import invoice_pdf
+        out = []
+        for m in marks:
+            d = dict(docs.get(m) or {"mark": m, "not_found": True})
+            url = str(d.get("url") or "")
+            d["pdf"] = ("direct" if invoice_pdf.expects_pdf(url) else "page") if url else ""
+            d["type"] = map_invoice_type_label(d.get("type_code")) if d.get("type_code") else ""
+            if not d.get("name") and d.get("afm"):
+                try:
+                    import vat_name_cache
+                    d["name"] = str(vat_name_cache.lookup_name(d["afm"]) or "")
+                except Exception:
+                    pass
+            out.append(d)
+        return jsonify({"ok": True, "afm": afm, "year": year, "rows": out, "from_cache": not fetched_now})
+    except Exception as exc:
+        log.exception("api_e3_unclassified_details failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route('/api/e3/unclassified/pdf', methods=['POST'])
+@login_required
+def api_e3_unclassified_pdf():
+    """Body: {afm, year, mark} → PDF του παρόχου (URL από τα αποθηκευμένα στοιχεία του server)."""
+    try:
+        p = request.get_json(silent=True) or {}
+        afm = "".join(ch for ch in str(p.get("afm") or "") if ch.isdigit())
+        year = "".join(ch for ch in str(p.get("year") or "") if ch.isdigit())[:4]
+        mark = "".join(ch for ch in str(p.get("mark") or "") if ch.isdigit())
+        cache_path = _e3_unchar_cache_path(afm, year)
+        docs = ((json_read(cache_path) if cache_path and os.path.exists(cache_path) else None) or {}).get("docs") or {}
+        url = str((docs.get(mark) or {}).get("url") or "")
+        if not url:
+            return jsonify({"ok": False, "reason": "no_url", "error": "Το παραστατικό δεν έχει σύνδεσμο παρόχου."}), 404
+        import invoice_pdf
+        try:
+            result = invoice_pdf.fetch_pdf(url)
+        except invoice_pdf.PdfError as exc:
+            status = 422 if exc.reason == "viewer_only" else 502
+            _record_failed_scrape(url, "pdf_" + str(exc.reason), error=str(exc.message_el or ""), kind="pdf")
+            return jsonify({"ok": False, "reason": exc.reason, "error": exc.message_el, "url": url,
+                            "retryable": bool(exc.retryable)}), status
+        resp = Response(result.payload, mimetype="application/pdf")
+        resp.headers["X-Pdf-Source"] = result.source
+        resp.headers["Content-Disposition"] = f'attachment; filename="{mark}.pdf"'
+        resp.headers["Cache-Control"] = "private, no-store"
+        return resp
+    except Exception as exc:
+        log.exception("api_e3_unclassified_pdf failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route('/activity/check_updates', methods=['GET'])
 def activity_check_updates():
     """Return recent activity events relevant to current active credential (vat) and group.

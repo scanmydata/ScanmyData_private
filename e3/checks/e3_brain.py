@@ -1478,7 +1478,7 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
                                   pdf_dir: Optional[Path], warnings: List[str],
                                   on_progress: Optional[Any] = None,
                                   work_dir: Optional[Path] = None,
-                                  timeout: int = 900) -> Dict[str, Any]:
+                                  timeout: int = 900, force_refresh: bool = False) -> Dict[str, Any]:
     """Τρέχει το efka_teka_reconciliation.py για έναν ασφαλισμένο. Επιστρέφει
     {ok, reason, certificate_amounts:{EFKA,TEKA}, kinds:{...σύνοψη...}, report_pdf, raw_path}.
     ok=True μόνο αν βρέθηκε ποσό βεβαίωσης. Οι γραμμές «@@PROGRESS@@ <pct> <label>» του
@@ -1503,6 +1503,16 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
     args = [sys.executable, str(script), "--username", t.taxisnet_username, "--password", t.taxisnet_password,
             "--afm", t.afm or afm, "--amka", t.amka, "--year", str(year), "--out-dir", str(out),
             "--notices", "auto", "--always-report"]
+    # Κλεισμένη χρήση με οριστικά αποθηκευμένα δεδομένα → καμία νέα λήψη (μόνο υπολογισμός + καρτέλα).
+    _cached = _e3_cache_get(t.afm or afm, year, "efka_recon_raw.json", force_refresh)
+    if _cached:
+        args = [sys.executable, str(script), "--from-raw", str(_cached["path"]), "--out-dir", str(out), "--always-report"]
+        res["from_cache"] = _cached["meta"].get("saved_at")
+        if on_progress:
+            try:
+                on_progress(50, f"από αποθηκευμένα δεδομένα ({_cached['meta'].get('saved_at', '')[:10]}) — χωρίς νέα λήψη")
+            except Exception:
+                pass
     # Cache ειδοποιητηρίων ανά ασφαλισμένο (κοινό για την ομάδα): κατεβαίνουν μόνο οι μήνες που λείπουν.
     _ncache = _resolve_pdfs_dir("efka_notices", t.afm or afm)
     if _ncache is not None:
@@ -1550,7 +1560,12 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
         res["reason"] = ((s.get("login") or {}).get("reason")) or s.get("error") or "failed"
         return res
     raw_files = sorted(out.glob("efka_recon_raw_*.json"))
-    res["raw_path"] = str(raw_files[0]) if raw_files else None
+    res["raw_path"] = str(raw_files[0]) if raw_files else (str(_cached["path"]) if _cached else None)
+    # Στο cache μόνο πλήρη δεδομένα: βεβαίωση + ΚΕΑΟ διαβάστηκαν (αλλιώς θα κρατιόταν μια αποτυχία).
+    _keao_ok_s = bool(((s.get("sources") or {}).get("keao") or {}).get("ok"))
+    _cert_ok_s = any((c or {}).get("amount") is not None for c in ((s.get("sources") or {}).get("certificates") or {}).values())
+    if raw_files and not _cached and _keao_ok_s and _cert_ok_s:
+        _e3_cache_put(t.afm or afm, year, "efka_recon_raw.json", raw_files[0])
     res["out_dir"] = str(out)
     for kind, c in ((s.get("sources") or {}).get("certificates") or {}).items():
         if c and c.get("amount") is not None:
@@ -1577,7 +1592,7 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
         "net": round(sum(float(c.get("net") or 0) for c in _oth), 2),
         "fees": round(sum(float(c.get("extra_fees") or 0) + float(c.get("surcharges") or 0) for c in _oth), 2),
         "count": sum(int(c.get("count") or 0) for c in _oth),
-        "registries": sorted({re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", str(r.get("forea") or ""))
+        "registries": sorted({_fund_short(r.get("forea"))
                               for r in ((s.get("sources") or {}).get("keao") or {}).get("registries") or []
                               if r.get("class") == "other_non_employee" and r.get("rows")}),
     }
@@ -1607,6 +1622,74 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
         res.pop("raw_path", None)
         shutil.rmtree(own_tmp, ignore_errors=True)
     return res
+
+
+# ---------------------------------------------------------------- cache δεδομένων Ε3
+# Ό,τι κατέβηκε για μια ΚΛΕΙΣΜΕΝΗ χρήση (βεβαιώσεις/καταβολές/ΚΕΑΟ, Καρτέλα Εργοδότη, αποδεικτικά ΚΕΑΟ) κρατιέται
+# στον server (data/<ομάδα>/e3_data_cache/<ΑΦΜ>/<έτος>/) και ξαναχρησιμοποιείται αντί για νέα λήψη — όπως στο
+# Λογιστικό Αποτέλεσμα. «Οριστικά» θεωρούνται δεδομένα που κατέβηκαν από 1/4 του επόμενου έτους και μετά (μετά την
+# προθεσμία πληρωμής των εισφορών του Δεκεμβρίου/δώρου και τη δημοσίευση των βεβαιώσεων). Παράκαμψη: «Νέα λήψη».
+def _e3_cache_dir(afm: str, year: int) -> Optional[Path]:
+    base = _resolve_pdfs_dir("e3_cache", afm)
+    if base is None:
+        return None
+    d = base / str(year)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _e3_cache_final_date(year: int) -> date:
+    return date(year + 1, 4, 1)
+
+
+def _e3_cache_get(afm: str, year: int, name: str, force: bool) -> Optional[Dict[str, Any]]:
+    """{"path", "meta"} αν υπάρχει ΟΡΙΣΤΙΚΟ αποθηκευμένο αρχείο `name` για (ΑΦΜ, έτος)· αλλιώς None."""
+    if force:
+        return None
+    d = _e3_cache_dir(afm, year)
+    if d is None:
+        return None
+    f, m = d / name, d / (name + ".meta.json")
+    if not f.exists() or not m.exists():
+        return None
+    try:
+        meta = json.loads(m.read_text(encoding="utf-8"))
+        saved = datetime.fromisoformat(str(meta.get("saved_at"))).date()
+    except Exception:
+        return None
+    if saved < _e3_cache_final_date(year):
+        return None
+    return {"path": f, "meta": meta}
+
+
+def _e3_cache_put(afm: str, year: int, name: str, src: Any, extra: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """Αποθήκευση (αρχείο-πηγή ή dict → JSON) με meta {saved_at}. Best-effort."""
+    try:
+        d = _e3_cache_dir(afm, year)
+        if d is None:
+            return None
+        f = d / name
+        if isinstance(src, (dict, list)):
+            f.write_text(json.dumps(src, ensure_ascii=False, default=str), encoding="utf-8")
+        else:
+            import shutil as _sh
+            _sh.copy2(str(src), str(f))
+        meta = {"saved_at": datetime.now().isoformat(timespec="seconds"), "final": date.today() >= _e3_cache_final_date(year)}
+        meta.update(extra or {})
+        (d / (name + ".meta.json")).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return f
+    except Exception:
+        logging.getLogger(__name__).exception("e3 cache put %s", name)
+        return None
+
+
+def _fund_short(forea: Any) -> str:
+    """Σύντομο όνομα ταμείου ΚΕΑΟ (ΟΑΕΕ, ΤΣΜΕΔΕ, …) — ίδιο με την καρτέλα αντιπαραβολής."""
+    try:
+        from .efka_teka_reconciliation import fund_short_name
+        return fund_short_name(str(forea or ""))
+    except Exception:
+        return re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", str(forea or ""))
 
 
 def _employer_card_date_to(year: int) -> str:
@@ -1770,6 +1853,8 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "tax_certificate_pdfs"
         elif kind_lower == "efka_notices":
             root_name = "efka_notices_cache"
+        elif kind_lower == "e3_cache":
+            root_name = "e3_data_cache"
         else:
             return None
         target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / afm
@@ -2400,7 +2485,8 @@ def process_client(
                     f"Φορολογικές Βεβαιώσεις: δεν βρέθηκε ενεργή ομάδα για αποθήκευση του ΑΦΜ {t.afm or afm}."
                 )
             recon_res = _run_efka_teka_reconciliation(checks_dir, t, afm, year, cert_pdf_dir, warnings,
-                                                      on_progress=_on_progress, work_dir=_recon_work / f"m{idx}")
+                                                      on_progress=_on_progress, work_dir=_recon_work / f"m{idx}",
+                                                      force_refresh=bool(_flags.get("force_refresh")))
             efka_teka_recon_results.append(recon_res)
             _of = recon_res.get("other_funds") or {}
             if _of.get("net") or _of.get("fees"):
@@ -2477,117 +2563,139 @@ def process_client(
             f"Οικονομική Καρτέλα Εργοδότη — {input_name or afm}",
             percent=33,
         )
-        with tempfile.TemporaryDirectory(prefix=f"e3kart_{afm}_") as tmpdir:
-            tmp = Path(tmpdir)
-            target_dir = kart_pdf_dir if kart_pdf_dir is not None else (tmp / "out")
-            target_dir.mkdir(parents=True, exist_ok=True)
-            summary_path = tmp / "kartela_ergodoti_summary.json"
-            kart_args = [
-                sys.executable,
-                str(checks_dir / "kartela_ergodoti.py"),
-                "--efka-username", efka_taxis_user,
-                "--efka-password", efka_taxis_pass,
-                "--teka-username", ika_emp_user,
-                "--teka-password", ika_emp_pass,
-                "--ame", ika_emp_ame,
-                "--afm", afm,
-                "--date-from", f"01/01/{year}",
-                "--date-to", _employer_card_date_to(year),
-                "--pdf-dir", str(target_dir),
-                "--summary-out", str(summary_path),
-            ]
-            if not headed:
-                kart_args.append("--headless")
-            if not (ika_emp_user and ika_emp_pass):
-                kart_args.append("--efka-only")
-            if not ika_emp_ame:
-                _publish_brain_step(job_id, f"Καρτέλα Εργοδότη — ανάκτηση ΑΜΕ (Πιστοποίηση Εργοδοτών) — {input_name or afm}",
-                                    percent=33)
-            kartela_status["ran"] = True
+        # Κλεισμένη χρήση με οριστικά αποθηκευμένη καρτέλα (σύνοψη + PDF στον server) → χωρίς νέα λήψη.
+        _kart_cached = _e3_cache_get(afm, year, "kartela_summary.json", bool(_flags.get("force_refresh")))
+        if _kart_cached is not None:
             try:
-                proc = subprocess.run(
-                    kart_args, capture_output=True, text=True, timeout=480
-                )
-                kartela_ergodoti_result = {
-                    "ok": proc.returncode == 0,
-                    "stdout_tail": (proc.stdout or "")[-1000:],
-                    "stderr_tail": (proc.stderr or "")[-500:],
-                }
-                if summary_path.exists():
-                    try:
-                        kartela_ergodoti_result["summary"] = json.loads(
-                            summary_path.read_text(encoding="utf-8")
-                        )
-                    except Exception:
-                        pass
-                _ksum = kartela_ergodoti_result.get("summary") or {}
-                kartela_status["ame"] = _ksum.get("ame") or ika_emp_ame or ""
-                kartela_status["ame_source"] = _ksum.get("ame_source")
-                kartela_status["teka_update_required"] = bool(_ksum.get("teka_update_required"))
-                kartela_status["parts"] = {
-                    k: {"ok": bool((_ksum.get(k) or {}).get("ok")), "error": (_ksum.get(k) or {}).get("error"),
-                        "source": (_ksum.get(k) or {}).get("source")}
-                    for k in ("efka", "teka")}
-                if kartela_status["ame_source"] in ("ePistErg", "ΤΕΚΑ") and kartela_status["ame"]:
-                    warnings.append(f"Καρτέλα Εργοδότη: βρέθηκε ΑΜΕ {kartela_status['ame']} "
-                                    f"({'Πιστοποίηση Εργοδοτών' if kartela_status['ame_source'] == 'ePistErg' else 'καρτέλα ΤΕΚΑ'}) "
-                                    "— αποθηκεύεται στα στοιχεία του πελάτη.")
-                if kartela_status["teka_update_required"]:
-                    warnings.append("Οικονομική Καρτέλα Εργοδότη ΤΕΚΑ: " + str(((_ksum.get("teka") or {}).get("error"))
-                                                                              or "απαιτείται ενημέρωση στοιχείων στο e-ΕΦΚΑ."))
-                for _k, _nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ")):
-                    _part = _ksum.get(_k) or {}
-                    if (proc.returncode == 0 and not _part.get("ok") and not _part.get("update_required")
-                            and not str(_part.get("error") or "").startswith("παράλειψη")):
-                        warnings.append(f"Οικονομική Καρτέλα Εργοδότη {_nm}: δεν βγήκε — {_part.get('error') or 'άγνωστο σφάλμα'}")
-                if proc.returncode != 0:
-                    # summary["ok"] is efka.ok OR teka.ok — a non-zero exit
-                    # means BOTH sides failed (a partial success, e.g. only
-                    # ΤΕΚΑ working, returns 0 and never reaches here). Any
-                    # PDFs still visible in the per-AFM folder afterwards
-                    # are therefore from an EARLIER successful run, not
-                    # this one — PDFs are year-qualified and intentionally
-                    # never deleted across runs so multiple years coexist.
-                    _summ = kartela_ergodoti_result.get("summary") or {}
-                    _efka_err = ((_summ.get("efka") or {}).get("error")) or "—"
-                    _teka_err = ((_summ.get("teka") or {}).get("error")) or "—"
-                    kartela_status.update({"ok": False, "reason": f"αποτυχία — ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}"})
-                    warnings.append(
-                        "Οικονομική Καρτέλα Εργοδότη: αποτυχία και στα δύο (ΕΦΚΑ+ΤΕΚΑ) — "
-                        f"ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}. "
-                        "Τυχόν PDF που βλέπεις στη λίστα είναι από προηγούμενο επιτυχημένο run "
-                        "(δεν διαγράφονται μεταξύ ετών)."
+                _ksc = json.loads(Path(_kart_cached["path"]).read_text(encoding="utf-8"))
+                _kpdfs = [k for k in ("efka", "teka", "teka_next")
+                          if (_ksc.get(k) or {}).get("ok") and Path(str((_ksc.get(k) or {}).get("pdf") or "")).exists()]
+                if not _kpdfs:
+                    raise ValueError("τα PDF της αποθηκευμένης καρτέλας δεν υπάρχουν πια")
+                kartela_ergodoti_result = {"ok": True, "summary": _ksc, "from_cache": _kart_cached["meta"].get("saved_at")}
+                kartela_status.update({
+                    "ran": True, "ok": True, "pdfs": len(_kpdfs), "ame": _ksc.get("ame") or ika_emp_ame or "",
+                    "ame_source": _ksc.get("ame_source"), "teka_update_required": bool(_ksc.get("teka_update_required")),
+                    "from_cache": _kart_cached["meta"].get("saved_at"),
+                    "parts": {k: {"ok": bool((_ksc.get(k) or {}).get("ok")), "error": (_ksc.get(k) or {}).get("error"),
+                                  "source": "cache"} for k in ("efka", "teka")},
+                    "reason": f"από αποθηκευμένα δεδομένα ({str(_kart_cached['meta'].get('saved_at'))[:10]}) — χωρίς νέα λήψη"})
+                pdfs_saved["kartela_ergodoti"] = pdfs_saved.get("kartela_ergodoti", 0) + len(_kpdfs)
+            except Exception as _kexc:
+                logging.getLogger(__name__).info("kartela cache unusable: %s", _kexc)
+                _kart_cached = None
+        if _kart_cached is None:
+            with tempfile.TemporaryDirectory(prefix=f"e3kart_{afm}_") as tmpdir:
+                tmp = Path(tmpdir)
+                target_dir = kart_pdf_dir if kart_pdf_dir is not None else (tmp / "out")
+                target_dir.mkdir(parents=True, exist_ok=True)
+                summary_path = tmp / "kartela_ergodoti_summary.json"
+                kart_args = [
+                    sys.executable,
+                    str(checks_dir / "kartela_ergodoti.py"),
+                    "--efka-username", efka_taxis_user,
+                    "--efka-password", efka_taxis_pass,
+                    "--teka-username", ika_emp_user,
+                    "--teka-password", ika_emp_pass,
+                    "--ame", ika_emp_ame,
+                    "--afm", afm,
+                    "--date-from", f"01/01/{year}",
+                    "--date-to", _employer_card_date_to(year),
+                    "--pdf-dir", str(target_dir),
+                    "--summary-out", str(summary_path),
+                ]
+                if not headed:
+                    kart_args.append("--headless")
+                if not (ika_emp_user and ika_emp_pass):
+                    kart_args.append("--efka-only")
+                if not ika_emp_ame:
+                    _publish_brain_step(job_id, f"Καρτέλα Εργοδότη — ανάκτηση ΑΜΕ (Πιστοποίηση Εργοδοτών) — {input_name or afm}",
+                                        percent=33)
+                kartela_status["ran"] = True
+                try:
+                    proc = subprocess.run(
+                        kart_args, capture_output=True, text=True, timeout=480
                     )
-                elif kart_pdf_dir is not None:
-                    try:
-                        _ks0 = (kartela_ergodoti_result or {}).get("summary") or {}
-                        saved = [Path(str((_ks0.get(k) or {}).get("pdf"))) for k in ("efka", "teka", "teka_next")
-                                 if (_ks0.get(k) or {}).get("ok") and (_ks0.get(k) or {}).get("pdf")
-                                 and Path(str((_ks0.get(k) or {}).get("pdf"))).exists()]
-                        pdfs_saved["kartela_ergodoti"] = (
-                            pdfs_saved.get("kartela_ergodoti", 0) + len(saved)
-                        )
-                        _ks = (kartela_ergodoti_result or {}).get("summary") or {}
-                        _part = [f"{nm}: {'✓' if (_ks.get(k) or {}).get('ok') else '✗ ' + str((_ks.get(k) or {}).get('error') or '—')}"
-                                 for k, nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ"))]
-                        if kartela_status.get("ame"):
-                            _part.append(f"ΑΜΕ {kartela_status['ame']}")
-                        kartela_status.update({"ok": bool(saved), "pdfs": len(saved),
-                                               "reason": ("αποθηκεύτηκε" if saved else "έτρεξε χωρίς PDF") + " — " + " · ".join(_part)})
-                        if not saved:
-                            warnings.append(
-                                "Οικονομική Καρτέλα Εργοδότη: το script έτρεξε αλλά δεν εντοπίστηκαν PDFs στον per-AFM φάκελο."
+                    kartela_ergodoti_result = {
+                        "ok": proc.returncode == 0,
+                        "stdout_tail": (proc.stdout or "")[-1000:],
+                        "stderr_tail": (proc.stderr or "")[-500:],
+                    }
+                    if summary_path.exists():
+                        try:
+                            kartela_ergodoti_result["summary"] = json.loads(
+                                summary_path.read_text(encoding="utf-8")
                             )
-                    except Exception:
-                        pass
-            except subprocess.TimeoutExpired:
-                warnings.append("Οικονομική Καρτέλα Εργοδότη: timeout κατά τη λήψη.")
-                kartela_ergodoti_result = {"ok": False, "error": "timeout"}
-                kartela_status.update({"ok": False, "reason": "λήξη χρόνου (timeout)"})
-            except Exception as exc:
-                warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
-                kartela_ergodoti_result = {"ok": False, "error": str(exc)}
-                kartela_status.update({"ok": False, "reason": str(exc)})
+                        except Exception:
+                            pass
+                    _ksum = kartela_ergodoti_result.get("summary") or {}
+                    kartela_status["ame"] = _ksum.get("ame") or ika_emp_ame or ""
+                    kartela_status["ame_source"] = _ksum.get("ame_source")
+                    kartela_status["teka_update_required"] = bool(_ksum.get("teka_update_required"))
+                    kartela_status["parts"] = {
+                        k: {"ok": bool((_ksum.get(k) or {}).get("ok")), "error": (_ksum.get(k) or {}).get("error"),
+                            "source": (_ksum.get(k) or {}).get("source")}
+                        for k in ("efka", "teka")}
+                    if kartela_status["ame_source"] in ("ePistErg", "ΤΕΚΑ") and kartela_status["ame"]:
+                        warnings.append(f"Καρτέλα Εργοδότη: βρέθηκε ΑΜΕ {kartela_status['ame']} "
+                                        f"({'Πιστοποίηση Εργοδοτών' if kartela_status['ame_source'] == 'ePistErg' else 'καρτέλα ΤΕΚΑ'}) "
+                                        "— αποθηκεύεται στα στοιχεία του πελάτη.")
+                    if kartela_status["teka_update_required"]:
+                        warnings.append("Οικονομική Καρτέλα Εργοδότη ΤΕΚΑ: " + str(((_ksum.get("teka") or {}).get("error"))
+                                                                                  or "απαιτείται ενημέρωση στοιχείων στο e-ΕΦΚΑ."))
+                    for _k, _nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ")):
+                        _part = _ksum.get(_k) or {}
+                        if (proc.returncode == 0 and not _part.get("ok") and not _part.get("update_required")
+                                and not str(_part.get("error") or "").startswith("παράλειψη")):
+                            warnings.append(f"Οικονομική Καρτέλα Εργοδότη {_nm}: δεν βγήκε — {_part.get('error') or 'άγνωστο σφάλμα'}")
+                    if proc.returncode != 0:
+                        # summary["ok"] is efka.ok OR teka.ok — a non-zero exit
+                        # means BOTH sides failed (a partial success, e.g. only
+                        # ΤΕΚΑ working, returns 0 and never reaches here). Any
+                        # PDFs still visible in the per-AFM folder afterwards
+                        # are therefore from an EARLIER successful run, not
+                        # this one — PDFs are year-qualified and intentionally
+                        # never deleted across runs so multiple years coexist.
+                        _summ = kartela_ergodoti_result.get("summary") or {}
+                        _efka_err = ((_summ.get("efka") or {}).get("error")) or "—"
+                        _teka_err = ((_summ.get("teka") or {}).get("error")) or "—"
+                        kartela_status.update({"ok": False, "reason": f"αποτυχία — ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}"})
+                        warnings.append(
+                            "Οικονομική Καρτέλα Εργοδότη: αποτυχία και στα δύο (ΕΦΚΑ+ΤΕΚΑ) — "
+                            f"ΕΦΚΑ: {_efka_err} · ΤΕΚΑ: {_teka_err}. "
+                            "Τυχόν PDF που βλέπεις στη λίστα είναι από προηγούμενο επιτυχημένο run "
+                            "(δεν διαγράφονται μεταξύ ετών)."
+                        )
+                    elif kart_pdf_dir is not None:
+                        try:
+                            _ks0 = (kartela_ergodoti_result or {}).get("summary") or {}
+                            saved = [Path(str((_ks0.get(k) or {}).get("pdf"))) for k in ("efka", "teka", "teka_next")
+                                     if (_ks0.get(k) or {}).get("ok") and (_ks0.get(k) or {}).get("pdf")
+                                     and Path(str((_ks0.get(k) or {}).get("pdf"))).exists()]
+                            pdfs_saved["kartela_ergodoti"] = (
+                                pdfs_saved.get("kartela_ergodoti", 0) + len(saved)
+                            )
+                            _ks = (kartela_ergodoti_result or {}).get("summary") or {}
+                            _part = [f"{nm}: {'✓' if (_ks.get(k) or {}).get('ok') else '✗ ' + str((_ks.get(k) or {}).get('error') or '—')}"
+                                     for k, nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ"))]
+                            if kartela_status.get("ame"):
+                                _part.append(f"ΑΜΕ {kartela_status['ame']}")
+                            kartela_status.update({"ok": bool(saved), "pdfs": len(saved),
+                                                   "reason": ("αποθηκεύτηκε" if saved else "έτρεξε χωρίς PDF") + " — " + " · ".join(_part)})
+                            if not saved:
+                                warnings.append(
+                                    "Οικονομική Καρτέλα Εργοδότη: το script έτρεξε αλλά δεν εντοπίστηκαν PDFs στον per-AFM φάκελο."
+                                )
+                        except Exception:
+                            pass
+                except subprocess.TimeoutExpired:
+                    warnings.append("Οικονομική Καρτέλα Εργοδότη: timeout κατά τη λήψη.")
+                    kartela_ergodoti_result = {"ok": False, "error": "timeout"}
+                    kartela_status.update({"ok": False, "reason": "λήξη χρόνου (timeout)"})
+                except Exception as exc:
+                    warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
+                    kartela_ergodoti_result = {"ok": False, "error": str(exc)}
+                    kartela_status.update({"ok": False, "reason": str(exc)})
     elif save_kartela and has_payroll_flag and not (efka_taxis_user and efka_taxis_pass):
         # Η νέα υπηρεσία ΕΦΚΑ (Καρτέλα Εργοδότη) απαιτεί TaxisNet company
         # credentials πλέον, πέρα από τα IKA Εργοδότη — χωρίς αυτά ο έλεγχος
@@ -2596,6 +2704,14 @@ def process_client(
             "Έχει επισημανθεί μισθοδοσία αλλά λείπουν οι κωδικοί TaxisNet εταιρίας "
             "(απαιτούνται για τη νέα υπηρεσία ΕΦΚΑ) — η Οικονομική Καρτέλα Εργοδότη παραλείπεται."
         )
+
+    # Στο cache ΜΟΝΟ πλήρης καρτέλα: ΕΦΚΑ οκ και ΤΕΚΑ οκ (ή χωρίς κωδικούς ΙΚΑ) — αλλιώς το μέρος που απέτυχε
+    # δεν θα ξαναδοκιμαζόταν ποτέ.
+    _ksave = (kartela_ergodoti_result or {}).get("summary") or {}
+    if (kartela_ergodoti_result and not kartela_ergodoti_result.get("from_cache")
+            and (_ksave.get("efka") or {}).get("ok")
+            and ((_ksave.get("teka") or {}).get("ok") or str((_ksave.get("teka") or {}).get("error") or "").startswith("παράλειψη"))):
+        _e3_cache_put(afm, year, "kartela_summary.json", _ksave)
 
     # ------------------------------------------------------------------
     # Απλήρωτες εισφορές ΕΡΓΟΔΟΤΗ (ΙΚΑ/ΤΕΚΑ): Καρτέλα Εργοδότη ↔ ΚΕΑΟ εργοδότη, προθεσμία τέλος
@@ -2667,6 +2783,19 @@ def process_client(
                 keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": 0,
                                         "reason": "καμία πίστωση ΚΕΑΟ σε κανένα μητρώο — δεν χρειάζεται αποδεικτικό"})
                 continue
+            # Κλεισμένη χρήση: αποδεικτικά ΚΕΑΟ που κατέβηκαν ήδη (οριστικά) → χωρίς νέα λήψη.
+            _kc = _e3_cache_get(t.afm, year, "keao_out.json", bool(_flags.get("force_refresh")))
+            if _kc is not None and _rr and _rr.get("keao_ok"):
+                try:
+                    _kj = json.loads(Path(_kc["path"]).read_text(encoding="utf-8"))
+                    _kp = [r.get("pdf") for r in (_kj.get("registries") or []) if r.get("pdf") and Path(str(r["pdf"])).exists()]
+                    if _kp:
+                        keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": len(_kp),
+                                                "reason": f"από αποθηκευμένα ({str(_kc['meta'].get('saved_at'))[:10]}) — χωρίς νέα λήψη"})
+                        pdfs_saved["keao"] = pdfs_saved.get("keao", 0) + len(_kp)
+                        continue
+                except Exception:
+                    pass
             with tempfile.TemporaryDirectory(prefix=f"e3keao_{t.afm}_") as tmpdir:
                 tmp = Path(tmpdir)
                 # Το ΚΕΑΟ τρέχει πλέον ΜΟΝΟ για το αποδεικτικό PDF (τα ποσά έρχονται από την αντιπαραβολή).
@@ -2694,6 +2823,8 @@ def process_client(
                     keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": 0, "reason": f"αποτυχία: {k_err}"})
                     continue
                 _k_pdfs = [r.get("pdf") for r in (k_json.get("registries") or []) if r.get("pdf")]
+                if _k_pdfs and keao_pdf_dir is not None:
+                    _e3_cache_put(t.afm, year, "keao_out.json", k_json)
                 _k_regs = "; ".join(f"ΑΜΟ {r.get('amo')}: {r.get('status')}" for r in (k_json.get("registries") or []))
                 keao_pdf_status.append({"afm": t.afm, "name": who_k, "pdf": len(_k_pdfs),
                                         "reason": ("αποθηκεύτηκε" if _k_pdfs else
@@ -3707,6 +3838,7 @@ def run_brain(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "download_keao_pdfs": payload["_download_keao_pdfs"],
                     "save_kartela_ergodoti": payload["_save_kartela_ergodoti"],
                     "tax_certificate": payload["_run_tax_certificate"],
+                    "force_refresh": bool(payload.get("force_refresh")),
                 },
                 job_id=job_id,
             )

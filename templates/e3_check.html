@@ -10,6 +10,60 @@
   .brain-bulk-table td input:not([type=checkbox]) { padding-top: .15rem; padding-bottom: .15rem; }
   .brain-bulk-table tbody tr[data-bulk-row]:hover { background: rgba(14, 165, 233, .06); }
   .brain-bulk-table tr.bulk-filtered-out { display: none !important; }
+  /* Popups πίνακα Ε3 / στηλών ισοζυγίου: χρώματα από το θέμα της ΕΦΑΡΜΟΓΗΣ ([data-theme]), όχι από το θέμα του
+     λειτουργικού (οι κλάσεις dark: του Tailwind ακολουθούσαν το σκοτεινό θέμα των Windows → λευκά γράμματα σε λευκό). */
+  #e3ResultModal > div, #e3IsozygioHintModal > div { background: #ffffff !important; color: #111827 !important; }
+  #e3ResultModal h3, #e3IsozygioHintModal h3 { color: #0f172a !important; }
+  #e3ResultModalStatus { color: #475569 !important; }
+  #e3ResultModalClose, #e3IsozygioHintClose { color: #64748b !important; }
+  #e3ResultModalDiag { background: #fffbeb !important; color: #78350f !important; border-color: #fcd34d !important; }
+  #e3IsozygioHintModal table th { background: #f1f5f9 !important; color: #0f172a !important; }
+  #e3IsozygioHintModal p, #e3IsozygioHintModal td { color: #334155 !important; }
+  [data-theme="dark"] #e3ResultModal > div, [data-theme="dark"] #e3IsozygioHintModal > div { background: #1f2937 !important; color: #e5e7eb !important; }
+  [data-theme="dark"] #e3ResultModal h3, [data-theme="dark"] #e3IsozygioHintModal h3 { color: #f9fafb !important; }
+  [data-theme="dark"] #e3ResultModalStatus { color: #cbd5e1 !important; }
+  [data-theme="dark"] #e3ResultModalDiag { background: rgba(120, 53, 15, .35) !important; color: #fde68a !important; border-color: #92400e !important; }
+  [data-theme="dark"] #e3IsozygioHintModal table th { background: #374151 !important; color: #f9fafb !important; }
+  [data-theme="dark"] #e3IsozygioHintModal p, [data-theme="dark"] #e3IsozygioHintModal td { color: #d1d5db !important; }
+  /* Popup αχαρακτήριστων (Ε3): ίδια λογική με την Αναζήτηση, χρώματα από το θέμα της εφαρμογής */
+  #e3UncharModal { background: rgba(0,0,0,.5); z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  #e3UncharModal.hidden { display: none !important; }
+  #e3UncharModal .e3u-dialog { background: #fff; color: #111827; border-radius: .75rem; width: min(1300px, 100%); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+  #e3UncharModal .e3u-head { display: flex; justify-content: space-between; align-items: flex-start; padding: .9rem 1.1rem; border-bottom: 3px solid #f59e0b; }
+  #e3UncharModal h3 { margin: 0; font-size: 1.05rem; font-weight: 700; color: #0f172a; }
+  #e3UncharModal .e3u-sub { font-size: .8rem; color: #64748b; margin-top: .15rem; }
+  #e3UncharModal .e3u-x { background: transparent; border: none; font-size: 1.2rem; color: #64748b; cursor: pointer; }
+  #e3UncharModal .e3u-toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1.1rem; }
+  #e3UncharModal .e3u-toolbar input[type=search] { border: 1px solid #cbd5e1; border-radius: .45rem; padding: .35rem .6rem; min-width: 240px; background: #fff; color: #111827; }
+  #e3UncharModal .e3u-btn { border: 1px solid #cbd5e1; background: #f8fafc !important; color: #0f172a !important; border-radius: .45rem; padding: .35rem .75rem; font-size: .82rem; font-weight: 600; cursor: pointer; }
+  #e3UncharModal .e3u-btn-pdf { background: #1d4ed8 !important; color: #fff !important; border-color: #1d4ed8; }
+  #e3UncharModal .e3u-btn:disabled { opacity: .55; cursor: default; }
+  #e3UncharModal .e3u-spacer { flex: 1; }
+  #e3UncharModal .e3u-status { font-size: .8rem; color: #475569; }
+  #e3UncharModal .e3u-notice { margin: 0 1.1rem .5rem; padding: .5rem .7rem; border: 1px solid #fcd34d; background: #fffbeb; color: #78350f; border-radius: .45rem; font-size: .8rem; }
+  #e3UncharModal .e3u-notice ul { margin: .3rem 0 0 1rem; list-style: disc; }
+  #e3UncharModal .e3u-tablewrap { overflow: auto; padding: 0 1.1rem; flex: 1; }
+  #e3UncharModal table.e3u-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+  #e3UncharModal .e3u-table th { position: sticky; top: 0; background: #fef3c7; color: #78350f; text-align: left; padding: .4rem .45rem; cursor: pointer; white-space: nowrap; border-bottom: 1px solid #fcd34d; }
+  #e3UncharModal .e3u-table td { padding: .35rem .45rem; border-bottom: 1px solid #f1f5f9; color: #1f2937; }
+  #e3UncharModal .e3u-table .n { text-align: right; white-space: nowrap; } #e3UncharModal .e3u-table .c { text-align: center; } #e3UncharModal .e3u-table .r { text-align: right; }
+  #e3UncharModal .e3u-table tr.is-sel td { background: #fffbeb; }
+  #e3UncharModal .e3u-table tfoot td { border-top: 2px solid #fcd34d; }
+  #e3UncharModal .e3u-pdf { border: 1px solid #93c5fd; background: #eff6ff !important; color: #1d4ed8 !important; border-radius: .35rem; padding: .15rem .45rem; font-size: .75rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  #e3UncharModal .e3u-pdf.is-link { border-color: #b45309; background: #fffbeb !important; color: #92400e !important; }
+  #e3UncharModal .e3u-muted { color: #94a3b8; }
+  #e3UncharModal .e3u-foot { display: flex; justify-content: space-between; align-items: center; padding: .6rem 1.1rem; border-top: 1px solid #e5e7eb; }
+  [data-theme="dark"] #e3UncharModal .e3u-dialog { background: #1f2937; color: #e5e7eb; }
+  [data-theme="dark"] #e3UncharModal h3 { color: #f9fafb; }
+  [data-theme="dark"] #e3UncharModal .e3u-toolbar input[type=search] { background: #111827; color: #f3f4f6; border-color: #4b5563; }
+  [data-theme="dark"] #e3UncharModal .e3u-btn { background: #374151 !important; color: #f3f4f6 !important; border-color: #4b5563; }
+  [data-theme="dark"] #e3UncharModal .e3u-btn-pdf { background: #1d4ed8 !important; color: #fff !important; }
+  [data-theme="dark"] #e3UncharModal .e3u-table th { background: #422006; color: #fde68a; border-color: #92400e; }
+  [data-theme="dark"] #e3UncharModal .e3u-table td { color: #e5e7eb; border-color: #374151; }
+  [data-theme="dark"] #e3UncharModal .e3u-table tr.is-sel td { background: #2a1a0b; }
+  [data-theme="dark"] #e3UncharModal .e3u-notice { background: rgba(120,53,15,.35); color: #fde68a; border-color: #92400e; }
+  [data-theme="dark"] #e3UncharModal .e3u-pdf { background: #172554 !important; color: #bfdbfe !important; border-color: #3b82f6; }
+  [data-theme="dark"] #e3UncharModal .e3u-foot { border-color: #374151; }
   /* Wait overlay: λίστα βημάτων + μπάρα συνολικής προόδου */
   .e3-ov-bar { height: 6px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: .6rem 0 .5rem; }
   .e3-ov-bar > div { height: 100%; background: linear-gradient(90deg, #0ea5e9, #2563eb); transition: width .4s ease; }
@@ -1500,6 +1554,11 @@
             <input id="brainSaveComparisonPdf" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
             Αποθήκευση πίνακα αντιπαραβολής σε PDF μετά την εκτέλεση
           </label>
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 md:col-span-2"
+                 title="Για κλεισμένες χρήσεις τα στοιχεία e-ΕΦΚΑ/ΚΕΑΟ, η Καρτέλα Εργοδότη και τα αποδεικτικά ΚΕΑΟ που έχουν ήδη κατέβει οριστικά (από 1/4 του επόμενου έτους) ξαναχρησιμοποιούνται χωρίς νέα λήψη. Τσέκαρε για να κατέβουν από την αρχή.">
+            <input id="brainForceRefresh" type="checkbox" class="rounded border-gray-300 dark:border-gray-600" />
+            Νέα λήψη (αγνόησε τα αποθηκευμένα δεδομένα κλεισμένης χρήσης)
+          </label>
         </div>
         <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">
           ℹ️ Όλα τα παραπάνω εφαρμόζονται και στον <strong>ατομικό</strong> και στον <strong>μαζικό</strong> έλεγχο.
@@ -1809,7 +1868,7 @@
       <div id="unclassifiedTotal" class="text-xl font-semibold text-amber-700 dark:text-amber-300">0,00</div>
     </div>
     <button id="toggleUnclassifiedList" type="button" class="px-3 py-2 rounded-md text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
-      Λίστα μη χαρακτηρισμένων (<span id="unclassifiedCount">0</span>)
+      📋 Αχαρακτήριστα — λίστα &amp; PDF (<span id="unclassifiedCount">0</span>)
     </button>
   </div>
   <div id="unclassifiedListWrap" class="e3-unclassified-list e3-hidden">
@@ -4651,6 +4710,330 @@
     });
   }
 
+  // ===================== Αχαρακτήριστα (Έλεγχος Ε3): popup με PDF από τον πάροχο =====================
+  // Όπως τα «Αχαρακτήριστα τιμολόγια myDATA» της Αναζήτησης (αναζήτηση, επιλογή, PDF ανά γραμμή, ZIP, σύνδεσμοι),
+  // χωρίς χαρακτηρισμό/αποθήκευση. Τα στοιχεία (εκδότης, σειρά/αριθμός, ημ/νία, σύνδεσμος παρόχου) έρχονται από
+  // /api/e3/unclassified/details (μία κλήση RequestDocs, αποθηκεύονται στον server) και το PDF από
+  // /api/e3/unclassified/pdf — για τον πελάτη του Ε3, ανεξάρτητα από τον ενεργό πελάτη της Αναζήτησης.
+  var E3U = { rows: [], afm: '', year: '', sortKey: 'date', sortDir: -1, busy: false };
+
+  function _e3uCtx() {
+    const c0 = (E3_BRAIN_LAST_RESULT && Array.isArray(E3_BRAIN_LAST_RESULT.clients) && E3_BRAIN_LAST_RESULT.clients[0]) || {};
+    const afm = String(c0.afm || (document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+    let year = String((E3_BRAIN_LAST_RESULT && E3_BRAIN_LAST_RESULT.year) || '');
+    if (!year) {
+      const df = String((document.getElementById('brainDateFrom') || {}).value || '');
+      const m = df.match(/(\d{4})/);
+      year = m ? m[1] : String(new Date().getFullYear() - 1);
+    }
+    return {
+      afm, year,
+      mydata_user: String((document.getElementById('brainMydataUser') || {}).value || '').trim(),
+      mydata_key: String((document.getElementById('brainMydataKey') || {}).value || '').trim(),
+    };
+  }
+
+  function _e3uFmt(n) { return Number(n || 0).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function _e3uEsc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _e3uNorm(s) { let t = String(s == null ? '' : s).toLowerCase(); try { t = t.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (_) {} return t; }
+  function _e3uDateVal(s) { const m = String(s || '').match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/); return m ? (+m[3]) * 10000 + (+m[2]) * 100 + (+m[1]) : 0; }
+
+  function _e3uEnsureModal() {
+    let modal = document.getElementById('e3UncharModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'e3UncharModal';
+    modal.className = 'hidden fixed inset-0';
+    modal.setAttribute('role', 'dialog');
+    modal.innerHTML = `
+      <div class="e3u-dialog">
+        <div class="e3u-head">
+          <div><h3>Αχαρακτήριστα τιμολόγια myDATA (Ε3)</h3><div id="e3uSub" class="e3u-sub"></div></div>
+          <button type="button" id="e3uClose" class="e3u-x" data-modal-close aria-label="Κλείσιμο">✕</button>
+        </div>
+        <div class="e3u-toolbar">
+          <input id="e3uSearch" type="search" placeholder="🔎 Αναζήτηση…">
+          <button type="button" id="e3uZip" class="e3u-btn e3u-btn-pdf">⬇ PDF όλων (ZIP)</button>
+          <button type="button" id="e3uCopy" class="e3u-btn">📋 Σύνδεσμοι</button>
+          <button type="button" id="e3uRefresh" class="e3u-btn" title="Νέα ανάκτηση στοιχείων από το myDATA">🔄 Ανανέωση</button>
+          <span class="e3u-spacer"></span><span id="e3uStatus" class="e3u-status"></span>
+        </div>
+        <div id="e3uNotice" class="e3u-notice" hidden></div>
+        <div class="e3u-tablewrap"><table class="e3u-table"><thead><tr>
+          <th class="e3u-sel"><input type="checkbox" id="e3uAll" title="Επιλογή όλων (εμφανιζόμενων)"></th>
+          <th>PDF</th><th data-k="mark">MARK</th><th data-k="afm">ΑΦΜ</th><th data-k="name">Επωνυμία</th>
+          <th data-k="series">Σειρά</th><th data-k="number">Αριθμός</th><th data-k="date">Ημερομηνία</th><th data-k="type">Είδος</th>
+          <th data-k="net" class="n">Καθαρή</th><th data-k="vat" class="n">ΦΠΑ</th><th data-k="total" class="n">Σύνολο</th>
+        </tr></thead><tbody id="e3uBody"></tbody><tfoot id="e3uFoot"></tfoot></table></div>
+        <div class="e3u-foot"><span id="e3uProgress" class="e3u-status"></span>
+          <button type="button" id="e3uClose2" class="e3u-btn">Κλείσιμο</button></div>
+      </div>`;
+    document.body.appendChild(modal);
+    const close = () => { modal.classList.add('hidden'); modal.style.display = 'none'; };
+    modal.querySelector('#e3uClose').addEventListener('click', close);
+    modal.querySelector('#e3uClose2').addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('#e3uSearch').addEventListener('input', _e3uRender);
+    modal.querySelector('#e3uAll').addEventListener('change', (e) => {
+      _e3uVisible().forEach((r) => { r._sel = e.target.checked; });
+      _e3uRender();
+    });
+    modal.querySelector('#e3uZip').addEventListener('click', _e3uZip);
+    modal.querySelector('#e3uCopy').addEventListener('click', _e3uCopyLinks);
+    modal.querySelector('#e3uRefresh').addEventListener('click', () => _e3uLoad(true));
+    modal.querySelectorAll('th[data-k]').forEach((th) => th.addEventListener('click', () => {
+      const k = th.dataset.k;
+      E3U.sortDir = (E3U.sortKey === k) ? -E3U.sortDir : 1;
+      E3U.sortKey = k;
+      _e3uRender();
+    }));
+    modal.querySelector('#e3uBody').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-pdf]');
+      if (b) { _e3uRowPdf(b.dataset.pdf); return; }
+      const cb = e.target.closest('input[data-sel]');
+      if (cb) { const r = E3U.rows.find((x) => x.mark === cb.dataset.sel); if (r) r._sel = cb.checked; _e3uStatus(); }
+    });
+    return modal;
+  }
+
+  function _e3uVisible() {
+    const q = _e3uNorm((document.getElementById('e3uSearch') || {}).value || '').trim();
+    let rows = E3U.rows.slice();
+    if (q) rows = rows.filter((d) => _e3uNorm([d.mark, d.afm, d.name, d.series, d.number, d.date, d.type, _e3uFmt(d.total)].join(' ')).includes(q));
+    const k = E3U.sortKey, dir = E3U.sortDir;
+    rows.sort((a, b) => {
+      let va = a[k], vb = b[k];
+      if (k === 'date') { va = _e3uDateVal(va); vb = _e3uDateVal(vb); }
+      else if (k === 'net' || k === 'vat' || k === 'total') { va = Number(va || 0); vb = Number(vb || 0); }
+      else { return String(va || '').localeCompare(String(vb || ''), 'el', { numeric: true }) * dir; }
+      return (va - vb) * dir;
+    });
+    return rows;
+  }
+
+  function _e3uStatus() {
+    const sel = E3U.rows.filter((r) => r._sel).length;
+    const st = document.getElementById('e3uStatus');
+    if (st) st.textContent = `${E3U.rows.length} παραστατικά` + (sel ? ` · επιλεγμένα ${sel}` : '');
+    const zip = document.getElementById('e3uZip');
+    if (zip) { zip.textContent = sel ? `⬇ PDF επιλεγμένων (${sel})` : '⬇ PDF όλων (ZIP)'; zip.disabled = E3U.busy || !E3U.rows.length; }
+  }
+
+  function _e3uRender() {
+    const body = document.getElementById('e3uBody');
+    if (!body) return;
+    const rows = _e3uVisible();
+    body.innerHTML = rows.map((d) => {
+      const pdfBtn = d.pdf
+        ? `<button type="button" class="e3u-pdf ${d.pdf === 'page' ? 'is-link' : ''}" data-pdf="${_e3uEsc(d.mark)}" ${d._busy ? 'disabled' : ''}
+             title="${d.pdf === 'page' ? 'Ο πάροχος δείχνει μόνο σελίδα: άνοιγμα συνδέσμου' : 'Λήψη PDF από τον πάροχο'}">${d._busy ? '⏳' : (d.pdf === 'page' ? '🔗' : '⬇ PDF')}</button>`
+        : `<span class="e3u-muted" title="${d.not_found ? 'Δεν βρέθηκε στα ληφθέντα του myDATA' : 'Χωρίς σύνδεσμο παρόχου'}">—</span>`;
+      return `<tr class="${d._sel ? 'is-sel' : ''}"><td class="e3u-sel"><input type="checkbox" data-sel="${_e3uEsc(d.mark)}" ${d._sel ? 'checked' : ''}></td>
+        <td class="c">${pdfBtn}</td><td>${_e3uEsc(d.mark)}</td><td>${_e3uEsc(d.afm || '')}</td><td>${_e3uEsc(d.name || (d.not_found ? '(δεν βρέθηκε στο myDATA)' : ''))}</td>
+        <td>${_e3uEsc(d.series || '')}</td><td>${_e3uEsc(d.number || '')}</td><td>${_e3uEsc(d.date || '')}</td><td>${_e3uEsc(d.type || '')}</td>
+        <td class="n">${d.net != null ? _e3uFmt(d.net) : ''}</td><td class="n">${d.vat != null ? _e3uFmt(d.vat) : ''}</td><td class="n">${_e3uFmt(d.total)}</td></tr>`;
+    }).join('') || '<tr><td colspan="12" class="e3u-muted c">Κανένα παραστατικό.</td></tr>';
+    const sum = (k) => rows.reduce((s, r) => s + Number(r[k] || 0), 0);
+    const foot = document.getElementById('e3uFoot');
+    if (foot) foot.innerHTML = `<tr><td colspan="9" class="r"><b>ΣΥΝΟΛΑ (${rows.length})</b></td><td class="n"><b>${_e3uFmt(sum('net'))}</b></td>
+      <td class="n"><b>${_e3uFmt(sum('vat'))}</b></td><td class="n"><b>${_e3uFmt(sum('total'))}</b></td></tr>`;
+    const all = document.getElementById('e3uAll');
+    if (all) all.checked = rows.length > 0 && rows.every((r) => r._sel);
+    _e3uStatus();
+  }
+
+  function _e3uNotice(html) {
+    const n = document.getElementById('e3uNotice');
+    if (!n) return;
+    n.innerHTML = html || '';
+    n.hidden = !html;
+  }
+
+  async function _e3uLoad(refresh) {
+    const ctx = _e3uCtx();
+    const base = Array.isArray(E3_LAST_DATA && E3_LAST_DATA.unclassified_invoices) ? E3_LAST_DATA.unclassified_invoices : [];
+    E3U.afm = ctx.afm; E3U.year = ctx.year;
+    const sub = document.getElementById('e3uSub');
+    if (sub) sub.textContent = `ΑΦΜ ${ctx.afm || '—'} · χρήση ${ctx.year}`;
+    E3U.rows = base.map((r) => ({ mark: String(r.mark || '').trim(), total: Number(r.amount != null ? r.amount : r.totalValue || 0),
+                                   date: r.issueDate || '', afm: r.issuerVat || '', name: r.issuerName || '', _amountE3: true }))
+      .filter((r) => r.mark);
+    _e3uNotice('');
+    _e3uRender();
+    if (!E3U.rows.length || ctx.afm.length !== 9) return;
+    const prog = document.getElementById('e3uProgress');
+    if (prog) prog.textContent = 'Ανάκτηση στοιχείων των παραστατικών από το myDATA…';
+    try {
+      const r = await fetch('/api/e3/unclassified/details', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify(Object.assign({}, ctx, { marks: E3U.rows.map((x) => x.mark), refresh: !!refresh })),
+      });
+      const d = await _brainParseJsonResponse(r);
+      if (!d || !d.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
+      const by = {};
+      (d.rows || []).forEach((x) => { by[x.mark] = x; });
+      E3U.rows = E3U.rows.map((x) => {
+        const info = by[x.mark] || {};
+        const out = Object.assign({}, x, info, { _sel: x._sel });
+        if (!info.total) out.total = x.total;   // ποσό του Ε3 όταν δεν βρέθηκε στο myDATA
+        return out;
+      });
+      _e3uRender();
+      const nf = E3U.rows.filter((x) => x.not_found).length;
+      if (nf) _e3uNotice(`${nf} παραστατικά δεν βρέθηκαν στα ληφθέντα του myDATA (π.χ. εκδοθέντα από τον ίδιο) — χωρίς PDF.`);
+    } catch (e) {
+      _e3uNotice('Δεν ανακτήθηκαν τα στοιχεία των παραστατικών: ' + _e3uEsc(e.message || e));
+    } finally {
+      if (prog) prog.textContent = '';
+    }
+  }
+
+  function openE3UncharModal() {
+    const modal = _e3uEnsureModal();
+    modal.classList.remove('hidden');
+    modal.style.display = 'flex';
+    const s = document.getElementById('e3uSearch');
+    if (s) s.value = '';
+    _e3uLoad(false);
+  }
+
+  function _e3uFileName(r) {
+    const clean = (p) => String(p == null ? '' : p).replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim();
+    const m = String(r.date || '').match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+    const iso = m ? `${m[3]}-${('0' + m[2]).slice(-2)}-${('0' + m[1]).slice(-2)}` : '';
+    const parts = [clean(r.name).slice(0, 40).trim(), clean(r.afm), iso, clean(r.series), clean(r.number), _e3uFmt(r.total).replace(/\./g, '')];
+    return (parts.filter(Boolean).join('_') || r.mark) + '.pdf';
+  }
+
+  function _e3uSaveBlob(blob, name) {
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href; a.download = name; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60000);
+  }
+
+  async function _e3uRequestPdf(mark) {
+    try {
+      const res = await fetch('/api/e3/unclassified/pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify({ afm: E3U.afm, year: E3U.year, mark }),
+      });
+      const type = String(res.headers.get('Content-Type') || '');
+      if (res.ok && type.indexOf('application/pdf') === 0) {
+        return { ok: true, blob: await res.blob(), rendered: String(res.headers.get('X-Pdf-Source') || '') === 'rendered' };
+      }
+      const d = await res.json().catch(() => null);
+      return { ok: false, reason: (d && d.reason) || '', error: (d && d.error) || ('HTTP ' + res.status), url: (d && d.url) || '' };
+    } catch (_) { return { ok: false, reason: 'network', error: 'Σφάλμα δικτύου' }; }
+  }
+
+  function _e3uOpenLink(r) {
+    const url = String(r.url || '');
+    if (!/^https?:\/\//i.test(url)) return;
+    try { navigator.clipboard && navigator.clipboard.writeText(url).catch(() => {}); } catch (_) {}
+    try { const w = window.open(url, '_blank'); if (w) w.opener = null; } catch (_) {}
+    showBrainFlash('Το παραστατικό φαίνεται μόνο στη σελίδα του παρόχου: ο σύνδεσμος άνοιξε σε νέα καρτέλα και αντιγράφηκε.', 'info', 5000);
+  }
+
+  async function _e3uRowPdf(mark) {
+    const r = E3U.rows.find((x) => x.mark === mark);
+    if (!r || r._busy) return;
+    if (r.pdf === 'page') { _e3uOpenLink(r); return; }
+    r._busy = true; _e3uRender();
+    const res = await _e3uRequestPdf(mark);
+    r._busy = false;
+    if (res.ok) {
+      _e3uSaveBlob(res.blob, _e3uFileName(r));
+      if (res.rendered) showBrainFlash('Ο πάροχος δεν δίνει αρχείο PDF: κατέβηκε η εκτύπωση της σελίδας του παραστατικού.', 'info', 5000);
+    } else if (res.reason === 'viewer_only') {
+      r.pdf = 'page'; _e3uOpenLink(r);
+    } else {
+      _e3uNotice(`Το PDF του ${_e3uEsc(mark)} δεν κατέβηκε: ${_e3uEsc(res.error)}` +
+        (r.url ? ` — <a href="${_e3uEsc(r.url)}" target="_blank" rel="noopener">άνοιγμα συνδέσμου παρόχου</a>` : ''));
+    }
+    _e3uRender();
+  }
+
+  function _e3uEnsureZip() {
+    if (window.JSZip) return Promise.resolve();
+    if (!window.__e3uZipPromise) {
+      window.__e3uZipPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/static/vendor/jszip.min.js';
+        s.onload = () => resolve();
+        s.onerror = () => { window.__e3uZipPromise = null; reject(new Error('Αποτυχία φόρτωσης βιβλιοθήκης ZIP')); };
+        document.head.appendChild(s);
+      });
+    }
+    return window.__e3uZipPromise;
+  }
+
+  async function _e3uZip() {
+    if (E3U.busy) return;
+    let rows = E3U.rows.filter((r) => r._sel);
+    if (!rows.length) rows = _e3uVisible();
+    const queue = rows.filter((r) => r.pdf === 'direct');
+    const linkOnly = rows.filter((r) => r.pdf === 'page');
+    const noLink = rows.filter((r) => !r.pdf);
+    if (!queue.length && !linkOnly.length) { showBrainFlash('Κανένα από τα παραστατικά δεν έχει σύνδεσμο παρόχου για PDF.', 'warning', 4000); return; }
+    E3U.busy = true; _e3uStatus();
+    const prog = document.getElementById('e3uProgress');
+    const got = [], errors = [];
+    let next = 0, done = 0;
+    const worker = async () => {
+      while (next < queue.length) {
+        const r = queue[next++];
+        const res = await _e3uRequestPdf(r.mark);
+        done++;
+        if (prog) prog.textContent = `Λήψη PDF ${done}/${queue.length}…`;
+        if (res.ok) got.push({ r, blob: res.blob });
+        else if (res.reason === 'viewer_only') { r.pdf = 'page'; linkOnly.push(r); }
+        else errors.push({ r, error: res.error });
+      }
+    };
+    try {
+      await Promise.all([worker(), worker(), worker()]);
+      if (got.length === 1 && rows.length === 1) {
+        _e3uSaveBlob(got[0].blob, _e3uFileName(got[0].r));
+      } else if (got.length) {
+        if (prog) prog.textContent = 'Δημιουργία ZIP…';
+        await _e3uEnsureZip();
+        const zip = new window.JSZip();
+        const used = {};
+        got.forEach((g) => {
+          let name = _e3uFileName(g.r);
+          if (used[name.toLowerCase()]) name = name.replace(/\.pdf$/, '_' + g.r.mark + '.pdf');
+          used[name.toLowerCase()] = true;
+          zip.file(name, g.blob);
+        });
+        const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+        _e3uSaveBlob(blob, `Αχαρακτήριστα_Ε3_${E3U.afm}_${E3U.year}.zip`);
+      }
+    } catch (e) {
+      _e3uNotice('Η λήψη PDF διακόπηκε: ' + _e3uEsc(e.message || e));
+    } finally {
+      E3U.busy = false;
+      if (prog) prog.textContent = '';
+      _e3uRender();
+    }
+    const items = []
+      .concat(linkOnly.map((r) => `<li><a href="${_e3uEsc(r.url)}" target="_blank" rel="noopener">${_e3uEsc(r.name || r.afm)} ${_e3uEsc(r.series || '')} ${_e3uEsc(r.number || '')}</a> — μόνο στη σελίδα του παρόχου</li>`))
+      .concat(errors.map((x) => `<li>${_e3uEsc(x.r.name || x.r.mark)} — ${_e3uEsc(x.error)}${x.r.url ? ` (<a href="${_e3uEsc(x.r.url)}" target="_blank" rel="noopener">σύνδεσμος</a>)` : ''}</li>`))
+      .concat(noLink.map((r) => `<li>${_e3uEsc(r.name || r.mark)} — χωρίς σύνδεσμο παρόχου</li>`));
+    const summary = got.length ? `Κατέβηκαν ${got.length} PDF από ${rows.length} παραστατικά.` : `Δεν κατέβηκε κανένα PDF από ${rows.length} παραστατικά.`;
+    if (items.length) _e3uNotice(summary + '<ul>' + items.join('') + '</ul>');
+    else showBrainFlash(summary, 'success', 4000);
+  }
+
+  function _e3uCopyLinks() {
+    const rows = (E3U.rows.filter((r) => r._sel).length ? E3U.rows.filter((r) => r._sel) : _e3uVisible()).filter((r) => r.url);
+    if (!rows.length) { showBrainFlash('Δεν υπάρχουν σύνδεσμοι παρόχου.', 'warning', 3000); return; }
+    const text = rows.map((r) => r.url).join('\n');
+    const done = (ok) => showBrainFlash(ok ? `Αντιγράφηκαν ${rows.length} σύνδεσμοι.` : 'Η αντιγραφή δεν επιτράπηκε από τον browser.', ok ? 'success' : 'warning', 3000);
+    try { navigator.clipboard.writeText(text).then(() => done(true), () => done(false)); } catch (_) { done(false); }
+  }
+
   function populateUnclassifiedSummary(data) {
     const card = document.getElementById('unclassifiedSummaryCard');
     const countEl = document.getElementById('unclassifiedCount');
@@ -4702,6 +5085,8 @@
     document.addEventListener('click', (ev) => {
       const btn = ev.target && ev.target.closest && ev.target.closest('#toggleUnclassifiedList');
       if (!btn) return;
+      // Popup με PDF από τον πάροχο (όπως η Αναζήτηση)· η απλή λίστα μένει ως fallback.
+      if (typeof openE3UncharModal === 'function') { try { openE3UncharModal(); return; } catch (e) { console.warn('e3 unchar popup', e); } }
       const wrap = document.getElementById('unclassifiedListWrap');
       if (!wrap) return;
       wrap.classList.toggle('e3-hidden');
@@ -5147,6 +5532,7 @@
       download_e9_pdfs: downloadE9Pdfs,
       download_keao_pdfs: downloadKeaoPdfs,
       save_kartela_ergodoti: saveKartelaErgodoti,
+      force_refresh: !!(document.getElementById('brainForceRefresh') || {}).checked,
       // Default to headless so the brain works when Flask runs as a
       // background service (no interactive desktop / no visible
       // chromium window stealing focus). The extractors still launch
@@ -7155,6 +7541,7 @@
       download_e9_pdfs: _bulkSaveAllPdfs && runE9,
       download_keao_pdfs: runKeao,
       save_kartela_ergodoti: _bulkSaveAllPdfs,
+      force_refresh: !!(document.getElementById('brainForceRefresh') || {}).checked,
       save_comparison_pdf: false,
       headed: false,
       auto_active_group_clients: true,

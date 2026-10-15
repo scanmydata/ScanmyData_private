@@ -1172,6 +1172,33 @@ def classify_registry(forea: str) -> str:
     return "other_non_employee"
 
 
+_FUND_SHORT = [
+    (("οαεε", "οργανισμοσ ασφαλισησ ελευθερων επαγγελματιων"), "ΟΑΕΕ"),
+    (("τσμεδε",), "ΤΣΜΕΔΕ"), (("τσαυ",), "ΤΣΑΥ"), (("τσαυ", "εταα", "ετααπ"), "ΕΤΑΑ"),
+    (("ογα", "οργανισμοσ γεωργικων ασφαλισεων"), "ΟΓΑ"), (("ναυτικ",), "ΝΑΤ"), (("οαεδ", "δυπα"), "ΔΥΠΑ/ΟΑΕΔ"),
+    (("τεβε",), "ΤΕΒΕ"), (("ταε",), "ΤΑΕ"), (("τσα",), "ΤΣΑ"), (("τεκα",), "ΤΕΚΑ"),
+    (("ικα", "ιδρυμα κοινωνικων ασφαλισεων"), "ΙΚΑ"),
+]
+
+
+def fund_short_name(forea: str) -> str:
+    """Σύντομο όνομα ταμείου από την ονομασία φορέα του ΚΕΑΟ (π.χ. «ΟΡΓΑΝΙΣΜΟΣ ΑΣΦΑΛΙΣΗΣ ΕΛΕΥΘΕΡΩΝ
+    ΕΠΑΓΓΕΛΜΑΤΙΩΝ - …» → «ΟΑΕΕ»). Τελικό ς → σ ώστε να ταιριάζει. Αλλιώς το πρώτο τμήμα της ονομασίας."""
+    name = re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", (forea or "").strip(), flags=re.I)
+    if name == EFKA_MH_MISTHWTWN_FOREA:
+        return "e-ΕΦΚΑ μη μισθωτών"
+    n = _norm(name).replace("ς", "σ").replace(".", "")
+    toks = set(re.split(r"[\s\-/]+", n))
+    for keys, label in _FUND_SHORT:
+        if label == "ΕΤΑΑ" and "τσαυ" in n:
+            continue
+        for k in keys:
+            if (" " in k and k in n) or k in toks:
+                return label
+    first = name.split(" - ")[0].strip()
+    return first[:60] or "λοιπό ταμείο"
+
+
 def _keao_picker(http: _Http, keao_url: str) -> Dict[str, Any]:
     land = http.follow("GET", keao_url)["text"]
     fm = re.search(r'<form\b[^>]*id="amoForm"[^>]*>', land, re.I)
@@ -1236,9 +1263,40 @@ _PEE_DOC_RE = re.compile(r"\d{3}-\d{4}-[Α-ΩA-Z]{2,5}/[Α-ΩA-Z]{1,4}/\d+")
 _PERIOD_RE = re.compile(r"(?<![\d/])(\d{1,2})/(\d{4})(?![\d/])")
 
 
+def _analysis_items(headers: List[str], rows: List[List[str]]) -> List[Dict[str, Any]]:
+    """Γραμμές της «Ανάλυσης Χρεώσεων» (Έτος · Μήνας · Μήνας Αναφοράς · Κωδ. Υπ/τος · Ημ-νία Έκδοσης ·
+    Τύπος/Σειρά/Αρ. Παραστατικού · Κύρια Εισφορά · Πρόσθετα Τέλη · Συνολικό Ποσό · Προέλευση) → δομημένα."""
+    hn = [_norm(h) for h in headers]
+
+    def col(*keys, exclude=()):
+        for idx, h in enumerate(hn):
+            if any(k in h for k in keys) and not any(x in h for x in exclude):
+                return idx
+        return None
+    c_year, c_month = col("ετος"), col("μηνας", exclude=("αναφορ",))
+    c_ref, c_date = col("αναφορ"), col("ημ-νια", "ημνια", "ημερομην", "εκδοσ")
+    c_doc, c_main = col("παραστατ"), col("κυρια")
+    c_fees, c_sur, c_tot = col("προσθετ"), col("προσαυξ"), col("συνολ")
+    c_orig = col("προελευσ")
+    out = []
+    for r in rows:
+        def g(c):
+            return r[c].strip() if c is not None and c < len(r) else ""
+        y, m = g(c_year), g(c_month)
+        it = {"year": int(y) if y.isdigit() else None, "month": int(m) if m.isdigit() else None,
+              "ref_month": g(c_ref), "issue_date": g(c_date), "doc": g(c_doc),
+              "main": _r2(to_amount(g(c_main)) or 0.0), "fees": _r2(to_amount(g(c_fees)) or 0.0),
+              "surcharges": _r2(to_amount(g(c_sur)) or 0.0), "total": _r2(to_amount(g(c_tot)) or 0.0),
+              "origin": g(c_orig)}
+        if it["doc"] or it["main"] or it["total"]:
+            out.append(it)
+    return out
+
+
 def _keao_credit_analysis(http: _Http, post_url: str, vs: str, row_html: str, diag: _Diag, tag: str) -> Optional[Dict[str, Any]]:
-    """«Ανάλυση» μιας πίστωσης ΚΕΑΟ (κουμπί της γραμμής): σε ποιες οφειλές (παραστατικά/περιόδους) κατανεμήθηκε.
-    Επιστρέφει {"rows":[[κελιά]], "headers":[...], "docs":[...], "periods":["M/YYYY"], "text":...} ή None."""
+    """«Ανάλυση» μιας πίστωσης ΚΕΑΟ (κουμπί της γραμμής) → «Ανάλυση Χρεώσεων»: ποιες οφειλές (ΠΕΕ, έτος/μήνας)
+    εξόφλησε και με πόσο (κύρια εισφορά / πρόσθετα τέλη). Διαβάζει όλες τις σελίδες του πίνακα της ανάλυσης.
+    Επιστρέφει {"headers", "rows", "items":[...], "docs", "periods", "text"} ή None."""
     bm = re.search(r"<button\b([^>]*)>", row_html, re.I)
     if not bm:
         return None
@@ -1259,24 +1317,56 @@ def _keao_credit_analysis(http: _Http, post_url: str, vs: str, row_html: str, di
     except Exception as exc:
         logging.warning("[keao] ανάλυση %s: %s", bid, exc)
         return None
-    diag.dump(f"keao_{tag}_analysis_{re.sub(r'[^0-9A-Za-z]+', '_', bid)[-40:]}.xml", x)
+    safe = re.sub(r"[^0-9A-Za-z]+", "_", bid)[-40:]
+    diag.dump(f"keao_{tag}_analysis_{safe}.xml", x)
     frag = "".join(re.findall(r"<update[^>]*><!\[CDATA\[([\s\S]*?)\]\]></update>", x, re.I)) or x
-    tables = parse_datatables(frag)
+    tables = [t for t in parse_datatables(frag) if t.get("rows")]
+    # ο πίνακας της «Ανάλυσης Χρεώσεων» (όχι ο πίνακας των πιστώσεων αν ξαναζωγραφίστηκε)
+    tables = [t for t in tables if not t["id"].endswith("dt-table-2")] or tables
     rows, headers = [], []
-    for t in tables:
-        if t.get("rows"):
-            headers = headers or list(t.get("headers") or [])
-            rows.extend(t["rows"])
+    for t in tables[:1]:
+        headers = list(t.get("headers") or [])
+        rows.extend(t["rows"])
+        # σελιδοποίηση του πίνακα της ανάλυσης (αν οι οφειλές είναι πολλές)
+        total, rpp = t.get("row_count") or 0, t.get("rows_per_page") or len(t["rows"]) or 10
+        tid = t["id"]
+        form = tid.split(":")[0]
+        first, guard = len(t["rows"]), 0
+        while total and first < total and guard < 50:
+            try:
+                px = http.ajax(post_url, {
+                    "jakarta.faces.partial.ajax": "true", "jakarta.faces.source": tid,
+                    "jakarta.faces.partial.execute": tid, "jakarta.faces.partial.render": tid, tid: tid,
+                    f"{tid}_pagination": "true", f"{tid}_first": str(first), f"{tid}_rows": str(rpp),
+                    f"{tid}_skipChildren": "true", f"{tid}_encodeFeature": "true", form: form,
+                    "jakarta.faces.ViewState": vs,
+                })["text"]
+            except Exception:
+                break
+            pf = "".join(re.findall(r"<update[^>]*><!\[CDATA\[([\s\S]*?)\]\]></update>", px, re.I))
+            got = 0
+            for tr in re.finditer(r"<tr\b([^>]*)>([\s\S]*?)</tr>", pf, re.I):
+                if re.search(r'data-ri="\d+"', tr.group(1)):
+                    rows.append([_strip_cell(c) for c in re.findall(r"<td\b[^>]*>([\s\S]*?)</td>", tr.group(2), re.I)])
+                    got += 1
+            if not got:
+                break
+            first += got
+            guard += 1
     if not rows:
         for tr in re.finditer(r"<tr\b[^>]*>([\s\S]*?)</tr>", frag, re.I):
             cells = [cert._strip_tags(c) for c in re.findall(r"<td\b[^>]*>([\s\S]*?)</td>", tr.group(1), re.I)]
             if any(cells):
                 rows.append(cells)
+    items = _analysis_items(headers, rows) if headers else []
     text = cert._strip_tags(frag)
-    docs = sorted(set(_PEE_DOC_RE.findall(text)))
-    periods = sorted({f"{int(m)}/{y}" for m, y in _PERIOD_RE.findall(" ".join(" ".join(r) for r in rows) or text)
-                      if 1 <= int(m) <= 12}, key=lambda p: (int(p.split("/")[1]), int(p.split("/")[0])))
-    return {"headers": headers, "rows": rows[:200], "docs": docs, "periods": periods, "text": text[:1500]}
+    docs = sorted({it["doc"] for it in items if it["doc"]} | set(_PEE_DOC_RE.findall(text)))
+    periods = sorted({f"{it['month']}/{it['year']}" for it in items if it["year"] and it["month"] and 1 <= it["month"] <= 12},
+                     key=lambda p: (int(p.split("/")[1]), int(p.split("/")[0])))
+    if not periods:
+        periods = sorted({f"{int(m)}/{y}" for m, y in _PERIOD_RE.findall(" ".join(" ".join(r) for r in rows) or text)
+                          if 1 <= int(m) <= 12}, key=lambda p: (int(p.split("/")[1]), int(p.split("/")[0])))
+    return {"headers": headers, "rows": rows[:300], "items": items, "docs": docs, "periods": periods, "text": text[:1500]}
 
 
 def _keao_registry_credits(http: _Http, picker: Dict[str, Any], reg: Dict[str, Any], diag: _Diag,
@@ -1512,6 +1602,15 @@ def _components(year: int, kind: str, payments: Dict[str, Any], keao: Dict[str, 
         c["rows"].extend(yr)
         c["registries"].append({"amo": reg.get("amo"), "forea": reg.get("forea"), "status": reg.get("status")})
     for c in by_key.values():
+        if c["key"] == "keao_other":
+            names = []
+            for r in c["registries"]:
+                nm = fund_short_name(r.get("forea") or "")
+                if nm not in names:
+                    names.append(nm)
+            if names:
+                c["label"] = "Καταβολές στο ΚΕΑΟ — " + ", ".join(names) + " (λοιπό μητρώο μη μισθωτού)"
+            c["fund_names"] = names
         c.update({"net": _sum(c["rows"], "main_contrib"), "extra_fees": _sum(c["rows"], "extra_fees"),
                   "surcharges": _sum(c["rows"], "surcharges"), "total": _sum(c["rows"], "total"),
                   "count": len(c["rows"])})

@@ -209,7 +209,27 @@
         pollTimer = setInterval(poll, 3000);
         poll();
       }
+      // Μετά από αποσύνδεση/νέα σύνδεση (ή άλλο browser) το sessionStorage είναι άδειο, ενώ ο μαζικός Ε3 συνεχίζει
+      // στον server: ρωτάμε μία φορά τον server ώστε το banner (με «Διακοπή») να εμφανιστεί σε οποιαδήποτε σελίδα.
+      function adoptServerJob() {
+        if (readActive()) return;
+        try {
+          fetch('/api/e3/brain/bulk_jobs_mine?kind=bulk', { cache: 'no-store', credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+              var j = d && d.ok && (d.jobs || []).filter(function (x) { return x.status === 'running'; })[0];
+              if (!j || readActive()) return;
+              try {
+                sessionStorage.setItem('e3BulkActiveJob', JSON.stringify({
+                  jobId: j.id, total: j.total || 0, startedAt: (j.started ? j.started * 1000 : Date.now()), adopted: true }));
+              } catch (_) {}
+              poll();
+            })
+            .catch(function () {});
+        } catch (_) {}
+      }
       try { start(); } catch (_) {}
+      try { setTimeout(adoptServerJob, 1200); } catch (_) {}
     })();
 
     // ============================================================================

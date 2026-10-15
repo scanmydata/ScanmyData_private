@@ -154,7 +154,7 @@ def ledger(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 take = min(amount, d["open"])
                 d["open"] = _r2(d["open"] - take)
                 t = {"date": r["date"], "amount": _r2(take), "doc": r["doc"], "period": d["period"],
-                     "keao_paid": [], "keao_open": _r2(take)}
+                     "range": (lo, hi), "keao_paid": [], "keao_open": _r2(take)}
                 d["transferred"].append(t)
                 transfers.append(t)
                 amount = _r2(amount - take)
@@ -176,9 +176,31 @@ def _norm_doc(x: Any) -> str:
     return re.sub(r"\s+", "", str(x or "")).upper()
 
 
+def _doc_match(card_doc: Any, item_doc: Any) -> bool:
+    """«002-2025-ΠΕΕ/ΑΚ/1318» (καρτέλα) ↔ «ΠΕΕ/ΑΚ/1318» (ανάλυση ΚΕΑΟ)."""
+    a, b = _norm_doc(card_doc), _norm_doc(item_doc)
+    return bool(a and b) and (a == b or a.endswith("-" + b) or a.endswith(b) and a[-len(b) - 1:-len(b)] in ("-", ""))
+
+
+def _allocate(t: Dict[str, Any], amount: float, fees: float, d: _dt.date, doc: Any, how: str,
+              allocs: List[Dict[str, Any]]) -> float:
+    take = min(amount, t["keao_open"])
+    if take <= TOL / 10:
+        return amount
+    t["keao_open"] = _r2(t["keao_open"] - take)
+    t["keao_paid"].append({"date": d, "amount": _r2(take), "doc": doc, "matched_by": how, "fees_share": _r2(fees)})
+    allocs.append({"period": t["period"], "amount": _r2(take), "transfer_doc": t.get("doc"), "matched_by": how,
+                   "fees": _r2(fees)})
+    return _r2(amount - take)
+
+
 def apply_keao(transfers: List[Dict[str, Any]], keao_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Πληρωμές ΚΕΑΟ (κύρια εισφορά) → μεταφερμένες οφειλές. Με «Ανάλυση» της πίστωσης: πρώτα οι μεταφορές με το
-    ίδιο παραστατικό ΠΕΕ, μετά της ίδιας περιόδου· ό,τι μένει (ή χωρίς ανάλυση) με σειρά μεταφοράς (FIFO)."""
+    """Πληρωμές ΚΕΑΟ (κύρια εισφορά) → μεταφερμένες οφειλές (ΠΕΕ της καρτέλας).
+
+    * Με «Ανάλυση Χρεώσεων» (items): ΚΑΘΕ γραμμή λέει ποια ΠΕΕ (παραστατικό) και ποιο έτος/μήνα εξοφλεί και με
+      πόση κύρια εισφορά / πρόσθετα τέλη → κατανέμεται ακριβώς εκεί. Γραμμή που αφορά ΠΕΕ εκτός καρτέλας (άλλη
+      χρήση, π.χ. 4/2018) ΔΕΝ πάει σε άλλη οφειλή — μένει «άλλες περίοδοι».
+    * Χωρίς items αλλά με παραστατικά/περιόδους: πρώτα αυτά, μετά FIFO. Χωρίς ανάλυση: FIFO (σειρά μεταφοράς)."""
     pays = sorted(((_date(r.get("date") or ""), r) for r in keao_rows or []), key=lambda x: (x[0] or _dt.date.min))
     used = []
     leftover = 0.0
@@ -189,38 +211,156 @@ def apply_keao(transfers: List[Dict[str, Any]], keao_rows: List[Dict[str, Any]])
         main = float(r.get("main_contrib") or 0.0)
         fees = float(r.get("extra_fees") or 0.0) + float(r.get("surcharges") or 0.0)
         an = r.get("analysis") or {}
-        docs = {_norm_doc(x) for x in an.get("docs") or []}
-        pers = set()
-        for p in an.get("periods") or []:
-            pm = re.match(r"(\d{1,2})/(\d{4})", str(p))
-            if pm:
-                pers.add((int(pm.group(2)), int(pm.group(1))))
-        by_doc = [t for t in queue if docs and _norm_doc(t.get("doc")) in docs]
-        by_per = [t for t in queue if pers and t["period"] in pers and t not in by_doc]
-        order = [("analysis_doc", t) for t in by_doc] + [("analysis_period", t) for t in by_per] +                 [("fifo", t) for t in queue if t not in by_doc and t not in by_per]
-        rest = main
-        allocs = []
-        for how, t in order:
-            if rest <= TOL / 10:
-                break
-            if t["keao_open"] <= TOL / 10 or t["date"] > d:
-                continue
-            take = min(rest, t["keao_open"])
-            t["keao_open"] = _r2(t["keao_open"] - take)
-            t["keao_paid"].append({"date": d, "amount": _r2(take), "doc": r.get("doc"), "matched_by": how,
-                                   "fees_share": _r2(fees * take / main) if main else 0.0})
-            allocs.append({"period": t["period"], "amount": _r2(take), "transfer_doc": t.get("doc"), "matched_by": how})
-            rest = _r2(rest - take)
-        leftover += rest
-        used.append({"date": d, "doc": r.get("doc"), "main": main, "fees": _r2(fees), "unassigned": _r2(rest),
-                     "allocations": allocs, "has_analysis": bool(an)})
+        items = [it for it in an.get("items") or [] if float(it.get("main") or 0) > 0 or it.get("doc")]
+        allocs: List[Dict[str, Any]] = []
+        other = 0.0
+        if items:
+            for it in items:
+                amt = float(it.get("main") or 0.0)
+                it_fees = float(it.get("fees") or 0.0) + float(it.get("surcharges") or 0.0)
+                per = (int(it["year"]), int(it["month"])) if it.get("year") and it.get("month") else None
+                open_t = [t for t in queue if t["keao_open"] > TOL / 10 and t["date"] <= d]
+                # Οι αριθμοί ΠΕΕ ξαναρχίζουν κάθε χρόνο (ΠΕΕ/ΑΚ/428 υπάρχει σε πολλά έτη): με γνωστή περίοδο
+                # απαιτείται ΚΑΙ ίδια περίοδος· μόνο παραστατικό όταν η ανάλυση δεν έχει έτος/μήνα.
+                if per:
+                    cands = [t for t in open_t if _doc_match(t.get("doc"), it.get("doc")) and t["period"] == per] or                             [t for t in open_t if _doc_match(t.get("doc"), it.get("doc")) and (t.get("range") or (None, None))[0]
+                             and t["range"][0] <= per <= t["range"][1]]
+                else:
+                    cands = [t for t in open_t if _doc_match(t.get("doc"), it.get("doc"))]
+                how = "analysis_doc"
+                if not cands and not it.get("doc") and per:
+                    cands, how = [t for t in open_t if t["period"] == per], "analysis_period"
+                rest = amt
+                for t in cands:
+                    if rest <= TOL / 10:
+                        break
+                    before = rest
+                    rest = _allocate(t, rest, it_fees * (before - _r2(before - min(before, t["keao_open"]))) / amt if amt else 0.0,
+                                     d, r.get("doc"), how, allocs)
+                if rest > TOL / 10:
+                    other += rest
+                    allocs.append({"period": per, "amount": _r2(rest), "transfer_doc": it.get("doc"),
+                                   "matched_by": "analysis_other", "fees": _r2(it_fees * rest / amt) if amt else 0.0})
+            rest_total = _r2(main - sum(float(it.get("main") or 0) for it in items))
+            if rest_total > TOL:          # η ανάλυση δεν κάλυψε όλο το ποσό → το υπόλοιπο FIFO
+                for t in queue:
+                    if rest_total <= TOL / 10:
+                        break
+                    if t["keao_open"] > TOL / 10 and t["date"] <= d:
+                        rest_total = _allocate(t, rest_total, 0.0, d, r.get("doc"), "fifo", allocs)
+                other += max(rest_total, 0.0)
+            unassigned = _r2(other)
+        else:
+            docs = {_norm_doc(x) for x in an.get("docs") or []}
+            pers = set()
+            for p in an.get("periods") or []:
+                pm = re.match(r"(\d{1,2})/(\d{4})", str(p))
+                if pm:
+                    pers.add((int(pm.group(2)), int(pm.group(1))))
+            by_doc = [t for t in queue if docs and any(_doc_match(t.get("doc"), x) for x in docs)]
+            by_per = [t for t in queue if pers and t["period"] in pers and t not in by_doc]
+            order = [("analysis_doc", t) for t in by_doc] + [("analysis_period", t) for t in by_per] + \
+                    [("fifo", t) for t in queue if t not in by_doc and t not in by_per]
+            rest = main
+            for how, t in order:
+                if rest <= TOL / 10:
+                    break
+                if t["keao_open"] <= TOL / 10 or t["date"] > d:
+                    continue
+                before = rest
+                take = min(rest, t["keao_open"])
+                rest = _allocate(t, rest, fees * take / main if main else 0.0, d, r.get("doc"), how, allocs)
+            unassigned = _r2(rest)
+        leftover += unassigned
+        used.append({"date": d, "doc": r.get("doc"), "main": main, "fees": _r2(fees), "unassigned": unassigned,
+                     "allocations": allocs, "has_analysis": bool(an), "analysis_items": items})
     return {"payments": used, "unassigned": _r2(leftover)}
+
+
+def _short_doc(doc: Any) -> str:
+    """«002-2025-ΠΕΕ/ΑΚ/720» → «ΠΕΕ/ΑΚ/720» (όπως στην ανάλυση του ΚΕΑΟ)."""
+    return re.sub(r"^\d{3}-\d{4}-", "", str(doc or ""))
+
+
+def _doc_cell(kp: Dict[str, Any], e) -> str:
+    """Παραστατικό: «Τύπος/Σειρά/Αρ.» της ανάλυσης (ΠΕΕ) και από κάτω, σε παρένθεση, της πίστωσης (ΓΚ/Τ/…)."""
+    pee = []
+    for it in kp.get("analysis_items") or []:
+        d = str(it.get("doc") or "").strip()
+        if d and d not in pee:
+            pee.append(d)
+    if not pee:
+        for a in kp.get("allocations") or []:
+            d = _short_doc(a.get("transfer_doc"))
+            if d and d not in pee and a.get("matched_by") != "fifo":
+                pee.append(d)
+    credit = str(kp.get("doc") or "")
+    if not pee:
+        return e(credit)
+    return "<br>".join(e(x) for x in pee) + (f"<br><span class='muted'>({e(credit)})</span>" if credit else "")
+
+
+def _prev_rows(f: Dict[str, Any], year: int) -> List[Dict[str, Any]]:
+    """Καταβολές ΚΕΑΟ μέσα στο έτος που εξόφλησαν εισφορές ΠΡΟΗΓΟΥΜΕΝΩΝ ετών (από την ανάλυση/κατανομή)."""
+    out = []
+    for kp in f.get("keao_payments") or []:
+        d = _date(kp["date"])
+        if not d or d.year != year:
+            continue
+        items = kp.get("analysis_items") or []
+        if items:
+            for it in items:
+                if it.get("year") and int(it["year"]) < year:
+                    out.append({"date": kp["date"], "credit_doc": kp.get("doc"), "doc": it.get("doc"),
+                                "period": f"{it.get('month')}/{it.get('year')}", "year": int(it["year"]),
+                                "main": float(it.get("main") or 0), "fees": float(it.get("fees") or 0) + float(it.get("surcharges") or 0),
+                                "source": "ανάλυση ΚΕΑΟ"})
+        else:
+            for a in kp.get("allocations") or []:
+                pm = re.match(r"(\d{1,2})/(\d{4})", str(a.get("period") or ""))
+                if pm and int(pm.group(2)) < year:
+                    out.append({"date": kp["date"], "credit_doc": kp.get("doc"), "doc": _short_doc(a.get("transfer_doc")),
+                                "period": a["period"], "year": int(pm.group(2)), "main": float(a.get("amount") or 0),
+                                "fees": float(a.get("fees") or 0), "source": "σειρά μεταφοράς"})
+    return sorted(out, key=lambda r: (r["year"], _date(r["date"]) or _dt.date.min))
+
+
+def _prev_years_section(f: Dict[str, Any], year: int, fname: str, e) -> List[str]:
+    rows = _prev_rows(f, year)
+    if not rows:
+        return []
+    out = [f"<h2>Καταβολές ΚΕΑΟ μέσα στο {year} για εισφορές προηγούμενων ετών — {fname}</h2>",
+           "<p class='small muted'>Δεν αφορούν τις περιόδους του " + str(year) + ", αλλά είναι καταβολές ασφαλιστικών εισφορών "
+           "που έγιναν μέσα στο " + str(year) + " για οφειλές προηγούμενων ετών (από την «Ανάλυση Χρεώσεων» του ΚΕΑΟ).</p>",
+           "<table><tr><th>Ημ/νία</th><th>Παραστατικό</th><th>Περίοδος οφειλής</th><th class='n'>Κύρια εισφορά</th>"
+           "<th class='n'>Πρόσθ. τέλη / προσαυξ.</th><th>Πηγή</th></tr>"]
+    by_year: Dict[int, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_year.setdefault(r["year"], []).append(r)
+    tm = tf = 0.0
+    for yy in sorted(by_year):
+        sm = sf = 0.0
+        for r in by_year[yy]:
+            out.append(f"<tr><td>{e(r['date'])}</td><td class='small'>{e(r['doc'] or '')}"
+                       + (f"<br><span class='muted'>({e(r['credit_doc'])})</span>" if r.get("credit_doc") else "")
+                       + f"</td><td>{e(r['period'])}</td><td class='n'>{_fmt(r['main'])}</td>"
+                       f"<td class='n'>{_fmt(r['fees']) if r['fees'] else ''}</td><td class='small'>{e(r['source'])}</td></tr>")
+            sm += r["main"]
+            sf += r["fees"]
+        out.append(f"<tr class='tot'><td colspan='3'>Σύνολο εισφορών έτους {yy}</td><td class='n'>{_fmt(sm)}</td>"
+                   f"<td class='n'>{_fmt(sf)}</td><td></td></tr>")
+        tm += sm
+        tf += sf
+    out.append(f"<tr class='diff'><td colspan='3'><b>Σύνολο καταβολών {year} για προηγούμενα έτη</b></td>"
+               f"<td class='n'><b>{_fmt(tm)}</b></td><td class='n'><b>{_fmt(tf)}</b></td><td></td></tr></table>")
+    return out
 
 
 def _pay_view(p: Dict[str, Any], year: int) -> Dict[str, Any]:
     """Πληρωμή ΚΕΑΟ για εμφάνιση: πόσα αφορούν περιόδους της χρήσης `year` και πώς αντιστοιχίστηκαν."""
     allocs = [dict(a, period=f"{a['period'][1]}/{a['period'][0]}" if a.get("period") else "") for a in p.get("allocations") or []]
-    for_year = _r2(sum(a["amount"] for a in p.get("allocations") or [] if a.get("period") and a["period"][0] == year))
+    for_year = _r2(sum(a["amount"] for a in p.get("allocations") or []
+                       if a.get("period") and a["period"][0] == year and a.get("matched_by") != "analysis_other"))
     return dict(p, date=p["date"].strftime("%d/%m/%Y"), allocations=allocs, for_year=for_year)
 
 
@@ -389,11 +529,13 @@ def build_report_html(res: Dict[str, Any], afm: str, name: str, ame: str = "") -
         # πληρωμές ΚΕΑΟ
         rel = [kp for kp in f.get("keao_payments") or [] if kp.get("for_year", 0) > TOL]
         if rel:
-            how_lbl = {"analysis_doc": "ανάλυση ΚΕΑΟ (παραστατικό ΠΕΕ)", "analysis_period": "ανάλυση ΚΕΑΟ (περίοδος)",
-                       "fifo": "σειρά μεταφοράς"}
+            how_lbl = {"analysis_doc": "ανάλυση ΚΕΑΟ (ΠΕΕ + περίοδος)", "analysis_period": "ανάλυση ΚΕΑΟ (περίοδος)",
+                       "fifo": "σειρά μεταφοράς (χωρίς ανάλυση)"}
             regs = "; ".join(f"ΑΜΟ {e(r.get('amo'))} — {e(re.sub(r'^Ληξιπρόθεσμο - ', '', r.get('forea') or ''))}"
                              for r in f.get("keao_registries") or [])
             parts.append(f"<h2>Καταβολές στο ΚΕΑΟ που αφορούν τη χρήση {y} — {fname}</h2>"
+                         + (f"<p class='small muted'>Αντιστοίχιση από την «Ανάλυση Χρεώσεων» του ΚΕΑΟ για "
+                            f"{f.get('keao_analysis_used', 0)} από {len(f.get('keao_payments') or [])} καταβολές.</p>")
                          + (f"<p class='small muted'>{regs}</p>" if regs else "")
                          + "<table><tr><th>Ημ/νία</th><th>Παραστατικό</th><th class='n'>Κύρια εισφορά</th>"
                          "<th class='n'>Πρόσθ. τέλη / προσαυξ.</th><th>Περίοδοι " + str(y) + " που εξοφλήθηκαν</th><th>Αντιστοίχιση</th>"
@@ -401,19 +543,25 @@ def build_report_html(res: Dict[str, Any], afm: str, name: str, ame: str = "") -
             for kp in rel:
                 d = _date(kp["date"])
                 inside = bool(d and d <= deadline_for(y))
-                per = "; ".join(f"{e(a['period'])}: {_fmt(a['amount'])}" for a in kp.get("allocations") or []
-                                if a.get("period", "").endswith(f"/{y}"))
+                per = "; ".join(f"{e(a['period'])}: {_fmt(a['amount'])}"
+                                + (" <span class='muted'>(" + e(_short_doc(a.get("transfer_doc"))) + ")</span>"
+                                   if a.get("transfer_doc") else "")
+                                for a in kp.get("allocations") or []
+                                if a.get("period", "").endswith(f"/{y}") and a.get("matched_by") != "analysis_other")
                 how = ", ".join(sorted({how_lbl.get(a.get("matched_by"), "") for a in kp.get("allocations") or []
                                         if a.get("period", "").endswith(f"/{y}")} - {""}))
-                parts.append(f"<tr class='{'hl' if inside else ''}'><td>{e(kp['date'])}</td><td class='small'>{e(kp.get('doc') or '')}</td>"
+                parts.append(f"<tr class='{'hl' if inside else ''}'><td>{e(kp['date'])}</td><td class='small'>{_doc_cell(kp, e)}</td>"
                              f"<td class='n'>{_fmt(kp['main'])}</td><td class='n'>{_fmt(kp['fees']) if kp['fees'] else ''}</td>"
                              f"<td class='small'>{per}</td><td class='small'>{e(how)}</td><td>{'✔' if inside else '—'}</td></tr>")
             parts.append("</table>")
-            other = len(f.get("keao_payments") or []) - len(rel)
-            if other > 0:
-                parts.append(f"<p class='small muted'>{other} ακόμη καταβολή(-ές) ΚΕΑΟ αφορούν άλλες χρήσεις και δεν εμφανίζονται.</p>")
         elif f.get("keao_payments"):
             parts.append(f"<p class='small muted'>Καμία από τις {len(f['keao_payments'])} καταβολές ΚΕΑΟ δεν αφορά περιόδους {y}.</p>")
+        parts.extend(_prev_years_section(f, y, fname, e))
+        shown = len(rel) + len(_prev_rows(f, y))
+        other = len(f.get("keao_payments") or []) - len(rel)
+        if f.get("keao_payments") and other > 0:
+            parts.append(f"<p class='small muted'>Σύνολο καταβολών ΚΕΑΟ στο μητρώο: {len(f['keao_payments'])} · για περιόδους {y}: "
+                         f"{len(rel)} · οι υπόλοιπες αφορούν άλλες χρήσεις (όσες έγιναν μέσα στο {y} αναλύονται παραπάνω).</p>")
         elif not f.get("keao_available"):
             parts.append("<p class='small muted'>Δεν διαβάστηκαν πιστώσεις ΚΕΑΟ εργοδότη — τα ποσά που μεταφέρθηκαν στο ΚΕΑΟ "
                          "λογίζονται απλήρωτα.</p>")
