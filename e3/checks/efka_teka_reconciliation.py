@@ -639,8 +639,77 @@ def _paginate_full(http: _Http, url: str, table: Dict[str, Any], vs: str, active
     return rows, buttons
 
 
+# ---------------------------------------------------- cache ειδοποιητηρίων
+# Το ειδοποιητήριο ενός μήνα οφειλής δεν αλλάζει αφού εκδοθεί: κρατιέται (PDF + ανάλυση) σε
+# φάκελο ανά ασφαλισμένο και στο επόμενο τρέξιμο κατεβαίνουν ΜΟΝΟ οι μήνες που λείπουν.
+_CACHE_INDEX = "notices_index.json"
+
+
+def _cache_load(cache_dir: Optional[Path]) -> List[Dict[str, Any]]:
+    if not cache_dir:
+        return []
+    try:
+        data = json.loads((Path(cache_dir) / _CACHE_INDEX).read_text(encoding="utf-8"))
+        return [n for n in data.get("notices") or [] if isinstance(n, dict)]
+    except Exception:
+        return []
+
+
+def _cache_save(cache_dir: Optional[Path], notices: List[Dict[str, Any]]) -> None:
+    if not cache_dir:
+        return
+    try:
+        cd = Path(cache_dir)
+        cd.mkdir(parents=True, exist_ok=True)
+        tmp = cd / (_CACHE_INDEX + ".tmp")
+        tmp.write_text(json.dumps({"version": 1, "notices": notices}, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, cd / _CACHE_INDEX)
+    except Exception as exc:
+        logging.warning("[notices-cache] αποθήκευση: %s", exc)
+
+
+def _cache_put(cache_dir: Optional[Path], index: List[Dict[str, Any]], info: Dict[str, Any], pdf: bytes, name: str) -> None:
+    """Προσθήκη/αντικατάσταση (ίδιο είδος + μήνας + αρ. ειδοποιητηρίου) στο cache."""
+    if not cache_dir or info.get("error") or not info.get("period"):
+        return
+    try:
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        (Path(cache_dir) / name).write_bytes(pdf)
+    except Exception as exc:
+        logging.warning("[notices-cache] PDF %s: %s", name, exc)
+        return
+    key = (info.get("kind"), info.get("period"), info.get("notice_id"))
+    index[:] = [n for n in index if (n.get("kind"), n.get("period"), n.get("notice_id")) != key]
+    entry = {k: v for k, v in info.items() if k not in ("pdf", "text_excerpt")}
+    entry["file"] = name
+    entry["cached_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+    index.append(entry)
+
+
+def use_notice_cache(wanted: List[Tuple[Any, ...]], cache_idx: List[Dict[str, Any]], cache_dir: Optional[Path],
+                     res: Dict[str, Any]) -> List[Tuple[Any, ...]]:
+    """Ό,τι μήνας οφειλής υπάρχει ήδη στο cache (τουλάχιστον όσα ειδοποιητήρια δείχνει ο πίνακας για
+    τον ίδιο μήνα) προστίθεται στα res["notices"] και ΔΕΝ ξανακατεβαίνει. Επιστρέφει όσα λείπουν."""
+    if not cache_idx or not wanted or not cache_dir:
+        return wanted
+    need: Dict[Tuple[str, str], int] = {}
+    for w in wanted:
+        need[(w[0], w[1])] = need.get((w[0], w[1]), 0) + 1
+    have: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for n in cache_idx:
+        if n.get("period") and not n.get("error") and (Path(cache_dir) / str(n.get("file") or "")).exists():
+            have.setdefault((n.get("kind"), n.get("period")), []).append(n)
+    hit_keys = {k for k, cnt in need.items() if k[1] and len(have.get(k, [])) >= cnt}
+    for k in sorted(hit_keys, key=lambda k: (_period_key(k[1]) or (0, 0), k[0])):
+        for n in have[k]:
+            res["notices"].append(dict(n, pdf=str(Path(cache_dir) / n["file"]), cached=True))
+            res["cache"]["hits"] += 1
+    return [w for w in wanted if (w[0], w[1]) not in hit_keys]
+
+
 def fetch_notices(http: _Http, obl_url: str, year: int, out_dir: Path, diag: _Diag,
-                  max_pdfs: int = 60, kinds: Optional[set] = None) -> Dict[str, Any]:
+                  max_pdfs: int = 60, kinds: Optional[set] = None,
+                  cache_dir: Optional[Path] = None) -> Dict[str, Any]:
     """«Υποχρεώσεις Ασφάλισης → Μηνιαία Ειδοποιητήρια»: PDF ειδοποιητηρίων e-ΕΦΚΑ/ΤΕΚΑ για
     τις περιόδους 10/(έτος−1) … 12/έτος (οι πληρωμές του έτους αφορούν και ειδοποιητήρια του
     προηγούμενου). Η δομή του tab δεν έχει επιβεβαιωθεί live — όλα σώζονται στο _diag."""
@@ -783,9 +852,15 @@ def fetch_notices(http: _Http, obl_url: str, year: int, out_dir: Path, diag: _Di
     else:
         for vname, html in views:
             collect_rows(vname, parse_datatables(html), {}, vname == "default")
+    # Έξυπνη λήψη: οι μήνες που υπάρχουν ήδη στο cache δεν ξανακατεβαίνουν.
+    cache_idx = _cache_load(cache_dir)
+    res["cache"] = {"dir": str(cache_dir) if cache_dir else None, "hits": 0, "downloaded": 0}
+    wanted = use_notice_cache(wanted, cache_idx, cache_dir, res)
+    if res["cache"]["hits"]:
+        progress(72, "Ειδοποιητήρια: %d από το αρχείο — λήψη μόνο %d που λείπουν" % (res["cache"]["hits"], len(wanted)))
     if len(wanted) > max_pdfs:
         wanted = wanted[:max_pdfs]
-    logging.info("[notices] %d ειδοποιητήρια προς λήψη", len(wanted))
+    logging.info("[notices] %d ειδοποιητήρια προς λήψη (cache: %d)", len(wanted), res["cache"]["hits"])
     for _ni, (kind, period, btns, tid, extra) in enumerate(wanted, start=1):
         progress(72 + 20 * (_ni - 1) / max(1, len(wanted)),
                  f"Ειδοποιητήριο {'ΤΕΚΑ' if kind == 'TEKA' else 'e-ΕΦΚΑ'} {period} ({_ni}/{len(wanted)})")
@@ -813,8 +888,14 @@ def fetch_notices(http: _Http, obl_url: str, year: int, out_dir: Path, diag: _Di
         if period and info.get("period") and info["period"] != period:
             info["warning"] = f"Το PDF γράφει περίοδο {info['period']}, ο πίνακας {period}."
         res["notices"].append(info)
+        res["cache"]["downloaded"] += 1
+        if not info.get("warning"):
+            # κλειδί cache = μήνας του ΠΙΝΑΚΑ (με αυτόν συγκρίνεται στο επόμενο τρέξιμο)
+            _cache_put(cache_dir, cache_idx, dict(info, period=info.get("period") or period), pdf, name)
+    if res["cache"]["downloaded"]:
+        _cache_save(cache_dir, cache_idx)
     res["ok"] = True
-    if not wanted:
+    if not wanted and not res["cache"]["hits"]:
         res["error"] = "Δεν βρέθηκαν ειδοποιητήρια για λήψη (δες _diag/notices_tab.html)."
     return res
 
@@ -1712,7 +1793,8 @@ def build_report_html(recon: Dict[str, Any], holder: Dict[str, Any], afm: str, a
             flag = "✓ " if abs(d) <= TOLERANCE else "⚠ "
             return f"<td class='n'><b>{flag}{fmt_eur(d)}</b></td>" if abs(d) > TOLERANCE else f"<td class='n'>{flag}{fmt_eur(d)}</td>"
         for r in cv["rows"]:
-            parts.append(f"<tr><td>{_e(r.get('code'))}</td><td>{_e(r.get('desc'))}</td><td class='n'>{fmt_eur(r.get('value'))}</td>"
+            bd = "".join(f"<div class='small muted'>{_e(b)}</div>" for b in (r.get("breakdown") or []))
+            parts.append(f"<tr><td>{_e(r.get('code'))}</td><td>{_e(r.get('desc'))}{bd}</td><td class='n'>{fmt_eur(r.get('value'))}</td>"
                          f"<td class='n'>{fmt_eur(r.get('mydata')) if r.get('mydata') is not None else '—'}</td>"
                          f"<td class='n'>{fmt_eur(r.get('isozygio')) if r.get('isozygio') is not None else '—'}</td>"
                          + _dc(r.get("mydata_diff")) + _dc(r.get("isozygio_diff")) + "</tr>")
@@ -1769,7 +1851,8 @@ def precheck(year: int, certificates: Dict[str, Any], payments: Dict[str, Any], 
 
 
 def collect(username: str, password: str, afm: str, amka: str, year: int, out_dir: Path,
-            keao_fallback: bool = True, notices_mode: str = "auto") -> Dict[str, Any]:
+            keao_fallback: bool = True, notices_mode: str = "auto",
+            notices_cache: Optional[Path] = None) -> Dict[str, Any]:
     diag = _Diag(out_dir / "_diag")
     raw: Dict[str, Any] = {"afm": afm, "amka": amka, "year": year,
                            "retrieved_at": _dt.datetime.now().isoformat(timespec="seconds"),
@@ -1823,7 +1906,8 @@ def collect(username: str, password: str, afm: str, amka: str, year: int, out_di
         raw["notices"] = {"ok": True, "skipped": why, "notices": []}
     else:
         try:
-            raw["notices"] = fetch_notices(http, obl, year, out_dir / "notices", diag, kinds=kinds)
+            raw["notices"] = fetch_notices(http, obl, year, out_dir / "notices", diag, kinds=kinds,
+                                           cache_dir=notices_cache)
         except Exception as exc:
             logging.exception("notices failed")
             raw["notices"] = {"ok": False, "error": str(exc), "notices": []}
@@ -1936,6 +2020,7 @@ def finish(raw: Dict[str, Any], out_dir: Path, always_report: bool = False,
         "precheck": pc,
         "notices": {"ok": (raw.get("notices") or {}).get("ok"), "error": (raw.get("notices") or {}).get("error"),
                     "skipped": (raw.get("notices") or {}).get("skipped"), "used_for": sorted(ledger_kinds),
+                    "cache": (raw.get("notices") or {}).get("cache"),
                     "downloaded": len(notices), "stats": notice_stats,
                     "list": [{k: n.get(k) for k in ("kind", "period", "issue_date", "payable", "fees", "credits",
                                                     "monthly", "identity_ok", "error")} for n in notices]},
@@ -1977,6 +2062,7 @@ def main() -> int:
                     help="auto: ειδοποιητήρια μόνο αν η βεβαίωση δεν συμφωνεί ήδη· always: λήψη PDF πάντα· never: ποτέ.")
     ap.add_argument("--no-keao-fallback", action="store_true")
     ap.add_argument("--compare-json", default="", help="Ποσά Ε3 (myDATA/ισοζύγιο) για αντιπαραβολή μέσα στην καρτέλα.")
+    ap.add_argument("--notices-cache", default="", help="Φάκελος cache ειδοποιητηρίων (κατεβαίνουν μόνο οι μήνες που λείπουν).")
     ap.add_argument("--headless", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--headed", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
@@ -1991,7 +2077,7 @@ def main() -> int:
             return 2
         password = a.password or getpass.getpass("Κωδικός TAXISnet: ")
         raw = collect(a.username, password, a.afm, a.amka, a.year, out_dir, keao_fallback=not a.no_keao_fallback,
-                      notices_mode=a.notices)
+                      notices_mode=a.notices, notices_cache=Path(a.notices_cache) if a.notices_cache else None)
         (out_dir / f"efka_recon_raw_{a.afm}_{a.year}.json").write_text(
             json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     if a.notices_dir:

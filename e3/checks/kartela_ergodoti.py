@@ -290,6 +290,55 @@ def _login_employer(context: BrowserContext, username: str, password: str,
     return page
 
 
+class UpdateRequired(RuntimeError):
+    """Ο e-ΕΦΚΑ ζητά (υποχρεωτική) ενημέρωση στοιχείων πριν δώσει την υπηρεσία."""
+
+
+_UPDATE_RE = re.compile(r"ενημ[εέ]ρωσ[ηη]\s+(?:των\s+)?στοιχε[ιί]ων|επικαιροπο[ιί]ησ|"
+                        r"στοιχε[ιί]α\s+επικοινων[ιί]ας", re.I)
+UPDATE_REQUIRED_MSG = (
+    "Η καρτέλα ΤΕΚΑ δεν βγήκε: ο e-ΕΦΚΑ ζητά ενημέρωση στοιχείων (επικοινωνίας/εργοδότη) πριν δώσει "
+    "την υπηρεσία. Συνδεθείτε μία φορά στο e-ΕΦΚΑ με τους κωδικούς Ι.Κ.Α. Εργοδότη, ολοκληρώστε την "
+    "ενημέρωση στοιχείων και ξανατρέξτε τον έλεγχο."
+)
+
+
+def _skip_or_detect_update(page: Page, expect_selector: Optional[str] = None) -> None:
+    """Αν ο e-ΕΦΚΑ δείχνει την οθόνη ενημέρωσης στοιχείων: «Παράλειψη» όπου επιτρέπεται,
+    αλλιώς UpdateRequired (ενημερώνεται ο χρήστης και το τελικό report). Όταν δοθεί
+    `expect_selector` και υπάρχει στη σελίδα, η σελίδα θεωρείται κανονική (το μενού
+    «Ενημέρωση στοιχείων» μιας κανονικής σελίδας δεν μετράει)."""
+    for _ in range(2):
+        url = (page.url or "").lower()
+        if expect_selector and "eprofile" not in url:
+            try:
+                if page.locator(expect_selector).count():
+                    return
+            except Exception:
+                pass
+        try:
+            text = page.locator("body").inner_text(timeout=5000) or ""
+        except Exception:
+            text = ""
+        skip = page.get_by_role("button", name="Παράλειψη")
+        if skip.count() == 0:
+            skip = page.get_by_role("link", name="Παράλειψη")
+        prompt = "eprofile" in url or (skip.count() > 0 and _UPDATE_RE.search(text[:4000])) or (
+            expect_selector is not None and _UPDATE_RE.search(text[:4000]))
+        if not prompt:
+            return
+        if skip.count() == 0:
+            raise UpdateRequired(UPDATE_REQUIRED_MSG)
+        logging.info("eProfile prompt → «Παράλειψη»")
+        try:
+            skip.first.click()
+            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        except Exception:
+            pass
+    if "eprofile" in (page.url or "").lower():
+        raise UpdateRequired(UPDATE_REQUIRED_MSG)
+
+
 def _login_legacy_teka(context: BrowserContext, username: str, password: str) -> Page:
     """Log into the unchanged TEKA service with IKA employer credentials."""
     page = context.new_page()
@@ -307,9 +356,11 @@ def _login_legacy_teka(context: BrowserContext, username: str, password: str) ->
             submit.click()
     except PlaywrightTimeoutError:
         submit.click()
+    _skip_or_detect_update(page)
     page.goto(TEKA_APP_URL, wait_until="domcontentloaded")
     if "login" in (page.url or "").lower() or "j_security_check" in (page.url or ""):
         raise RuntimeError("Αποτυχία σύνδεσης ΤΕΚΑ με τα credentials IKA.")
+    _skip_or_detect_update(page)
     return page
 
 
@@ -408,6 +459,11 @@ def _download_report_pdf(page: Page, report_url: str, year: Optional[str],
         page.wait_for_load_state("networkidle", timeout=15000)
     except PlaywrightTimeoutError:
         pass
+    if label == "TEKA":
+        try:
+            _skip_or_detect_update(page, "button[title='Εκτύπωση'], select[id$='year_input']")
+        except UpdateRequired as exc:
+            return {"ok": False, "pdf": None, "error": str(exc), "update_required": True}
 
     discovered_ame = _page_ame(page)
 
@@ -611,43 +667,89 @@ def run_extractor(efka_username: str, efka_password: str,
         "efka": {"ok": False, "pdf": None, "error": "not run"},
         "teka": {"ok": False, "pdf": None, "error": "not run"},
         "error": None,
+        "ame": ame or "",
+        "ame_source": "given" if ame else None,
+        "teka_update_required": False,
     }
+    try:
+        from e3.checks import efka_employer_card as emp
+    except Exception:  # pragma: no cover — standalone
+        import efka_employer_card as emp  # type: ignore
+
+    # 1) ΑΜΕ ΠΡΩΤΑ (αν λείπει): «Πιστοποίηση Εργοδοτών» με τους κωδικούς TAXISnet.
+    if not ame and efka_username and efka_password and afm:
+        logging.info("ΑΜΕ: ανάκτηση από ePistErg")
+        ar = emp.retrieve_ame(efka_username, efka_password, afm, headless=headless)
+        summary["ame_lookup"] = {k: ar.get(k) for k in ("ok", "reason", "error", "ames")}
+        if ar.get("ok") and ar.get("ame"):
+            ame = ar["ame"]
+            summary["ame_source"] = "ePistErg"
+            logging.info("ΑΜΕ = %s (ePistErg)", ame)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless, args=chromium_launch_args())
         context = browser.new_context(accept_downloads=True, user_agent=DESKTOP_UA,
                                       locale="el-GR")
         try:
+            # 2) ΤΕΚΑ (κωδικοί Ι.Κ.Α. Εργοδότη) — αν δεν βρέθηκε ΑΜΕ, ανακαλύπτεται εδώ.
             if include_teka:
-                teka_portal = _login_legacy_teka(context, teka_username, teka_password)
-                discovered_ame = _extract_ame_from_page(teka_portal)
-                if not ame and discovered_ame:
-                    ame = discovered_ame
-                    logging.info("Discovered AME from TEKA session.")
-                summary["teka"] = _open_teka_kartela(
-                    context, teka_portal, date_from, pdf_dir, afm
-                )
-                if not ame:
-                    ame = summary["teka"].get("ame") or _extract_ame_from_page(teka_portal)
-                    if ame:
-                        logging.info("Discovered AME from TEKA report: %s", ame)
                 try:
-                    teka_portal.close()
-                except Exception:
-                    pass
+                    teka_portal = _login_legacy_teka(context, teka_username, teka_password)
+                    discovered_ame = _extract_ame_from_page(teka_portal)
+                    if not ame and discovered_ame:
+                        ame = discovered_ame
+                        summary["ame_source"] = "ΤΕΚΑ"
+                        logging.info("Discovered AME from TEKA session.")
+                    summary["teka"] = _open_teka_kartela(
+                        context, teka_portal, date_from, pdf_dir, afm
+                    )
+                    if not ame:
+                        ame = summary["teka"].get("ame") or _extract_ame_from_page(teka_portal)
+                        if ame:
+                            summary["ame_source"] = "ΤΕΚΑ"
+                            logging.info("Discovered AME from TEKA report: %s", ame)
+                    try:
+                        teka_portal.close()
+                    except Exception:
+                        pass
+                except UpdateRequired as exc:
+                    summary["teka"] = {"ok": False, "pdf": None, "error": str(exc), "update_required": True}
+                except Exception as exc:
+                    logging.exception("TEKA failed")
+                    summary["teka"] = {"ok": False, "pdf": None, "error": str(exc)}
+                summary["teka_update_required"] = bool(summary["teka"].get("update_required"))
             else:
-                summary["teka"] = {"ok": False, "pdf": None, "error": "skipped (--efka-only)"}
+                summary["teka"] = {"ok": False, "pdf": None, "error": "παράλειψη — δεν υπάρχουν κωδικοί Ι.Κ.Α. Εργοδότη (απαιτούνται για την καρτέλα ΤΕΚΑ)"}
             summary["ame"] = ame
-            portal = _login_employer(context, efka_username, efka_password, ame=ame)
-            summary["efka"] = _open_efka_kartela(context, portal, date_from, date_to, pdf_dir, afm)
+
+            # 3) ΕΦΚΑ (νέο ΟΠΣ, TAXISnet + ΑΜΕ): πρώτα καθαρό HTTP, μετά browser ως fallback.
+            if not ame:
+                summary["efka"] = {"ok": False, "pdf": None,
+                                   "error": "δεν βρέθηκε ΑΜΕ (ούτε από την Πιστοποίηση Εργοδοτών ούτε από το ΤΕΚΑ)"
+                                            + (f" — {summary.get('ame_lookup', {}).get('error')}"
+                                               if (summary.get("ame_lookup") or {}).get("error") else "")}
+            else:
+                year_tok = _extract_year(date_from) or _extract_year(date_to)
+                try:
+                    summary["efka"] = emp.fetch_card(efka_username, efka_password, afm, ame, date_from, date_to,
+                                                     pdf_dir, year=year_tok)
+                    summary["efka"].pop("rows", None)
+                except Exception as exc:
+                    logging.exception("EFKA HTTP card failed")
+                    summary["efka"] = {"ok": False, "pdf": None, "error": f"HTTP: {exc}", "reason": "Exception"}
+                if not summary["efka"].get("ok") and summary["efka"].get("reason") not in ("InvalidCredentials", "InvalidInput"):
+                    http_err = summary["efka"].get("error")
+                    logging.info("EFKA HTTP απέτυχε (%s) → browser fallback", http_err)
+                    try:
+                        portal = _login_employer(context, efka_username, efka_password, ame=ame)
+                        fb = _open_efka_kartela(context, portal, date_from, date_to, pdf_dir, afm)
+                        fb["source"] = "browser"
+                        if not fb.get("ok"):
+                            fb["error"] = f"HTTP: {http_err} · browser: {fb.get('error')}"
+                        summary["efka"] = fb
+                    except Exception as exc:
+                        summary["efka"]["error"] = f"HTTP: {http_err} · browser: {exc}"
             summary["ok"] = bool(summary["efka"]["ok"] or summary["teka"]["ok"])
-            # Best-effort logout
-            try:
-                logout = portal.get_by_role("link", name=re.compile(r"Αποσύνδεση"))
-                if logout.count():
-                    logout.first.click()
-            except Exception:
-                pass
         except Exception as exc:
             logging.exception("kartela_ergodoti run failed: %s", exc)
             summary["error"] = str(exc)
@@ -716,9 +818,9 @@ def main() -> int:
               file=sys.stderr)
         return 2
     if not args.efka_only and (not teka_username or not teka_password):
-        print("ERROR: TEKA IKA credentials are required unless --efka-only is used.",
-              file=sys.stderr)
-        return 2
+        # Χωρίς κωδικούς Ι.Κ.Α. Εργοδότη: μόνο η καρτέλα ΕΦΚΑ (TAXISnet + ΑΜΕ).
+        logging.info("Χωρίς κωδικούς Ι.Κ.Α. Εργοδότη → μόνο καρτέλα ΕΦΚΑ.")
+        args.efka_only = True
 
     pdf_dir = Path(args.pdf_dir).resolve() if args.pdf_dir else (
         Path(__file__).resolve().parent / "ergodoti_pdfs"

@@ -90,6 +90,24 @@
     // (the fixed top-right slot created by `ensureFlashContainer`) and
     // render a custom flash element with the «Διακοπή» button inline.
     // ============================================================================
+    // Κείμενο προόδου E3 Brain: «Πελάτης i/n: όνομα · Βήμα k/N: βήμα (x%) — λεπτομέρεια · συνολικά y%».
+    // Κοινό για το flash του μαζικού (εδώ) και το overlay/banner της σελίδας Ε3.
+    window.formatE3BrainProgress = function (p) {
+      if (!p || !p.label) return '';
+      if (!p.step_total) {
+        return String(p.label) + ((typeof p.percent === 'number') ? ' (' + p.percent + '%)' : '');
+      }
+      var parts = [];
+      if (p.client_total > 1) parts.push('Πελάτης ' + p.client_index + '/' + p.client_total + ': ' + (p.client_name || ''));
+      var stepPct = (typeof p.step_percent === 'number') ? ' ' + p.step_percent + '%' : '';
+      var detail = String(p.detail || '');
+      // η λεπτομέρεια χωρίς το όνομα του βήματος που ήδη φαίνεται
+      if (detail.indexOf(p.step) === 0) detail = detail.slice(String(p.step).length).replace(/^\s*[—:-]\s*/, '');
+      parts.push('Βήμα ' + p.step_index + '/' + p.step_total + ': ' + p.step + stepPct + (detail ? ' — ' + detail : ''));
+      if (typeof p.percent === 'number') parts.push('συνολικά ' + p.percent + '%');
+      return parts.join(' · ');
+    };
+
     (function () {
       var BANNER_ID = 'e3BulkProgressFlash';
       function readActive() {
@@ -171,8 +189,7 @@
             var p = data && data.progress;
             if (p && p.label) {
               consecutiveEmpty = 0;
-              var pct = (typeof p.percent === 'number') ? ' (' + p.percent + '%)' : '';
-              renderBanner(active, 'E3 Bulk — ' + p.label + pct);
+              renderBanner(active, 'E3 Bulk — ' + window.formatE3BrainProgress(p));
             } else {
               // After ~5 empty polls (15s) + run started >30s ago, assume
               // brain finished (the originating tab clears sessionStorage

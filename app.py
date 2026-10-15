@@ -20302,10 +20302,11 @@ def api_e3_fetch():
     try:
         payload = request.get_json(silent=True) or {}
         credential_name = str(payload.get("credential") or "").strip()
+        credential_afm = _canon_afm(payload.get("afm") or "")
         date_from = str(payload.get("date_from") or "").strip()
         date_to = str(payload.get("date_to") or "").strip()
         
-        if not credential_name or not date_from or not date_to:
+        if (not credential_name and not credential_afm) or not date_from or not date_to:
             return jsonify({"ok": False, "error": "Missing credential or dates"}), 400
         
         # Validate dates
@@ -20316,9 +20317,26 @@ def api_e3_fetch():
         
         # Get credential
         creds = load_credentials()
-        cred = next((c for c in creds if str(c.get("name") or "").strip() == credential_name), None)
+        cred = next((c for c in creds if credential_name and str(c.get("name") or "").strip() == credential_name), None)
+        if not cred and credential_afm:
+            # Ο πελάτης του Ε3 μπορεί να έχει άλλο όνομα στη λίστα πελατών — ταύτιση με ΑΦΜ.
+            cred = next((c for c in creds if _canon_afm(c.get("vat") or "") == credential_afm), None)
+        if not cred and credential_afm:
+            # …ή να υπάρχει μόνο στα αποθηκευμένα credentials του Ε3 (myDATA user/key εκεί).
+            try:
+                from admin.auth import get_active_group
+                _grp = get_active_group()
+                _store, _err = _read_credentials_store_or_refuse(_credentials_store_file_path(_grp)) if _grp else (None, "no group")
+                for _e in ((_store or {}).get("companies") or []):
+                    _co = (_e or {}).get("company") or {}
+                    if _canon_afm(_co.get("afm") or "") == credential_afm and _co.get("mydata_user") and _co.get("mydata_key"):
+                        cred = {"name": _co.get("name") or credential_afm, "vat": credential_afm,
+                                "user": _co.get("mydata_user"), "key": _co.get("mydata_key")}
+                        break
+            except Exception:
+                log.exception("api_e3_fetch: αναζήτηση στα credentials του Ε3 απέτυχε")
         if not cred:
-            return jsonify({"ok": False, "error": "Credential not found"}), 404
+            return jsonify({"ok": False, "error": "Δεν βρέθηκε ο πελάτης (ούτε στη λίστα πελατών ούτε στα αποθηκευμένα credentials του Ε3)."}), 404
         
         vat = str(cred.get("vat") or "").strip()
         aade_user = str(cred.get("user") or os.getenv("AADE_USER_ID", AADE_USER_ENV) or "").strip()
@@ -23965,6 +23983,10 @@ def api_e3_brain():
         result = run_brain(payload)
         if isinstance(result, dict) and result.get("ok") and "message" not in result:
             result["message"] = "Η εκτέλεση E3 Brain ολοκληρώθηκε επιτυχώς."
+        try:
+            _persist_discovered_ames(result)
+        except Exception:
+            log.exception("api_e3_brain: αποθήκευση ΑΜΕ απέτυχε")
         return jsonify(result), 200
 
     except Exception as e:
@@ -24905,6 +24927,42 @@ def _write_credentials_store_atomic(file_path: str, data: dict) -> None:
                     os.remove(tmp_path)
             except OSError:
                 pass
+
+
+def _persist_discovered_ames(result) -> int:
+    """Ο ΑΜΕ που βρήκε η Καρτέλα Εργοδότη (Πιστοποίηση Εργοδοτών / ΤΕΚΑ) αποθηκεύεται στα
+    credentials της ενεργής ομάδας — μόνο όπου το πεδίο είναι κενό — ώστε να μην ξαναψάχνεται."""
+    from admin.auth import get_active_group
+    found = {}
+    for c in (result or {}).get("clients") or []:
+        ks = ((c or {}).get("checks") or {}).get("kartela_status") or {}
+        ame = "".join(ch for ch in str(ks.get("ame") or "") if ch.isdigit())
+        afm = _canon_afm((c or {}).get("afm") or "")
+        if ame and afm and ks.get("ame_source") in ("ePistErg", "ΤΕΚΑ"):
+            found[afm] = ame
+    if not found:
+        return 0
+    grp = get_active_group()
+    if not grp:
+        return 0
+    path = _credentials_store_file_path(grp)
+    data, err = _read_credentials_store_or_refuse(path)
+    if err or not data:
+        return 0
+    changed = 0
+    for entry in data.get("companies") or []:
+        co = (entry or {}).get("company") if isinstance(entry, dict) else None
+        if not isinstance(co, dict):
+            continue
+        afm = _canon_afm(co.get("afm") or "")
+        if afm in found and not str(co.get("ika_employer_ame") or "").strip():
+            co["ika_employer_ame"] = found[afm]
+            co["has_payroll"] = True
+            changed += 1
+    if changed:
+        _write_credentials_store_atomic(path, data)
+        log.info("E3 brain: αποθηκεύτηκαν %d ΑΜΕ στα credentials της ομάδας", changed)
+    return changed
 
 
 @app.route("/api/e3/brain/save_credentials", methods=["POST"])

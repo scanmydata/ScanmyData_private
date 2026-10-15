@@ -1503,6 +1503,10 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
     args = [sys.executable, str(script), "--username", t.taxisnet_username, "--password", t.taxisnet_password,
             "--afm", t.afm or afm, "--amka", t.amka, "--year", str(year), "--out-dir", str(out),
             "--notices", "auto", "--always-report"]
+    # Cache ειδοποιητηρίων ανά ασφαλισμένο (κοινό για την ομάδα): κατεβαίνουν μόνο οι μήνες που λείπουν.
+    _ncache = _resolve_pdfs_dir("efka_notices", t.afm or afm)
+    if _ncache is not None:
+        args += ["--notices-cache", str(_ncache)]
     tail: List[str] = []
     try:
         proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -1557,11 +1561,24 @@ def _run_efka_teka_reconciliation(checks_dir: Path, t: Any, afm: str, year: int,
         res["kinds"][kind] = {k: r.get(k) for k in ("status", "certificate_amount", "net_amount", "difference",
                                                       "extra_fees", "increments", "surcharges_total", "gross_paid",
                                                       "matched_label", "explanation")}
-    res["notices"] = {k: (s.get("notices") or {}).get(k) for k in ("skipped", "used_for", "downloaded")}
+    res["notices"] = {k: (s.get("notices") or {}).get(k) for k in ("skipped", "used_for", "downloaded", "cache")}
     res["keao_mh_count"] = sum(int(c.get("count") or 0)
                                for r in (s.get("reconciliation") or {}).values()
                                for c in (r.get("components") or []) if c.get("key") == "keao_efka_mh")
     res["keao_ok"] = bool(((s.get("sources") or {}).get("keao") or {}).get("ok"))
+    # Καθαρές εισφορές σε ΛΟΙΠΑ ταμεία μη μισθωτού (ΟΑΕΕ, ΤΣΜΕΔΕ, ΟΓΑ κ.λπ. — μέσω ΚΕΑΟ) που
+    # δεν περιλαμβάνονται στη βεβαίωση e-ΕΦΚΑ: προστίθενται στο 585.007 (καθαρά) και οι
+    # επιβαρύνσεις τους στο 588. Μητρώα εργοδότη (ΙΚΑ / ΤΕΚΑ μισθωτών) δεν συμμετέχουν ποτέ.
+    _oth = [c for r in (s.get("reconciliation") or {}).values() for c in (r.get("components") or [])
+            if c.get("key") == "keao_other" and not c.get("included")]
+    res["other_funds"] = {
+        "net": round(sum(float(c.get("net") or 0) for c in _oth), 2),
+        "fees": round(sum(float(c.get("extra_fees") or 0) + float(c.get("surcharges") or 0) for c in _oth), 2),
+        "count": sum(int(c.get("count") or 0) for c in _oth),
+        "registries": sorted({re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", str(r.get("forea") or ""))
+                              for r in ((s.get("sources") or {}).get("keao") or {}).get("registries") or []
+                              if r.get("class") == "other_non_employee" and r.get("rows")}),
+    }
     if pdf_dir is not None:
         try:
             pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -1662,6 +1679,8 @@ def _resolve_pdfs_dir(kind: str, afm: str) -> Optional[Path]:
             root_name = "kartela_ergodoti_pdfs"
         elif kind_lower in ("tax_certificate", "efka_teka_certificate"):
             root_name = "tax_certificate_pdfs"
+        elif kind_lower == "efka_notices":
+            root_name = "efka_notices_cache"
         else:
             return None
         target = Path(__file__).resolve().parents[2] / "data" / folder / root_name / afm
@@ -2117,6 +2136,25 @@ def process_client(
     warnings: List[str] = []
     errors: List[str] = []
 
+    # Πλάνο βημάτων (για «Βήμα k/N» και ποσοστό ανά βήμα σε overlay/flash, ατομικό και μαζικό).
+    _plan = ["Στοιχεία ΑΦΜ / μέλη"]
+    if _flag_for("efka_teka") or _flag_for("tax_certificate"):
+        _plan.append("ΕΦΚΑ/ΤΕΚΑ")
+    if _flags.get("save_kartela_ergodoti", True) and (client.get("has_payroll") or client.get("ika_employer_username")
+                                                      or client.get("ika_employer_ame")):
+        _plan.append("Καρτέλα Εργοδότη")
+    if _flag_for("keao"):
+        _plan.append("ΚΕΑΟ")
+    _plan.append("myDATA")
+    if _flag_for("misth"):
+        _plan.append("Μισθωτήρια")
+    if _flag_for("e9"):
+        _plan.append("Ε9 / υποκαταστήματα")
+    _plan.append("Ολοκλήρωση")
+    set_brain_step_plan(job_id, _plan)
+    _publish_brain_step(job_id, f"Στοιχεία ΑΦΜ / μέλη — {_norm_text(client.get('name')) or _norm_afm(client.get('afm'))}",
+                        percent=3)
+
     afm = _norm_afm(client.get("afm"))
     if len(afm) != 9:
         return {
@@ -2248,6 +2286,8 @@ def process_client(
     tax_certificate_results: List[Dict[str, Any]] = []
     efka_teka_recon_results: List[Dict[str, Any]] = []
     efka_teka_fees_total = 0.0
+    other_funds_total = 0.0          # καθαρές εισφορές σε λοιπά ταμεία (ΟΑΕΕ, ΤΣΜΕΔΕ κ.λπ.)
+    other_funds_names: List[str] = []
     _recon_work = None
     if (_flag_for("efka_teka") or _flag_for("tax_certificate")) and extractor_targets:
         root = Path(__file__).resolve().parents[2]
@@ -2273,6 +2313,13 @@ def process_client(
             recon_res = _run_efka_teka_reconciliation(checks_dir, t, afm, year, cert_pdf_dir, warnings,
                                                       on_progress=_on_progress, work_dir=_recon_work / f"m{idx}")
             efka_teka_recon_results.append(recon_res)
+            _of = recon_res.get("other_funds") or {}
+            if _of.get("net") or _of.get("fees"):
+                other_funds_total += float(_of.get("net") or 0.0)
+                efka_teka_fees_total += float(_of.get("fees") or 0.0)
+                for _nm in _of.get("registries") or []:
+                    if _nm not in other_funds_names:
+                        other_funds_names.append(_nm)
             if recon_res.get("ok"):
                 for amt in (recon_res.get("certificate_amounts") or {}).values():
                     if amt:
@@ -2293,8 +2340,10 @@ def process_client(
                             percent=hi_pct)
     tax_certificate_total = round(tax_certificate_total, 2)
     efka_teka_fees_total = round(efka_teka_fees_total, 2)
-    if tax_certificate_available:
-        efka_teka_total = tax_certificate_total
+    other_funds_total = round(other_funds_total, 2)
+    if tax_certificate_available or other_funds_total:
+        # 585.007 = καθαρά φορ. βεβαιώσεων e-ΕΦΚΑ/ΤΕΚΑ + καθαρές εισφορές λοιπών ταμείων μη μισθωτού.
+        efka_teka_total = round(tax_certificate_total + other_funds_total, 2)
         efka_teka_available = True
 
     # ------------------------------------------------------------------
@@ -2315,7 +2364,7 @@ def process_client(
     ika_emp_ame = _norm_text(client.get("ika_employer_ame"))
     efka_taxis_user = _norm_text(client.get("taxisnet_username"))
     efka_taxis_pass = _norm_text(client.get("taxisnet_password"))
-    has_payroll_flag = bool(client.get("has_payroll")) or bool(ika_emp_user and ika_emp_pass)
+    has_payroll_flag = bool(client.get("has_payroll")) or bool(ika_emp_user and ika_emp_pass) or bool(ika_emp_ame)
     # Ο χρήστης μπορεί να επιλέξει να ΜΗΝ αποθηκευτεί/τρέξει η Οικονομική Καρτέλα
     # Εργοδότη (default: ναι, για συμβατότητα).
     save_kartela = _flags.get("save_kartela_ergodoti", True)
@@ -2324,13 +2373,13 @@ def process_client(
         kartela_status["reason"] = "δεν ζητήθηκε (απενεργοποιημένη αποθήκευση Καρτέλας Εργοδότη)"
     elif not has_payroll_flag:
         kartela_status["reason"] = ("δεν έτρεξε — δεν έχει επιλεγεί «Έχει μισθοδοσία» και δεν υπάρχουν "
-                                    "αποθηκευμένοι κωδικοί Ι.Κ.Α. Εργοδότη για τον πελάτη")
-    elif not (ika_emp_user and ika_emp_pass):
-        kartela_status["reason"] = "δεν έτρεξε — λείπουν οι κωδικοί Ι.Κ.Α. Εργοδότη (για την καρτέλα ΤΕΚΑ)"
+                                    "αποθηκευμένοι κωδικοί Ι.Κ.Α. Εργοδότη / ΑΜΕ για τον πελάτη")
     elif not (efka_taxis_user and efka_taxis_pass):
-        kartela_status["reason"] = "δεν έτρεξε — λείπουν οι κωδικοί TAXISnet της επιχείρησης (για την καρτέλα ΕΦΚΑ)"
-    if (save_kartela and has_payroll_flag and ika_emp_user and ika_emp_pass
-            and efka_taxis_user and efka_taxis_pass and afm):
+        kartela_status["reason"] = ("δεν έτρεξε — λείπουν οι κωδικοί TAXISnet της επιχείρησης "
+                                    "(απαιτούνται για την καρτέλα ΕΦΚΑ και την ανάκτηση ΑΜΕ)")
+    # Καρτέλα ΕΦΚΑ: TAXISnet + ΑΜΕ (ο ΑΜΕ ανακτάται πρώτα αν λείπει)· καρτέλα ΤΕΚΑ: κωδικοί Ι.Κ.Α.
+    # Εργοδότη (προαιρετικοί — χωρίς αυτούς βγαίνει μόνο η ΕΦΚΑ).
+    if (save_kartela and has_payroll_flag and efka_taxis_user and efka_taxis_pass and afm):
         root = Path(__file__).resolve().parents[2]
         checks_dir = root / "e3" / "checks"
         kart_pdf_dir = _resolve_pdfs_dir("kartela_ergodoti", afm)
@@ -2360,10 +2409,15 @@ def process_client(
             ]
             if not headed:
                 kart_args.append("--headless")
+            if not (ika_emp_user and ika_emp_pass):
+                kart_args.append("--efka-only")
+            if not ika_emp_ame:
+                _publish_brain_step(job_id, f"Καρτέλα Εργοδότη — ανάκτηση ΑΜΕ (Πιστοποίηση Εργοδοτών) — {input_name or afm}",
+                                    percent=33)
             kartela_status["ran"] = True
             try:
                 proc = subprocess.run(
-                    kart_args, capture_output=True, text=True, timeout=300
+                    kart_args, capture_output=True, text=True, timeout=480
                 )
                 kartela_ergodoti_result = {
                     "ok": proc.returncode == 0,
@@ -2377,6 +2431,26 @@ def process_client(
                         )
                     except Exception:
                         pass
+                _ksum = kartela_ergodoti_result.get("summary") or {}
+                kartela_status["ame"] = _ksum.get("ame") or ika_emp_ame or ""
+                kartela_status["ame_source"] = _ksum.get("ame_source")
+                kartela_status["teka_update_required"] = bool(_ksum.get("teka_update_required"))
+                kartela_status["parts"] = {
+                    k: {"ok": bool((_ksum.get(k) or {}).get("ok")), "error": (_ksum.get(k) or {}).get("error"),
+                        "source": (_ksum.get(k) or {}).get("source")}
+                    for k in ("efka", "teka")}
+                if kartela_status["ame_source"] in ("ePistErg", "ΤΕΚΑ") and kartela_status["ame"]:
+                    warnings.append(f"Καρτέλα Εργοδότη: βρέθηκε ΑΜΕ {kartela_status['ame']} "
+                                    f"({'Πιστοποίηση Εργοδοτών' if kartela_status['ame_source'] == 'ePistErg' else 'καρτέλα ΤΕΚΑ'}) "
+                                    "— αποθηκεύεται στα στοιχεία του πελάτη.")
+                if kartela_status["teka_update_required"]:
+                    warnings.append("Οικονομική Καρτέλα Εργοδότη ΤΕΚΑ: " + str(((_ksum.get("teka") or {}).get("error"))
+                                                                              or "απαιτείται ενημέρωση στοιχείων στο e-ΕΦΚΑ."))
+                for _k, _nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ")):
+                    _part = _ksum.get(_k) or {}
+                    if (proc.returncode == 0 and not _part.get("ok") and not _part.get("update_required")
+                            and not str(_part.get("error") or "").startswith("παράλειψη")):
+                        warnings.append(f"Οικονομική Καρτέλα Εργοδότη {_nm}: δεν βγήκε — {_part.get('error') or 'άγνωστο σφάλμα'}")
                 if proc.returncode != 0:
                     # summary["ok"] is efka.ok OR teka.ok — a non-zero exit
                     # means BOTH sides failed (a partial success, e.g. only
@@ -2397,17 +2471,18 @@ def process_client(
                     )
                 elif kart_pdf_dir is not None:
                     try:
-                        saved = [
-                            p for p in kart_pdf_dir.iterdir()
-                            if p.suffix.lower() == ".pdf"
-                            and p.name.startswith("kartela_ergodoti_")
-                        ]
+                        _ks0 = (kartela_ergodoti_result or {}).get("summary") or {}
+                        saved = [Path(str((_ks0.get(k) or {}).get("pdf"))) for k in ("efka", "teka")
+                                 if (_ks0.get(k) or {}).get("ok") and (_ks0.get(k) or {}).get("pdf")
+                                 and Path(str((_ks0.get(k) or {}).get("pdf"))).exists()]
                         pdfs_saved["kartela_ergodoti"] = (
                             pdfs_saved.get("kartela_ergodoti", 0) + len(saved)
                         )
                         _ks = (kartela_ergodoti_result or {}).get("summary") or {}
                         _part = [f"{nm}: {'✓' if (_ks.get(k) or {}).get('ok') else '✗ ' + str((_ks.get(k) or {}).get('error') or '—')}"
                                  for k, nm in (("efka", "ΕΦΚΑ"), ("teka", "ΤΕΚΑ"))]
+                        if kartela_status.get("ame"):
+                            _part.append(f"ΑΜΕ {kartela_status['ame']}")
                         kartela_status.update({"ok": bool(saved), "pdfs": len(saved),
                                                "reason": ("αποθηκεύτηκε" if saved else "έτρεξε χωρίς PDF") + " — " + " · ".join(_part)})
                         if not saved:
@@ -2424,11 +2499,6 @@ def process_client(
                 warnings.append(f"Οικονομική Καρτέλα Εργοδότη: {exc}")
                 kartela_ergodoti_result = {"ok": False, "error": str(exc)}
                 kartela_status.update({"ok": False, "reason": str(exc)})
-    elif save_kartela and has_payroll_flag and not (ika_emp_user and ika_emp_pass):
-        warnings.append(
-            "Έχει επισημανθεί μισθοδοσία αλλά λείπουν τα IKA Εργοδότη credentials — "
-            "η Οικονομική Καρτέλα Εργοδότη παραλείπεται."
-        )
     elif save_kartela and has_payroll_flag and not (efka_taxis_user and efka_taxis_pass):
         # Η νέα υπηρεσία ΕΦΚΑ (Καρτέλα Εργοδότη) απαιτεί TaxisNet company
         # credentials πλέον, πέρα από τα IKA Εργοδότη — χωρίς αυτά ο έλεγχος
@@ -2691,11 +2761,17 @@ def process_client(
         _scope = ("Ποσά Ε3 της επιχείρησης" if is_individual or _n_ok == 1 else
                   f"Ποσά Ε3 της εταιρείας ({input_name or afm}) — σύνολο {_n_ok} μελών· η στήλη «Βεβαιώσεις» είναι το σύνολο όλων των μελών")
         _cmp = {"scope_label": _scope, "rows": [
-            {"code": "585.007", "desc": "Ασφαλιστικές εισφορές αυτοαπασχολούμενων (καθαρά, φορ. βεβαιώσεις)",
-             "value": efka_teka_total, "mydata": mydata_585_007, "isozygio": excel_585_007 or None},
+            {"code": "585.007", "desc": ("Ασφαλιστικές εισφορές αυτοαπασχολούμενων (καθαρά: φορ. βεβαιώσεις"
+                                         + (" + λοιπά ταμεία)" if other_funds_total else ")")),
+             "value": efka_teka_total, "mydata": mydata_585_007, "isozygio": excel_585_007 or None,
+             "breakdown": ([f"Φορολογικές βεβαιώσεις e-ΕΦΚΑ/ΤΕΚΑ: {_pretty_money(tax_certificate_total)} €",
+                            f"Λοιπά ταμεία μη μισθωτού ({', '.join(other_funds_names) or 'ΚΕΑΟ'}): "
+                            f"{_pretty_money(other_funds_total)} €"] if other_funds_total else [])},
             {"code": "588", "desc": "Ασυνήθη έξοδα, ζημιές και πρόστιμα (επιβαρύνσεις εισφορών)",
              "value": keao_588_total, "mydata": mydata_588, "isozygio": excel_588 or None},
-        ], "note": ("το 585.007 πρέπει να ισούται με το καθαρό ποσό των φορολογικών βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ· "
+        ], "note": ("το 585.007 πρέπει να ισούται με το καθαρό ποσό των φορολογικών βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ "
+                    "συν τις καθαρές εισφορές σε λοιπά ταμεία μη μισθωτού (ΟΑΕΕ, ΤΣΜΕΔΕ κ.λπ., από το ΚΕΑΟ — "
+                    "εκτός ΙΚΑ/ΤΕΚΑ εργοδότη)· "
                     "οι επιβαρύνσεις (πρόσθετα τέλη/προσαυξήσεις ειδοποιητηρίων και ΚΕΑΟ) δεν είναι εισφορές "
                     "και αντιπαραβάλλονται με τον κωδικό 588. Ισοζύγιο = εισαγόμενο αρχείο ισοζυγίου του πελάτη.")}
         for rec in efka_teka_recon_results:
@@ -3301,6 +3377,9 @@ def process_client(
             "efka_teka_recon": efka_teka_recon_results,
             # Επιβαρύνσεις (πρόσθετα τέλη/προσαυξήσεις) από την αντιπαραβολή → 588.
             "efka_teka_fees_total": efka_teka_fees_total if efka_teka_recon_results else None,
+            "efka_teka_certificates_total": tax_certificate_total if tax_certificate_available else None,
+            "efka_teka_other_funds_total": other_funds_total or None,
+            "efka_teka_other_funds_names": other_funds_names,
             "mydata_585_007": mydata_585_007,
             "excel_585_007": excel_585_007,
             "mydata_585_014": mydata_585_014,
@@ -3586,21 +3665,77 @@ def clear_brain_progress_scope(job_id: Optional[str]) -> None:
     (reg.get("__scope__") or {}).pop(str(job_id), None)
 
 
+# Αντιστοίχιση ετικέτας βήματος → όνομα βήματος του πλάνου (η σειρά των κανόνων μετράει).
+_STEP_RULES = [
+    (re.compile(r"^ΕΦΚΑ/ΤΕΚΑ — αντιπαραβολή με myDATA"), "myDATA"),
+    (re.compile(r"^ΕΦΚΑ/ΤΕΚΑ"), "ΕΦΚΑ/ΤΕΚΑ"),
+    (re.compile(r"Καρτέλα Εργοδότη"), "Καρτέλα Εργοδότη"),
+    (re.compile(r"^ΚΕΑΟ"), "ΚΕΑΟ"),
+    (re.compile(r"myDATA"), "myDATA"),
+    (re.compile(r"Μισθωτηρ"), "Μισθωτήρια"),
+    (re.compile(r"Ε9|ENFIA|υποκαταστημ", re.I), "Ε9 / υποκαταστήματα"),
+    (re.compile(r"^Ολοκλήρωση"), "Ολοκλήρωση"),
+]
+
+
+def set_brain_step_plan(job_id: Optional[str], steps: List[str]) -> None:
+    """Τα βήματα που θα τρέξουν για τον τρέχοντα πελάτη (μηδενίζει την κατάσταση βημάτων)."""
+    if not job_id:
+        return
+    reg = _get_or_init_brain_progress_registry()
+    reg.setdefault("__plan__", {})[str(job_id)] = {"steps": list(steps), "current": 0}
+
+
+def _step_info(job_id: str, label: str, percent: Optional[int]) -> Dict[str, Any]:
+    reg = _get_or_init_brain_progress_registry()
+    plan = (reg.get("__plan__") or {}).get(str(job_id))
+    if not plan:
+        return {}
+    steps: List[str] = plan["steps"]
+    name = next((nm for rx, nm in _STEP_RULES if rx.search(label)), None)
+    if name and name not in steps:
+        # βήμα εκτός πλάνου: τρέχει ΤΩΡΑ → μπαίνει αμέσως μετά το τρέχον
+        steps.insert(min(plan["current"] + 1, len(steps)), name)
+    idx = steps.index(name) if name else plan["current"]
+    idx = max(idx, plan["current"])            # ποτέ προς τα πίσω
+    plan["current"] = idx
+    # ποσοστό ΜΕΣΑ στο βήμα: για ΕΦΚΑ/ΤΕΚΑ από το εύρος 15–34 του πελάτη, αλλιώς 0 στην αρχή του βήματος
+    step_pct = None
+    if steps[idx] == "ΕΦΚΑ/ΤΕΚΑ" and percent is not None:
+        step_pct = int(max(0, min(100, (int(percent) - 15) * 100 / 19)))
+    return {"steps": [{"name": nm, "state": "done" if i < idx else ("active" if i == idx else "pending")}
+                      for i, nm in enumerate(steps)],
+            "step_index": idx + 1, "step_total": len(steps), "step": steps[idx], "step_percent": step_pct}
+
+
 def _publish_brain_step(job_id: Optional[str], label: str, percent: Optional[int] = None) -> None:
     """Record the brain's current step under the given job_id."""
     if not job_id:
         return
     reg = _get_or_init_brain_progress_registry()
     scope = (reg.get("__scope__") or {}).get(str(job_id))
-    if scope and scope["n"] > 1 and not str(label).startswith("Πελάτης "):
+    raw_label = str(label)
+    client_percent = percent
+    is_client_marker = raw_label.startswith("Πελάτης ")
+    if scope and scope["n"] > 1 and not is_client_marker:
         p = max(0, min(100, int(percent or 0)))
         percent = int(((scope["i"] - 1) + p / 100.0) * 100 / scope["n"])
         label = f"Πελάτης {scope['i']}/{scope['n']}: {scope['name']} — {label}"
-    reg[str(job_id)] = {
+    entry: Dict[str, Any] = {
         "label": label,
         "percent": percent,
         "ts": datetime.utcnow().isoformat() + "Z",
     }
+    if scope and scope["n"] > 1:
+        entry["client_index"], entry["client_total"], entry["client_name"] = scope["i"], scope["n"], scope["name"]
+    if not is_client_marker:
+        try:
+            entry.update(_step_info(str(job_id), raw_label, client_percent))
+            entry["client_percent"] = client_percent
+            entry["detail"] = raw_label
+        except Exception:
+            pass
+    reg[str(job_id)] = entry
 
 
 def get_brain_progress(job_id: str) -> Dict[str, Any]:
@@ -3614,6 +3749,7 @@ def _clear_brain_progress(job_id: Optional[str]) -> None:
         return
     reg = _get_or_init_brain_progress_registry()
     reg.pop(str(job_id), None)
+    (reg.get("__plan__") or {}).pop(str(job_id), None)
     clear_brain_progress_scope(job_id)
 
 

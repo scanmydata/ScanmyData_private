@@ -10,6 +10,17 @@
   .brain-bulk-table td input:not([type=checkbox]) { padding-top: .15rem; padding-bottom: .15rem; }
   .brain-bulk-table tbody tr[data-bulk-row]:hover { background: rgba(14, 165, 233, .06); }
   .brain-bulk-table tr.bulk-filtered-out { display: none !important; }
+  /* Wait overlay: λίστα βημάτων + μπάρα συνολικής προόδου */
+  .e3-ov-bar { height: 6px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: .6rem 0 .5rem; }
+  .e3-ov-bar > div { height: 100%; background: linear-gradient(90deg, #0ea5e9, #2563eb); transition: width .4s ease; }
+  .e3-ov-steps { list-style: none; margin: 0; padding: 0; text-align: left; font-size: .78rem; line-height: 1.55; }
+  .e3-ov-steps li span { display: inline-block; width: 1.1rem; text-align: center; }
+  .e3-ov-steps li.st-done { color: #15803d; }
+  .e3-ov-steps li.st-active { color: #1d4ed8; font-weight: 600; }
+  .e3-ov-steps li.st-pending { color: #9ca3af; }
+  [data-theme="dark"] .e3-ov-bar { background: #374151; }
+  [data-theme="dark"] .e3-ov-steps li.st-done { color: #4ade80; }
+  [data-theme="dark"] .e3-ov-steps li.st-active { color: #93c5fd; }
   .e3-section {
     margin-top: 2rem;
     margin-bottom: 2rem;
@@ -1716,6 +1727,7 @@
       </div>
     </div>
 
+    <button id="e3ResultReopenBtn" type="button" class="hidden mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white">📊 Πίνακας Ε3 — αντιπαραβολές</button>
     <pre id="brainResult" class="mt-4 text-xs bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 p-3 rounded-lg overflow-auto hidden" style="max-height: 340px;display:none;"></pre>
     <!-- Bulk results accordion (one card per client, toggle to expand). -->
     <div id="brainBulkResults" class="mt-4 brain-bulk-results" data-lock-skip></div>
@@ -1724,6 +1736,22 @@
   <!-- Status Area -->
   <div id="e3Status" class="mt-6 text-gray-600 dark:text-gray-400 text-sm"></div>
 </div>
+
+<!-- Πίνακες Ε3 με τις αντιπαραβολές σε popup (όπως το Λογιστικό Αποτέλεσμα): κλείνει με ×, Escape,
+     κλικ εκτός του παραθύρου (global dismiss του modal_utils.js)· ξανανοίγει από το «📊 Πίνακας Ε3». -->
+<div id="e3ResultModal" class="hidden fixed inset-0 flex items-center justify-center p-4" style="background:rgba(0,0,0,.45);z-index:9000;">
+  <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-full p-5 overflow-y-auto" style="max-width:min(1250px,100%);max-height:92vh;">
+    <div class="flex justify-between items-start gap-3 mb-3">
+      <div>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">📊 Πίνακας Ε3 — αντιπαραβολές</h3>
+        <div id="e3ResultModalStatus" class="text-sm text-gray-600 dark:text-gray-300 mt-1"></div>
+      </div>
+      <button id="e3ResultModalClose" type="button" data-modal-close aria-label="Κλείσιμο" class="text-2xl leading-none text-gray-500 hover:text-gray-700 dark:text-gray-300">&times;</button>
+    </div>
+    <div class="flex flex-wrap gap-2 mb-3">
+      <button id="e3ResultModalPdfBtn" type="button" data-lock-exempt class="px-3 py-1.5 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">⬇ Λήψη PDF</button>
+    </div>
+    <div id="e3ResultModalDiag" class="hidden mb-3 text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-900/30 dark:text-amber-100 p-2"></div>
 
 <!-- Μη χαρακτηρισμένα παραστατικά (κοινό για γρήγορο & αναλυτικό έλεγχο) -->
 <div id="unclassifiedSummaryCard" class="e3-unclassified-card e3-hidden">
@@ -1824,6 +1852,8 @@
     </table>
   </div>
 </div>
+  </div>
+</div>
 
 <div id="e3BrainTooltip" role="tooltip"></div>
 
@@ -1853,6 +1883,7 @@
     <div class="spinner" aria-hidden="true"></div>
     <div id="waitOverlayTitle" class="text-lg font-semibold text-gray-800">Φόρτωση δεδομένων E3...</div>
     <div id="waitOverlayMsg" class="text-sm text-gray-600">Παρακαλώ περιμένετε - η διαδικασία μπορεί να διαρκέσει.</div>
+    <div id="waitOverlaySteps"></div>
   </div>
 </div>
 
@@ -3484,10 +3515,10 @@
           // First real progress event → silence the fallback cycler.
           if (stopFallback) { try { stopFallback(); } catch (_) {} stopFallback = null; }
           lastLabel = progKey;
-          var pct = (typeof p.percent === 'number') ? ` (${p.percent}%)` : '';
           if (!noOverlay) {
-            showGlobalWaitOverlay(label, label + ' — ' + p.label + pct,
+            showGlobalWaitOverlay(label, label + ' — ' + _e3FmtProgress(p),
               { timeout: 60 * 60 * 1000 });
+            _renderOverlaySteps(p);
           }
           // Optional: feed the live progress into a custom consumer
           // (e.g. the bulk flash banner). Best-effort, never blocks polling.
@@ -3504,7 +3535,33 @@
     };
   }
 
+  function _e3FmtProgress(p) {
+    if (typeof window.formatE3BrainProgress === 'function') return window.formatE3BrainProgress(p);
+    return String((p && p.label) || '') + ((p && typeof p.percent === 'number') ? ` (${p.percent}%)` : '');
+  }
+
+  // Λίστα βημάτων (✓ ολοκληρώθηκε · ▶ τρέχει · ○ επόμενο) + μπάρα συνολικού ποσοστού στο wait overlay.
+  function _renderOverlaySteps(p) {
+    const host = document.getElementById('waitOverlaySteps');
+    if (!host) return;
+    if (!p || !Array.isArray(p.steps) || !p.steps.length) { host.innerHTML = ''; return; }
+    const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const pct = (typeof p.percent === 'number') ? Math.max(0, Math.min(100, p.percent)) : null;
+    let html = '';
+    if (pct !== null) {
+      html += `<div class="e3-ov-bar"><div style="width:${pct}%"></div></div>`;
+    }
+    html += '<ul class="e3-ov-steps">' + p.steps.map((s) => {
+      const icon = s.state === 'done' ? '✓' : (s.state === 'active' ? '▶' : '○');
+      const extra = (s.state === 'active' && typeof p.step_percent === 'number') ? ` — ${p.step_percent}%` : '';
+      return `<li class="st-${s.state}"><span>${icon}</span> ${esc(s.name)}${extra}</li>`;
+    }).join('') + '</ul>';
+    host.innerHTML = html;
+  }
+
   function hideGlobalWaitOverlay() {
+    const _st = document.getElementById('waitOverlaySteps');
+    if (_st) _st.innerHTML = '';
     if (E3_OVERLAY_TIMEOUT) { clearTimeout(E3_OVERLAY_TIMEOUT); E3_OVERLAY_TIMEOUT = null; }
     const localOverlay = document.getElementById('waitOverlay');
     if (localOverlay) {
@@ -3710,7 +3767,10 @@
     return false;
   }
 
-  async function loadBrainE3Data() {
+  async function loadBrainE3Data(opts) {
+    // opts.silent: κλήση μέσα από την εκτέλεση του ελέγχου — χωρίς δικό της overlay/flash
+    // (ο έλεγχος φέρνει ήδη τον πίνακα myDATA· αυτό είναι μόνο για τα μη χαρακτηρισμένα).
+    const silent = !!(opts && opts.silent);
     if (E3_LOADING) return;
 
     const activeClientSelect = document.getElementById('brainActiveClientSelect');
@@ -3738,8 +3798,8 @@
     const dateTo = document.getElementById('brainDateTo').value;
     const status = document.getElementById('brainE3Status');
 
-    if (!credential || !dateFrom || !dateTo) {
-      showBrainFlash('Παρακαλώ συμπληρώστε όλα τα πεδία', 'error');
+    if ((!credential && !selectedAfm) || !dateFrom || !dateTo) {
+      if (!silent) showBrainFlash('Παρακαλώ συμπληρώστε όλα τα πεδία', 'error');
       return;
     }
 
@@ -3749,15 +3809,15 @@
 
     const btn = document.getElementById('brainLoadE3Btn');
     if (btn) btn.disabled = true;
-    if (status) status.textContent = 'Φόρτωση δεδομένων...';
+    if (status && !silent) status.textContent = 'Φόρτωση δεδομένων...';
 
-    showGlobalWaitOverlay('Φόρτωση δεδομένων E3...', 'Παρακαλώ περιμένετε - γίνεται λήψη και επεξεργασία δεδομένων.');
+    if (!silent) showGlobalWaitOverlay('Φόρτωση δεδομένων E3...', 'Παρακαλώ περιμένετε - γίνεται λήψη και επεξεργασία δεδομένων.');
 
     try {
       const response = await fetch('/api/e3/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential, date_from: dateFrom, date_to: dateTo }),
+        body: JSON.stringify({ credential, afm: selectedAfm, date_from: dateFrom, date_to: dateTo }),
         signal: E3_FETCH_CONTROLLER.signal
       });
 
@@ -3773,17 +3833,18 @@
       } else {
         document.getElementById('e3DataContainer').style.display = 'none';
       }
-      showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
+      if (!silent) showBrainFlash(data.message || '✅ Δεδομένα E3 φόρτωθηκαν', 'success');
       if (status) status.textContent = '';
     } catch (err) {
       if (err.name === 'AbortError') {
         if (status) status.textContent = '';
       } else {
-        showBrainFlash(`❌ Σφάλμα: ${err.message}`, 'error');
+        if (!silent) showBrainFlash(`❌ Σφάλμα: ${err.message}`, 'error');
+        else console.warn('E3 myDATA (παράλληλη λήψη):', err.message);
         if (status) status.textContent = '';
       }
     } finally {
-      hideGlobalWaitOverlay();
+      if (!silent) hideGlobalWaitOverlay();
       E3_LOADING = false;
       if (btn) btn.disabled = false;
     }
@@ -4966,7 +5027,7 @@
     // promise only when we actually need its result (after the brain
     // response, to surface the "μη χαρακτηρισμένα" card).
     const _myDataFetchPromise = (async () => {
-      try { await loadBrainE3Data(); } catch (_) { /* best-effort */ }
+      try { await loadBrainE3Data({ silent: true }); } catch (_) { /* best-effort */ }
     })();
 
     try {
@@ -5015,7 +5076,8 @@
         if (_discoveredAme && ameEl && !ameEl.value.trim()) {
           ameEl.value = _discoveredAme;
           try { autoSaveBrainCredentialsFromForm({ verbose: false }).catch(() => {}); } catch (_) {}
-          showBrainFlash(`Βρέθηκε ΑΜΕ ${_discoveredAme} από την καρτέλα ΤΕΚΑ — αποθηκεύτηκε.`, 'info', 5000);
+          const _src = (_kartela.summary && _kartela.summary.ame_source) === 'ePistErg' ? 'την Πιστοποίηση Εργοδοτών' : 'την καρτέλα ΤΕΚΑ';
+          showBrainFlash(`Βρέθηκε ΑΜΕ ${_discoveredAme} από ${_src} — αποθηκεύτηκε.`, 'info', 5000);
         }
       } catch (_) {}
       // Τι έγινε με Καρτέλα Εργοδότη / αποδεικτικό ΚΕΑΟ — ρητά, όχι σιωπηλά.
@@ -5024,7 +5086,9 @@
         const _ks = _c0.kartela_status;
         const _msgs = [];
         let _warn = false;
-        if (_ks && _ks.requested && !(_ks.ran && _ks.ok)) {
+        const _partFail = !!(_ks && _ks.parts && ['efka', 'teka'].some((k) => _ks.parts[k] && !_ks.parts[k].ok &&
+          !/^παράλειψη/.test(String(_ks.parts[k].error || ''))));
+        if (_ks && _ks.requested && (!(_ks.ran && _ks.ok) || _partFail || _ks.teka_update_required)) {
           _warn = true;
           _msgs.push(`Καρτέλα Εργοδότη: ${_ks.reason || 'δεν αποθηκεύτηκε'}` +
             (_ks.payroll_hint ? ` (το myDATA δείχνει μισθοδοσία 581: ${Number(_ks.payroll_hint).toLocaleString('el-GR', { minimumFractionDigits: 2 })} €)` : ''));
@@ -5050,11 +5114,22 @@
       // settlement here — usually it has ALREADY resolved by the time the
       // brain returns (myDATA fetch is faster than full brain run).
       try { await _myDataFetchPromise; } catch (_) {}
+      // Ο έλεγχος φέρνει ήδη ολόκληρο τον πίνακα myDATA (checks.mydata_e3_report): χρησιμοποιείται όταν η
+      // παράλληλη λήψη δεν έδωσε δεδομένα (π.χ. πελάτης που υπάρχει μόνο στα αποθηκευμένα credentials του Ε3).
       try {
-        if (!E3_LAST_DATA || !Array.isArray(E3_LAST_DATA.unclassified_invoices)) {
-          await loadBrainE3Data();
+        const _c0r = (data.clients && data.clients[0] && data.clients[0].checks) || {};
+        if (!_e3HasRealData(E3_LAST_DATA) && _c0r.mydata_e3_report && _e3HasRealData(_c0r.mydata_e3_report)) {
+          E3_EXCEL_TOTALS = E3_EXCEL_TOTALS || new Map();
+          E3_LAST_DATA = Object.assign({}, _c0r.mydata_e3_report, {
+            unclassified_invoices: Array.isArray(_c0r.unclassified_invoices) ? _c0r.unclassified_invoices : [],
+            unclassified_total: Number(_c0r.unclassified_total || 0),
+          });
+          populateE3Tables(E3_LAST_DATA);
+          populateUnclassifiedSummary(E3_LAST_DATA);
+          _applyBrainChecksToE3Table(data, { quiet: true });
         }
       } catch (_) {}
+      try { _openE3ResultModal(data); } catch (_) {}
 
       // If the user opted in to keeping any PDFs, auto-refresh the listing
       // so the βεβαιώσεις/αποδείξεις/εκκαθαριστικά show up without an
@@ -5093,6 +5168,7 @@
           // Tiny defer so the toast above gets to render first.
           setTimeout(() => {
             try { hideGlobalWaitOverlay(); } catch (_) {}
+            try { const _m = document.getElementById('e3ResultModal'); if (_m) { _m.classList.add('hidden'); _m.style.display = 'none'; } } catch (_) {}
             try { _brainBulkExportToPdf(wrapped); } catch (_) {}
           }, 200);
         }
@@ -5123,6 +5199,10 @@
       out.push('Καρτέλα Εργοδότη: ' + icon + ' ' + esc(ks.reason || (ks.ran ? 'έτρεξε' : 'δεν έτρεξε')) +
         (ks.pdfs ? ' (' + ks.pdfs + ' PDF)' : '') +
         (ks.payroll_hint ? ' · myDATA 581: ' + Number(ks.payroll_hint).toLocaleString('el-GR', { minimumFractionDigits: 2 }) + ' €' : ''));
+      if (ks.teka_update_required) {
+        out.push('⚠ Καρτέλα Εργοδότη ΤΕΚΑ: ο e-ΕΦΚΑ ζητά ενημέρωση στοιχείων — συνδεθείτε με τους κωδικούς Ι.Κ.Α. Εργοδότη, ' +
+          'ολοκληρώστε την ενημέρωση και ξανατρέξτε τον έλεγχο.');
+      }
     }
     const kp = Array.isArray(checks.keao_pdf_status) ? checks.keao_pdf_status : [];
     kp.forEach((k) => {
@@ -5131,7 +5211,7 @@
     return out;
   }
 
-  function _applyBrainChecksToE3Table(data) {
+  function _applyBrainChecksToE3Table(data, opts) {
     // The brain endpoint returns { ok, mode, clients: [ { checks: {...} } ] }
     // for both single and bulk modes — there is NO top-level `data.checks`.
     // The previous version read `data.checks` and silently bailed out, so the
@@ -5164,6 +5244,14 @@
       // 585.007 = άθροισμα των φορολογικών βεβαιώσεων ΕΦΚΑ/ΤΕΚΑ (καθαρά ποσά) όλων των
       // ασφαλισμένων (ατομική: ο ίδιος· εταιρεία: κάθε μέλος) — από την αντιπαραβολή.
       let label = 'ΕΦΚΑ/ΤΕΚΑ — Φορ. Βεβαιώσεις (καθαρά)';
+      const _othF = Number(checks.efka_teka_other_funds_total || 0);
+      if (_othF > 0.004) {
+        // Καθαρές εισφορές σε λοιπά ταμεία μη μισθωτού (ΟΑΕΕ, ΤΣΜΕΔΕ κ.λπ. — ΚΕΑΟ) εκτός βεβαίωσης.
+        const _fm = (v) => Number(v || 0).toLocaleString('el-GR', { minimumFractionDigits: 2 });
+        const _nm = (Array.isArray(checks.efka_teka_other_funds_names) && checks.efka_teka_other_funds_names.length)
+          ? checks.efka_teka_other_funds_names.join(', ') : 'ΚΕΑΟ';
+        label = `ΕΦΚΑ/ΤΕΚΑ — Φορ. Βεβαιώσεις ${_fm(checks.efka_teka_certificates_total)} € + λοιπά ταμεία (${_nm}) ${_fm(_othF)} € (καθαρά)`;
+      }
       if (keaoMhMisthwtonTotal !== null && keaoMhMisthwtonTotal !== undefined) {
         // Πληροφοριακό μόνο — μέρος (όχι σύνολο) της βεβαίωσης.
         const fmtKeao = Number(keaoMhMisthwtonTotal).toLocaleString('el-GR', { minimumFractionDigits: 2 });
@@ -5299,9 +5387,57 @@
       parts.push(`ΕΦΚΑ/ΤΕΚΑ 585.007: ${fmt(efkaTotal)} €`);
     if (rentAnnual !== null && rentAnnual !== undefined)
       parts.push(`Ενοίκιο 585.014: ${fmt(rentAnnual)} €`);
-    if (parts.length)
+    if (parts.length && !(opts && opts.quiet))
       showBrainFlash(`E3 Brain ✓ — ${parts.join(' | ')} — δείτε τους δείκτες στον πίνακα`, 'info', 9000);
   }
+
+  // Popup με τους πίνακες Ε3 / αντιπαραβολές (ατομικός) — όπως το Λογιστικό Αποτέλεσμα.
+  function _openE3ResultModal(data) {
+    const modal = document.getElementById('e3ResultModal');
+    if (!modal) return false;
+    const c0 = (data && Array.isArray(data.clients) && data.clients[0]) || {};
+    const checks = c0.checks || {};
+    const hasTables = _e3HasRealData(E3_LAST_DATA);
+    const status = document.getElementById('e3ResultModalStatus');
+    if (status) {
+      const who = [c0.name, c0.afm ? 'ΑΦΜ ' + c0.afm : ''].filter(Boolean).join(' · ');
+      status.textContent = [who, data && data.year ? 'Έτος ' + data.year : ''].filter(Boolean).join(' — ') +
+        (hasTables ? '' : ' — δεν υπάρχουν δεδομένα myDATA για τον πίνακα');
+    }
+    const diag = document.getElementById('e3ResultModalDiag');
+    if (diag) {
+      const items = _brainExtraDiagItems(checks).concat(
+        (Array.isArray(c0.warnings) ? c0.warnings : []).map((w) => String(w).replace(/&/g, '&amp;').replace(/</g, '&lt;')));
+      diag.innerHTML = items.length ? '<ul style="margin:0;padding-left:1.1rem;list-style:disc">' +
+        items.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '';
+      diag.classList.toggle('hidden', !items.length);
+    }
+    const cont = document.getElementById('e3DataContainer');
+    if (cont) cont.style.display = hasTables ? 'block' : 'none';
+    modal.classList.remove('hidden');
+    modal.style.display = 'flex';
+    const reopen = document.getElementById('e3ResultReopenBtn');
+    if (reopen) reopen.classList.remove('hidden');
+    return true;
+  }
+
+  (function _wireE3ResultModal() {
+    const modal = document.getElementById('e3ResultModal');
+    if (!modal || modal.dataset.wired) return;
+    modal.dataset.wired = '1';
+    const close = () => { modal.classList.add('hidden'); modal.style.display = 'none'; };
+    const x = document.getElementById('e3ResultModalClose');
+    if (x) x.addEventListener('click', close);
+    const reopen = document.getElementById('e3ResultReopenBtn');
+    if (reopen) reopen.addEventListener('click', () => _openE3ResultModal(E3_BRAIN_LAST_RESULT || {}));
+    const pdf = document.getElementById('e3ResultModalPdfBtn');
+    if (pdf) pdf.addEventListener('click', () => {
+      const d = E3_BRAIN_LAST_RESULT;
+      if (!d || typeof _brainBulkExportToPdf !== 'function') return;
+      close();
+      _brainBulkExportToPdf({ ok: d.ok, mode: 'single', clients: Array.isArray(d.clients) ? d.clients : [], aborted: false });
+    });
+  })();
 
   // === Multi-ATAK picker (E9 ιδιόχρηση) ===
   // For each ATAK found at the company's έδρα, show κατηγορία/όροφος/τμ
@@ -6859,8 +6995,7 @@
     const text = document.getElementById('e3BulkBrainBannerText');
     if (!text) return;
     if (!progress || !progress.label) return;
-    const pct = (typeof progress.percent === 'number') ? ` (${progress.percent}%)` : '';
-    text.textContent = `E3 Bulk — ${progress.label}${pct}`;
+    text.textContent = 'E3 Bulk — ' + _e3FmtProgress(progress);
   }
   function _hideBrainBulkBanner() {
     const banner = document.getElementById('e3BulkBrainBanner');
