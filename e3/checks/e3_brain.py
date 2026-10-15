@@ -1662,7 +1662,8 @@ def _employer_contrib_check(year: int, afm: str, name: str, ksum: Dict[str, Any]
     for fund in ("IKA", "TEKA"):
         rows = [x for r in regs if (r.get("employer_fund") or "IKA") == fund for x in (r.get("rows") or [])]
         keao[fund] = rows if (rows or keao_read) else None
-    res = ER.reconcile(year, cards, keao)
+    regs_by_fund = {f: [r for r in regs if (r.get("employer_fund") or "IKA") == f] for f in ("IKA", "TEKA")}
+    res = ER.reconcile(year, cards, keao, regs_by_fund)
     res["keao_source"] = source
     res["deadline"] = ER.deadline_for(year).strftime("%d/%m/%Y")
     res["keao_fees_total"] = round(sum(f["totals"]["keao_fees"] for f in res["funds"].values()), 2)
@@ -1675,6 +1676,20 @@ def _employer_contrib_check(year: int, afm: str, name: str, ksum: Dict[str, Any]
             res["report_error"] = err[:300]
         else:
             res["report_pdf"] = target.name
+        # «Ανάλυση» κάθε πίστωσης ΚΕΑΟ εργοδότη + η αντιστοίχισή της → JSON δίπλα στην καρτέλα (τεκμηρίωση)
+        try:
+            jpath = pdf_dir / f"kartela_ergodoti_keao_analysi_{afm}_{year}.json"
+            jpath.write_text(json.dumps({
+                "afm": afm, "year": year, "ame": ame, "deadline": res["deadline"], "keao_source": source,
+                "registries": [{k: r.get(k) for k in ("amo", "forea", "am", "employer_fund", "status")}
+                               | {"credits": [{k: c.get(k) for k in ("date", "doc", "kod_kin", "total", "main_contrib",
+                                                                       "extra_fees", "surcharges", "analysis")}
+                                              for c in r.get("rows") or []]} for r in regs],
+                "allocations": {f: v.get("keao_payments") for f, v in res["funds"].items()},
+            }, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+            res["analysis_json"] = jpath.name
+        except Exception as exc:
+            res["analysis_json_error"] = str(exc)[:200]
     for f in res["funds"].values():
         f.pop("keao_payments", None)
         f.pop("movements", None)

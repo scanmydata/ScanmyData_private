@@ -696,11 +696,46 @@ def _png_to_rgb(path: Path) -> Image.Image:
     return img
 
 
-def _stitch_pdf(png_paths: list[Path], pdf_path: Path) -> Path:
+def _header_font(size: int, bold: bool = False):
+    from PIL import ImageFont
+    names = (["arialbd.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"] if bold else []) +         ["arial.ttf", "segoeui.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"]
+    dirs = ["", "C:/Windows/Fonts/", "/usr/share/fonts/truetype/dejavu/", "/usr/share/fonts/truetype/liberation/",
+            "/usr/share/fonts/dejavu/", "/Library/Fonts/"]
+    for n in names:
+        for d in dirs:
+            try:
+                return ImageFont.truetype(d + n, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _add_header(img: Image.Image, title: str, subtitle: str = "") -> Image.Image:
+    """Επικεφαλίδα πάνω από το στιγμιότυπο: ταμείο/μητρώο ώστε το αποδεικτικό να λέει ΤΙ είναι
+    (όπως η καρτέλα αντιπαραβολής), αφού η σελίδα του ΚΕΑΟ δείχνει μόνο ΑΜΟ/Α.Μ."""
+    from PIL import ImageDraw
+    pad = 14
+    f1, f2 = _header_font(20, bold=True), _header_font(15)
+    h = pad * 2 + 24 + (22 if subtitle else 0)
+    out = Image.new("RGB", (img.width, img.height + h), "white")
+    d = ImageDraw.Draw(out)
+    d.rectangle([0, 0, img.width, h - 4], fill=(11, 61, 99))
+    d.text((pad, pad), title, font=f1, fill="white")
+    if subtitle:
+        d.text((pad, pad + 26), subtitle, font=f2, fill=(220, 230, 240))
+    out.paste(img, (0, h))
+    return out
+
+
+def _stitch_pdf(png_paths: list[Path], pdf_path: Path, title: str = "", subtitle: str = "") -> Path:
     if not png_paths:
         return pdf_path
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     images = [_png_to_rgb(p) for p in png_paths]
+    if title:
+        n = len(images)
+        images = [_add_header(im, title, (subtitle + (f" · σελίδα {i + 1}/{n}" if n > 1 else "")).strip(" ·"))
+                  for i, im in enumerate(images)]
     first, rest = images[0], images[1:]
     first.save(str(pdf_path), "PDF", save_all=True, append_images=rest)
     return pdf_path
@@ -783,7 +818,10 @@ def _process_registry(picker: Page, reg: dict, date_from: str, year: int,
         idx += 1
 
     pdf_path = output_dir / f"{artifact_safe}.pdf"
-    _stitch_pdf(shot_paths, pdf_path)
+    _forea_clean = re.sub(r"^Ληξιπρόθεσμο\s*-\s*", "", reg["forea"] or "", flags=re.IGNORECASE)
+    _stitch_pdf(shot_paths, pdf_path,
+                title=f"ΚΕΑΟ — Πιστώσεις οφειλέτη — {kind_label}",
+                subtitle=f"ΑΜΟ {reg['amo']} · {_forea_clean}" + (f" · ΑΦΜ {afm}" if afm else "") + f" · από {date_from}")
     record["pdf"] = str(pdf_path)
     record["rows"] = all_rows
 

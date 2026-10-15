@@ -1232,7 +1232,55 @@ def _labeled(html: str, label: str) -> str:
     return ""
 
 
-def _keao_registry_credits(http: _Http, picker: Dict[str, Any], reg: Dict[str, Any], diag: _Diag) -> Dict[str, Any]:
+_PEE_DOC_RE = re.compile(r"\d{3}-\d{4}-[Α-ΩA-Z]{2,5}/[Α-ΩA-Z]{1,4}/\d+")
+_PERIOD_RE = re.compile(r"(?<![\d/])(\d{1,2})/(\d{4})(?![\d/])")
+
+
+def _keao_credit_analysis(http: _Http, post_url: str, vs: str, row_html: str, diag: _Diag, tag: str) -> Optional[Dict[str, Any]]:
+    """«Ανάλυση» μιας πίστωσης ΚΕΑΟ (κουμπί της γραμμής): σε ποιες οφειλές (παραστατικά/περιόδους) κατανεμήθηκε.
+    Επιστρέφει {"rows":[[κελιά]], "headers":[...], "docs":[...], "periods":["M/YYYY"], "text":...} ή None."""
+    bm = re.search(r"<button\b([^>]*)>", row_html, re.I)
+    if not bm:
+        return None
+    attrs = bm.group(1)
+    bid = (re.search(r'\bid="([^"]+)"', attrs) or [None, ""])[1]
+    if not bid:
+        return None
+    oc = cert._decode_html((re.search(r'onclick="([^"]*)"', attrs) or [None, ""])[1] or "")
+    upd = (re.search(r'u:"([^"]+)"', oc) or [None, "@all"])[1]
+    src = (re.search(r'PrimeFaces\.ab\(\{s:"([^"]+)"', oc) or [None, bid])[1]
+    try:
+        x = http.ajax(post_url, {
+            "jakarta.faces.partial.ajax": "true", "jakarta.faces.source": src,
+            "jakarta.faces.partial.execute": src, "jakarta.faces.partial.render": upd, src: src,
+            "debtorTransForm": "debtorTransForm", "debtorTransForm:mainTabView_activeIndex": "1",
+            "jakarta.faces.ViewState": vs,
+        })["text"]
+    except Exception as exc:
+        logging.warning("[keao] ανάλυση %s: %s", bid, exc)
+        return None
+    diag.dump(f"keao_{tag}_analysis_{re.sub(r'[^0-9A-Za-z]+', '_', bid)[-40:]}.xml", x)
+    frag = "".join(re.findall(r"<update[^>]*><!\[CDATA\[([\s\S]*?)\]\]></update>", x, re.I)) or x
+    tables = parse_datatables(frag)
+    rows, headers = [], []
+    for t in tables:
+        if t.get("rows"):
+            headers = headers or list(t.get("headers") or [])
+            rows.extend(t["rows"])
+    if not rows:
+        for tr in re.finditer(r"<tr\b[^>]*>([\s\S]*?)</tr>", frag, re.I):
+            cells = [cert._strip_tags(c) for c in re.findall(r"<td\b[^>]*>([\s\S]*?)</td>", tr.group(1), re.I)]
+            if any(cells):
+                rows.append(cells)
+    text = cert._strip_tags(frag)
+    docs = sorted(set(_PEE_DOC_RE.findall(text)))
+    periods = sorted({f"{int(m)}/{y}" for m, y in _PERIOD_RE.findall(" ".join(" ".join(r) for r in rows) or text)
+                      if 1 <= int(m) <= 12}, key=lambda p: (int(p.split("/")[1]), int(p.split("/")[0])))
+    return {"headers": headers, "rows": rows[:200], "docs": docs, "periods": periods, "text": text[:1500]}
+
+
+def _keao_registry_credits(http: _Http, picker: Dict[str, Any], reg: Dict[str, Any], diag: _Diag,
+                           analyze: bool = False) -> Dict[str, Any]:
     vs, post_url = picker["vs"], picker["post_url"]
     tag = f"amo{reg['amo']}"
     en = http.ajax(post_url, {
@@ -1319,7 +1367,11 @@ def _keao_registry_credits(http: _Http, picker: Dict[str, Any], reg: Dict[str, A
             c = [cert._strip_tags(x) for x in re.findall(r"<td\b[^>]*>([\s\S]*?)</td>", tr.group(2), re.I)]
             if len(c) < 8:
                 continue
-            rows.append(keao_credit_row(c[1], c[2], c[3], c[4], c[5], c[6], c[7], branch=c[0]))
+            row = keao_credit_row(c[1], c[2], c[3], c[4], c[5], c[6], c[7], branch=c[0])
+            if analyze:
+                # Μητρώα ΕΡΓΟΔΟΤΗ: «Ανάλυση» κάθε πίστωσης → ακριβής αντιστοίχιση με τις μεταφορές (ΠΕΕ) της καρτέλας.
+                row["analysis"] = _keao_credit_analysis(http, post_url, vs, tr.group(2), diag, tag)
+            rows.append(row)
         step += 1
     return {"status": "ok", "rows": rows, "header_totals": header}
 
@@ -1353,7 +1405,7 @@ def fetch_keao(http: _Http, keao_url: str, diag: _Diag) -> Dict[str, Any]:
             if i > 0:
                 picker = _keao_picker(http, keao_url)  # φρέσκο ViewState ανά μητρώο
                 reg = next((r for r in picker["rows"] if r["amo"] == reg["amo"] and r["forea"] == reg["forea"]), reg)
-            rec.update(_keao_registry_credits(http, picker, reg, diag))
+            rec.update(_keao_registry_credits(http, picker, reg, diag, analyze=(kind == "employer")))
         except Exception as exc:
             logging.exception("KEAO registry %s", reg.get("amo"))
             rec.update({"status": f"error: {exc}", "rows": []})
