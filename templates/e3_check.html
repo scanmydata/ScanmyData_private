@@ -1432,6 +1432,9 @@
         <button type="button" id="brainLoadExcelBtn" class="e3-action-button">
           📤 Μεταφόρτωση Ισοζυγίου
         </button>
+        <button id="e3IsozygioHintBtn" type="button" aria-label="Ποιες στήλες χρειάζεται το ισοζύγιο;"
+                title="Ποιες στήλες χρειάζεται το ισοζύγιο; (και πρότυπο Excel)"
+                class="w-6 h-6 rounded-full bg-sky-100 text-sky-700 text-sm font-bold hover:bg-sky-200">i</button>
         <!-- Hidden legacy button: keeps existing bindings on brainLoadE3Btn
              alive so loadBrainE3Data() is still callable from JS, but the
              menu/dropdown UI is gone — myDATA fetch now fires as part of
@@ -1639,6 +1642,51 @@
     </div>
 
     <!-- Hint modal: πώς εξάγω τους κωδικούς σε Excel (Hyper/Extra & TaxSystem) -->
+    <!-- ⓘ Μεταφόρτωση Ισοζυγίου: πρότυπες στήλες + λήψη προτύπου Excel -->
+    <div id="e3IsozygioHintModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4"
+         style="background:rgba(0,0,0,.55);">
+      <div class="bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-lg font-bold flex items-center gap-2">📤 Ισοζύγιο — στήλες που χρειάζεται η εφαρμογή</h3>
+          <button id="e3IsozygioHintClose" type="button" data-modal-close class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xl leading-none">✕</button>
+        </div>
+        <div class="px-5 py-4 text-sm space-y-3">
+          <p class="text-gray-600 dark:text-gray-300">
+            Ισοζύγιο Γενικής Λογιστικής (.xlsx / .xls) από το λογιστικό σας πρόγραμμα. Η εφαρμογή βρίσκει μόνη της τη
+            γραμμή επικεφαλίδων (αυτή που περιέχει «Κωδικός» και «Υπόλοιπο»), σε οποιοδήποτε φύλλο.
+          </p>
+          <table class="w-full text-xs border-collapse">
+            <thead><tr class="bg-gray-100 dark:bg-gray-700">
+              <th class="border dark:border-gray-600 px-2 py-1 text-left">Στήλη</th>
+              <th class="border dark:border-gray-600 px-2 py-1">Υποχρ.</th>
+              <th class="border dark:border-gray-600 px-2 py-1 text-left">Τι περιέχει</th></tr></thead>
+            <tbody>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Κωδικός</td><td class="border dark:border-gray-600 px-2 py-1 text-center">✓</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Κωδικός λογαριασμού. Αθροίζονται οι αναλυτικοί (με παύλες, π.χ. <code>64-07-00-0000</code>)· οι συγκεντρωτικοί (π.χ. <code>64</code>) αγνοούνται.</td></tr>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Περιγραφή</td><td class="border dark:border-gray-600 px-2 py-1 text-center">—</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Προαιρετική· εμφανίζεται στην ανάλυση ανά λογαριασμό.</td></tr>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Χρέωση</td><td class="border dark:border-gray-600 px-2 py-1 text-center">✓</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Σύνολο χρεώσεων χρήσης (αριθμός).</td></tr>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Πίστωση</td><td class="border dark:border-gray-600 px-2 py-1 text-center">✓</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Σύνολο πιστώσεων χρήσης (αριθμός).</td></tr>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Υπόλοιπο</td><td class="border dark:border-gray-600 px-2 py-1 text-center">✓</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Ανοικτό ισοζύγιο: ποσό Ε3 = |Υπόλοιπο|. Κλειστό (χρεοπιστωμένο, εντοπίζεται αυτόματα): ομάδα 6 → Χρέωση, ομάδα 7 → Πίστωση.</td></tr>
+              <tr><td class="border dark:border-gray-600 px-2 py-1 font-semibold">Πεδίο Ε3</td><td class="border dark:border-gray-600 px-2 py-1 text-center">✓</td>
+                <td class="border dark:border-gray-600 px-2 py-1">Κωδικός Ε3 ως αριθμός με 3 δεκαδικά (π.χ. <code>585.007</code>, <code>561.003</code>, <code>588</code>). Κενό ή <code>-1</code> = εκτός Ε3.</td></tr>
+            </tbody>
+          </table>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            Συγκρίσεις: <strong>585.007</strong> με τις φορολογικές βεβαιώσεις e-ΕΦΚΑ/ΤΕΚΑ (+ λοιπά ταμεία),
+            <strong>588</strong> με τις επιβαρύνσεις εισφορών, <strong>585.014</strong> με το ενοίκιο/ιδιόχρηση και όλοι οι κωδικοί με το myDATA.
+          </p>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex flex-wrap justify-end gap-2">
+          <a id="e3IsozygioTemplateBtn" href="/api/e3/isozygio_template" download
+             class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium">⬇ Λήψη προτύπου Excel</a>
+          <button id="e3IsozygioHintClose2" type="button" class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 px-4 py-2 rounded-lg font-medium">Κλείσιμο</button>
+        </div>
+      </div>
+    </div>
     <div id="brainExcelHintModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4"
          style="background:rgba(0,0,0,.55);">
       <div class="bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto">
@@ -2504,6 +2552,122 @@
     } catch (_) { /* best-effort — the pill/cache above already reflect the type either way */ }
   }
 
+  // Μέλη από το κοινό store → μορφή του Ατομικού (με τους αποθηκευμένους κωδικούς μελών).
+  function _e3ApplyStoreMembers(members) {
+    E3_BRAIN_MEMBERS = [];
+    E3_BRAIN_MEMBER_CREDS = {};
+    (Array.isArray(members) ? members : []).forEach((m, idx) => {
+      const credKey = `_m${idx}`;
+      E3_BRAIN_MEMBER_CREDS[credKey] = {
+        taxisnet_username: m.taxisnet_username || '', taxisnet_password: m.taxisnet_password || '', amka: m.amka || '',
+      };
+      E3_BRAIN_MEMBERS.push({ afm: String(m.afm || ''), name: String(m.full_name || m.name || ''), role: String(m.role || ''),
+                              dt_from: m.dt_from || null, dt_to: m.dt_to || null, raw: m, _credKey: credKey });
+    });
+    try { renderBrainPartnerFields(); } catch (_) {}
+  }
+
+  // Ενημέρωση της cache του store στη σελίδα ώστε η αλλαγή πελάτη → επιστροφή να δείχνει τη νομική μορφή.
+  function _e3PatchCredsCache(afm, patch, members) {
+    try {
+      if (!Array.isArray(E3_BRAIN_CREDS_CACHE)) E3_BRAIN_CREDS_CACHE = [];
+      let e = E3_BRAIN_CREDS_CACHE.find((c) => String((c.company || {}).afm || '').trim() === afm);
+      if (!e) { e = { company: { afm }, members: [] }; E3_BRAIN_CREDS_CACHE.push(e); }
+      e.company = Object.assign({}, e.company || {}, patch);
+      if (Array.isArray(members)) e.members = members;
+    } catch (_) {}
+  }
+
+  async function _e3PollStoreMembers(afm, year) {
+    const started = Date.now();
+    while (Date.now() - started < 10 * 60 * 1000) {
+      await _e3Sleep(5000);
+      const cur = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
+      if (cur !== afm) return;                              // ο χρήστης άλλαξε πελάτη
+      let d;
+      try {
+        const r = await fetch(`/api/e3/brain/company_info/members?afm=${encodeURIComponent(afm)}&year=${encodeURIComponent(year || '')}`, { cache: 'no-store' });
+        d = await _brainParseJsonResponse(r);
+      } catch (_) { continue; }
+      if (!d || !d.ok || d.pending) continue;
+      _e3ApplyStoreMembers(d.members);
+      _e3PatchCredsCache(afm, {}, d.members);
+      try {
+        const ex = _membersCacheGet(afm, year) || {};
+        _membersCacheSet(afm, year, Object.assign({}, ex, { members: E3_BRAIN_MEMBERS }));
+      } catch (_) {}
+      try { saveE3BrainState(); } catch (_) {}
+      const n = (d.members || []).length;
+      showBrainAfmStatus(n ? `Τα μέλη ανακτήθηκαν (${n}${year ? ' για το ' + year : ''}) και αποθηκεύτηκαν.` +
+        (d.gemi_warning ? ' ⚠ ' + d.gemi_warning : '') : 'Δεν βρέθηκαν ενεργά μέλη για το έτος.', n ? 'success' : 'warning', 8000);
+      return;
+    }
+  }
+
+  async function _e3CompanyInfoNew(afm, year, taxisUser, taxisPass, force) {
+    showBrainAfmStatus('Ανάκτηση νομικής μορφής και διεύθυνσης από ΑΑΔΕ...', 'info', 0);
+    try { showGlobalWaitOverlay('Φόρτωση δεδομένων', 'Ανάκτηση νομικής μορφής και διεύθυνσης από ΑΑΔΕ...'); } catch (_) {}
+    const branchesPromise = fetch('/api/e3/brain/sub_home', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taxis_user: taxisUser, taxis_pass: taxisPass }),
+    }).then((r) => _brainParseJsonResponse(r)).catch(() => null);
+    let d;
+    try {
+      const r = await fetch('/api/e3/brain/company_info', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ afm, year, taxis_user: taxisUser, taxis_pass: taxisPass, force: !!force }),
+      });
+      d = await _brainParseJsonResponse(r);
+      if (!d || !d.ok) throw new Error((d && d.error) || 'Αποτυχία ανάκτησης από ΑΑΔΕ.');
+    } catch (e) {
+      console.warn('E3 company_info (νέα ροή) → fallback company_members:', e && e.message);
+      try { hideGlobalWaitOverlay(); } catch (_) {}
+      return false;
+    }
+    try {
+      const isIndividual = !!d.is_individual;
+      applyBrainSingleLegalType(d.legal_type || '', isIndividual);
+      const addrEl = document.getElementById('brainAddress');
+      if (addrEl && d.address) addrEl.value = d.address;
+      updateBrainAmkaVisibility(isIndividual);
+      if (isIndividual) { E3_BRAIN_MEMBERS = []; E3_BRAIN_MEMBER_CREDS = {}; try { renderBrainPartnerFields(); } catch (_) {} }
+      else _e3ApplyStoreMembers(d.members);
+      _e3PatchCredsCache(afm, { legal_type: d.legal_type || '', address: d.address || '' }, isIndividual ? [] : d.members);
+      if (year) {
+        _membersCacheSet(afm, year, { company: {}, address: d.address || '', legal_type: d.legal_type || '',
+                                      is_individual: isIndividual, members: E3_BRAIN_MEMBERS, branches: [] });
+      }
+      try { saveE3BrainState(); } catch (_) {}
+      (async () => {
+        const sub = await branchesPromise;
+        if (!(sub && sub.ok)) return;
+        const all = [].concat(sub.branches_domestic || [], sub.branches_abroad || []);
+        const addresses = all.map((b) => String(b.address || '').trim()).filter(Boolean);
+        if (!addresses.length) return;
+        try { setBrainBranchAddresses(addresses); } catch (_) {}
+        try { _annotateBrainBranchTypes(all); } catch (_) {}
+        try { saveE3BrainState(); } catch (_) {}
+        try { if (year) _membersCacheSet(afm, year, Object.assign({}, _membersCacheGet(afm, year) || {}, { branches: all })); } catch (_) {}
+        showBrainFlash(`Βρέθηκαν ${addresses.length} υποκαταστήματα από ΑΑΔΕ.`, 'info', 5000);
+      })();
+      if (isIndividual && !String((document.getElementById('brainAmka') || {}).value || '').trim()) {
+        const autoModal = document.getElementById('brainAmkaAutoFetchModal');
+        if (autoModal) autoModal.style.display = 'flex';
+      }
+      const parts = [`Νομική μορφή: ${d.legal_type || '—'}`, d.address ? `έδρα: ${d.address}` : 'χωρίς διεύθυνση από ΑΑΔΕ'];
+      parts.push(d.was_saved ? 'ενημερώθηκε η καρτέλα του πελάτη' : 'ο πελάτης αποθηκεύτηκε στα κοινά στοιχεία (Ε3 / Λογιστικό Αποτέλεσμα)');
+      if (!isIndividual) {
+        if (d.members_pending) parts.push('τα μέλη ανακτώνται στο παρασκήνιο…');
+        else parts.push(`${(d.members || []).length} μέλη${year ? ' για το ' + year : ''}`);
+      }
+      showBrainAfmStatus(parts.join(' · ') + '.', 'success', d.members_pending ? 0 : 8000);
+      if (!isIndividual && d.members_pending) _e3PollStoreMembers(afm, year);
+    } finally {
+      try { hideGlobalWaitOverlay(); } catch (_) {}
+    }
+    return true;
+  }
+
   async function loadE3Partners(dateFromIso=null, dateToIso=null, opts) {
     const force = !!(opts && opts.force);
     const afm = String((document.getElementById('brainAfm') || {}).value || '').replace(/\D/g, '');
@@ -2550,6 +2714,12 @@
         } catch (_) { /* fall through to live fetch on any cache hydration error */ }
       }
     }
+    // ΝΕΟ (κοινό με το Λογιστικό Αποτέλεσμα): ΑΑΔΕ Μητρώο → νομική μορφή + διεύθυνση αποθηκεύονται στο
+    // κοινό store· τα μέλη έρχονται στο παρασκήνιο (χωρίς timeout του gateway). Παλιά ροή = fallback.
+    if (taxisUser && taxisPass) {
+      const done = await _e3CompanyInfoNew(afm, cacheYear, taxisUser, taxisPass, force);
+      if (done) return;
+    }
     showBrainAfmStatus('Αναμονή λήψης διεύθυνσης και νομικής μορφής...', 'info', 0);
     try {
       // show a global overlay for longer operations and ensure it's hidden later
@@ -2578,7 +2748,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const data = await resp.json();
+      let data;
+      try {
+        data = await _brainParseJsonResponse(resp);
+      } catch (pe) {
+        throw new Error(resp.status >= 500
+          ? 'Η ανάκτηση άργησε πολύ και διακόπηκε από τον διακομιστή (HTTP ' + resp.status + '). Δοκίμασε ξανά — με κωδικούς TAXISnet τα μέλη έρχονται στο παρασκήνιο.'
+          : pe.message);
+      }
       if (!resp.ok || !data.ok) {
         throw new Error((data && data.error) || 'Αποτυχία φόρτωσης εταιρικών στοιχείων.');
       }
@@ -5031,15 +5208,89 @@
     })();
 
     try {
-      const response = await fetch('/api/e3/brain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
-        throw new Error((data && data.error) || 'Αποτυχία εκτέλεσης E3 brain.');
+      // ΝΕΟ: ο ατομικός τρέχει ως job του server (όπως ο μαζικός) — ως ένα μακρύ HTTP αίτημα ξεπερνούσε
+      // το όριο του gateway (σελίδα σφάλματος HTML, το popup δεν άνοιγε, η εργασία «δεν τελείωνε»).
+      // Παλιός server χωρίς το endpoint: απευθείας αίτημα όπως πριν.
+      let data = null;
+      const srv = await _e3SingleRunOnServer(payload);
+      if (srv.unsupported) {
+        const response = await fetch('/api/e3/brain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        data = await _brainParseJsonResponse(response);
+        if (!response.ok || !data.ok) {
+          throw new Error((data && data.error) || 'Αποτυχία εκτέλεσης E3 brain.');
+        }
+      } else {
+        if (srv.jobId) _e3BulkConsume(srv.jobId);
+        if (srv.claimed) throw new Error('Το αποτέλεσμα παραλήφθηκε από άλλο tab.');
+        if (srv.detached) throw new Error(srv.error || 'Η επικοινωνία διακόπηκε — ο έλεγχος συνεχίζει στον server.');
+        data = srv.data;
+        if (!srv.ok || !data || !data.ok) throw new Error((data && data.error) || srv.error || 'Αποτυχία εκτέλεσης E3 brain.');
       }
+      await _e3SingleFinish(data, { downloadEfkaPdfs, downloadTekaPdfs, downloadMisthPdfs, downloadE9Pdfs, runMisth, runE9,
+                                    stopProgress, myDataPromise: _myDataFetchPromise });
+    } catch (e) {
+      brainSetResult(`Σφάλμα: ${e.message}`);
+      showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
+    } finally {
+      try { stopProgress(); } catch (_) {}
+      hideGlobalWaitOverlay();
+    }
+  }
+
+  async function _e3SingleRunOnServer(payload) {
+    let started = null;
+    try {
+      const resp = await fetch('/api/e3/brain/single_start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(payload),
+      });
+      if (resp.status === 404) return { unsupported: true };
+      started = await _brainParseJsonResponse(resp);
+    } catch (_) { return { unsupported: true }; }
+    if (!started || !started.ok) return { unsupported: true, error: started && started.error };
+    try { sessionStorage.setItem('e3SingleActiveJob', started.job_id); } catch (_) {}
+    try {
+      return await _e3BulkWaitJob(started.job_id);
+    } finally {
+      try { sessionStorage.removeItem('e3SingleActiveJob'); } catch (_) {}
+    }
+  }
+
+  // Ατομικός που έτρεχε στον server όταν ο χρήστης έφυγε από τη σελίδα (partial navigation/ανανέωση):
+  // ξαναπιάνεται και ανοίγει το popup με το αποτέλεσμα.
+  async function _e3SingleResumePending() {
+    if (window.__e3SingleAttached) return;
+    try {
+      const d = await (await fetch('/api/e3/brain/bulk_jobs_mine?kind=single', { cache: 'no-store', credentials: 'same-origin' })).json();
+      const j = d && d.ok && (d.jobs || []).slice(-1)[0];
+      if (!j || window.__e3SingleAttached) return;
+      window.__e3SingleAttached = j.id;
+      const stop = (j.status === 'running') ? _startBrainProgressPoller('E3 Brain', j.id, ['Ο έλεγχος συνεχίζει στον server…']) : null;
+      try {
+        const res = await _e3BulkWaitJob(j.id);
+        _e3BulkConsume(j.id);
+        if (res.ok && res.data && res.data.ok) await _e3SingleFinish(res.data, {});
+        else if (!res.claimed) showBrainFlash(`Σφάλμα: ${res.error || (res.data && res.data.error) || ''}`, 'error');
+      } finally {
+        if (stop) { try { stop(); } catch (_) {} }
+        try { hideGlobalWaitOverlay(); } catch (_) {}
+        window.__e3SingleAttached = null;
+      }
+    } catch (_) {}
+  }
+  window._e3SingleResumePending = _e3SingleResumePending;
+  setTimeout(function () { try { _e3SingleResumePending(); } catch (_) {} }, 1700);
+
+  // Μετά την ολοκλήρωση του Ατομικού (άμεσα ή μετά από ξαναπιάσιμο): flash, πίνακες, popup.
+  async function _e3SingleFinish(data, ctx) {
+    ctx = ctx || {};
+    const { downloadEfkaPdfs, downloadTekaPdfs, downloadMisthPdfs, downloadE9Pdfs, runMisth, runE9 } = ctx;
+    const stopProgress = ctx.stopProgress || function () {};
+    const _myDataFetchPromise = ctx.myDataPromise || Promise.resolve();
+    {
       E3_BRAIN_LAST_RESULT = data;
       brainSetResult(data);
       showBrainFlash(data.message || 'E3 Brain εκτελέστηκε επιτυχώς.', 'success');
@@ -5138,8 +5389,10 @@
       // available for the user to switch).
       // Auto-refresh the unified PDF browser if the brain produced any
       // βεβαιώσεις / αποδείξεις / εκκαθαριστικά during this run.
+      const _anySaved = Object.values(((data.clients && data.clients[0] && data.clients[0].checks) || {}).pdfs_saved || {})
+        .some((v) => Number(v || 0) > 0);
       if (downloadEfkaPdfs || downloadTekaPdfs || downloadMisthPdfs || downloadE9Pdfs ||
-          runMisth || runE9) {
+          runMisth || runE9 || _anySaved) {
         try { await refreshBrainAllPdfs(); } catch (_) {}
       }
 
@@ -5173,12 +5426,6 @@
           }, 200);
         }
       } catch (_) {}
-    } catch (e) {
-      brainSetResult(`Σφάλμα: ${e.message}`);
-      showBrainFlash(`Σφάλμα: ${e.message}`, 'error');
-    } finally {
-      try { stopProgress(); } catch (_) {}
-      hideGlobalWaitOverlay();
     }
   }
 
@@ -5421,7 +5668,22 @@
     return true;
   }
 
+  // Στατικά modals της σελίδας → άμεσα παιδιά του <body> (το #appShell μπορεί να έχει transform και
+  // τότε ένα position:fixed modal τοποθετείται σχετικά με αυτό). ΠΡΙΝ τη μετακίνηση σβήνονται τα
+  // «ορφανά» αντίγραφα που άφησε προηγούμενη επίσκεψη (partial navigation): αλλιώς υπήρχαν δύο
+  // στοιχεία με το ίδιο id (π.χ. #e3DataContainer) και οι πίνακες/το popup εμφανίζονταν μια ναι μια όχι.
+  function _e3AdoptBodyModals() {
+    ['e3ResultModal', 'brainExcelHintModal', 'brainAmkaAutoFetchModal', 'e3IsozygioHintModal'].forEach(function (id) {
+      const all = Array.prototype.slice.call(document.querySelectorAll('[id="' + id + '"]'));
+      if (!all.length) return;
+      const fresh = all.find(function (n) { return n.parentElement !== document.body; }) || all[all.length - 1];
+      all.forEach(function (n) { if (n !== fresh) n.remove(); });
+      if (fresh.parentElement !== document.body) document.body.appendChild(fresh);
+    });
+  }
+
   (function _wireE3ResultModal() {
+    try { _e3AdoptBodyModals(); } catch (_) {}
     const modal = document.getElementById('e3ResultModal');
     if (!modal || modal.dataset.wired) return;
     modal.dataset.wired = '1';
@@ -6225,12 +6487,37 @@
         payload.date_from = `${yr}-01-01`;
         payload.date_to = `${yr}-12-31`;
       }
+      // ΝΕΟ (κοινό με Λογιστικό Αποτέλεσμα): ΑΑΔΕ Μητρώο + αποθήκευση νομικής μορφής στην καρτέλα του πελάτη.
+      if (taxisUser && taxisPass) {
+        try {
+          const r0 = await fetch('/api/e3/brain/company_info', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ afm: payload.afm, year: (yr >= 2017 && yr <= 2100) ? String(yr) : '',
+                                   taxis_user: taxisUser, taxis_pass: taxisPass }),
+          });
+          const d0 = await _brainParseJsonResponse(r0);
+          if (d0 && d0.ok) {
+            if (d0.address) client.address = d0.address;
+            if (d0.legal_type) client.legal_type = d0.legal_type;
+            const mem = (Array.isArray(d0.members) ? d0.members : []).map((m) => ({
+              afm: String(m.afm || ''), name: String(m.full_name || m.name || ''), role: String(m.role || '') }));
+            if (mem.length) client.members = mem;
+            _e3PatchCredsCache(payload.afm, { legal_type: d0.legal_type || '', address: d0.address || '' }, d0.members);
+            renderBulkPreviewTable(E3_BRAIN_PREVIEW_CLIENTS);
+            showBrainFlash(`Στοιχεία ΑΑΔΕ ενημερώθηκαν για ΑΦΜ ${payload.afm} (${d0.legal_type || '—'})` +
+              (d0.members_pending ? ' — τα μέλη ανακτώνται στο παρασκήνιο, πάτησε ξανά «🔍 Λήψη» σε λίγο.' : '.'), 'success', 6000);
+            return;
+          }
+        } catch (e0) {
+          console.warn('bulk company_info → fallback company_members:', e0 && e0.message);
+        }
+      }
       const resp = await fetch('/api/e3/brain/company_members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await resp.json();
+      const data = await _brainParseJsonResponse(resp);
       if (!resp.ok || !data.ok) {
         throw new Error((data && data.error) || 'Αποτυχία λήψης στοιχείων');
       }
@@ -8520,6 +8807,8 @@
 
     function _parseDateInputToIso(s) {
       if (!s) return null;
+      const _typed = _e3TypedDateToIso(s);      // dd/mm/yy → 20yy κ.λπ.
+      if (_typed) return _typed;
       const t = String(s).trim();
       // ISO yyyy-mm-dd
       if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
@@ -8677,6 +8966,20 @@
     }
 
     // «i» hint modal: πώς εξάγω τους κωδικούς σε Excel (Hyper/Extra & TaxSystem).
+    (function wireIsozygioHint(){
+      const btn = document.getElementById('e3IsozygioHintBtn');
+      const modal = document.getElementById('e3IsozygioHintModal');
+      if (!btn || !modal || btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      const close = () => { modal.classList.add('hidden'); modal.style.display = ''; };
+      btn.addEventListener('click', () => { modal.classList.remove('hidden'); });
+      ['e3IsozygioHintClose', 'e3IsozygioHintClose2'].forEach((id) => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', close);
+      });
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    })();
+
     (function wireExcelHint(){
       const hintBtn = document.getElementById('brainExcelHintBtn');
       const modal = document.getElementById('brainExcelHintModal');
@@ -9358,6 +9661,28 @@
     if (_savedTab === 'analyticTab' || _savedTab === 'quickCheckTab') showE3PageTab(_savedTab);
   } catch (_) {}
 
+  // Πληκτρολογημένη ημερομηνία → ISO (yyyy-mm-dd). Δέχεται dd/mm/yyyy, dd/mm/yy (→ 20yy), d/m/yy,
+  // διαχωριστικά / . -, ddmmyy και ddmmyyyy. null αν δεν είναι έγκυρη.
+  function _e3TypedDateToIso(s) {
+    const t = String(s || '').trim();
+    if (!t) return null;
+    let d, mo, y;
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else if ((m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/))) { d = +m[1]; mo = +m[2]; y = m[3]; }
+    else if ((m = t.match(/^(\d{2})(\d{2})(\d{2}|\d{4})$/))) { d = +m[1]; mo = +m[2]; y = m[3]; }
+    else return null;
+    if (typeof y === 'string') y = y.length === 2 ? 2000 + Number(y) : Number(y);
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  function _e3ParseTypedDate(str, fmt) {
+    const iso = _e3TypedDateToIso(str);
+    if (iso) return new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+    try { return window.flatpickr.parseDate(str, fmt); } catch (_) { return undefined; }
+  }
+
   function ensureE3DatePickerReady() {
     const inputs = ['e3DateFrom', 'e3DateTo', 'brainDateFrom', 'brainDateTo']
       .map((id) => document.getElementById(id))
@@ -9367,6 +9692,17 @@
     function applyMask(input) {
       if (!input || input.dataset.e3MaskBound === '1') return;
       input.dataset.e3MaskBound = '1';
+      // Διψήφιο έτος → 20yy όταν φεύγει ο κέρσορας (και χωρίς flatpickr).
+      input.addEventListener('blur', function() {
+        const iso = _e3TypedDateToIso(input.value);
+        if (iso) {
+          const v = iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+          if (input.value !== v) {
+            input.value = v;
+            try { if (input._flatpickr) input._flatpickr.setDate(v, false, 'd/m/Y'); } catch (_) {}
+          }
+        }
+      });
       input.addEventListener('input', function() {
         const digits = String(input.value || '').replace(/\D/g, '').slice(0, 8);
         const dd = digits.slice(0, 2);
@@ -9470,7 +9806,9 @@
             dateFormat: 'd/m/Y',
             allowInput: true,
             appendTo: document.body,
-            position: 'auto'
+            position: 'auto',
+            // «01/01/25» → 01/01/2025 (το προεπιλεγμένο parse του flatpickr διάβαζε λάθος το διψήφιο έτος)
+            parseDate: _e3ParseTypedDate,
           }, useGr ? { locale: 'gr' } : {}));
         });
       } catch (e) {
@@ -9507,12 +9845,7 @@
     // this unconditionally (every OTHER modal on this page is already
     // created via document.createElement + document.body.appendChild,
     // which is naturally immune — these two are the only static exceptions).
-    try {
-      ['brainExcelHintModal', 'brainAmkaAutoFetchModal'].forEach(function (id) {
-        var el = document.getElementById(id);
-        if (el && el.parentElement !== document.body) document.body.appendChild(el);
-      });
-    } catch (e) { console.warn('[E3] modal body-move failed', e); }
+    try { _e3AdoptBodyModals(); } catch (e) { console.warn('[E3] modal body-move failed', e); }
     try { if (typeof setupE3CheckTabBindings === 'function') setupE3CheckTabBindings(); }
     catch (e) { console.warn('[E3] tab bindings failed', e); }
     try {

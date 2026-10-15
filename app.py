@@ -20475,6 +20475,20 @@ def api_e3_upload_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/e3/isozygio_template", methods=["GET"])
+@login_required
+def api_e3_isozygio_template():
+    """Πρότυπο Excel ισοζυγίου με τις στήλες που διαβάζει η «Μεταφόρτωση Ισοζυγίου» (κουμπί ⓘ)."""
+    try:
+        from e3.e3_processor import build_isozygio_template
+        data = build_isozygio_template()
+        return send_file(io.BytesIO(data), as_attachment=True, download_name="protypo_isozygiou_E3.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        log.exception("api_e3_isozygio_template failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ---------------- Λογιστικό Αποτέλεσμα (accounting_result) ----------------
 
 def _ar_store_path(vat: str) -> str:
@@ -21799,7 +21813,7 @@ def _e3_job_persist(job, result=None) -> None:
         path = _e3_job_store_path(job.get("group"), job.get("id"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         doc = {k: job.get(k) for k in ("id", "group", "user_key", "username", "status", "started", "finished",
-                                       "error", "total", "consumed")}
+                                       "error", "total", "consumed", "kind")}
         doc["result"] = result if result is not None else job.get("result")
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -21863,7 +21877,7 @@ def _e3_recover_jobs(force: bool = False) -> None:
                 "status": "done" if (have and doc.get("status") in ("done", "running")) else ("done" if have else "error"),
                 "activity_id": None, "started": doc.get("started"), "finished": doc.get("finished") or now,
                 "result": res if have else None, "error": err, "claimed": "", "consumed": False,
-                "total": doc.get("total"), "recovered": True,
+                "total": doc.get("total"), "recovered": True, "kind": doc.get("kind") or "bulk",
             }
 
 
@@ -22036,12 +22050,48 @@ def api_e3_brain_bulk_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/e3/brain/single_start", methods=["POST"])
+@login_required
+def api_e3_brain_single_start():
+    """Ατομικός έλεγχος Ε3 ως job του server (όπως ο μαζικός): ο έλεγχος (ΕΦΚΑ/ΤΕΚΑ ανά μέλος, Καρτέλα
+    Εργοδότη, ΚΕΑΟ, Ε9…) κρατά λεπτά — ως ένα HTTP αίτημα ξεπερνούσε το όριο του gateway, ο browser
+    έπαιρνε σελίδα σφάλματος HTML και το popup με τα δεδομένα δεν άνοιγε ποτέ. Χωρίς κλείδωμα ομάδας."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        group = _ar_group_key()
+        if not group:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 400
+        jid = str(payload.get("job_id") or "").strip() or ("single-" + secrets.token_hex(5))
+        payload["job_id"] = jid
+        uk, un = _ar_user_ident()
+        job = {"id": jid, "group": group, "user_key": uk, "username": un, "status": "running", "activity_id": None,
+               "started": time.time(), "finished": None, "result": None, "error": "", "claimed": "", "consumed": False,
+               "total": 1, "kind": "single"}
+        with _E3_SERVER_JOBS_LOCK:
+            _E3_SERVER_JOBS[jid] = job
+        _e3_job_persist(job)
+        env = {
+            "headers": {k: v for k, v in (("User-Agent", request.headers.get("User-Agent")),
+                                          ("X-Forwarded-For", request.headers.get("X-Forwarded-For"))) if v},
+            "environ_base": {"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        }
+        threading.Thread(
+            target=_e3_bulk_worker,
+            args=(current_app._get_current_object(), job, dict(session), env, get_group_base_dir(), payload),
+            daemon=True,
+        ).start()
+        return jsonify({"ok": True, "job_id": jid}), 200
+    except Exception as e:
+        log.exception("api_e3_brain_single_start failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 def _e3_job_public(job) -> Dict[str, Any]:
     prog = _e3_progress(job.get("id")) if job.get("status") == "running" else {}
     return {"id": job.get("id"), "status": job.get("status"), "username": job.get("username"),
             "label": prog.get("label") or "", "percent": prog.get("percent"), "error": job.get("error") or "",
             "started": job.get("started"), "finished": job.get("finished"), "total": job.get("total"),
-            "consumed": job.get("consumed")}
+            "consumed": job.get("consumed"), "kind": job.get("kind") or "bulk"}
 
 
 @app.route("/api/e3/brain/bulk_job_state", methods=["GET"])
@@ -22098,8 +22148,10 @@ def api_e3_brain_bulk_jobs_mine():
     me, _ = _ar_user_ident()
     _e3_recover_jobs()
     group = _ar_group_key()
+    kind = str(request.args.get("kind") or "bulk")
     out = [_e3_job_public(j) for j in list(_E3_SERVER_JOBS.values())
-           if j.get("group") == group and j.get("user_key") == me and not j.get("consumed")]
+           if j.get("group") == group and j.get("user_key") == me and not j.get("consumed")
+           and (j.get("kind") or "bulk") == kind]
     out.sort(key=lambda j: j.get("started") or 0)
     return jsonify({"ok": True, "jobs": out}), 200
 
@@ -25577,6 +25629,33 @@ def _ar_fetch_members_by_year(afm: str, taxis_user: str, taxis_pass: str):
     return members, members_by_year, gemi_warning
 
 
+def _merge_members_keep_creds(old_members, new_members) -> list:
+    """Νέα λίστα μελών (από ΑΑΔΕ/ΓΕΜΗ) που ΚΡΑΤΑ τους κωδικούς TAXISnet/ΑΜΚΑ που είχαν ήδη
+    αποθηκευτεί ανά μέλος (ταύτιση με ΑΦΜ, αλλιώς με όνομα) — αλλιώς μια νέα ανάκτηση
+    έσβηνε τα credentials των μελών που χρειάζεται ο έλεγχος Ε3."""
+    import unicodedata as _ud
+
+    def _nk(m):
+        s = _ud.normalize("NFD", str((m or {}).get("full_name") or (m or {}).get("name") or ""))
+        s = "".join(ch for ch in s if _ud.category(ch) != "Mn")
+        return " ".join(s.upper().split())
+    old = [m for m in (old_members or []) if isinstance(m, dict)]
+    by_afm = {str(m.get("afm") or "").strip(): m for m in old if str(m.get("afm") or "").strip()}
+    by_name = {_nk(m): m for m in old if _nk(m)}
+    out = []
+    for m in new_members or []:
+        if not isinstance(m, dict):
+            continue
+        prev = by_afm.get(str(m.get("afm") or "").strip()) or by_name.get(_nk(m)) or {}
+        rec = dict(m)
+        rec.setdefault("full_name", m.get("name") or prev.get("full_name") or "")
+        for k in ("taxisnet_username", "taxisnet_password", "amka"):
+            if prev.get(k) and not rec.get(k):
+                rec[k] = prev[k]
+        out.append(rec)
+    return out
+
+
 def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> None:
     """Runs the heavy members fetch OFF the request thread (it used to run
     inside the HTTP request and, together with the ΑΑΔΕ login, outlived the
@@ -25594,7 +25673,7 @@ def _ar_members_background(afm: str, taxis_user: str, taxis_pass: str, grp) -> N
             entry = next((c for c in data.setdefault("companies", []) if isinstance(c, dict) and str((c.get("company") or {}).get("afm") or "").strip() == afm), None)
             if entry is None:
                 return
-            entry["members"] = members
+            entry["members"] = _merge_members_keep_creds(entry.get("members"), members)
             entry["members_by_year"] = members_by_year
             co_b = entry.setdefault("company", {})
             if gemi_warning:
@@ -25681,7 +25760,7 @@ def _ar_company_info_fetch_and_save(afm: str, taxis_user: str, taxis_pass: str, 
         entry["members"] = []
         entry["members_by_year"] = {}
     elif members_mode == "sync" and members_error is None:
-        entry["members"] = members
+        entry["members"] = _merge_members_keep_creds(entry.get("members"), members)
         entry["members_by_year"] = members_by_year
         if members_gemi_warning:
             co["members_gemi_warning"] = members_gemi_warning
@@ -25757,6 +25836,82 @@ def api_accounting_result_company_info():
     except Exception as e:
         log.exception("api_accounting_result_company_info failed")
         return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
+
+
+def _e3_members_for_year(entry: Dict[str, Any], year: str) -> list:
+    """Μέλη του έτους από το κοινό store (members_by_year), με τους αποθηκευμένους κωδικούς μελών."""
+    if not entry:
+        return []
+    by_year = entry.get("members_by_year") or {}
+    lst = by_year.get(str(year)) if year else None
+    if lst is None:
+        lst = entry.get("members") or []
+    return _merge_members_keep_creds(entry.get("members"), lst)
+
+
+@app.route("/api/e3/brain/company_info", methods=["POST"])
+@login_required
+def api_e3_brain_company_info():
+    """Ανάκτηση διεύθυνσης / νομικής μορφής / μελών για τον Ατομικό έλεγχο Ε3 — η ΙΔΙΑ λειτουργία με
+    το Λογιστικό Αποτέλεσμα (ΑΑΔΕ Μητρώο, αποθήκευση στο κοινό store, μέλη στο παρασκήνιο ώστε το
+    αίτημα να μη ξεπερνά το χρονικό όριο του gateway → HTML 502/524 «Unexpected token '<'»)."""
+    try:
+        from admin.auth import get_active_group
+        grp = get_active_group()
+        if not grp:
+            return jsonify({"ok": False, "error": "Δεν υπάρχει ενεργή ομάδα."}), 403
+        payload = request.get_json(silent=True) or {}
+        afm = "".join(ch for ch in str(payload.get("afm") or "") if ch.isdigit())
+        if len(afm) != 9:
+            return jsonify({"ok": False, "error": "Απαιτείται έγκυρο ΑΦΜ 9 ψηφίων."}), 400
+        year = "".join(ch for ch in str(payload.get("year") or "") if ch.isdigit())[:4]
+        taxis_user = str(payload.get("taxis_user") or "").strip()
+        taxis_pass = str(payload.get("taxis_pass") or "").strip()
+        if not (taxis_user and taxis_pass):
+            taxis_user, taxis_pass = _ar_lookup_taxis_creds(afm)
+        if not taxis_user or not taxis_pass:
+            return jsonify({"ok": False, "error": "Χρειάζονται κωδικοί TAXISnet της επιχείρησης."}), 400
+        prev = _ar_store_company_record(afm)
+        force = bool(payload.get("force"))
+        # μέλη στο παρασκήνιο όταν: νέα ανάκτηση ή δεν υπάρχουν ακόμη μέλη ανά έτος
+        mode = "defer"
+        res = _ar_company_info_fetch_and_save(afm, taxis_user, taxis_pass, grp, members_mode=mode)
+        resp, code = (res if isinstance(res, tuple) else (res, 200))
+        data = resp.get_json(silent=True) or {}
+        if code != 200 or not data.get("ok"):
+            return resp, code
+        entry = _ar_store_company_record(afm)
+        is_individual = "ατομικ" in str(data.get("legal_type") or "").lower()
+        need_members = (not is_individual) and (force or not entry.get("members_by_year")
+                                                or (year and year not in (entry.get("members_by_year") or {})))
+        if need_members and afm not in _AR_MEMBERS_PENDING:
+            _AR_MEMBERS_PENDING.add(afm)
+            threading.Thread(target=_ar_members_background, args=(afm, taxis_user, taxis_pass, grp), daemon=True).start()
+        data.update({
+            "is_individual": is_individual,
+            "members": [] if is_individual else _e3_members_for_year(entry, year),
+            "members_pending": afm in _AR_MEMBERS_PENDING,
+            "was_saved": bool(prev),
+            "source": "aade_profile",
+        })
+        return jsonify(data)
+    except Exception as e:
+        log.exception("api_e3_brain_company_info failed")
+        return jsonify({"ok": False, "error": _friendly_net_error(e) or str(e)}), 500
+
+
+@app.route("/api/e3/brain/company_info/members", methods=["GET"])
+@login_required
+def api_e3_brain_company_info_members():
+    """Κατάσταση/αποτέλεσμα της ανάκτησης μελών στο παρασκήνιο (?afm=&year=)."""
+    afm = "".join(ch for ch in str(request.args.get("afm") or "") if ch.isdigit())
+    year = "".join(ch for ch in str(request.args.get("year") or "") if ch.isdigit())[:4]
+    entry = _ar_store_company_record(afm)
+    co = (entry or {}).get("company") or {}
+    return jsonify({"ok": True, "afm": afm, "pending": afm in _AR_MEMBERS_PENDING,
+                    "legal_type": co.get("legal_type") or "", "address": co.get("address") or "",
+                    "gemi_warning": co.get("members_gemi_warning"),
+                    "members": _e3_members_for_year(entry, year), "has_members_by_year": bool((entry or {}).get("members_by_year"))})
 
 
 @app.route("/api/accounting_result/company_info/fetch_members", methods=["POST"])

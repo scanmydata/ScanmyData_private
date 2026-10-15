@@ -1,3 +1,14 @@
+// Πληκτρολογημένη ημερομηνία για flatpickr: dd/mm/yyyy, dd/mm/yy (→ 20yy), d/m/yy, ddmmyy, ddmmyyyy,
+// διαχωριστικά / . - · αλλιώς το προεπιλεγμένο parse του flatpickr (που διάβαζε λάθος το διψήφιο έτος).
+window.__parseTypedDate = window.__parseTypedDate || function (str, fmt) {
+  var t = String(str || '').trim(), m, d, mo, y;
+  if ((m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/)) || (m = t.match(/^(\d{2})(\d{2})(\d{2}|\d{4})$/))) {
+    d = +m[1]; mo = +m[2]; y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    var dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) return dt;
+  }
+  try { return window.flatpickr.parseDate(str, fmt); } catch (_) { return undefined; }
+};
     (function(){
       const SELECTORS = ['[data-flash]', '.flash', '.alert', '[role="alert"]'];
       const AUTO_HIDE_MS = 0; // βάλε 6000 αν θέλεις αυτομάτως να κλείνουν
@@ -1061,7 +1072,7 @@
           try {
             const _useGr = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
             fetchDateInputs.forEach(function(input) {
-              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useGr ? { locale: 'gr' } : {}));
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true, parseDate: window.__parseTypedDate }, _useGr ? { locale: 'gr' } : {}));
             });
           } catch (e) {
             console.warn('Fetch fallback flatpickr init failed', e);
@@ -1163,7 +1174,7 @@
           try {
             const _useGr = !!(window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.gr);
             e3DateInputs.forEach(function(input) {
-              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true }, _useGr ? { locale: 'gr' } : {}));
+              window.flatpickr(input, Object.assign({ dateFormat: 'd/m/Y', allowInput: true, parseDate: window.__parseTypedDate }, _useGr ? { locale: 'gr' } : {}));
             });
           } catch (e) {
             console.warn('E3 fallback flatpickr init failed', e);

@@ -31,13 +31,14 @@ def _load_dataframe(excel_path: str):
 
     Επιστρέφει DataFrame ή None αν δεν βρεθεί έγκυρη γραμμή.
     """
-    xls = pd.ExcelFile(excel_path)
-    for sheet in xls.sheet_names:
-        raw = pd.read_excel(xls, sheet_name=sheet, header=None)
-        for i, row_vals in raw.iterrows():
-            row_str = " ".join(str(v) for v in row_vals if pd.notna(v)).lower()
-            if "κωδικός" in row_str and ("υπόλοιπο" in row_str or "υπολοιπο" in row_str):
-                return pd.read_excel(xls, sheet_name=sheet, header=i)
+    # with: το αρχείο κλείνει (στα Windows ένα ανοιχτό ExcelFile μπλόκαρε τη διαγραφή του προσωρινού αρχείου)
+    with pd.ExcelFile(excel_path) as xls:
+        for sheet in xls.sheet_names:
+            raw = pd.read_excel(xls, sheet_name=sheet, header=None)
+            for i, row_vals in raw.iterrows():
+                row_str = " ".join(str(v) for v in row_vals if pd.notna(v)).lower()
+                if "κωδικός" in row_str and ("υπόλοιπο" in row_str or "υπολοιπο" in row_str):
+                    return pd.read_excel(xls, sheet_name=sheet, header=i)
     return None
 
 
@@ -225,6 +226,99 @@ def extract_account_leaf_rows(excel_path: str) -> dict:
         })
 
     return {"ok": True, "is_closed_balance_sheet": is_closed, "leaf_rows": rows}
+
+
+# Οι στήλες που διαβάζει η εφαρμογή (ίδιες με το _normalise_columns) — για το ⓘ και το πρότυπο Excel.
+ISOZYGIO_COLUMNS = [
+    {"name": "Κωδικός", "required": True,
+     "help": "Κωδικός λογαριασμού. Οι αναλυτικοί λογαριασμοί έχουν παύλες (π.χ. 64-07-00-0000) και αυτοί αθροίζονται· "
+             "οι συγκεντρωτικοί (π.χ. 64) αγνοούνται όταν υπάρχουν αναλυτικοί."},
+    {"name": "Περιγραφή", "required": False, "help": "Περιγραφή λογαριασμού (προαιρετική, εμφανίζεται στην ανάλυση)."},
+    {"name": "Χρέωση", "required": True, "help": "Σύνολο χρεώσεων της χρήσης (αριθμός)."},
+    {"name": "Πίστωση", "required": True, "help": "Σύνολο πιστώσεων της χρήσης (αριθμός)."},
+    {"name": "Υπόλοιπο", "required": True,
+     "help": "Υπόλοιπο λογαριασμού. Ανοικτό ισοζύγιο: ποσό Ε3 = |Υπόλοιπο|. Κλειστό (χρεοπιστωμένο): ομάδα 6 → Χρέωση, ομάδα 7 → Πίστωση."},
+    {"name": "Πεδίο Ε3", "required": True,
+     "help": "Κωδικός Ε3 του λογαριασμού ως αριθμός με 3 δεκαδικά (π.χ. 585.007, 561.003, 588). "
+             "Κενό ή -1 = ο λογαριασμός δεν πάει στο Ε3."},
+]
+
+_ISOZYGIO_SAMPLE = [
+    ("60", "Αμοιβές και έξοδα προσωπικού", 10000.00, 0.00, 10000.00, None),
+    ("60-00-00-0000", "Μικτές αποδοχές", 10000.00, 0.00, 10000.00, 581.001),
+    ("64", "Διάφορα έξοδα", 10524.72, 0.00, 10524.72, None),
+    ("64-07-00-0000", "Ασφαλιστικές εισφορές επιτηδευματία (e-ΕΦΚΑ/ΤΕΚΑ)", 4064.30, 0.00, 4064.30, 585.007),
+    ("64-09-00-0000", "Ενοίκια", 6000.00, 0.00, 6000.00, 585.014),
+    ("64-98-00-0000", "Πρόσθετα τέλη και προσαυξήσεις εισφορών", 460.42, 0.00, 460.42, 588),
+    ("70", "Πωλήσεις εμπορευμάτων", 0.00, 50000.00, -50000.00, None),
+    ("70-00-00-0000", "Πωλήσεις εμπορευμάτων λιανικές", 0.00, 50000.00, -50000.00, 561.003),
+    ("38-00-00-0000", "Ταμείο", 60000.00, 40000.00, 20000.00, -1),
+]
+
+
+def build_isozygio_template() -> bytes:
+    """Πρότυπο Excel ισοζυγίου (.xlsx) με τις στήλες που διαβάζει η εφαρμογή, παραδείγματα και οδηγίες."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ισοζύγιο"
+    ws.append(["Ισοζύγιο Γενικής Λογιστικής — πρότυπο ScanmyData (Έλεγχος Ε3)"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append(["Συμπληρώστε από τη γραμμή 4 και κάτω. Οι επικεφαλίδες της γραμμής 3 πρέπει να μείνουν ως έχουν."])
+    ws["A2"].font = Font(italic=True, color="666666")
+    ws.append([c["name"] for c in ISOZYGIO_COLUMNS])
+    head_fill = PatternFill("solid", fgColor="1E3A8A")
+    for cell in ws[3]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = head_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row in _ISOZYGIO_SAMPLE:
+        ws.append(list(row))
+    for r in ws.iter_rows(min_row=4, max_row=ws.max_row):
+        for c in r[2:5]:
+            c.number_format = "#,##0.00"
+        r[5].number_format = "0.000"
+        if "-" not in str(r[0].value or ""):
+            for c in r:
+                c.font = Font(bold=True, color="475569")
+    for col, w in zip("ABCDEF", (18, 52, 14, 14, 14, 12)):
+        ws.column_dimensions[col].width = w
+    ws.freeze_panes = "A4"
+    dv = DataValidation(type="decimal", operator="between", formula1="-1", formula2="999.999", allow_blank=True,
+                        showErrorMessage=True, errorTitle="Πεδίο Ε3",
+                        error="Δώστε κωδικό Ε3 ως αριθμό (π.χ. 585.007) ή -1 / κενό για λογαριασμό εκτός Ε3.")
+    ws.add_data_validation(dv)
+    dv.add("F4:F5000")
+
+    info = wb.create_sheet("Οδηγίες")
+    info.append(["Στήλη", "Υποχρεωτική", "Τι περιέχει"])
+    for cell in info[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = head_fill
+    for c in ISOZYGIO_COLUMNS:
+        info.append([c["name"], "Ναι" if c["required"] else "Όχι", c["help"]])
+    info.append([])
+    for line in (
+        "Η εφαρμογή βρίσκει μόνη της τη γραμμή επικεφαλίδων (αυτή που περιέχει «Κωδικός» και «Υπόλοιπο»), σε οποιοδήποτε φύλλο.",
+        "Δεκτά αρχεία: .xlsx και .xls. Τα ποσά ως αριθμοί (όχι κείμενο).",
+        "Οι γραμμές-παραδείγματα στο φύλλο «Ισοζύγιο» μπορούν να σβηστούν.",
+        "Συγκρίσεις: 585.007 με τις φορολογικές βεβαιώσεις e-ΕΦΚΑ/ΤΕΚΑ (+ λοιπά ταμεία), 588 με τις επιβαρύνσεις εισφορών, "
+        "585.014 με το ενοίκιο/ιδιόχρηση, και όλοι οι κωδικοί με το myDATA.",
+    ):
+        info.append([line])
+    info.column_dimensions["A"].width = 16
+    info.column_dimensions["B"].width = 13
+    info.column_dimensions["C"].width = 110
+    for r in info.iter_rows(min_row=2):
+        for c in r:
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def process_excel_file(excel_path: str) -> dict:

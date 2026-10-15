@@ -2584,11 +2584,17 @@ def process_client(
                 if not _k_pdfs:
                     warnings.append(f"ΚΕΑΟ — αποδεικτικό PDF ({who_k}): δεν παράχθηκε PDF "
                                     f"(κατάσταση: {k_json.get('status')}{' — ' + _k_regs if _k_regs else ''}).")
-                keao_available = True
                 add_585 = float(k_json.get("e3_585_007_year") or 0.0)
                 add_588 = float(k_json.get("e3_588_year") or 0.0)
-                keao_585_007_total += add_585
-                keao_588_total += add_588
+                # Τα ποσά ΚΕΑΟ έρχονται πλέον από τη ΝΕΑ διαδικασία (αντιπαραβολή: ΚΕΑΟ HTTP με δικό της
+                # fallback, λοιπά ταμεία → 585.007, επιβαρύνσεις → 588). Τα ποσά του keao-mistoton.py
+                # μετρούν ΜΟΝΟ ως fallback, όταν η αντιπαραβολή δεν διάβασε το ΚΕΑΟ για το μέλος —
+                # αλλιώς θα διπλομετρούνταν.
+                _use_old = not (_rr and _rr.get("keao_ok"))
+                if _use_old:
+                    keao_available = True
+                    keao_585_007_total += add_585
+                    keao_588_total += add_588
                 for r in (k_json.get("registries") or []):
                     if r.get("is_efka_mh_misthwton") and r.get("status") == "ok":
                         keao_mh_misthwton_total += float((r.get("totals_year") or {}).get("main_contrib") or 0.0)
@@ -2598,6 +2604,7 @@ def process_client(
                     "name": t.full_name,
                     "e3_585_007_year": round(add_585, 2),
                     "e3_588_year": round(add_588, 2),
+                    "used_for_totals": _use_old,
                     "registries": [
                         {
                             "forea": r.get("forea"),
