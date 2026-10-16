@@ -706,7 +706,16 @@
       data: rows,
       index: 'mark',
       layout: 'fitColumns',
-      columns: buildColumns(),
+      columns: (function(cols){
+        // Κινητό/tablet: ελάχιστο πλάτος στηλών ώστε ο πίνακας να κυλά οριζόντια αντί να στριμώχνει τις στήλες.
+        try{
+          if(!window.matchMedia || !window.matchMedia('(max-width: 900px)').matches) return cols;
+          return (cols||[]).map(function(c){
+            if(!c || c.formatter === 'rowSelection' || c.minWidth || c.width) return c;
+            return Object.assign({}, c, { minWidth: 96 });
+          });
+        }catch(_){ return cols; }
+      })(buildColumns()),
       maxHeight: availableHeight() + 'px',
       movableColumns: true,
       selectable: true,

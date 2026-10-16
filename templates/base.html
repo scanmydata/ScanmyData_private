@@ -55,6 +55,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='shell.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='tour.css') }}">
+  {# Κινητά/tablet: κεφαλίδα, πίνακες, modals, πλέγματα (μετά το shell.css, πριν την Tailwind). #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
     
   {% block head_extra %}{% endblock %}
 
@@ -97,6 +99,7 @@
      μέσα στο shell ξανα-εκτελούνταν σε κάθε partial nav και οι pollers
      πολλαπλασιάζονταν (διπλά «Η λήψη ολοκληρώθηκε»). #}
   <script src="{{ url_for('static', filename='js/base_06.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/responsive.js') }}"></script>
   <div class="container">
     <div id="appShell">
     <header class="mb-6{% if not current_user.is_authenticated %} is-guest{% endif %}">
@@ -126,7 +129,7 @@
             {% endif %}
 
             <!-- Right side controls -->
-            <div class="ml-4 flex items-center gap-3">
+            <div class="layout-header__controls ml-4 flex items-center gap-3">
               {% if not current_user.is_authenticated %}
                 <a href="/firebase-auth/login" class="px-4 py-2 rounded-md text-sm font-medium text-white transition-colors shadow-sm">🔐 Σύνδεση</a>
               {% endif %}
@@ -227,6 +230,9 @@
           <a href="{{ url_for('e3_check') }}" class="sm2-item"><span class="sm2-ico">📋</span><span class="sm2-lbl">Έλεγχος Ε3</span></a>
           <a href="{{ url_for('accounting_result_page') }}" class="sm2-item"><span class="sm2-ico">🧮</span><span class="sm2-lbl">Λογιστικό αποτέλεσμα</span></a>
           <a href="{{ url_for('credentials') }}" class="sm2-item"><span class="sm2-ico">👥</span><span class="sm2-lbl">Πελάτες</span></a>
+          {% if current_user.is_admin or current_user.id == ADMIN_USER_ID %}
+          <a href="{{ url_for('admin_dashboard') }}" class="sm2-item"><span class="sm2-ico">⚙️</span><span class="sm2-lbl">Admin</span></a>
+          {% endif %}
         </nav>
 
         <!-- Βοήθεια -->

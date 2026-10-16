@@ -1,0 +1,157 @@
+/* ScanmyData — responsive στρώμα για κινητά / tablet (όλες οι σελίδες που κληρονομούν το base.html).
+   Φορτώνεται μετά τα app.css / shell.css και πριν το tailwind.css· όπου πρέπει να νικήσει utilities
+   της Tailwind χρησιμοποιεί μεγαλύτερη εξειδίκευση (html body …) ή !important.
+   Οι πίνακες που δεν χωράνε τυλίγονται σε .rsp-scroll από το static/js/responsive.js. */
+
+/* ---------- βάση ---------- */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* δίχτυ ασφαλείας: τίποτα δεν σπρώχνει τη σελίδα πλάγια (clip ≠ hidden: δεν σπάει τα sticky) */
+html body { overflow-x: clip; }
+img, video, iframe { max-width: 100%; }
+pre { max-width: 100%; overflow-x: auto; }
+
+.rsp-scroll {
+  display: block; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: visible;
+  -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+}
+.rsp-scroll > table { margin-bottom: 0; }
+
+/* ---------- κεφαλίδα: tablet / μικρά laptop ---------- */
+html body header.mb-6 #sideMenuToggle { white-space: nowrap; }
+@media (max-width: 1280px) {
+  html body header.mb-6 .layout-header {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand . ctrls" "nav nav nav" "ctx ctx ctx";
+    align-items: center; gap: 8px 12px;
+  }
+  html body header.mb-6 .layout-header__brand { grid-area: brand; }
+  html body header.mb-6 .layout-header__right,
+  html body header.mb-6 .layout-header__top-row { display: contents; }
+  html body header.mb-6 .layout-header__controls { grid-area: ctrls; margin-left: 0 !important; justify-self: end; }
+  /* πλοήγηση: μία γραμμή με οριζόντια κύλιση (swipe), όχι 3 σειρές κουμπιά */
+  html body header.mb-6 .layout-header__nav {
+    grid-area: nav; flex-wrap: nowrap !important; justify-content: flex-start !important; overflow-x: auto;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; margin: 0 -4px; padding: 2px 4px;
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  html body header.mb-6 .layout-header__nav::-webkit-scrollbar { display: none; }
+  html body header.mb-6 .layout-header__nav a { flex: none; white-space: nowrap; }
+  html body header.mb-6 .layout-header__year-row {
+    grid-area: ctx; width: auto !important; max-width: 100%; justify-self: stretch;
+    flex-wrap: wrap; border-radius: 16px; row-gap: 6px;
+  }
+  html body header.mb-6 #fiscalYearSelect { width: auto !important; flex: none; }
+  html body header.mb-6 .layout-header__year-row > * { flex: none; }
+  html body header.mb-6 .layout-header__brand .logo-img { height: 72px; }
+  html body header.mb-6.is-guest .layout-header__brand .logo-img { height: 88px; }
+}
+
+/* ---------- κεφαλίδα: κινητό ---------- */
+@media (max-width: 768px) {
+  /* στο κινητό η κεφαλίδα δεν μένει καρφωμένη: θα έτρωγε το μισό ύψος της οθόνης */
+  html body header.mb-6 { position: relative; top: 0; margin-bottom: 12px !important; }
+  html.is-scrolled body header.mb-6 .layout-header__brand .logo-img { height: 52px; }
+  html body header.mb-6 .layout-header__brand .logo-img { height: 52px; }
+  html body header.mb-6.is-guest .layout-header__brand .logo-img { height: 64px; }
+  html body header.mb-6 .layout-header__controls { gap: 8px !important; }
+  html body header.mb-6 .layout-header__year-row { padding: 6px 8px; gap: 6px 8px !important; }
+  html body header.mb-6 .layout-header__active-customer,
+  html body header.mb-6 .layout-header__active-group { min-width: 0; max-width: 100%; }
+  html body header.mb-6 .layout-header__active-customer a,
+  html body header.mb-6 .layout-header__active-group a {
+    max-width: min(62vw, 340px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block !important;
+  }
+  html body header.mb-6 .layout-header__active-customer a::before,
+  html body header.mb-6 .layout-header__active-group a::before { display: inline-block; margin-right: 6px; vertical-align: middle; }
+}
+@media (max-width: 480px) {
+  html body header.mb-6 .layout-header__year-row > label,
+  html body header.mb-6 .layout-header__year-row span.text-gray-500 { font-size: 10px !important; letter-spacing: .03em; }
+  html body header.mb-6 #sideMenuToggle { padding: 7px 11px; }
+}
+
+/* ---------- περιεχόμενο ---------- */
+@media (max-width: 768px) {
+  html body .container { margin: 8px auto; padding: 8px; max-width: 100% !important; }
+  /* κάρτες/πλαίσια με μεγάλο padding */
+  html body #appShell .p-6 { padding: 14px !important; }
+  html body #appShell .p-8 { padding: 16px !important; }
+  html body #appShell .px-6 { padding-left: 14px !important; padding-right: 14px !important; }
+  /* γραμμές εργαλείων: τα κουμπιά πάνε σε νέα σειρά αντί να βγαίνουν εκτός οθόνης */
+  html body #appShell .flex.justify-between:not(.flex-nowrap),
+  html body #appShell .flex:not(.flex-nowrap):has(> button + button),
+  html body #appShell .flex:not(.flex-nowrap):has(> a + a),
+  html body #appShell .flex:not(.flex-nowrap):has(> button + a),
+  html body #appShell .flex:not(.flex-nowrap):has(> a + button) { flex-wrap: wrap; row-gap: 8px; }
+  html body #appShell .flex > input[type="search"],
+  html body #appShell .flex > input[type="text"] { min-width: 0; }
+  /* select με μακριές επιλογές (ονόματα εταιριών) και τα κουτάκια τους */
+  html body #appShell select { max-width: 100%; text-overflow: ellipsis; }
+  html body #appShell .flex-wrap > div, html body #appShell .flex-wrap > label { max-width: 100%; min-width: 0; }
+  /* γραμμή σελιδοποίησης λιστών (Αναζήτηση) */
+  html body #appShell .list-pagebar { flex-wrap: wrap; margin-left: 0; justify-content: flex-start; row-gap: 6px; }
+  /* σταθερά πλάτη από inline style / Tailwind arbitrary values */
+  html body #appShell [class*="min-w-["] { min-width: 0 !important; }
+  html body #appShell [class*="w-["]:not(img) { max-width: 100%; }
+  html body #appShell .w-72, html body #appShell .w-80, html body #appShell .w-96 { max-width: 100%; }
+  /* κείμενα που δεν σπάνε (μεγάλα ονόματα, URL, MARK) */
+  html body #appShell h1, html body #appShell h2, html body #appShell h3 { overflow-wrap: anywhere; }
+  html body #appShell .text-3xl { font-size: 1.5rem; line-height: 2rem; }
+  html body #appShell .text-2xl { font-size: 1.3rem; line-height: 1.8rem; }
+}
+@media (max-width: 640px) {
+  /* πλέγματα 4+ στηλών χωρίς breakpoint → 2 στήλες */
+  html body .grid.grid-cols-4, html body .grid.grid-cols-5, html body .grid.grid-cols-6,
+  html body .grid.grid-cols-7, html body .grid.grid-cols-8, html body .grid.grid-cols-12 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  html body .grid.grid-cols-4 > [class*="col-span-"], html body .grid.grid-cols-6 > [class*="col-span-"],
+  html body .grid.grid-cols-12 > [class*="col-span-"] { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  html body .grid.grid-cols-3:not(.rsp-keep) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* φόρμες: 16px σε οθόνες αφής ώστε το iOS να μην κάνει zoom στο focus */
+@media (max-width: 768px) and (pointer: coarse) {
+  html body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  html body select, html body textarea { font-size: 16px !important; }
+}
+
+/* ---------- DataTables ---------- */
+@media (max-width: 768px) {
+  html body .dataTables_wrapper .dataTables_length,
+  html body .dataTables_wrapper .dataTables_filter,
+  html body .dataTables_wrapper .dataTables_info,
+  html body .dataTables_wrapper .dataTables_paginate { float: none !important; text-align: left !important; width: 100%; }
+  html body .dataTables_wrapper .dataTables_filter input { width: 100%; max-width: 100%; margin-left: 0 !important; margin-top: 4px; }
+  html body .dataTables_wrapper .dataTables_paginate { display: flex; flex-wrap: wrap; gap: 2px; padding-top: 8px !important; }
+  html body .dataTables_wrapper .dataTables_paginate .paginate_button { margin: 0 !important; padding: 6px 10px !important; }
+  html body .dataTables_wrapper .dataTables_paginate .ellipsis { padding: 6px 4px; }
+}
+
+/* ---------- modals / popups ---------- */
+@media (max-width: 768px) {
+  /* Tailwind overlays (fixed inset-0 …): η κάρτα ποτέ φαρδύτερη/ψηλότερη από την οθόνη */
+  html body .fixed.inset-0:not(#sideMenuOverlay) { padding-left: 8px; padding-right: 8px; }
+  html body .fixed.inset-0:not(#sideMenuOverlay) > div:not(.absolute):not(.fixed) {
+    max-width: calc(100vw - 16px) !important; max-height: calc(100dvh - 16px); overflow-y: auto;
+  }
+  html body .fixed.inset-0:not(#sideMenuOverlay) > div > div:not(.absolute) { max-width: 100%; }
+  /* Bootstrap modals */
+  html body .modal-dialog { margin: 8px auto; max-width: calc(100vw - 16px) !important; }
+  html body .modal-dialog .modal-body { overflow-x: auto; }
+  /* side menu σε όλο το πλάτος στα πολύ στενά */
+  html body #sideMenu { max-width: 100vw; }
+}
+@media (max-width: 400px) {
+  html body #sideMenu { width: 100vw; }
+}
+
+/* ---------- σταθερά στοιχεία οθόνης ---------- */
+@media (max-width: 768px) {
+  html body #cookieConsent { padding: 14px !important; max-height: 80vh; overflow-y: auto; }
+  html body #cookieConsent .flex { flex-wrap: wrap; gap: 8px; }
+  html body #flashContainer { top: calc(env(safe-area-inset-top, 0px) + 8px); }
+}

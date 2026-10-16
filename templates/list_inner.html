@@ -2831,7 +2831,16 @@ document.addEventListener('click', function(e){
       const tab = new Tabulator(wrapper, {
         data: rows,
         layout: 'fitColumns',
-        columns: columns,
+        columns: (function(cols){
+          // Κινητό/tablet: ελάχιστο πλάτος στηλών ώστε ο πίνακας να κυλά οριζόντια αντί να στριμώχνει τις στήλες.
+          try{
+            if(!window.matchMedia || !window.matchMedia('(max-width: 900px)').matches) return cols;
+            return (cols||[]).map(function(c){
+              if(!c || c.formatter === 'rowSelection' || c.minWidth || c.width) return c;
+              return Object.assign({}, c, { minWidth: 96 });
+            });
+          }catch(_){ return cols; }
+        })(columns),
         // Initial height -- will be adjusted dynamically below
         height: 'auto',
         movableColumns: true,
